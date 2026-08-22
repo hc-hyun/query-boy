@@ -1,6 +1,6 @@
 # Query Man Implementation Roadmap
 
-Status: Active
+Status: Production ready
 
 이 문서는 Query Man의 최종 목적을 구현하기 위한 TODO의 단일 관리 문서다.
 세부 설계 원칙은 [architecture.md](architecture.md), 현재 검증용 데이터와 계약은
@@ -164,14 +164,14 @@ Dependencies: `DEC-09`, `ONB-01`
 
 Dependencies: all required items above
 
-- [ ] `REL-01` 세 개 이상의 서로 다른 PostgreSQL source가 동일한 runtime 코드 경로를 사용하는지 확인한다.
-- [ ] `REL-02` 신규 source를 서비스 재배포 없이 등록하고 MCP에서 조회·실행하는 시나리오를 통과한다.
+- [x] `REL-01` 세 개 이상의 서로 다른 PostgreSQL source가 동일한 runtime 코드 경로를 사용하는지 확인한다.
+- [x] `REL-02` 신규 source를 서비스 재배포 없이 등록하고 MCP에서 조회·실행하는 시나리오를 통과한다.
 - [x] `REL-03` 모든 golden/verified question의 relation 선택, SQL 안전성과 결과 invariant를 통과한다.
-- [ ] `REL-04` 공격·오용 corpus에서 write, privilege escalation, system object와 resource limit 우회를 차단한다.
-- [ ] `REL-05` 부하 테스트에서 source별 concurrency와 queue 격리, cancel과 hard limit을 확인한다.
-- [ ] `REL-06` Schema drift, source 장애, stale 만료와 control plane rollback 복구 시나리오를 통과한다.
-- [ ] `REL-07` 운영 dashboard, alert, audit와 runbook 검토를 완료한다.
-- [ ] `REL-08` Architecture의 Success Criteria를 전부 충족하고 문서 상태를 `Production ready`로 갱신한다.
+- [x] `REL-04` 공격·오용 corpus에서 write, privilege escalation, system object와 resource limit 우회를 차단한다.
+- [x] `REL-05` 부하 테스트에서 source별 concurrency와 queue 격리, cancel과 hard limit을 확인한다.
+- [x] `REL-06` Schema drift, source 장애, stale 만료와 control plane rollback 복구 시나리오를 통과한다.
+- [x] `REL-07` 운영 dashboard, alert, audit와 runbook 검토를 완료한다.
+- [x] `REL-08` Architecture의 Success Criteria를 전부 충족하고 문서 상태를 `Production ready`로 갱신한다.
 
 ## Recommended Milestones
 

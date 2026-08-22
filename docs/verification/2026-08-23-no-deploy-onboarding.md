@@ -18,7 +18,7 @@ rollback/deactivate와 세 번째 PostgreSQL fixture acceptance를 검증했다.
 | Rollback | 대상 profile/secret/metadata 품질 사전 검증 후 active pointer 복구 |
 | 세 번째 source | 독립 `support_tickets` DB와 reader를 admin API로 L0 publish |
 | L2 promotion | L1 semantic revision → guarded verified contract → same revision L2 publish |
-| End-to-end | `PUT admin → /sources → /meta → verified → L2 → /query` PASS, 3 queue/120 tickets |
+| End-to-end | `PUT admin → L2 → MCP list_sources/get_context/query` PASS, 3 queue/120 tickets |
 
 세 번째 fixture는 [`config/onboarding/support-tickets.yaml`](../../config/onboarding/support-tickets.yaml)
 manifest를 사용한다. 이 파일은 bootstrap registry에 포함되지 않으며 application의

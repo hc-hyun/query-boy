@@ -312,11 +312,30 @@ async def test_onboards_third_source_without_runtime_restart() -> None:
         "support-tickets-local-secret",
     )
     app = build_app(runtime)
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server_socket.bind(("127.0.0.1", 0))
+    server_socket.listen(128)
+    server_socket.setblocking(False)
+    port = int(server_socket.getsockname()[1])
+    server = uvicorn.Server(
+        uvicorn.Config(
+            app,
+            log_level="critical",
+            lifespan="on",
+            timeout_graceful_shutdown=2,
+        )
+    )
+    server_task = asyncio.create_task(server.serve(sockets=[server_socket]))
+    try:
+        for _ in range(100):
+            if server.started:
+                break
+            await asyncio.sleep(0.01)
+        assert server.started
 
-    async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
-            base_url="http://test",
+            base_url=f"http://127.0.0.1:{port}",
         ) as session:
             published = await session.put(
                 "/admin/sources/support-tickets",
@@ -401,6 +420,44 @@ async def test_onboards_third_source_without_runtime_restart() -> None:
             assert queried.status_code == 200
             assert queried.json()["row_count"] == 3
 
+            async with (
+                httpx2.AsyncClient() as mcp_http,
+                Client(
+                    streamable_http_client(
+                        f"http://127.0.0.1:{port}/mcp",
+                        http_client=mcp_http,
+                    )
+                ) as mcp_client,
+            ):
+                mcp_sources = await mcp_client.call_tool("list_sources", {})
+                assert "support-tickets" in {
+                    source["source_id"]
+                    for source in mcp_sources.structured_content["sources"]  # type: ignore[index,union-attr]
+                }
+                mcp_context = await mcp_client.call_tool(
+                    "get_context",
+                    {
+                        "source_id": "support-tickets",
+                        "question": "지원 queue별 ticket 수를 보여줘",
+                    },
+                )
+                assert mcp_context.structured_content["quality_level"] == "L2"  # type: ignore[index]
+                mcp_result = await mcp_client.call_tool(
+                    "query",
+                    {
+                        "source_id": "support-tickets",
+                        "metadata_revision": mcp_context.structured_content[  # type: ignore[index,union-attr]
+                            "metadata_revision"
+                        ],
+                        "sql": (
+                            "SELECT queue_name, count(*) AS ticket_count "
+                            "FROM ai.ticket_overview "
+                            "GROUP BY queue_name ORDER BY queue_name"
+                        ),
+                    },
+                )
+                assert mcp_result.structured_content["row_count"] == 3  # type: ignore[index]
+
             rotated_credential = "support-tickets-rotated-acceptance-secret"
             admin_connection = await AsyncConnection.connect(control_dsn)
             try:
@@ -448,6 +505,17 @@ async def test_onboards_third_source_without_runtime_restart() -> None:
             assert "support-tickets" not in {
                 source["source_id"] for source in listed_after.json()["sources"]
             }
+    finally:
+        server.should_exit = True
+        try:
+            await asyncio.wait_for(server_task, timeout=5)
+        except TimeoutError:
+            server.force_exit = True
+            server_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await server_task
+        finally:
+            server_socket.close()
 
 
 @pytest.mark.integration

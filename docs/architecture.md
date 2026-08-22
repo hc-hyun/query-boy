@@ -1,6 +1,6 @@
 # Query Man Architecture
 
-Status: Published metadata, guarded query and MCP milestones implemented
+Status: Production ready
 
 ## Goal
 
@@ -37,8 +37,10 @@ Source Registry
 PostgreSQL Reader / Analytics Replica
 ```
 
-현재 MVP는 `development_issues`와 `market_voc`을 독립 source database로 사용한다.
-두 source의 구체적인 grain, seed와 검증 범위는 [mvp.md](mvp.md)에 기록한다.
+Bootstrap은 `development_issues`와 `market_voc` 독립 source database를 사용한다. Release
+acceptance는 세 번째 `support_tickets` database를 control plane으로 실행 중 등록해 동일한
+runtime과 MCP 경로로 검증한다. Bootstrap source의 구체적인 grain, seed와 검증 범위는
+[mvp.md](mvp.md)에 기록한다.
 
 ## Component Boundaries
 

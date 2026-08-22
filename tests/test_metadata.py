@@ -109,6 +109,23 @@ async def test_returns_stale_revision_after_refresh_failure() -> None:
 
 
 @pytest.mark.asyncio
+async def test_source_outage_fails_closed_after_stale_limit_expires() -> None:
+    clock = [1_000]
+    service = MetadataService(
+        load_test_registry(),
+        SequencedCatalog(minimal_development_snapshot()),
+        cache_ttl_ms=0,
+        max_stale_ms=10,
+        now=lambda: clock[0],
+    )
+    await service.get_context("development-issues", "최근 문제")
+    clock[0] = 1_011
+
+    with pytest.raises(MetadataUnavailableError):
+        await service.get_context("development-issues", "최근 문제")
+
+
+@pytest.mark.asyncio
 async def test_fails_closed_on_drift_even_with_cache() -> None:
     incomplete = minimal_development_snapshot()
     incomplete.relations = incomplete.relations[:1]
