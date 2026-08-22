@@ -8,7 +8,6 @@ import uuid
 from dataclasses import asdict, dataclass
 from typing import Any, Protocol
 
-from fastapi.encoders import jsonable_encoder
 from psycopg import AsyncConnection, errors
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool, PoolTimeout
@@ -30,6 +29,7 @@ from query_man.reader_policy import (
     require_reader_session_policy,
 )
 from query_man.registry import SourceRegistry
+from query_man.result_encoding import encode_result_value
 from query_man.sql_validation import SqlValidationError, ValidatedSql, validate_sql
 
 _FUNCTION_POLICY_QUERY = """
@@ -417,9 +417,14 @@ class PostgresQueryExecutor:
                     if len(rows) >= source.budget.max_result_rows:
                         truncated = True
                         break
-                    encoded_row = jsonable_encoder(row)
+                    encoded_row = encode_result_value(row)
                     row_bytes = len(
-                        json.dumps(encoded_row, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+                        json.dumps(
+                            encoded_row,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                            allow_nan=False,
+                        ).encode("utf-8")
                     )
                     separator_bytes = 1 if rows else 0
                     if result_bytes + separator_bytes + row_bytes > source.budget.max_result_bytes:

@@ -18,6 +18,7 @@ def create_metadata_revision(source: SourceProfile, catalog: CatalogSnapshot) ->
             if source.tenant_isolation != "none"
             else {}
         ),
+        "execution_budget": asdict(source.budget),
         "semantic_overlay": asdict(source.semantic_overlay),
         "relations": [
             {

@@ -1013,7 +1013,7 @@ callers:
             "placed_at": "2026-08-01T01:00:00+00:00",
             "promised_on": "2026-08-05",
             "discount_amount": None,
-            "net_amount": 100.0,
+            "net_amount": "100.00",
             "attributes": {"campaign": "summer", "gift": False},
             "line_count": 2,
             "returned_line_count": 1,
@@ -1022,8 +1022,8 @@ callers:
             "order_id": "00000000-0000-0000-0000-000000000002",
             "placed_at": "2026-08-02T02:00:00+00:00",
             "promised_on": None,
-            "discount_amount": 5.5,
-            "net_amount": 74.5,
+            "discount_amount": "5.50",
+            "net_amount": "74.50",
             "attributes": {"campaign": None, "gift": True},
             "line_count": 1,
             "returned_line_count": 1,
@@ -1032,8 +1032,8 @@ callers:
             "order_id": "00000000-0000-0000-0000-000000000003",
             "placed_at": "2026-08-03T03:00:00+00:00",
             "promised_on": "2026-08-03",
-            "discount_amount": 0.0,
-            "net_amount": 50.25,
+            "discount_amount": "0.00",
+            "net_amount": "50.25",
             "attributes": {"store": "서울"},
             "line_count": 0,
             "returned_line_count": 0,
@@ -1042,8 +1042,8 @@ callers:
             "order_id": "00000000-0000-0000-0000-000000000004",
             "placed_at": "2026-08-04T04:00:00+00:00",
             "promised_on": "2026-08-10",
-            "discount_amount": 20.0,
-            "net_amount": 100.0,
+            "discount_amount": "20.00",
+            "net_amount": "100.00",
             "attributes": {"partner": "alpha", "tags": ["bulk", "priority"]},
             "line_count": 3,
             "returned_line_count": 0,
@@ -1484,6 +1484,28 @@ async def test_live_guarded_query_enforces_plan_and_result_limits() -> None:
         assert counted["rows"] == [{"issue_count": 600}]
         assert counted["truncated"] is False
         assert counted["plan_summary"]["node_count"] > 0  # type: ignore[index]
+
+        exact_scalars = await service.query(
+            "development-issues",
+            "SELECT 12345678901234567890.1234567890::pg_catalog.numeric "
+            "AS exact_numeric, '\\xff00'::pg_catalog.bytea AS binary_payload "
+            "FROM ai.issue_overview LIMIT 1",
+            published.revision,
+        )
+        assert exact_scalars["rows"] == [
+            {
+                "exact_numeric": "12345678901234567890.1234567890",
+                "binary_payload": "base64:/wA=",
+            }
+        ]
+        assert exact_scalars["result_bytes"] == len(
+            json.dumps(
+                exact_scalars["rows"],
+                ensure_ascii=False,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        )
 
         limited = await service.query(
             "development-issues",

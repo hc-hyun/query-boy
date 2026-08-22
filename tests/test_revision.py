@@ -1,4 +1,5 @@
 from copy import deepcopy
+from dataclasses import replace
 
 from query_man.models import CatalogForeignKey, CatalogIndex
 from query_man.revision import create_metadata_revision
@@ -53,3 +54,18 @@ def test_revision_preserves_physical_key_and_index_column_order() -> None:
     assert create_metadata_revision(source, reversed_primary) != revision
     assert create_metadata_revision(source, reversed_reference) != revision
     assert create_metadata_revision(source, reversed_index) != revision
+
+
+def test_revision_changes_with_execution_budget() -> None:
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+    snapshot = minimal_development_snapshot()
+    stricter = replace(
+        source,
+        budget=replace(source.budget, max_result_rows=source.budget.max_result_rows - 1),
+    )
+
+    assert create_metadata_revision(source, snapshot) != create_metadata_revision(
+        stricter,
+        snapshot,
+    )

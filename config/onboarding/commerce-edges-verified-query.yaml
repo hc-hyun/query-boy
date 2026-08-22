@@ -34,4 +34,4 @@ expected:
     - line_count
     - returned_line_count
   row_count: 4
-  result_hash: sha256:b935f61fdd91ca7c1249b23c420bd599dac7d5729f143ba8b842cd0c9798ee27
+  result_hash: sha256:5cf7f3fb6843b221d22e10e64df21e37341b2471a93429793704a5ac4ee1d4b9

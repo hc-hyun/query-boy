@@ -4,7 +4,7 @@ queries:
   - query_id: development-recent-model-issues
     source_id: development-issues
     question: 최근 90일 동안 모델별 개발 문제 건수와 미해결 건수를 보여줘.
-    metadata_revision: sha256:d04d1afbb0b0652799665e3d9fb0364ada499197d3d6e334b69d4572348bc855
+    metadata_revision: sha256:83c8918b9a9d0eda9a394a93063a679dd3c513efc192ba5ead65afd078122464
     relations: [ai.issue_overview]
     sql: >-
       SELECT model_name, count(*) AS issue_count,
@@ -22,7 +22,7 @@ queries:
   - query_id: development-critical-without-cause
     source_id: development-issues
     question: 원인이 아직 입력되지 않은 Critical 또는 High 문제를 찾아줘.
-    metadata_revision: sha256:d04d1afbb0b0652799665e3d9fb0364ada499197d3d6e334b69d4572348bc855
+    metadata_revision: sha256:83c8918b9a9d0eda9a394a93063a679dd3c513efc192ba5ead65afd078122464
     relations: [ai.issue_overview]
     sql: >-
       SELECT issue_id, issue_no, severity, title, discovered_at
@@ -37,7 +37,7 @@ queries:
   - query_id: development-user-activity
     source_id: development-issues
     question: 사용자별 등록 문제 수, 담당 문제 수와 작성 댓글 수를 비교해줘.
-    metadata_revision: sha256:d04d1afbb0b0652799665e3d9fb0364ada499197d3d6e334b69d4572348bc855
+    metadata_revision: sha256:83c8918b9a9d0eda9a394a93063a679dd3c513efc192ba5ead65afd078122464
     relations: [ai.issue_overview, ai.issue_comments]
     sql: >-
       WITH registered AS (
@@ -67,7 +67,7 @@ queries:
   - query_id: development-top-issue-type-by-version
     source_id: development-issues
     question: HW/SW version 조합별로 가장 많이 발생한 문제 유형은 무엇인가?
-    metadata_revision: sha256:d04d1afbb0b0652799665e3d9fb0364ada499197d3d6e334b69d4572348bc855
+    metadata_revision: sha256:83c8918b9a9d0eda9a394a93063a679dd3c513efc192ba5ead65afd078122464
     relations: [ai.issue_overview]
     sql: >-
       WITH counts AS (
@@ -93,7 +93,7 @@ queries:
   - query_id: market-model-voc-rate
     source_id: market-voc
     question: 모델별 기기 수, VOC 수와 기기당 VOC 수를 높은 순서로 보여줘.
-    metadata_revision: sha256:aa96fcad874d36b95d7a0261b1571852ea335ea0935484bfb3fe647841e8df63
+    metadata_revision: sha256:d62177e5798a405308e698e550d5350f7c295e543ecc652e10a7b6784d855f2e
     relations: [ai.device_overview]
     sql: >-
       SELECT model_name, count(*) AS device_count, sum(voc_count) AS voc_count,
@@ -104,12 +104,12 @@ queries:
     expected:
       columns: [model_name, device_count, voc_count, voc_per_device]
       row_count: 8
-      result_hash: sha256:b01fd8a8c9087d0b4f0b98a04c1086005eb7a23fd3e690faca7bb272b0fdc7b7
+      result_hash: sha256:d962d4b7293e88654fbecea95896f53ad17a525b4f366f61d2307d70ad44652b
 
   - query_id: market-devices-without-voc
     source_id: market-voc
     question: VOC가 한 번도 없는 기기는 몇 대인가?
-    metadata_revision: sha256:aa96fcad874d36b95d7a0261b1571852ea335ea0935484bfb3fe647841e8df63
+    metadata_revision: sha256:d62177e5798a405308e698e550d5350f7c295e543ecc652e10a7b6784d855f2e
     relations: [ai.device_overview]
     sql: >-
       SELECT count(*) AS devices_without_voc
@@ -122,7 +122,7 @@ queries:
   - query_id: market-nuri-hinge-voc
     source_id: market-voc
     question: NURI 세대별 힌지 VOC 수를 비교해줘.
-    metadata_revision: sha256:aa96fcad874d36b95d7a0261b1571852ea335ea0935484bfb3fe647841e8df63
+    metadata_revision: sha256:d62177e5798a405308e698e550d5350f7c295e543ecc652e10a7b6784d855f2e
     relations: [ai.voc_overview]
     sql: >-
       SELECT model_name, count(*) AS hinge_voc_count
@@ -137,7 +137,7 @@ queries:
   - query_id: market-lot-battery-overheat-ratio
     source_id: market-voc
     question: 제조 lot별 전체 VOC 중 배터리 및 과열 VOC 비율을 비교해줘.
-    metadata_revision: sha256:aa96fcad874d36b95d7a0261b1571852ea335ea0935484bfb3fe647841e8df63
+    metadata_revision: sha256:d62177e5798a405308e698e550d5350f7c295e543ecc652e10a7b6784d855f2e
     relations: [ai.voc_overview]
     sql: >-
       SELECT manufacturing_lot, count(*) AS total_voc_count,
@@ -159,12 +159,12 @@ queries:
         - battery_overheat_count
         - battery_overheat_ratio
       row_count: 15
-      result_hash: sha256:6ea832bb486c22a7ec2875f6e3bc549cc0a3d5bfffe45a37c11f06d4dd3ad762
+      result_hash: sha256:25f43b1690378c680b9e4b790db289384745b94bd3fd1653dcf4f8e96339d33d
 
   - query_id: market-region-month-unresolved
     source_id: market-voc
     question: 지역과 월별 미해결 VOC 추이를 보여줘.
-    metadata_revision: sha256:aa96fcad874d36b95d7a0261b1571852ea335ea0935484bfb3fe647841e8df63
+    metadata_revision: sha256:d62177e5798a405308e698e550d5350f7c295e543ecc652e10a7b6784d855f2e
     relations: [ai.voc_overview]
     sql: >-
       SELECT market_region,
