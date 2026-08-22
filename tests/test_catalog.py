@@ -5,9 +5,10 @@ from dataclasses import replace
 
 import pytest
 from dotenv import load_dotenv
+from psycopg import AsyncConnection
+from psycopg.conninfo import make_conninfo
 
 from query_man.catalog import PostgresCatalog, _apply_structures
-from query_man.models import ResolvedConnection
 from tests.helpers import ROOT_DIRECTORY, load_test_registry, minimal_development_snapshot
 
 
@@ -60,29 +61,54 @@ def test_applies_primary_foreign_key_and_index_structures() -> None:
 @pytest.mark.asyncio
 async def test_live_catalog_collects_only_simple_visible_table_structures() -> None:
     load_dotenv(ROOT_DIRECTORY / ".env")
-    required = ["POSTGRES_USER", "POSTGRES_PASSWORD"]
+    required = [
+        "POSTGRES_USER",
+        "POSTGRES_PASSWORD",
+        "DEVELOPMENT_ISSUES_READER_PASSWORD",
+        "MARKET_VOC_READER_PASSWORD",
+    ]
     if any(not os.environ.get(name) for name in required):
         pytest.skip("local PostgreSQL administrator credentials are not configured")
-    source = load_test_registry().get("development-issues")
+    source = load_test_registry(os.environ).get("development-issues")
     assert source is not None
     source = replace(
         source,
-        connection=ResolvedConnection(
-            host="127.0.0.1",
-            port=int(os.environ.get("POSTGRES_PORT", "5432")),
-            database="development_issues",
-            user=os.environ["POSTGRES_USER"],
-            password=os.environ["POSTGRES_PASSWORD"],
-            ssl=False,
-        ),
         allowed_schemas=["development"],
         allowed_relation_kinds=["table"],
     )
+    admin = await AsyncConnection.connect(
+        make_conninfo(
+            host="127.0.0.1",
+            port=os.environ.get("POSTGRES_PORT", "5432"),
+            dbname="development_issues",
+            user=os.environ["POSTGRES_USER"],
+            password=os.environ["POSTGRES_PASSWORD"],
+            sslmode="disable",
+        )
+    )
     catalog = PostgresCatalog()
     try:
+        await admin.execute(
+            "GRANT USAGE ON SCHEMA development TO development_issues_reader"
+        )
+        await admin.execute(
+            "GRANT SELECT ON ALL TABLES IN SCHEMA development "
+            "TO development_issues_reader"
+        )
+        await admin.commit()
         snapshot = await catalog.load(source)
     finally:
         await catalog.close()
+        await admin.rollback()
+        await admin.execute(
+            "REVOKE SELECT ON ALL TABLES IN SCHEMA development "
+            "FROM development_issues_reader"
+        )
+        await admin.execute(
+            "REVOKE USAGE ON SCHEMA development FROM development_issues_reader"
+        )
+        await admin.commit()
+        await admin.close()
 
     by_name = {relation.qualified_name: relation for relation in snapshot.relations}
     issues = by_name["development.issues"]
