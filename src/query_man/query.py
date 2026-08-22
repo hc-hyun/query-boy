@@ -84,6 +84,7 @@ class PlanSummary:
 class _ActiveQuery:
     source_id: str
     connection: AsyncConnection[dict[str, Any]]
+    task: asyncio.Task[Any]
 
 
 class QueryExecutor(Protocol):
@@ -161,6 +162,7 @@ class PostgresQueryExecutor:
         self._pool_lock = asyncio.Lock()
         self._active_lock = asyncio.Lock()
         self._active: dict[str, _ActiveQuery] = {}
+        self._inflight: set[asyncio.Task[Any]] = set()
         self._accepting = True
 
     async def execute(
@@ -173,8 +175,42 @@ class PostgresQueryExecutor:
         query_id: str | None = None,
         tenant_id: str | None = None,
     ) -> dict[str, object]:
-        if not self._accepting:
+        task = asyncio.current_task()
+        if task is None:
             raise QueryUnavailableError
+        async with self._active_lock:
+            if not self._accepting:
+                raise QueryUnavailableError
+            self._inflight.add(task)
+        try:
+            return await self._execute_admitted(
+                source,
+                sql,
+                metadata_revision,
+                validated,
+                task,
+                query_id=query_id,
+                tenant_id=tenant_id,
+            )
+        except asyncio.CancelledError as error:
+            if not self._accepting:
+                raise QueryUnavailableError from error
+            raise
+        finally:
+            async with self._active_lock:
+                self._inflight.discard(task)
+
+    async def _execute_admitted(
+        self,
+        source: SourceProfile,
+        sql: str,
+        metadata_revision: str,
+        validated: ValidatedSql,
+        task: asyncio.Task[Any],
+        *,
+        query_id: str | None,
+        tenant_id: str | None,
+    ) -> dict[str, object]:
         query_id = query_id or str(uuid.uuid4())
         if source.tenant_isolation == "rls" and tenant_id is None:
             raise QueryRejectedError("TENANT_CONTEXT_REQUIRED")
@@ -204,7 +240,11 @@ class PostgresQueryExecutor:
                         timeout=source.budget.query_queue_timeout_ms / 1000
                     ) as connection:
                         async with self._active_lock:
-                            self._active[query_id] = _ActiveQuery(source.source_id, connection)
+                            self._active[query_id] = _ActiveQuery(
+                                source.source_id,
+                                connection,
+                                task,
+                            )
                         try:
                             return await self._execute_connection(
                                 connection,
@@ -248,34 +288,57 @@ class PostgresQueryExecutor:
             operations.increment("query_cancel_requested", active.source_id)
             return True
 
+    def stop_accepting(self) -> None:
+        self._accepting = False
+
     async def close(self) -> None:
         if self._accepting:
             await self.drain(0)
         else:
             async with self._active_lock:
+                inflight = list(self._inflight)
                 active = list(self._active.values())
-            for query in active:
-                await query.connection.cancel_safe(timeout=1)
+            if inflight:
+                await self._cancel_inflight(inflight, active)
         for pool in self._pools.values():
             await pool.close()
         self._pools.clear()
 
     async def drain(self, grace_ms: int) -> None:
-        self._accepting = False
+        self.stop_accepting()
         operations.increment("shutdown_started")
         deadline = time.monotonic() + grace_ms / 1_000
         while True:
             async with self._active_lock:
+                inflight = list(self._inflight)
                 active = list(self._active.values())
-            if not active:
+            if not inflight:
                 operations.increment("shutdown_drained")
                 return
             if time.monotonic() >= deadline:
-                for query in active:
-                    await query.connection.cancel_safe(timeout=1)
-                operations.increment("shutdown_forced_cancel", value=len(active))
+                await self._cancel_inflight(inflight, active)
+                operations.increment("shutdown_forced_cancel", value=len(inflight))
                 return
             await asyncio.sleep(min(0.01, max(0.0, deadline - time.monotonic())))
+
+    async def _cancel_inflight(
+        self,
+        inflight: list[asyncio.Task[Any]],
+        active: list[_ActiveQuery],
+    ) -> None:
+        active_tasks = {query.task for query in active}
+        for task in inflight:
+            if task not in active_tasks:
+                task.cancel()
+        await asyncio.gather(
+            *(query.connection.cancel_safe(timeout=1) for query in active),
+            return_exceptions=True,
+        )
+        _done, pending = await asyncio.wait(inflight, timeout=1)
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.wait(pending, timeout=1)
 
     async def invalidate(self, source_id: str) -> None:
         async with self._pool_lock:

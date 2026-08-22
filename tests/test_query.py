@@ -167,6 +167,74 @@ async def test_executor_rejects_new_queries_after_drain_starts() -> None:
 
 
 @pytest.mark.asyncio
+async def test_drain_cancels_active_and_queued_admitted_queries() -> None:
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+    source = replace(
+        source,
+        budget=replace(
+            source.budget,
+            max_pool_size=1,
+            max_concurrent_queries=1,
+        ),
+    )
+    executor = PostgresQueryExecutor()
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    class FakeConnection:
+        async def cancel_safe(self, **options: int) -> None:
+            assert options == {"timeout": 1}
+            cancelled.set()
+
+    connection = FakeConnection()
+
+    class ConnectionContext:
+        async def __aenter__(self) -> FakeConnection:
+            return connection
+
+        async def __aexit__(self, *_args: object) -> None:
+            pass
+
+    class FakePool:
+        def connection(self, *, timeout: float) -> ConnectionContext:
+            assert timeout > 0
+            return ConnectionContext()
+
+    async def get_pool(_source: SourceProfile) -> FakePool:
+        return FakePool()
+
+    async def execute_connection(*_args: object, **_kwargs: object) -> dict[str, object]:
+        started.set()
+        await cancelled.wait()
+        raise QueryTimeoutError
+
+    executor._get_pool = get_pool  # type: ignore[method-assign]
+    executor._execute_connection = execute_connection  # type: ignore[method-assign]
+    validated = ValidatedSql("fingerprint", (), (), ())
+    active = asyncio.create_task(
+        executor.execute(source, "SELECT 1", "test-revision", validated)
+    )
+    await started.wait()
+    queued = asyncio.create_task(
+        executor.execute(source, "SELECT 1", "test-revision", validated)
+    )
+    for _attempt in range(100):
+        if len(executor._inflight) == 2:
+            break
+        await asyncio.sleep(0)
+    assert len(executor._inflight) == 2
+
+    await executor.drain(0)
+
+    with pytest.raises(QueryTimeoutError):
+        await active
+    with pytest.raises(QueryUnavailableError):
+        await queued
+    assert executor._inflight == set()
+
+
+@pytest.mark.asyncio
 async def test_client_disconnect_cancels_active_query() -> None:
     cancelled = asyncio.Event()
 
