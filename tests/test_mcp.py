@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import logging
+from typing import cast
 
+import pytest
 from mcp.client import Client
 
 from query_man.access import AccessPolicy, CallerContext
@@ -55,6 +58,31 @@ class StaticExecutor:
         pass
 
 
+class ExplodingGateway:
+    detail = "sensitive-internal-database-detail"
+
+    def list_sources(self, _caller: CallerContext) -> dict[str, object]:
+        raise RuntimeError(self.detail)
+
+    async def get_context(
+        self,
+        _caller: CallerContext,
+        _source_id: str,
+        _question: str,
+        _max_objects: int,
+    ) -> dict[str, object]:
+        raise RuntimeError(self.detail)
+
+    async def query(
+        self,
+        _caller: CallerContext,
+        _source_id: str,
+        _sql: str,
+        _metadata_revision: str,
+    ) -> dict[str, object]:
+        raise RuntimeError(self.detail)
+
+
 def mcp_fixture() -> tuple[object, MetadataService]:
     registry = load_test_registry()
     metadata = MetadataService(registry, StaticCatalog())
@@ -81,6 +109,7 @@ async def test_mcp_exposes_fixed_tools_and_reuses_gateway_policy() -> None:
         ]
         assert all("host" not in tool.input_schema.get("properties", {}) for tool in listed_tools.tools)
         schemas = {tool.name: tool.input_schema for tool in listed_tools.tools}
+        assert all(schema["additionalProperties"] is False for schema in schemas.values())
         assert schemas["list_sources"]["properties"] == {}
         assert schemas["get_context"]["required"] == ["source_id", "question"]
         assert schemas["get_context"]["properties"]["max_objects"] == {
@@ -116,6 +145,30 @@ async def test_mcp_exposes_fixed_tools_and_reuses_gateway_policy() -> None:
             }
         }
 
+        rejected_extras = [
+            await client.call_tool("list_sources", {"host": "attacker.invalid"}),
+            await client.call_tool(
+                "get_context",
+                {
+                    "source_id": "development-issues",
+                    "question": "문제 수",
+                    "host": "attacker.invalid",
+                },
+            ),
+            await client.call_tool(
+                "query",
+                {
+                    "source_id": "development-issues",
+                    "sql": "SELECT count(*) FROM ai.issue_overview",
+                    "metadata_revision": f"sha256:{'0' * 64}",
+                    "tenant_id": "caller-selected-tenant",
+                },
+            ),
+        ]
+        assert all(result.is_error is True for result in rejected_extras)
+        assert all(result.structured_content is None for result in rejected_extras)
+        assert all("Extra inputs are not permitted" in str(result.content) for result in rejected_extras)
+
 
 async def test_mcp_context_revision_and_query_contract() -> None:
     server, _metadata = mcp_fixture()
@@ -147,3 +200,46 @@ async def test_mcp_context_revision_and_query_contract() -> None:
         assert mismatch.structured_content["error"]["code"] == (  # type: ignore[index]
             "METADATA_REVISION_MISMATCH"
         )
+
+
+async def test_mcp_sanitizes_unexpected_tool_errors(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caller = CallerContext(
+        caller_id="test-analyst",
+        tenant_id="engineering",
+        allowed_sources=frozenset({"development-issues"}),
+    )
+    server = create_mcp_server(
+        cast(GatewayService, ExplodingGateway()),
+        lambda: caller,
+    )
+    caplog.set_level(logging.ERROR, logger="query_man")
+
+    async with Client(server) as client:
+        results = [
+            await client.call_tool("list_sources", {}),
+            await client.call_tool(
+                "get_context",
+                {"source_id": "development-issues", "question": "문제 수"},
+            ),
+            await client.call_tool(
+                "query",
+                {
+                    "source_id": "development-issues",
+                    "sql": "SELECT count(*) FROM ai.issue_overview",
+                    "metadata_revision": f"sha256:{'0' * 64}",
+                },
+            ),
+        ]
+
+    expected = {
+        "error": {
+            "code": "INTERNAL_ERROR",
+            "message": "An internal error occurred.",
+        }
+    }
+    assert all(result.is_error is False for result in results)
+    assert all(result.structured_content == expected for result in results)
+    assert all(ExplodingGateway.detail not in str(result.content) for result in results)
+    assert caplog.messages.count("Unhandled MCP tool error") == 3

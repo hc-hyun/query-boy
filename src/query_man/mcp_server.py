@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 from typing import Annotated
 
@@ -9,6 +10,8 @@ from pydantic import Field
 from query_man.access import CallerContext
 from query_man.errors import AppError
 from query_man.gateway import GatewayService
+
+logger = logging.getLogger("query_man")
 
 SourceId = Annotated[str, Field(min_length=1, max_length=80)]
 Question = Annotated[str, Field(min_length=1, max_length=2_000)]
@@ -36,7 +39,7 @@ def create_mcp_server(
 
     @server.tool(description="List PostgreSQL sources authorized for the current caller.")
     def list_sources() -> dict[str, object]:
-        return gateway.list_sources(caller_provider())
+        return _safe_sync_call(lambda: gateway.list_sources(caller_provider()))
 
     @server.tool(description="Get question-scoped metadata and the revision required by query.")
     async def get_context(
@@ -68,6 +71,7 @@ def create_mcp_server(
             )
         )
 
+    _forbid_extra_tool_arguments(server, ("list_sources", "get_context", "query"))
     return server
 
 
@@ -76,7 +80,45 @@ async def _safe_call(pending: Awaitable[dict[str, object]]) -> dict[str, object]
         result: dict[str, object] = await pending
         return result
     except AppError as error:
-        body: dict[str, object] = {"code": error.code, "message": error.message}
-        if error.status_code < 500 and error.details is not None:
-            body["details"] = error.details
-        return {"error": body}
+        return _app_error_response(error)
+    except Exception as error:
+        logger.exception("Unhandled MCP tool error", exc_info=error)
+        return _internal_error_response()
+
+
+def _safe_sync_call(call: Callable[[], dict[str, object]]) -> dict[str, object]:
+    try:
+        return call()
+    except AppError as error:
+        return _app_error_response(error)
+    except Exception as error:
+        logger.exception("Unhandled MCP tool error", exc_info=error)
+        return _internal_error_response()
+
+
+def _app_error_response(error: AppError) -> dict[str, object]:
+    body: dict[str, object] = {"code": error.code, "message": error.message}
+    if error.status_code < 500 and error.details is not None:
+        body["details"] = error.details
+    return {"error": body}
+
+
+def _internal_error_response() -> dict[str, object]:
+    return {
+        "error": {
+            "code": "INTERNAL_ERROR",
+            "message": "An internal error occurred.",
+        }
+    }
+
+
+def _forbid_extra_tool_arguments(server: MCPServer, names: tuple[str, ...]) -> None:
+    # ponytail: MCP SDK 2.x has no public strict-arguments option; remove this when it does.
+    for name in names:
+        tool = server._tool_manager.get_tool(name)
+        if tool is None:  # pragma: no cover - names are registered immediately above.
+            raise RuntimeError(f"MCP tool was not registered: {name}")
+        argument_model = tool.fn_metadata.arg_model
+        argument_model.model_config["extra"] = "forbid"
+        argument_model.model_rebuild(force=True)
+        tool.parameters = argument_model.model_json_schema(by_alias=True)
