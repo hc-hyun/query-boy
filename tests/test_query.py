@@ -7,10 +7,15 @@ from typing import Any
 import pytest
 
 from query_man.app import _until_disconnect
-from query_man.errors import MetadataRevisionMismatchError, QueryRejectedError, QueryTimeoutError
+from query_man.errors import (
+    MetadataRevisionMismatchError,
+    QueryRejectedError,
+    QueryTimeoutError,
+    QueryUnavailableError,
+)
 from query_man.metadata import MetadataService
 from query_man.models import CatalogSnapshot, SourceProfile
-from query_man.query import PlanSummary, QueryService, _summarize_plan
+from query_man.query import PlanSummary, PostgresQueryExecutor, QueryService, _summarize_plan
 from query_man.registry import SourceRegistry
 from query_man.sql_validation import ValidatedSql
 from tests.helpers import load_test_registry, minimal_development_snapshot
@@ -143,6 +148,22 @@ def test_summarizes_nested_explain_plan() -> None:
 def test_rejects_plan_without_required_estimates() -> None:
     with pytest.raises(RuntimeError):
         _summarize_plan({"Plan Rows": 1})
+
+
+@pytest.mark.asyncio
+async def test_executor_rejects_new_queries_after_drain_starts() -> None:
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+    executor = PostgresQueryExecutor()
+    await executor.drain(0)
+
+    with pytest.raises(QueryUnavailableError):
+        await executor.execute(
+            source,
+            "SELECT 1",
+            "test-revision",
+            ValidatedSql("fingerprint", (), (), ()),
+        )
 
 
 @pytest.mark.asyncio

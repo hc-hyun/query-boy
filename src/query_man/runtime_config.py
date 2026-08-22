@@ -40,6 +40,12 @@ class _Environment(BaseModel):
         ge=250,
         le=300_000,
     )
+    shutdown_grace_ms: int = Field(
+        10_000,
+        alias="QUERY_MAN_SHUTDOWN_GRACE_MS",
+        ge=0,
+        le=300_000,
+    )
 
     @field_validator("log_level")
     @classmethod
@@ -65,6 +71,7 @@ class RuntimeConfig:
     control_dsn: str | None = None
     source_encryption_key: str | None = None
     source_reload_interval_ms: int = 5_000
+    shutdown_grace_ms: int = 10_000
 
 
 def load_runtime_config(
@@ -105,6 +112,7 @@ def load_runtime_config(
             else None
         ),
         source_reload_interval_ms=parsed.source_reload_interval_ms,
+        shutdown_grace_ms=parsed.shutdown_grace_ms,
     )
 
 

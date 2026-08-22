@@ -26,6 +26,7 @@ from query_man.mcp_server import create_mcp_server
 from query_man.metadata import MetadataService
 from query_man.metadata_store import PostgresMetadataStore
 from query_man.models import CatalogProvider
+from query_man.operations import operations
 from query_man.query import PostgresQueryExecutor, QueryExecutor, QueryService
 from query_man.registry import SourceRegistry, load_budget_profiles
 from query_man.runtime_config import RuntimeConfig
@@ -98,6 +99,7 @@ def build_app(
     query_executor: QueryExecutor | None = None,
     access_policy: AccessPolicy | None = None,
 ) -> FastAPI:
+    operations.reset()
     registry = registry or SourceRegistry.load(runtime_config.source_directory, runtime_config.budget_file)
     catalog = catalog or PostgresCatalog()
     source_ids = [source["source_id"] for source in registry.list()]
@@ -192,10 +194,14 @@ def build_app(
             try:
                 yield
             finally:
+                operations.set_accepting(False)
                 if reload_task is not None:
                     reload_task.cancel()
                     with suppress(asyncio.CancelledError):
                         await reload_task
+                drain = getattr(query_executor, "drain", None)
+                if callable(drain):
+                    await drain(runtime_config.shutdown_grace_ms)
                 try:
                     await query_executor.close()
                 finally:
@@ -222,7 +228,20 @@ def build_app(
 
     @app.middleware("http")
     async def authenticate(request: Request, call_next: object) -> JSONResponse:
-        if request.url.path != "/health":
+        if (
+            operations.public_status() == "shutting_down"
+            and request.url.path not in {"/health", "/ready"}
+        ):
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": {
+                        "code": "SERVICE_SHUTTING_DOWN",
+                        "message": "The service is shutting down.",
+                    }
+                },
+            )
+        if request.url.path not in {"/health", "/ready"}:
             authorization = request.headers.get("authorization")
             received = (
                 authorization[7:]
@@ -299,6 +318,29 @@ def build_app(
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/ready")
+    async def readiness() -> JSONResponse:
+        status = operations.public_status()
+        return JSONResponse(
+            status_code=200 if status == "ready" else 503,
+            content={"status": status},
+        )
+
+    @app.get("/admin/health")
+    async def detailed_health(request: Request) -> dict[str, object]:
+        _require_operator(request)
+        snapshot = operations.snapshot()
+        return {
+            "status": operations.public_status(),
+            "accepting": snapshot["accepting"],
+            "sources": snapshot["sources"],
+        }
+
+    @app.get("/admin/metrics")
+    async def metrics(request: Request) -> dict[str, object]:
+        _require_operator(request)
+        return operations.snapshot()
 
     @app.get("/sources")
     async def sources(request: Request) -> dict[str, object]:

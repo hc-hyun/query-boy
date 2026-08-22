@@ -23,6 +23,7 @@ from query_man.models import (
     RelationSemantic,
     SourceProfile,
 )
+from query_man.operations import operations
 from query_man.quality_level import QualityLevelReport, assess_quality_level
 from query_man.registry import SourceRegistry
 from query_man.relevance import (
@@ -204,13 +205,17 @@ class MetadataService:
                 raise MetadataUnavailableError from error
             if stored is not None:
                 self._cache_value(source.source_id, stored)
+                operations.set_source_health(source.source_id, "healthy")
                 return stored, False
         now = self._now()
         if cached and cached.expires_at > now:
             return cached.value, False
         if cached and cached.next_refresh_at > now:
             if now - cached.loaded_at <= self._max_stale_ms:
+                operations.increment("metadata_stale_served", source.source_id)
+                operations.set_source_health(source.source_id, "stale")
                 return cached.value, True
+            operations.set_source_health(source.source_id, "unavailable")
             raise MetadataUnavailableError
         try:
             return await self._refresh(source), False
@@ -220,7 +225,12 @@ class MetadataService:
             failed_at = self._now()
             if cached and failed_at - cached.loaded_at <= self._max_stale_ms:
                 cached.next_refresh_at = failed_at + self._refresh_retry_ms
+                operations.increment("metadata_refresh_failed", source.source_id)
+                operations.increment("metadata_stale_served", source.source_id)
+                operations.set_source_health(source.source_id, "stale")
                 return cached.value, True
+            operations.increment("metadata_refresh_failed", source.source_id)
+            operations.set_source_health(source.source_id, "unavailable")
             raise MetadataUnavailableError from error
 
     async def _refresh(self, source: SourceProfile) -> PreparedMetadata:
@@ -235,15 +245,25 @@ class MetadataService:
             self._refreshes.pop(source.source_id, None)
 
     async def _load_and_validate(self, source: SourceProfile) -> PreparedMetadata:
+        operations.increment("metadata_refresh_started", source.source_id)
         snapshot = await self._catalog.load(source)
         issues = _validate_snapshot(source, snapshot)
         if issues:
+            operations.increment("metadata_validation_rejected", source.source_id)
+            operations.set_source_health(source.source_id, "unavailable")
             raise MetadataUnavailableError({"contract_violations": issues})
         value = PreparedMetadata(snapshot, create_metadata_revision(source, snapshot))
-        self._require_quality(source, value)
+        try:
+            self._require_quality(source, value)
+        except MetadataUnavailableError:
+            operations.increment("metadata_validation_rejected", source.source_id)
+            operations.set_source_health(source.source_id, "unavailable")
+            raise
         if self._store is not None:
             value = await self._store.publish(source, value)
         self._cache_value(source.source_id, value)
+        operations.increment("metadata_refresh_succeeded", source.source_id)
+        operations.set_source_health(source.source_id, "healthy")
         return value
 
     def _cache_value(self, source_id: str, value: PreparedMetadata) -> None:

@@ -23,6 +23,7 @@ from query_man.errors import (
 )
 from query_man.metadata import MetadataService
 from query_man.models import SourceProfile
+from query_man.operations import operations
 from query_man.registry import SourceRegistry
 from query_man.sql_validation import SqlValidationError, ValidatedSql, validate_sql
 
@@ -125,6 +126,7 @@ class QueryService:
             raise QueryRejectedError("TENANT_CONTEXT_REQUIRED")
         published = await self._metadata.get_published(source_id)
         if metadata_revision != published.revision:
+            operations.increment("query_revision_rejected", source.source_id)
             raise MetadataRevisionMismatchError
         try:
             validated = validate_sql(
@@ -133,6 +135,7 @@ class QueryService:
                 max_sql_bytes=source.budget.max_sql_bytes,
             )
         except SqlValidationError as error:
+            operations.increment("query_rejected", source.source_id)
             raise QueryRejectedError(error.code) from error
         return await self._executor.execute(
             source,
@@ -154,6 +157,7 @@ class PostgresQueryExecutor:
         self._pool_lock = asyncio.Lock()
         self._active_lock = asyncio.Lock()
         self._active: dict[str, _ActiveQuery] = {}
+        self._accepting = True
 
     async def execute(
         self,
@@ -165,6 +169,8 @@ class PostgresQueryExecutor:
         query_id: str | None = None,
         tenant_id: str | None = None,
     ) -> dict[str, object]:
+        if not self._accepting:
+            raise QueryUnavailableError
         query_id = query_id or str(uuid.uuid4())
         if source.tenant_isolation == "rls" and tenant_id is None:
             raise QueryRejectedError("TENANT_CONTEXT_REQUIRED")
@@ -180,9 +186,12 @@ class PostgresQueryExecutor:
                 timeout=source.budget.query_queue_timeout_ms / 1000,
             )
         except TimeoutError as error:
+            operations.increment("query_queue_rejected", source.source_id)
             raise QueryOverloadedError from error
 
         queue_ms = round((time.monotonic() - queued_at) * 1000)
+        operations.observe("query_queue_ms", queue_ms, source.source_id)
+        operations.increment("query_execution_started", source.source_id)
         try:
             pool = await self._get_pool(source)
             try:
@@ -207,14 +216,21 @@ class PostgresQueryExecutor:
                             async with self._active_lock:
                                 self._active.pop(query_id, None)
             except PoolTimeout as error:
+                operations.increment("query_pool_exhausted", source.source_id)
                 raise QueryOverloadedError from error
             except TimeoutError as error:
+                operations.increment("query_timeout", source.source_id)
                 raise QueryTimeoutError from error
             except errors.QueryCanceled as error:
+                operations.increment("query_cancelled", source.source_id)
                 raise QueryTimeoutError from error
-            except (QueryRejectedError, QueryOverloadedError, QueryTimeoutError):
+            except QueryRejectedError:
+                operations.increment("query_rejected", source.source_id)
+                raise
+            except (QueryOverloadedError, QueryTimeoutError):
                 raise
             except Exception as error:
+                operations.increment("query_failed", source.source_id)
                 raise QueryUnavailableError from error
         finally:
             semaphore.release()
@@ -225,15 +241,37 @@ class PostgresQueryExecutor:
             if active is None or active.source_id not in allowed_sources:
                 return False
             await active.connection.cancel_safe(timeout=1)
+            operations.increment("query_cancel_requested", active.source_id)
             return True
 
     async def close(self) -> None:
-        async with self._active_lock:
-            for active in self._active.values():
-                await active.connection.cancel_safe(timeout=1)
+        if self._accepting:
+            await self.drain(0)
+        else:
+            async with self._active_lock:
+                active = list(self._active.values())
+            for query in active:
+                await query.connection.cancel_safe(timeout=1)
         for pool in self._pools.values():
             await pool.close()
         self._pools.clear()
+
+    async def drain(self, grace_ms: int) -> None:
+        self._accepting = False
+        operations.increment("shutdown_started")
+        deadline = time.monotonic() + grace_ms / 1_000
+        while True:
+            async with self._active_lock:
+                active = list(self._active.values())
+            if not active:
+                operations.increment("shutdown_drained")
+                return
+            if time.monotonic() >= deadline:
+                for query in active:
+                    await query.connection.cancel_safe(timeout=1)
+                operations.increment("shutdown_forced_cancel", value=len(active))
+                return
+            await asyncio.sleep(min(0.01, max(0.0, deadline - time.monotonic())))
 
     async def invalidate(self, source_id: str) -> None:
         async with self._pool_lock:
@@ -344,6 +382,11 @@ class PostgresQueryExecutor:
             await _rollback_quietly(connection)
             raise
 
+        elapsed_ms = round((time.monotonic() - started_at) * 1000)
+        operations.increment("query_execution_succeeded", source.source_id)
+        operations.observe("query_elapsed_ms", elapsed_ms, source.source_id)
+        if truncated:
+            operations.increment("query_truncated", source.source_id)
         return {
             "status": "ok",
             "query_id": query_id,
@@ -355,7 +398,7 @@ class PostgresQueryExecutor:
             "result_bytes": result_bytes,
             "truncated": truncated,
             "queue_ms": queue_ms,
-            "elapsed_ms": round((time.monotonic() - started_at) * 1000),
+            "elapsed_ms": elapsed_ms,
             "plan_summary": asdict(plan),
         }
 

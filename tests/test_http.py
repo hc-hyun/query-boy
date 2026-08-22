@@ -118,6 +118,27 @@ async def test_lists_sources_without_connection_information() -> None:
 
 
 @pytest.mark.asyncio
+async def test_public_readiness_hides_inventory_and_operator_metrics_are_detailed() -> None:
+    async with client(ReturningCatalog(minimal_development_snapshot())) as session:
+        ready = await session.get("/ready")
+        await session.post(
+            "/meta",
+            json={"source_id": "development-issues", "question": "최근 문제"},
+        )
+        detailed = await session.get("/admin/health")
+        metrics = await session.get("/admin/metrics")
+
+    assert ready.status_code == 200
+    assert ready.json() == {"status": "ready"}
+    assert "development-issues" not in ready.text
+    assert detailed.json()["sources"]["development-issues"] == "healthy"
+    assert any(
+        metric["name"] == "metadata_refresh_succeeded"
+        for metric in metrics.json()["metrics"]
+    )
+
+
+@pytest.mark.asyncio
 async def test_bearer_token_is_required_when_configured(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

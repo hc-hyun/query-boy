@@ -23,7 +23,12 @@ from psycopg.conninfo import make_conninfo
 
 from query_man.app import build_app
 from query_man.catalog import PostgresCatalog
-from query_man.errors import QueryOverloadedError, QueryRejectedError, QueryTimeoutError
+from query_man.errors import (
+    QueryOverloadedError,
+    QueryRejectedError,
+    QueryTimeoutError,
+    QueryUnavailableError,
+)
 from query_man.metadata import MetadataService
 from query_man.models import CatalogSnapshot, SourceProfile
 from query_man.query import PostgresQueryExecutor, QueryService
@@ -808,7 +813,12 @@ async def test_streamable_http_mcp_runs_all_golden_queries() -> None:
 @pytest.mark.asyncio
 async def test_live_query_concurrency_cancel_and_source_isolation() -> None:
     load_dotenv(ROOT_DIRECTORY / ".env")
-    required = ["DEVELOPMENT_ISSUES_READER_PASSWORD", "MARKET_VOC_READER_PASSWORD"]
+    required = [
+        "DEVELOPMENT_ISSUES_READER_PASSWORD",
+        "MARKET_VOC_READER_PASSWORD",
+        "POSTGRES_USER",
+        "POSTGRES_PASSWORD",
+    ]
     if any(not os.environ.get(name) for name in required):
         pytest.skip("local reader credentials are not configured")
 
@@ -927,6 +937,25 @@ async def test_live_query_concurrency_cancel_and_source_isolation() -> None:
             )
         )
         await asyncio.sleep(0.05)
+        observer = await AsyncConnection.connect(
+            make_conninfo(
+                host="127.0.0.1",
+                port=os.environ.get("POSTGRES_PORT", "5432"),
+                dbname="development_issues",
+                user=os.environ["POSTGRES_USER"],
+                password=os.environ["POSTGRES_PASSWORD"],
+                sslmode="disable",
+            )
+        )
+        try:
+            activity = await observer.execute(
+                "SELECT application_name FROM pg_catalog.pg_stat_activity "
+                "WHERE application_name = %s",
+                (f"query-man:{operator_query_id}",),
+            )
+            assert await activity.fetchone() == (f"query-man:{operator_query_id}",)
+        finally:
+            await observer.close()
         assert await executor.cancel(operator_query_id, frozenset({"market-voc"})) is False
         assert await executor.cancel(
             operator_query_id,
@@ -942,6 +971,26 @@ async def test_live_query_concurrency_cancel_and_source_isolation() -> None:
             dev_count_validated,
         )
         assert recovered_after_operator_cancel["rows"] == [{"issue_count": 600}]
+
+        slow_task = asyncio.create_task(
+            executor.execute(
+                limited_development,
+                slow_sql,
+                development_metadata.revision,
+                slow_validated,
+            )
+        )
+        await asyncio.sleep(0.05)
+        await executor.drain(20)
+        with pytest.raises(QueryTimeoutError):
+            await slow_task
+        with pytest.raises(QueryUnavailableError):
+            await executor.execute(
+                limited_development,
+                dev_count_sql,
+                development_metadata.revision,
+                dev_count_validated,
+            )
     finally:
         if slow_task is not None:
             if not slow_task.done():

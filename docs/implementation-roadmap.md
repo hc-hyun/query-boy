@@ -151,14 +151,14 @@ Dependencies: `DEC-09`, `ONB-01`
 
 ## 8. Observability And Operations
 
-- [ ] `OPS-01` Credential, bearer token, SQL literal과 DB error detail을 제거하는 구조화 logging 정책을 구현한다.
-- [ ] `OPS-02` Metadata refresh, validation reject, queue, execution, timeout, cancel과 truncation metric을 제공한다.
-- [ ] `OPS-03` Source별 health/readiness를 정의하되 public health가 source inventory를 노출하지 않게 한다.
-- [ ] `OPS-04` `query_id`로 application log와 PostgreSQL activity를 연계한다.
-- [ ] `OPS-05` Revision publish 실패, stale 상한 초과, reject 급증과 pool 고갈 alert 기준을 정의한다.
-- [ ] `OPS-06` Graceful shutdown 중 신규 query를 거부하고 실행 중 query를 제한 시간 안에 종료한다.
-- [ ] `OPS-07` Migration, backup, restore와 disaster recovery runbook을 작성하고 복구 훈련을 검증한다.
-- [ ] `OPS-08` Dependency, container, secret scanning과 정기 보안 업데이트 절차를 CI에 추가한다.
+- [x] `OPS-01` Credential, bearer token, SQL literal과 DB error detail을 제거하는 구조화 logging 정책을 구현한다.
+- [x] `OPS-02` Metadata refresh, validation reject, queue, execution, timeout, cancel과 truncation metric을 제공한다.
+- [x] `OPS-03` Source별 health/readiness를 정의하되 public health가 source inventory를 노출하지 않게 한다.
+- [x] `OPS-04` `query_id`로 application log와 PostgreSQL activity를 연계한다.
+- [x] `OPS-05` Revision publish 실패, stale 상한 초과, reject 급증과 pool 고갈 alert 기준을 정의한다.
+- [x] `OPS-06` Graceful shutdown 중 신규 query를 거부하고 실행 중 query를 제한 시간 안에 종료한다.
+- [x] `OPS-07` Migration, backup, restore와 disaster recovery runbook을 작성하고 복구 훈련을 검증한다.
+- [x] `OPS-08` Dependency, container, secret scanning과 정기 보안 업데이트 절차를 CI에 추가한다.
 
 ## 9. Release Acceptance
 

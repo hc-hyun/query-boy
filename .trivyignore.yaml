@@ -1,0 +1,9 @@
+vulnerabilities:
+  - id: CVE-2025-68121
+    paths:
+      - "usr/local/bin/gosu"
+    expired_at: 2026-09-30
+    statement: >-
+      The official PostgreSQL 18.6 image uses gosu only for a local UID/GID
+      transition in its entrypoint; gosu never establishes or resumes TLS.
+      Recheck for an upstream image rebuild before this exception expires.
