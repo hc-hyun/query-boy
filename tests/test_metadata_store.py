@@ -59,26 +59,83 @@ async def test_postgres_metadata_store_publishes_immutable_revisions_and_rolls_b
     second = PreparedMetadata(second_snapshot, create_metadata_revision(source, second_snapshot))
     store = PostgresMetadataStore(dsn)
     try:
-        await store.unpin(source)
-        await store.publish(source, first)
-        await store.publish(source, second)
+        try:
+            await store.unpin(source)
+        except StoredMetadataNotFoundError:
+            pass
+        published_first = await store.publish(source, first)
+        published_second = await store.publish(source, second)
+        assert published_first.freshness_age_ms is not None
+        assert published_first.freshness_age_ms >= 0
+        assert published_second.freshness_age_ms is not None
+        assert published_second.freshness_age_ms >= 0
         assert (await store.get_active(source)) == second
 
         rolled_back = await store.activate(source, first.revision)
         assert rolled_back == first
+        assert rolled_back.freshness_age_ms is not None
+        assert rolled_back.freshness_age_ms >= 0
         assert (await store.get_active(source)) == first
-        assert (await store.publish(source, second)) == first
-        await store.unpin(source)
-        assert (await store.publish(source, second)) == second
-
-        with pytest.raises(StoredMetadataNotFoundError):
-            await store.activate(source, f"sha256:{'0' * 64}")
-        incompatible = replace(source, allowed_schemas=["other"])
-        with pytest.raises(StoredMetadataInvalidError):
-            await store.get_active(incompatible)
 
         connection = await AsyncConnection.connect(dsn)
         try:
+            await connection.execute(
+                "UPDATE control.active_metadata_revisions "
+                "SET activated_at = clock_timestamp() - interval '10 seconds' "
+                "WHERE source_id = %s",
+                (source.source_id,),
+            )
+            await connection.commit()
+            aged = await store.get_active(source)
+            assert aged is not None
+            assert aged.freshness_age_ms is not None
+            assert aged.freshness_age_ms >= 9_000
+
+            same_revision = await store.publish(source, first)
+            assert same_revision == first
+            assert same_revision.freshness_age_ms is not None
+            assert same_revision.freshness_age_ms < 5_000
+            pinned = await connection.execute(
+                "SELECT pinned FROM control.active_metadata_revisions "
+                "WHERE source_id = %s",
+                (source.source_id,),
+            )
+            assert await pinned.fetchone() == (True,)
+
+            await connection.execute(
+                "UPDATE control.active_metadata_revisions "
+                "SET activated_at = clock_timestamp() - interval '10 seconds' "
+                "WHERE source_id = %s",
+                (source.source_id,),
+            )
+            await connection.commit()
+            pinned_different = await store.publish(source, second)
+            assert pinned_different == first
+            assert pinned_different.freshness_age_ms is not None
+            assert pinned_different.freshness_age_ms >= 9_000
+
+            await connection.execute(
+                "UPDATE control.active_metadata_revisions "
+                "SET activated_at = clock_timestamp() + interval '10 seconds' "
+                "WHERE source_id = %s",
+                (source.source_id,),
+            )
+            await connection.commit()
+            with pytest.raises(StoredMetadataInvalidError):
+                await store.get_active(source)
+
+            await store.unpin(source)
+            refreshed = await store.publish(source, second)
+            assert refreshed == second
+            assert refreshed.freshness_age_ms is not None
+            assert refreshed.freshness_age_ms < 5_000
+
+            with pytest.raises(StoredMetadataNotFoundError):
+                await store.activate(source, f"sha256:{'0' * 64}")
+            incompatible = replace(source, allowed_schemas=["other"])
+            with pytest.raises(StoredMetadataInvalidError):
+                await store.get_active(incompatible)
+
             privileges = await connection.execute(
                 "SELECT "
                 "has_table_privilege('query_man_control_writer', "

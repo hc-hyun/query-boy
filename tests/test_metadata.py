@@ -42,6 +42,16 @@ class SequencedCatalog(StaticCatalog):
         return self.snapshot
 
 
+class FailingCatalog(StaticCatalog):
+    def __init__(self, snapshot: CatalogSnapshot) -> None:
+        super().__init__(snapshot)
+        self.load_count = 0
+
+    async def load(self, _source: SourceProfile) -> CatalogSnapshot:
+        self.load_count += 1
+        raise RuntimeError("temporary catalog failure")
+
+
 class SnapshotSequenceCatalog:
     def __init__(self, snapshots: list[CatalogSnapshot]) -> None:
         self.snapshots = iter(snapshots)
@@ -108,6 +118,20 @@ class MemoryMetadataStore:
 
     async def close(self) -> None:
         self.closed = True
+
+
+def test_freshness_provenance_is_not_part_of_metadata_identity() -> None:
+    registry = load_test_registry()
+    source = registry.get("development-issues")
+    assert source is not None
+    snapshot = minimal_development_snapshot()
+    revision = create_metadata_revision(source, snapshot)
+
+    assert PreparedMetadata(snapshot, revision, 10) == PreparedMetadata(
+        snapshot,
+        revision,
+        20,
+    )
 
 
 @pytest.mark.asyncio
@@ -353,6 +377,120 @@ async def test_publishes_and_restores_active_metadata_across_service_restart() -
     )
     restored = await restarted.get_published("development-issues")
     assert restored == published
+
+
+@pytest.mark.asyncio
+async def test_restored_provenance_uses_remaining_ttl_and_stale_bound() -> None:
+    registry = load_test_registry()
+    source = registry.get("development-issues")
+    assert source is not None
+    snapshot = minimal_development_snapshot()
+    revision = create_metadata_revision(source, snapshot)
+    restored = PreparedMetadata(snapshot, revision, freshness_age_ms=9)
+    store = MemoryMetadataStore()
+    store.values[source.source_id] = {revision: restored}
+    store.active[source.source_id] = revision
+    catalog = FailingCatalog(snapshot)
+    clock = [1_000]
+    service = MetadataService(
+        registry,
+        catalog,
+        cache_ttl_ms=10,
+        max_stale_ms=20,
+        refresh_retry_ms=100,
+        now=lambda: clock[0],
+        store=store,
+    )
+
+    fresh = await service.get_context(source.source_id, "최근 문제")
+    clock[0] = 1_002
+    stale = await service.get_context(source.source_id, "최근 문제")
+    clock[0] = 1_012
+
+    assert fresh["snapshot_status"] == "fresh"
+    assert stale["snapshot_status"] == "stale"
+    assert catalog.load_count == 1
+    with pytest.raises(MetadataUnavailableError):
+        await service.get_context(source.source_id, "최근 문제")
+
+
+@pytest.mark.parametrize(
+    ("freshness_age_ms", "unavailable"),
+    [(15, False), (21, True)],
+)
+@pytest.mark.asyncio
+async def test_pinned_different_revision_uses_active_freshness(
+    freshness_age_ms: int,
+    unavailable: bool,
+) -> None:
+    registry = load_test_registry()
+    source = registry.get("development-issues")
+    assert source is not None
+    active_snapshot = minimal_development_snapshot()
+    active_revision = create_metadata_revision(source, active_snapshot)
+    active = PreparedMetadata(
+        active_snapshot,
+        active_revision,
+        freshness_age_ms=freshness_age_ms,
+    )
+    candidate_snapshot = minimal_development_snapshot()
+    candidate_snapshot.relations[0].comment = "different candidate"
+    store = MemoryMetadataStore()
+    store.values[source.source_id] = {active_revision: active}
+    store.active[source.source_id] = active_revision
+    store.pinned.add(source.source_id)
+    service = MetadataService(
+        registry,
+        StaticCatalog(candidate_snapshot),
+        cache_ttl_ms=10,
+        max_stale_ms=20,
+        now=lambda: 1_000,
+        store=store,
+    )
+
+    if unavailable:
+        with pytest.raises(MetadataUnavailableError):
+            await service.get_context(source.source_id, "최근 문제")
+    else:
+        response = await service.get_context(source.source_id, "최근 문제")
+        assert response["snapshot_status"] == "stale"
+        assert response["metadata_revision"] == active_revision
+    assert store.active[source.source_id] == active_revision
+
+
+@pytest.mark.asyncio
+async def test_resume_preserves_provenance_and_forces_refresh() -> None:
+    registry = load_test_registry()
+    source = registry.get("development-issues")
+    assert source is not None
+    snapshot = minimal_development_snapshot()
+    revision = create_metadata_revision(source, snapshot)
+    restored = PreparedMetadata(snapshot, revision, freshness_age_ms=15)
+    store = MemoryMetadataStore()
+    store.values[source.source_id] = {revision: restored}
+    store.active[source.source_id] = revision
+    store.pinned.add(source.source_id)
+    catalog = FailingCatalog(snapshot)
+    clock = [1_000]
+    service = MetadataService(
+        registry,
+        catalog,
+        cache_ttl_ms=100,
+        max_stale_ms=20,
+        refresh_retry_ms=100,
+        now=lambda: clock[0],
+        store=store,
+    )
+
+    await service.resume_automatic_publish(source.source_id)
+    stale = await service.get_context(source.source_id, "최근 문제")
+    clock[0] = 1_006
+
+    assert stale["snapshot_status"] == "stale"
+    assert catalog.load_count == 1
+    assert source.source_id not in store.pinned
+    with pytest.raises(MetadataUnavailableError):
+        await service.get_context(source.source_id, "최근 문제")
 
 
 @pytest.mark.asyncio

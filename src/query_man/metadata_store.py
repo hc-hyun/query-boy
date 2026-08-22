@@ -97,19 +97,15 @@ class PostgresMetadataStore:
     async def get_active(self, source: SourceProfile) -> PreparedMetadata | None:
         pool = await self._get_pool()
         async with pool.connection() as connection:
-            cursor = await connection.execute(
-                "SELECT active.revision, snapshot.snapshot "
-                "FROM control.active_metadata_revisions AS active "
-                "JOIN control.metadata_snapshots AS snapshot "
-                "ON snapshot.source_id = active.source_id "
-                "AND snapshot.revision = active.revision "
-                "WHERE active.source_id = %s",
-                (source.source_id,),
-            )
-            row = await cursor.fetchone()
+            row = await _read_active(connection, source.source_id)
         if row is None:
             return None
-        return _decode(source, str(row["revision"]), row["snapshot"])
+        return _decode(
+            source,
+            str(row["revision"]),
+            row["snapshot"],
+            freshness_age_ms=int(row["freshness_age_ms"]),
+        )
 
     async def get_revision(self, source: SourceProfile, revision: str) -> PreparedMetadata:
         pool = await self._get_pool()
@@ -149,22 +145,19 @@ class PostgresMetadataStore:
                 "VALUES (%s, %s, false, clock_timestamp()) "
                 "ON CONFLICT (source_id) DO UPDATE "
                 "SET revision = EXCLUDED.revision, activated_at = EXCLUDED.activated_at "
-                "WHERE NOT control.active_metadata_revisions.pinned",
+                "WHERE NOT control.active_metadata_revisions.pinned "
+                "OR control.active_metadata_revisions.revision = EXCLUDED.revision",
                 (source.source_id, value.revision),
             )
-            cursor = await connection.execute(
-                "SELECT active.revision, snapshot.snapshot "
-                "FROM control.active_metadata_revisions AS active "
-                "JOIN control.metadata_snapshots AS snapshot "
-                "ON snapshot.source_id = active.source_id "
-                "AND snapshot.revision = active.revision "
-                "WHERE active.source_id = %s",
-                (source.source_id,),
-            )
-            active = await cursor.fetchone()
+            active = await _read_active(connection, source.source_id)
             if active is None:
                 raise StoredMetadataInvalidError("Active metadata revision is unavailable")
-        return _decode(source, str(active["revision"]), active["snapshot"])
+        return _decode(
+            source,
+            str(active["revision"]),
+            active["snapshot"],
+            freshness_age_ms=int(active["freshness_age_ms"]),
+        )
 
     async def activate(self, source: SourceProfile, revision: str) -> PreparedMetadata:
         pool = await self._get_pool()
@@ -179,7 +172,7 @@ class PostgresMetadataStore:
             row = await cursor.fetchone()
             if row is None:
                 raise StoredMetadataNotFoundError("Stored metadata revision was not found")
-            value = _decode(source, revision, row["snapshot"])
+            _decode(source, revision, row["snapshot"])
             await connection.execute(
                 "INSERT INTO control.active_metadata_revisions "
                 "(source_id, revision, pinned, activated_at) "
@@ -189,7 +182,15 @@ class PostgresMetadataStore:
                 "activated_at = EXCLUDED.activated_at",
                 (source.source_id, revision),
             )
-        return value
+            active = await _read_active(connection, source.source_id)
+            if active is None:
+                raise StoredMetadataInvalidError("Active metadata revision is unavailable")
+        return _decode(
+            source,
+            str(active["revision"]),
+            active["snapshot"],
+            freshness_age_ms=int(active["freshness_age_ms"]),
+        )
 
     async def unpin(self, source: SourceProfile) -> None:
         pool = await self._get_pool()
@@ -238,6 +239,22 @@ async def _lock_source_transition(connection: Any, source_id: str) -> None:
         "pg_catalog.hashtextextended(%s, 0))",
         (source_id,),
     )
+
+
+async def _read_active(connection: Any, source_id: str) -> dict[str, Any] | None:
+    cursor = await connection.execute(
+        "SELECT active.revision, snapshot.snapshot, "
+        "floor(extract(epoch FROM (clock_timestamp() - active.activated_at)) "
+        "* 1000)::bigint AS freshness_age_ms "
+        "FROM control.active_metadata_revisions AS active "
+        "JOIN control.metadata_snapshots AS snapshot "
+        "ON snapshot.source_id = active.source_id "
+        "AND snapshot.revision = active.revision "
+        "WHERE active.source_id = %s",
+        (source_id,),
+    )
+    row: dict[str, Any] | None = await cursor.fetchone()
+    return row
 
 
 async def _require_current_source(connection: Any, source: SourceProfile) -> None:
@@ -321,7 +338,13 @@ def encode_snapshot(snapshot: CatalogSnapshot) -> dict[str, object]:
     }
 
 
-def _decode(source: SourceProfile, revision: str, raw: object) -> PreparedMetadata:
+def _decode(
+    source: SourceProfile,
+    revision: str,
+    raw: object,
+    *,
+    freshness_age_ms: int | None = None,
+) -> PreparedMetadata:
     try:
         document = _SnapshotDocument.model_validate(raw)
         snapshot = CatalogSnapshot(
@@ -397,7 +420,9 @@ def _decode(source: SourceProfile, revision: str, raw: object) -> PreparedMetada
             raise StoredMetadataInvalidError("Stored index columns are invalid")
     if create_metadata_revision(source, snapshot) != revision:
         raise StoredMetadataInvalidError("Stored metadata is incompatible with the source contract")
-    return PreparedMetadata(snapshot, revision)
+    if freshness_age_ms is not None and freshness_age_ms < 0:
+        raise StoredMetadataInvalidError("Stored metadata activation time is in the future")
+    return PreparedMetadata(snapshot, revision, freshness_age_ms)
 
 
 def _quote_identifier(value: str) -> str:

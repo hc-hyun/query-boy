@@ -45,6 +45,10 @@ class _CacheEntry:
     next_refresh_at: int
 
 
+class _PinnedActiveRevision(Exception):
+    pass
+
+
 class MetadataService:
     def __init__(
         self,
@@ -63,7 +67,7 @@ class MetadataService:
         self._cache_ttl_ms = cache_ttl_ms
         self._max_stale_ms = max_stale_ms
         self._refresh_retry_ms = refresh_retry_ms
-        self._now = now or (lambda: int(time.time() * 1000))
+        self._now = now or (lambda: time.monotonic_ns() // 1_000_000)
         self._store = store
         self._verified_revisions = verified_revisions
         self._cache: dict[str, _CacheEntry] = {}
@@ -208,12 +212,9 @@ class MetadataService:
         self._require_current(source, epoch)
         self._require_compatible(source, active)
         now = self._now()
-        self._cache[source_id] = _CacheEntry(
-            value=active,
-            loaded_at=now,
-            expires_at=now,
-            next_refresh_at=now,
-        )
+        self._cache_value(source_id, active)
+        self._cache[source_id].expires_at = now
+        self._cache[source_id].next_refresh_at = now
 
     async def _get_prepared(self, source: SourceProfile) -> tuple[PreparedMetadata, bool]:
         epoch = self._source_epochs.get(source.source_id, 0)
@@ -227,12 +228,12 @@ class MetadataService:
             if stored is not None:
                 self._require_compatible(source, stored)
                 self._cache_value(source.source_id, stored)
-                operations.set_source_health(source.source_id, "healthy")
-                return stored, False
+                cached = self._cache[source.source_id]
         now = self._now()
         if cached and cached.expires_at > now:
             self._require_current(source, epoch)
             self._require_compatible(source, cached.value)
+            operations.set_source_health(source.source_id, "healthy")
             return cached.value, False
         if cached and cached.next_refresh_at > now:
             if now - cached.loaded_at <= self._max_stale_ms:
@@ -247,6 +248,18 @@ class MetadataService:
             return await self._refresh(source, epoch), False
         except MetadataUnavailableError:
             raise
+        except _PinnedActiveRevision as error:
+            pinned_at = self._now()
+            cached = self._cache.get(source.source_id)
+            if cached and pinned_at - cached.loaded_at <= self._max_stale_ms:
+                self._require_current(source, epoch)
+                self._require_compatible(source, cached.value)
+                cached.next_refresh_at = pinned_at + self._refresh_retry_ms
+                operations.increment("metadata_stale_served", source.source_id)
+                operations.set_source_health(source.source_id, "stale")
+                return cached.value, True
+            operations.set_source_health(source.source_id, "unavailable")
+            raise MetadataUnavailableError from error
         except ReaderSessionPolicyError as error:
             operations.increment("metadata_refresh_failed", source.source_id)
             operations.set_source_health(source.source_id, "unavailable")
@@ -285,28 +298,34 @@ class MetadataService:
             operations.increment("metadata_validation_rejected", source.source_id)
             operations.set_source_health(source.source_id, "unavailable")
             raise MetadataUnavailableError({"contract_violations": issues})
-        value = PreparedMetadata(snapshot, create_metadata_revision(source, snapshot))
+        candidate = PreparedMetadata(snapshot, create_metadata_revision(source, snapshot))
         try:
-            self._require_quality(source, value)
+            self._require_quality(source, candidate)
         except MetadataUnavailableError:
             operations.increment("metadata_validation_rejected", source.source_id)
             operations.set_source_health(source.source_id, "unavailable")
             raise
         self._require_current(source, epoch)
+        value = candidate
         if self._store is not None:
             try:
-                value = await self._store.publish(source, value)
+                value = await self._store.publish(source, candidate)
             except StoredMetadataSupersededError as error:
                 raise MetadataUnavailableError from error
         self._require_current(source, epoch)
         self._require_compatible(source, value)
         self._cache_value(source.source_id, value)
         operations.increment("metadata_refresh_succeeded", source.source_id)
+        if value.revision != candidate.revision:
+            raise _PinnedActiveRevision
         operations.set_source_health(source.source_id, "healthy")
         return value
 
     def _cache_value(self, source_id: str, value: PreparedMetadata) -> None:
-        loaded_at = self._now()
+        freshness_age_ms = value.freshness_age_ms or 0
+        if freshness_age_ms < 0:
+            raise MetadataUnavailableError
+        loaded_at = self._now() - freshness_age_ms
         self._cache[source_id] = _CacheEntry(
             value=value,
             loaded_at=loaded_at,

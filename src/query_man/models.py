@@ -203,6 +203,7 @@ class CatalogSnapshot:
 class PreparedMetadata:
     snapshot: CatalogSnapshot
     revision: str
+    freshness_age_ms: int | None = field(default=None, compare=False)
 
 
 class CatalogProvider(Protocol):
