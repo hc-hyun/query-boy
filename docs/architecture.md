@@ -183,6 +183,8 @@ Schema drift로 overlay가 깨지면 신규 revision 발행을 중단하고 마�
   [ADR 0007](decisions/0007-immutable-metadata-publishing.md)을 따른다.
 - Physical primary/foreign key와 index 공개 범위는
   [ADR 0008](decisions/0008-physical-key-and-index-disclosure.md)을 따른다.
+- Wide relation의 question-scoped column disclosure는
+  [ADR 0009](decisions/0009-question-scoped-column-disclosure.md)을 따른다.
 
 ## Open Decisions
 
@@ -190,4 +192,3 @@ Schema drift로 overlay가 깨지면 신규 revision 발행을 중단하고 마�
 안정적인 TODO ID로 관리한다.
 
 - RLS source의 trusted tenant session context
-- Wide view를 위한 column-scoped progressive disclosure

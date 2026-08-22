@@ -53,6 +53,7 @@ class _Budget(_StrictModel):
     max_metadata_relations: int = Field(ge=1, le=10_000)
     max_metadata_columns: int = Field(ge=1, le=100_000)
     max_columns_per_relation: int = Field(ge=1, le=1_600)
+    max_context_columns_per_relation: int = Field(ge=1, le=200)
     max_metadata_response_bytes: int = Field(ge=1_024, le=100 * 1_024 * 1_024)
     max_result_rows: int = Field(ge=1, le=100_000)
     max_result_bytes: int = Field(ge=1_024, le=100 * 1_024 * 1_024)

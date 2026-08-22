@@ -88,6 +88,17 @@ class MetadataService:
             ]
         )
         ambiguities = _build_ambiguities(selected, joins, stale, bool(composition_hints))
+        relation_responses = [
+            _to_relation_response(
+                item,
+                index + 1,
+                source.semantic_overlay.joins,
+                source.semantic_overlay.business_terms,
+                question,
+                source.budget.max_context_columns_per_relation,
+            )
+            for index, item in enumerate(selected)
+        ]
         response: dict[str, object] = {
             "source_id": source.source_id,
             "source_name": source.name,
@@ -96,15 +107,13 @@ class MetadataService:
             "metadata_revision": prepared.revision,
             "snapshot_status": "stale" if stale else "fresh",
             "answerability": _build_answerability(question, source.semantic_overlay.question_rules, ambiguities),
-            "relations": [
-                _to_relation_response(item, index + 1, source.semantic_overlay.joins)
-                for index, item in enumerate(selected)
-            ],
+            "relations": relation_responses,
             "joins": [_to_join_response(join) for join in joins],
             "business_terms": _select_business_terms(question, source.semantic_overlay.business_terms),
             "composition_hints": composition_hints,
             "ambiguities": ambiguities,
-            "truncated": truncated,
+            "truncated": truncated
+            or any(bool(relation["columns_truncated"]) for relation in relation_responses),
         }
         encoded = json.dumps(response, ensure_ascii=False, separators=(",", ":")).encode()
         if len(encoded) > source.budget.max_metadata_response_bytes:
@@ -308,8 +317,28 @@ def _validate_snapshot(source: SourceProfile, snapshot: CatalogSnapshot) -> list
     return issues
 
 
-def _to_relation_response(candidate: RankedRelation, rank: int, all_joins: list[JoinDefinition]) -> dict[str, object]:
+def _to_relation_response(
+    candidate: RankedRelation,
+    rank: int,
+    all_joins: list[JoinDefinition],
+    business_terms: list[BusinessTermDefinition],
+    question: str,
+    max_columns: int,
+) -> dict[str, object]:
     relation, semantic = candidate.relation, candidate.semantic
+    columns = _select_context_columns(
+        candidate,
+        all_joins,
+        business_terms,
+        question,
+        max_columns,
+    )
+    returned_names = {column.name for column in columns}
+    indexes = [
+        index
+        for index in relation.indexes
+        if all(column in returned_names for column in index.columns)
+    ]
     response: dict[str, object] = {
         "rank": rank,
         "name": relation.qualified_name,
@@ -332,12 +361,71 @@ def _to_relation_response(candidate: RankedRelation, rank: int, all_joins: list[
         "measures": [_to_measure_response(measure) for measure in semantic.measures] if semantic else [],
         "primary_key": relation.primary_key,
         "foreign_keys": [asdict(key) for key in relation.foreign_keys],
-        "indexes": [asdict(index) for index in relation.indexes],
-        "columns": [_to_column_response(column, relation, semantic, all_joins) for column in relation.columns],
+        "indexes": [asdict(index) for index in indexes],
+        "indexes_truncated": len(indexes) < len(relation.indexes),
+        "column_count": len(relation.columns),
+        "returned_column_count": len(columns),
+        "columns_truncated": len(columns) < len(relation.columns),
+        "columns": [_to_column_response(column, relation, semantic, all_joins) for column in columns],
     }
     if relation.estimated_rows is not None:
         response["estimated_rows"] = relation.estimated_rows
     return response
+
+
+def _select_context_columns(
+    candidate: RankedRelation,
+    all_joins: list[JoinDefinition],
+    business_terms: list[BusinessTermDefinition],
+    question: str,
+    max_columns: int,
+) -> list[CatalogColumn]:
+    relation, semantic = candidate.relation, candidate.semantic
+    if len(relation.columns) <= max_columns:
+        return relation.columns
+
+    required = set(relation.primary_key)
+    required.update(column for key in relation.foreign_keys for column in key.columns)
+    required.update(reason.column for reason in candidate.reasons if reason.column is not None)
+    if semantic is not None:
+        if semantic.grain is not None:
+            required.update(semantic.grain.key_columns)
+        if semantic.default_time_column is not None:
+            required.add(semantic.default_time_column)
+        required.update(
+            measure.column for measure in semantic.measures if measure.column is not None
+        )
+    for join in all_joins:
+        if join.left_relation == relation.qualified_name:
+            required.update(pair["left"] for pair in join.column_pairs)
+        if join.right_relation == relation.qualified_name:
+            required.update(pair["right"] for pair in join.column_pairs)
+    for term in business_terms:
+        if any(_contains_business_phrase(question, alias) for alias in term.aliases):
+            required.update(
+                predicate.column
+                for predicate in term.predicates
+                if predicate.relation == relation.qualified_name
+            )
+
+    matched: set[str] = set()
+    for column in relation.columns:
+        phrases = [column.name, column.comment]
+        if semantic is not None:
+            phrases.extend(semantic.column_aliases.get(column.name, []))
+            phrases.extend(semantic.value_hints.get(column.name, []))
+        if any(
+            phrase is not None and _contains_business_phrase(question, phrase)
+            for phrase in phrases
+        ):
+            matched.add(column.name)
+
+    selected = required | matched
+    for column in relation.columns:
+        if len(selected) >= max(max_columns, len(required)):
+            break
+        selected.add(column.name)
+    return [column for column in relation.columns if column.name in selected]
 
 
 def _reason_dict(reason: SelectionReason) -> dict[str, str]:

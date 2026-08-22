@@ -22,6 +22,7 @@ class BudgetProfile:
     max_metadata_relations: int
     max_metadata_columns: int
     max_columns_per_relation: int
+    max_context_columns_per_relation: int
     max_metadata_response_bytes: int
     max_result_rows: int
     max_result_bytes: int

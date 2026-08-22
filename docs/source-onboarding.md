@@ -100,6 +100,12 @@ Catalog refresh가 일시 실패하면 제한된 stale 기간 동안 마지막 �
 `503 METADATA_UNAVAILABLE`을 반환한다. 권한 회수나 schema drift는 stale fallback을
 사용하지 않는다.
 
+40개를 넘는 wide relation은 질문과 직접 관련된 column, grain/time key, measure,
+business predicate와 approved join key를 우선 반환한다. `columns_truncated=true`는 전체
+catalog가 사라졌다는 뜻이 아니라 question context에서 일부 column을 생략했다는 뜻이다.
+이는 SQL column authorization 경계가 아니므로 민감 column은 curated view 자체에서
+제거해야 한다.
+
 Production에서는 `./scripts/apply-db.sh`가 생성하는 `control` schema를 사용하고,
 `query_man_control_writer` role을 상속한 전용 LOGIN의 DSN을
 `QUERY_MAN_CONTROL_DSN`에 설정한다. 정상 refresh는 immutable snapshot과 active pointer를

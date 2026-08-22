@@ -12,6 +12,7 @@ profiles:
     max_metadata_relations: 200
     max_metadata_columns: 5000
     max_columns_per_relation: 300
+    max_context_columns_per_relation: 40
     max_metadata_response_bytes: 1048576
     max_result_rows: 1000
     max_result_bytes: 1048576

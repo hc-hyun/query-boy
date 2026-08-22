@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from query_man.errors import MetadataUnavailableError
@@ -11,7 +13,8 @@ from query_man.models import (
     PreparedMetadata,
     SourceProfile,
 )
-from tests.helpers import load_test_registry, minimal_development_snapshot
+from query_man.registry import SourceRegistry
+from tests.helpers import column, load_test_registry, minimal_development_snapshot
 
 
 class StaticCatalog:
@@ -159,6 +162,47 @@ async def test_exposes_physical_keys_without_approving_a_semantic_join() -> None
         {"columns": ["discovered_at"], "unique": False, "primary": False}
     ]
     assert response["joins"] == []
+
+
+@pytest.mark.asyncio
+async def test_scopes_wide_relation_columns_to_question_and_required_semantics() -> None:
+    snapshot = minimal_development_snapshot()
+    issue = next(
+        relation
+        for relation in snapshot.relations
+        if relation.qualified_name == "ai.issue_overview"
+    )
+    for number in range(1, 61):
+        extra = column(f"extra_attribute_{number:02d}")
+        extra.ordinal = len(issue.columns) + 1
+        issue.columns.append(extra)
+    issue.indexes = [
+        CatalogIndex(["extra_attribute_60"], unique=False, primary=False)
+    ]
+    registry = load_test_registry()
+    sources = [
+        replace(
+            source,
+            budget=replace(source.budget, max_context_columns_per_relation=20),
+        )
+        for source_id in ["development-issues", "market-voc"]
+        if (source := registry.get(source_id)) is not None
+    ]
+    service = MetadataService(SourceRegistry(sources), StaticCatalog(snapshot))
+    response = await service.get_context(
+        "development-issues",
+        "원인이 아직 입력되지 않은 문제를 보여줘",
+    )
+    relation = response["relations"][0]
+    returned = {item["name"] for item in relation["columns"]}
+    assert relation["column_count"] == 73
+    assert relation["returned_column_count"] == 20
+    assert relation["columns_truncated"] is True
+    assert relation["indexes"] == []
+    assert relation["indexes_truncated"] is True
+    assert response["truncated"] is True
+    assert {"issue_id", "discovered_at", "cause", "comment_count"} <= returned
+    assert "extra_attribute_60" not in returned
 
 
 @pytest.mark.asyncio
