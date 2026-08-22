@@ -1,0 +1,33 @@
+name: query-man
+
+services:
+  postgres:
+    image: postgres:18.6-bookworm
+    container_name: query-man-postgres
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_INITDB_ARGS: --data-checksums --encoding=UTF8 --auth-host=scram-sha-256
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - log_min_duration_statement=1000
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    shm_size: 256mb
+    stop_grace_period: 30s
+
+volumes:
+  postgres_data:
