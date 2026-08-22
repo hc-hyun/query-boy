@@ -294,6 +294,19 @@ class SourceRegistry:
     def get(self, source_id: str) -> SourceProfile | None:
         return self._sources.get(source_id)
 
+    def upsert(self, source: SourceProfile) -> None:
+        self._sources = {**self._sources, source.source_id: source}
+
+    def remove(self, source_id: str) -> None:
+        self._sources = {
+            current_id: source
+            for current_id, source in self._sources.items()
+            if current_id != source_id
+        }
+
+    def source_ids(self) -> frozenset[str]:
+        return frozenset(self._sources)
+
     def __len__(self) -> int:
         return len(self._sources)
 

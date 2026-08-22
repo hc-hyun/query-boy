@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import Any
 
@@ -228,6 +229,7 @@ _CATALOG_KINDS = {
 class PostgresCatalog:
     def __init__(self) -> None:
         self._pools: dict[str, AsyncConnectionPool[Any]] = {}
+        self._pool_lock = asyncio.Lock()
 
     async def load(self, source: SourceProfile) -> CatalogSnapshot:
         pool = await self._get_pool(source)
@@ -291,34 +293,44 @@ class PostgresCatalog:
             await pool.close()
         self._pools.clear()
 
+    async def invalidate(self, source_id: str) -> None:
+        async with self._pool_lock:
+            pool = self._pools.pop(source_id, None)
+        if pool is not None:
+            await pool.close()
+
     async def _get_pool(self, source: SourceProfile) -> AsyncConnectionPool[Any]:
         existing = self._pools.get(source.source_id)
         if existing is not None:
             return existing
-        connection = source.connection
-        pool = AsyncConnectionPool(
-            conninfo="",
-            kwargs={
-                "host": connection.host,
-                "port": connection.port,
-                "dbname": connection.database,
-                "user": connection.user,
-                "password": connection.password,
-                "sslmode": "verify-full" if connection.ssl else "disable",
-                "application_name": f"query-man-meta:{source.source_id}",
-                "connect_timeout": 2,
-                "row_factory": dict_row,
-            },
-            min_size=0,
-            # MetadataService coalesces refreshes per source, so one catalog connection is sufficient.
-            max_size=1,
-            timeout=2,
-            max_idle=10,
-            open=False,
-        )
-        await pool.open()
-        self._pools[source.source_id] = pool
-        return pool
+        async with self._pool_lock:
+            existing = self._pools.get(source.source_id)
+            if existing is not None:
+                return existing
+            connection = source.connection
+            pool = AsyncConnectionPool(
+                conninfo="",
+                kwargs={
+                    "host": connection.host,
+                    "port": connection.port,
+                    "dbname": connection.database,
+                    "user": connection.user,
+                    "password": connection.password,
+                    "sslmode": "verify-full" if connection.ssl else "disable",
+                    "application_name": f"query-man-meta:{source.source_id}",
+                    "connect_timeout": 2,
+                    "row_factory": dict_row,
+                },
+                min_size=0,
+                # MetadataService coalesces refreshes per source, so one catalog connection is sufficient.
+                max_size=1,
+                timeout=2,
+                max_idle=10,
+                open=False,
+            )
+            await pool.open()
+            self._pools[source.source_id] = pool
+            return pool
 
 
 def _rows_to_relations(rows: list[dict[str, Any]]) -> list[CatalogRelation]:

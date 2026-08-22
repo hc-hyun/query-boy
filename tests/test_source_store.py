@@ -54,33 +54,41 @@ async def test_source_store_publishes_rotates_rolls_back_and_deactivates() -> No
         await metadata_store.unpin(source)
         current = await store.get_active(source.source_id)
         expected = 0 if current is None else current.generation
-        first_secret = cipher.encrypt(source.source_id, expected + 1, "first-reader-secret")
+        first_generation = await store.next_generation(source.source_id)
+        first_secret = cipher.encrypt(source.source_id, first_generation, "first-reader-secret")
         first = await store.publish(
             source.source_id,
             expected,
+            first_generation,
             validated.document,
             first_secret,
             metadata,
         )
-        assert first.generation == expected + 1
+        assert first.generation == first_generation
         assert cipher.decrypt(source.source_id, first.generation, first.encrypted_secret) == (
             "first-reader-secret"
         )
 
-        rotated_secret = cipher.encrypt(source.source_id, first.generation + 1, "rotated-secret")
+        rotated_generation = await store.next_generation(source.source_id)
+        rotated_secret = cipher.encrypt(source.source_id, rotated_generation, "rotated-secret")
         rotated = await store.publish(
             source.source_id,
             first.generation,
+            rotated_generation,
             validated.document,
             rotated_secret,
             metadata,
         )
-        assert rotated.generation == first.generation + 1
+        assert rotated.generation == rotated_generation
         assert cipher.decrypt(source.source_id, rotated.generation, rotated.encrypted_secret) == (
             "rotated-secret"
         )
 
-        rolled_back = await store.rollback(source.source_id, first.generation)
+        rolled_back = await store.rollback(
+            source.source_id,
+            first.generation,
+            rotated.generation,
+        )
         assert rolled_back.generation == first.generation
         assert cipher.decrypt(source.source_id, rolled_back.generation, rolled_back.encrypted_secret) == (
             "first-reader-secret"

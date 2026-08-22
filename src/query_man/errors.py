@@ -73,3 +73,18 @@ class OperatorRequiredError(AppError):
 class QueryNotFoundError(AppError):
     def __init__(self) -> None:
         super().__init__(404, "QUERY_NOT_FOUND", "The active query was not found.")
+
+
+class SourceValidationError(AppError):
+    def __init__(self) -> None:
+        super().__init__(400, "SOURCE_VALIDATION_FAILED", "The source configuration was rejected.")
+
+
+class SourceGenerationConflictError(AppError):
+    def __init__(self) -> None:
+        super().__init__(409, "SOURCE_GENERATION_CONFLICT", "The source changed; retry with current state.")
+
+
+class SourceControlUnavailableError(AppError):
+    def __init__(self) -> None:
+        super().__init__(503, "SOURCE_CONTROL_UNAVAILABLE", "Source administration is unavailable.")

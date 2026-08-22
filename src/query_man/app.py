@@ -6,23 +6,32 @@ import logging
 import uuid
 from collections.abc import AsyncIterator, Coroutine
 from contextlib import asynccontextmanager, suppress
+from typing import cast
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from query_man.access import AccessPolicy, CallerContext
 from query_man.catalog import PostgresCatalog
-from query_man.errors import AppError, QueryTimeoutError
+from query_man.errors import (
+    AppError,
+    OperatorRequiredError,
+    QueryTimeoutError,
+    SourceControlUnavailableError,
+)
 from query_man.gateway import GatewayService
 from query_man.mcp_server import create_mcp_server
 from query_man.metadata import MetadataService
 from query_man.metadata_store import PostgresMetadataStore
 from query_man.models import CatalogProvider
 from query_man.query import PostgresQueryExecutor, QueryExecutor, QueryService
-from query_man.registry import SourceRegistry
+from query_man.registry import SourceRegistry, load_budget_profiles
 from query_man.runtime_config import RuntimeConfig
+from query_man.secrets import SourceSecretCipher
+from query_man.source_admin import SourceAdminService, SourcePoolInvalidator, SourceReloader
+from query_man.source_store import PostgresSourceStore
 from query_man.verified import VerifiedQueryRegistry
 
 logger = logging.getLogger("query_man")
@@ -48,6 +57,19 @@ class QueryRequest(BaseModel):
     metadata_revision: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
 
 
+class SourcePublishRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    manifest: dict[str, object]
+    credential: SecretStr = Field(min_length=1, max_length=1_024)
+
+
+class SourceCredentialRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    credential: SecretStr = Field(min_length=1, max_length=1_024)
+
+
 def build_app(
     runtime_config: RuntimeConfig,
     *,
@@ -64,17 +86,18 @@ def build_app(
         set(source_ids),
     )
     verified_revisions = verified.revision_map()
+    metadata_store = (
+        PostgresMetadataStore(runtime_config.control_dsn)
+        if runtime_config.control_dsn is not None
+        else None
+    )
     metadata = MetadataService(
         registry,
         catalog,
         cache_ttl_ms=runtime_config.metadata_cache_ttl_ms,
         max_stale_ms=runtime_config.metadata_max_stale_ms,
         refresh_retry_ms=runtime_config.metadata_retry_delay_ms,
-        store=(
-            PostgresMetadataStore(runtime_config.control_dsn)
-            if runtime_config.control_dsn is not None
-            else None
-        ),
+        store=metadata_store,
         verified_revisions=verified_revisions,
     )
     query_executor = query_executor or PostgresQueryExecutor()
@@ -87,6 +110,40 @@ def build_app(
         else:
             access_policy = AccessPolicy.local(source_ids)
     gateway = GatewayService(registry, metadata, query_service, access_policy)
+    source_store: PostgresSourceStore | None = None
+    source_reloader: SourceReloader | None = None
+    source_admin: SourceAdminService | None = None
+    if (
+        runtime_config.control_dsn is not None
+        and runtime_config.source_encryption_key is not None
+        and metadata_store is not None
+    ):
+        source_store = PostgresSourceStore(runtime_config.control_dsn)
+        cipher = SourceSecretCipher.from_base64(runtime_config.source_encryption_key)
+        invalidators = tuple(
+            cast(SourcePoolInvalidator, candidate)
+            for candidate in (catalog, query_executor)
+            if callable(getattr(candidate, "invalidate", None))
+        )
+        budgets = load_budget_profiles(runtime_config.budget_file)
+        source_reloader = SourceReloader(
+            registry,
+            metadata,
+            metadata_store,
+            source_store,
+            cipher,
+            budgets,
+            verified_revisions,
+            invalidators,
+        )
+        source_admin = SourceAdminService(
+            source_store,
+            source_reloader,
+            cipher,
+            budgets,
+            verified_revisions,
+            PostgresCatalog,
+        )
     mcp_server = create_mcp_server(gateway, _mcp_caller)
     mcp_app = mcp_server.streamable_http_app(
         streamable_http_path="/mcp",
@@ -98,15 +155,31 @@ def build_app(
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        reload_task: asyncio.Task[None] | None = None
+        if source_reloader is not None:
+            await source_reloader.sync()
+            reload_task = asyncio.create_task(
+                _reload_sources(source_reloader, runtime_config.source_reload_interval_ms)
+            )
         async with mcp_app.router.lifespan_context(mcp_app):
-            yield
             try:
-                await query_executor.close()
+                yield
             finally:
+                if reload_task is not None:
+                    reload_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await reload_task
                 try:
-                    await catalog.close()
+                    await query_executor.close()
                 finally:
-                    await metadata.close()
+                    try:
+                        await catalog.close()
+                    finally:
+                        try:
+                            await metadata.close()
+                        finally:
+                            if source_store is not None:
+                                await source_store.close()
 
     app = FastAPI(title="query-man", lifespan=lifespan)
     app.state.registry = registry
@@ -117,6 +190,8 @@ def build_app(
     app.state.access_policy = access_policy
     app.state.gateway = gateway
     app.state.mcp_server = mcp_server
+    app.state.source_admin = source_admin
+    app.state.source_reloader = source_reloader
 
     @app.middleware("http")
     async def authenticate(request: Request, call_next: object) -> JSONResponse:
@@ -221,6 +296,53 @@ def build_app(
     async def cancel_query(query_id: uuid.UUID, request: Request) -> dict[str, str]:
         return await gateway.cancel_query(_caller(request), str(query_id))
 
+    @app.put("/admin/sources/{source_id}")
+    async def publish_source(
+        source_id: str,
+        payload: SourcePublishRequest,
+        request: Request,
+    ) -> dict[str, object]:
+        _require_operator(request)
+        if source_admin is None:
+            raise SourceControlUnavailableError
+        return await source_admin.publish(
+            source_id,
+            payload.manifest,
+            payload.credential.get_secret_value(),
+        )
+
+    @app.post("/admin/sources/{source_id}/credential")
+    async def rotate_source_credential(
+        source_id: str,
+        payload: SourceCredentialRequest,
+        request: Request,
+    ) -> dict[str, object]:
+        _require_operator(request)
+        if source_admin is None:
+            raise SourceControlUnavailableError
+        return await source_admin.rotate_credential(
+            source_id,
+            payload.credential.get_secret_value(),
+        )
+
+    @app.post("/admin/sources/{source_id}/rollback/{generation}")
+    async def rollback_source(
+        source_id: str,
+        generation: int,
+        request: Request,
+    ) -> dict[str, object]:
+        _require_operator(request)
+        if source_admin is None:
+            raise SourceControlUnavailableError
+        return await source_admin.rollback(source_id, generation)
+
+    @app.delete("/admin/sources/{source_id}")
+    async def deactivate_source(source_id: str, request: Request) -> dict[str, object]:
+        _require_operator(request)
+        if source_admin is None:
+            raise SourceControlUnavailableError
+        return await source_admin.deactivate(source_id)
+
     app.mount("/", mcp_app)
 
     return app
@@ -270,3 +392,14 @@ def _mcp_caller() -> CallerContext:
     if caller is None:
         raise RuntimeError("MCP caller context is unavailable")
     return caller
+
+
+def _require_operator(request: Request) -> None:
+    if not _caller(request).operator:
+        raise OperatorRequiredError
+
+
+async def _reload_sources(reloader: SourceReloader, interval_ms: int) -> None:
+    while True:
+        await asyncio.sleep(interval_ms / 1_000)
+        await reloader.sync()

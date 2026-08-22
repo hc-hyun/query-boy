@@ -28,6 +28,18 @@ class _Environment(BaseModel):
         min_length=1,
         max_length=2_048,
     )
+    source_encryption_key: SecretStr | None = Field(
+        None,
+        alias="QUERY_MAN_SOURCE_ENCRYPTION_KEY",
+        min_length=43,
+        max_length=64,
+    )
+    source_reload_interval_ms: int = Field(
+        5_000,
+        alias="QUERY_MAN_SOURCE_RELOAD_INTERVAL_MS",
+        ge=250,
+        le=300_000,
+    )
 
     @field_validator("log_level")
     @classmethod
@@ -51,6 +63,8 @@ class RuntimeConfig:
     metadata_max_stale_ms: int
     metadata_retry_delay_ms: int
     control_dsn: str | None = None
+    source_encryption_key: str | None = None
+    source_reload_interval_ms: int = 5_000
 
 
 def load_runtime_config(
@@ -66,6 +80,8 @@ def load_runtime_config(
         raise ValueError(f"Invalid runtime configuration: {error}") from error
     if parsed.api_token is not None and parsed.access_policy_file is not None:
         raise ValueError("Configure QUERY_MAN_API_TOKEN or QUERY_MAN_ACCESS_POLICY_FILE, not both")
+    if parsed.source_encryption_key is not None and parsed.control_dsn is None:
+        raise ValueError("QUERY_MAN_CONTROL_DSN is required for source control")
     if not _is_loopback(parsed.host) and parsed.api_token is None and parsed.access_policy_file is None:
         raise ValueError(
             "QUERY_MAN_API_TOKEN or QUERY_MAN_ACCESS_POLICY_FILE is required when QUERY_MAN_HOST is not loopback"
@@ -83,6 +99,12 @@ def load_runtime_config(
         metadata_max_stale_ms=parsed.max_stale_ms,
         metadata_retry_delay_ms=parsed.retry_delay_ms,
         control_dsn=(parsed.control_dsn.get_secret_value() if parsed.control_dsn is not None else None),
+        source_encryption_key=(
+            parsed.source_encryption_key.get_secret_value()
+            if parsed.source_encryption_key is not None
+            else None
+        ),
+        source_reload_interval_ms=parsed.source_reload_interval_ms,
     )
 
 

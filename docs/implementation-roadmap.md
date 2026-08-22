@@ -127,14 +127,14 @@ Dependencies: `EXEC-01`~`EXEC-10`, `META-05`~`META-08`, `DEC-08`
 
 Dependencies: `META-05`, `META-06`
 
-- [ ] `ONB-01` Source manifest와 secret을 검증된 control plane 입력으로 등록하는 관리자 계약을 구현한다.
-- [ ] `ONB-02` 신규 source 연결, 권한, catalog, overlay와 budget을 격리된 staging 단계에서 검증한다.
-- [ ] `ONB-03` 검증 성공한 source profile과 metadata revision을 원자적으로 publish한다.
-- [ ] `ONB-04` Runtime이 재시작 없이 source 추가·변경·비활성화를 반영한다.
-- [ ] `ONB-05` 잘못된 update가 현재 정상 source와 revision에 영향을 주지 않도록 rollback한다.
-- [ ] `ONB-06` Credential rotation을 연결 중단과 secret 노출 없이 반영한다.
+- [x] `ONB-01` Source manifest와 secret을 검증된 control plane 입력으로 등록하는 관리자 계약을 구현한다.
+- [x] `ONB-02` 신규 source 연결, 권한, catalog, overlay와 budget을 격리된 staging 단계에서 검증한다.
+- [x] `ONB-03` 검증 성공한 source profile과 metadata revision을 원자적으로 publish한다.
+- [x] `ONB-04` Runtime이 재시작 없이 source 추가·변경·비활성화를 반영한다.
+- [x] `ONB-05` 잘못된 update가 현재 정상 source와 revision에 영향을 주지 않도록 rollback한다.
+- [x] `ONB-06` Credential rotation을 연결 중단과 secret 노출 없이 반영한다.
 - [x] `ONB-07` Manifest schema version migration과 하위 호환 정책을 구현한다.
-- [ ] `ONB-08` 세 번째 fixture source를 애플리케이션 코드 변경 없이 등록하는 acceptance test를 추가한다.
+- [x] `ONB-08` 세 번째 fixture source를 애플리케이션 코드 변경 없이 등록하는 acceptance test를 추가한다.
 - [ ] `ONB-09` L0 등록부터 L2 verified query publish까지 운영 runbook을 완성한다.
 
 ## 7. Authorization And Tenant Isolation

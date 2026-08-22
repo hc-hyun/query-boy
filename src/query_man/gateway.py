@@ -30,7 +30,7 @@ class GatewayService:
             "sources": [
                 source
                 for source in self._registry.list()
-                if source["source_id"] in caller.allowed_sources
+                if caller.all_sources or source["source_id"] in caller.allowed_sources
             ]
         }
 
@@ -70,7 +70,10 @@ class GatewayService:
     async def cancel_query(self, caller: CallerContext, query_id: str) -> dict[str, str]:
         if not caller.operator:
             raise OperatorRequiredError
-        cancelled = await self._queries.cancel(query_id, caller.allowed_sources)
+        allowed_sources = (
+            self._registry.source_ids() if caller.all_sources else caller.allowed_sources
+        )
+        cancelled = await self._queries.cancel(query_id, allowed_sources)
         if not cancelled:
             raise QueryNotFoundError
         logger.info(

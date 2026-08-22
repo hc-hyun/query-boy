@@ -1,0 +1,16 @@
+version: 1
+source_id: support-tickets
+name: Support Tickets
+description: 고객 지원 ticket 운영 현황
+connection:
+  host: 127.0.0.1
+  port: 5432
+  port_env: POSTGRES_PORT
+  database: support_tickets
+  user: support_tickets_reader
+  password_env: SUPPORT_TICKETS_READER_PASSWORD
+  ssl: false
+allowed_schemas: [ai]
+allowed_relation_kinds: [view]
+budget_profile: interactive
+minimum_quality_level: L0

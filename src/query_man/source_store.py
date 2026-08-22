@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any
 
+from psycopg import errors
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
@@ -74,15 +75,45 @@ class PostgresSourceStore:
             row = await cursor.fetchone()
         return None if row is None else _decode(row)
 
+    async def get_revision(self, source_id: str, generation: int) -> StoredSource:
+        pool = await self._get_pool()
+        async with pool.connection() as connection:
+            cursor = await connection.execute(
+                "SELECT source_id, generation, true AS enabled, manifest, secret_nonce, "
+                "secret_ciphertext, metadata_revision "
+                "FROM control.source_profile_revisions "
+                "WHERE source_id = %s AND generation = %s",
+                (source_id, generation),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            raise StoredSourceNotFoundError
+        return _decode(row)
+
+    async def next_generation(self, source_id: str) -> int:
+        pool = await self._get_pool()
+        async with pool.connection() as connection:
+            cursor = await connection.execute(
+                "SELECT coalesce(max(generation), 0) + 1 AS generation "
+                "FROM control.source_profile_revisions WHERE source_id = %s",
+                (source_id,),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            raise StoredSourceNotFoundError
+        return int(row["generation"])
+
     async def publish(
         self,
         source_id: str,
         expected_generation: int,
+        generation: int,
         manifest: dict[str, object],
         encrypted_secret: EncryptedSecret,
         metadata: PreparedMetadata,
     ) -> StoredSource:
-        generation = expected_generation + 1
+        if generation <= 0:
+            raise SourceGenerationConflictError
         snapshot = encode_snapshot(metadata.snapshot)
         pool = await self._get_pool()
         async with pool.connection() as connection, connection.transaction():
@@ -102,19 +133,22 @@ class PostgresSourceStore:
             stored_snapshot = await cursor.fetchone()
             if stored_snapshot is None or stored_snapshot["snapshot"] != snapshot:
                 raise SourceGenerationConflictError
-            await connection.execute(
-                "INSERT INTO control.source_profile_revisions "
-                "(source_id, generation, manifest, secret_nonce, secret_ciphertext, "
-                "metadata_revision) VALUES (%s, %s, %s, %s, %s, %s)",
-                (
-                    source_id,
-                    generation,
-                    Jsonb(manifest),
-                    encrypted_secret.nonce,
-                    encrypted_secret.ciphertext,
-                    metadata.revision,
-                ),
-            )
+            try:
+                await connection.execute(
+                    "INSERT INTO control.source_profile_revisions "
+                    "(source_id, generation, manifest, secret_nonce, secret_ciphertext, "
+                    "metadata_revision) VALUES (%s, %s, %s, %s, %s, %s)",
+                    (
+                        source_id,
+                        generation,
+                        Jsonb(manifest),
+                        encrypted_secret.nonce,
+                        encrypted_secret.ciphertext,
+                        metadata.revision,
+                    ),
+                )
+            except errors.UniqueViolation as error:
+                raise SourceGenerationConflictError from error
             cursor = await connection.execute(
                 "INSERT INTO control.active_metadata_revisions "
                 "(source_id, revision, pinned, activated_at) "
@@ -158,9 +192,17 @@ class PostgresSourceStore:
             if await cursor.fetchone() is None:
                 raise SourceGenerationConflictError
 
-    async def rollback(self, source_id: str, generation: int) -> StoredSource:
+    async def rollback(
+        self,
+        source_id: str,
+        generation: int,
+        expected_generation: int,
+    ) -> StoredSource:
         pool = await self._get_pool()
         async with pool.connection() as connection, connection.transaction():
+            current_generation = await _lock_generation(connection, source_id)
+            if current_generation != expected_generation:
+                raise SourceGenerationConflictError
             cursor = await connection.execute(
                 "SELECT source_id, generation, true AS enabled, manifest, secret_nonce, "
                 "secret_ciphertext, metadata_revision "

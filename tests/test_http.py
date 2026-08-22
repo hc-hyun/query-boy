@@ -173,6 +173,30 @@ async def test_raw_database_errors_are_not_disclosed() -> None:
 
 
 @pytest.mark.asyncio
+async def test_source_admin_requires_operator_and_hides_credential() -> None:
+    policy_path = ROOT_DIRECTORY / "config" / "access-policies.example.yaml"
+    token = "development-analyst-token-at-least-32-characters"
+    policy = AccessPolicy.load(
+        policy_path,
+        ["development-issues", "market-voc"],
+        {
+            "DEVELOPMENT_ANALYST_API_TOKEN": token,
+            "QUALITY_OPERATOR_API_TOKEN": "operator-token-at-least-thirty-two-characters",
+        },
+    )
+    credential = "must-not-appear-in-response"
+    async with client(NeverCalledCatalog(), access_policy=policy) as session:
+        response = await session.put(
+            "/admin/sources/new-source",
+            headers={"authorization": f"Bearer {token}"},
+            json={"manifest": {}, "credential": credential},
+        )
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "OPERATOR_REQUIRED"
+    assert credential not in response.text
+
+
+@pytest.mark.asyncio
 async def test_schema_drift_details_are_not_disclosed() -> None:
     snapshot = minimal_development_snapshot()
     snapshot.relations = snapshot.relations[:1]

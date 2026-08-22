@@ -27,6 +27,7 @@ class CallerContext:
     tenant_id: str
     allowed_sources: frozenset[str]
     operator: bool = False
+    all_sources: bool = False
 
 
 @dataclass(frozen=True)
@@ -85,6 +86,7 @@ class AccessPolicy:
                 tenant_id="local-development",
                 allowed_sources=frozenset(source_ids),
                 operator=True,
+                all_sources=True,
             ),
         )
 
@@ -95,6 +97,7 @@ class AccessPolicy:
             tenant_id="default",
             allowed_sources=frozenset(source_ids),
             operator=True,
+            all_sources=True,
         )
         return cls((_Credential(_digest(token), caller),))
 
@@ -156,7 +159,7 @@ class AccessPolicy:
         return matched
 
     def require_source(self, caller: CallerContext, source_id: str) -> None:
-        if source_id not in caller.allowed_sources:
+        if not caller.all_sources and source_id not in caller.allowed_sources:
             raise SourceNotFoundError
 
 

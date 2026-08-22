@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import socket
@@ -13,9 +14,12 @@ import httpx
 import httpx2
 import pytest
 import uvicorn
+import yaml
 from dotenv import load_dotenv
 from mcp.client import Client
 from mcp.client.streamable_http import streamable_http_client
+from psycopg import AsyncConnection, sql
+from psycopg.conninfo import make_conninfo
 
 from query_man.app import build_app
 from query_man.catalog import PostgresCatalog
@@ -168,6 +172,145 @@ async def test_live_verified_queries_match_revision_relations_and_results() -> N
     finally:
         await executor.close()
         await catalog.close()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_onboards_third_source_without_runtime_restart() -> None:
+    load_dotenv(ROOT_DIRECTORY / ".env")
+    required = ["POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB"]
+    if any(not os.environ.get(name) for name in required):
+        pytest.skip("local PostgreSQL credentials are not configured")
+    control_dsn = make_conninfo(
+        host="127.0.0.1",
+        port=os.environ.get("POSTGRES_PORT", "5432"),
+        dbname=os.environ["POSTGRES_DB"],
+        user=os.environ["POSTGRES_USER"],
+        password=os.environ["POSTGRES_PASSWORD"],
+        sslmode="disable",
+    )
+    encryption_key = base64.urlsafe_b64encode(b"acceptance-source-key-material!!").decode(
+        "ascii"
+    )
+    assert len(base64.urlsafe_b64decode(encryption_key)) == 32
+    runtime = RuntimeConfig(
+        host="127.0.0.1",
+        port=3000,
+        log_level="critical",
+        api_token=None,
+        source_directory=ROOT_DIRECTORY / "config" / "sources",
+        budget_file=ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
+        access_policy_file=None,
+        metadata_cache_ttl_ms=30_000,
+        metadata_max_stale_ms=300_000,
+        metadata_retry_delay_ms=5_000,
+        control_dsn=control_dsn,
+        source_encryption_key=encryption_key,
+        source_reload_interval_ms=250,
+    )
+    manifest = yaml.safe_load(
+        (ROOT_DIRECTORY / "config" / "onboarding" / "support-tickets.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    credential = os.environ.get(
+        "SUPPORT_TICKETS_READER_PASSWORD",
+        "support-tickets-local-secret",
+    )
+    app = build_app(runtime)
+
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+            base_url="http://test",
+        ) as session:
+            published = await session.put(
+                "/admin/sources/support-tickets",
+                json={"manifest": manifest, "credential": credential},
+            )
+            assert published.status_code == 200
+            publish_body = published.json()
+            assert publish_body["status"] == "published"
+            assert publish_body["quality_level"] == "L0"
+            assert credential not in published.text
+
+            listed = await session.get("/sources")
+            assert "support-tickets" in {
+                source["source_id"] for source in listed.json()["sources"]
+            }
+            context = await session.post(
+                "/meta",
+                json={
+                    "source_id": "support-tickets",
+                    "question": "지원 queue별 ticket 수를 보여줘",
+                },
+            )
+            assert context.status_code == 200
+            assert context.json()["quality_level"] == "L0"
+            assert [relation["name"] for relation in context.json()["relations"]] == [
+                "ai.ticket_overview"
+            ]
+            queried = await session.post(
+                "/query",
+                json={
+                    "source_id": "support-tickets",
+                    "metadata_revision": context.json()["metadata_revision"],
+                    "sql": (
+                        "SELECT queue_name, count(*) AS ticket_count "
+                        "FROM ai.ticket_overview GROUP BY queue_name ORDER BY queue_name"
+                    ),
+                },
+            )
+            assert queried.status_code == 200
+            assert queried.json()["row_count"] == 3
+
+            rotated_credential = "support-tickets-rotated-acceptance-secret"
+            admin_connection = await AsyncConnection.connect(control_dsn)
+            try:
+                await admin_connection.execute(
+                    sql.SQL("ALTER ROLE support_tickets_reader PASSWORD {}").format(
+                        sql.Literal(rotated_credential)
+                    )
+                )
+                await admin_connection.commit()
+                rotated = await session.post(
+                    "/admin/sources/support-tickets/credential",
+                    json={"credential": rotated_credential},
+                )
+                assert rotated.status_code == 200
+                assert rotated.json()["generation"] > publish_body["generation"]
+                assert rotated_credential not in rotated.text
+                after_rotation = await session.post(
+                    "/query",
+                    json={
+                        "source_id": "support-tickets",
+                        "metadata_revision": context.json()["metadata_revision"],
+                        "sql": "SELECT count(*) AS ticket_count FROM ai.ticket_overview",
+                    },
+                )
+                assert after_rotation.status_code == 200
+                assert after_rotation.json()["rows"] == [{"ticket_count": 120}]
+            finally:
+                await admin_connection.rollback()
+                await admin_connection.execute(
+                    sql.SQL("ALTER ROLE support_tickets_reader PASSWORD {}").format(
+                        sql.Literal(credential)
+                    )
+                )
+                await admin_connection.commit()
+                restored = await session.post(
+                    "/admin/sources/support-tickets/credential",
+                    json={"credential": credential},
+                )
+                assert restored.status_code == 200
+                await admin_connection.close()
+
+            deactivated = await session.delete("/admin/sources/support-tickets")
+            assert deactivated.status_code == 200
+            listed_after = await session.get("/sources")
+            assert "support-tickets" not in {
+                source["source_id"] for source in listed_after.json()["sources"]
+            }
 
 
 @pytest.mark.integration

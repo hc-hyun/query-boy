@@ -138,3 +138,9 @@ accuracy, unsupported/clarification recall과 context byte 상한 중 하나라�
 각 source manifest의 `minimum_quality_level`은 L0/L1/L2 publish gate입니다. 현재 두 MVP
 source는 L2이며, metadata revision과 일치하는 verified contract가 없으면 `/meta`, MCP와
 query 경로가 새 revision을 활성화하지 않습니다.
+
+`QUERY_MAN_CONTROL_DSN`과 `QUERY_MAN_SOURCE_ENCRYPTION_KEY`를 함께 설정하면 operator 전용
+source admin API가 활성화됩니다. 신규 manifest는 격리 staging을 통과한 뒤 encrypted
+credential, immutable metadata와 함께 원자적으로 publish되며 runtime과 다른 replica가
+재시작 없이 반영합니다. 자세한 절차는
+[`docs/source-onboarding.md`](docs/source-onboarding.md)를 따릅니다.

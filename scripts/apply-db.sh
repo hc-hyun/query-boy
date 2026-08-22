@@ -13,6 +13,8 @@ for sql_file in \
   20-development-issues-seed.sql \
   30-market-voc-schema.sql \
   40-market-voc-seed.sql \
+  50-support-tickets-schema.sql \
+  60-support-tickets-seed.sql \
   90-validate-mvp.sql
 do
   docker compose exec -T postgres \

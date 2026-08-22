@@ -34,10 +34,10 @@ trust boundary에서 review·publish한다. 낮은 권한의 self-service 입력
 1. 조회 목적에 맞는 `ai` view를 만든다. 한 view의 grain은 하나로 고정한다.
 2. 별도 LOGIN reader에 해당 view의 `USAGE`와 `SELECT`만 부여한다.
 3. Reader에 read-only, timeout, temp resource와 connection limit을 설정한다.
-4. `config/sources/<source-id>.yaml` manifest를 추가한다.
-5. `password_env`가 가리키는 secret을 실행 환경에 추가한다.
-6. Metadata API process를 재시작해 manifest를 다시 읽는다.
-7. `uv run ruff check .`, `uv run mypy src`, `uv run pytest`와 실제 golden question으로 relation 선택을 검증한다.
+4. L0 manifest와 reader credential을 operator 전용 source admin API에 전달한다.
+5. 격리 staging에서 connection, reader identity, catalog, overlay, budget과 quality gate 결과를 확인한다.
+6. Publish 응답의 generation과 metadata revision을 변경 기록에 남긴다. Runtime 재시작은 필요 없다.
+7. `/sources`, `/meta`, `/query` 또는 MCP에서 실제 질문과 결과를 검증한다.
 
 Production caller에게 source를 공개할 때는 access-policy manifest의
 `allowed_sources`에도 source ID를 명시하고, token 값은 manifest가 참조하는 환경
@@ -65,6 +65,20 @@ budget_profile: interactive
 
 이 상태는 L0 best-effort 검색이다. 한국어 질문, grain과 비표준 join이 필요할 때만
 `semantic_overlay`를 추가한다.
+
+Admin endpoint는 operator caller만 사용할 수 있다.
+
+| Operation | Endpoint | 안전 조건 |
+|---|---|---|
+| Stage + publish | `PUT /admin/sources/{source_id}` | Body의 `manifest`, `credential`을 분리하고 path ID 일치 검증 |
+| Credential rotation | `POST /admin/sources/{source_id}/credential` | 새 credential로 isolated catalog 연결 성공 후 generation 교체 |
+| Rollback | `POST /admin/sources/{source_id}/rollback/{generation}` | 대상 profile, secret, metadata와 quality를 먼저 재검증 |
+| Deactivate | `DELETE /admin/sources/{source_id}` | Active pointer만 disable하고 immutable history 유지 |
+
+Admin API는 TLS 뒤에서만 노출하고 request body를 access log에 기록하지 않는다. Credential은
+응답, manifest JSON과 metadata에 포함되지 않으며 `QUERY_MAN_SOURCE_ENCRYPTION_KEY`로
+AES-256-GCM 암호화되어 control DB에 저장된다. 이 key는 URL-safe base64로 표현한 32 bytes여야
+하고 `QUERY_MAN_CONTROL_DSN`과 함께 모든 runtime replica에 secret으로 배포한다.
 
 ```yaml
 semantic_overlay:
@@ -117,6 +131,11 @@ Production에서는 `./scripts/apply-db.sh`가 생성하는 `control` schema를 
 원자적으로 publish한다. Rollback한 source는 pin되므로 이후 refresh가 active revision을
 덮지 않으며, 검증 후 automatic publish를 명시적으로 resume해야 한다. Control-plane
 DSN이나 snapshot payload는 metadata/MCP 응답에 포함되지 않는다.
+
+Control-plane source 변경은 `QUERY_MAN_SOURCE_RELOAD_INTERVAL_MS` 주기로 다른 replica에도
+반영된다. 각 replica는 encrypted credential, manifest, stored metadata revision과 quality를
+다시 검증한 후 registry를 교체한다. 검증 실패 시 해당 replica의 현재 정상 generation을
+유지한다.
 
 ## Security Checks
 

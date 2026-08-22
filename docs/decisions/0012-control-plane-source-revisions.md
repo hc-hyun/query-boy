@@ -35,4 +35,5 @@ lost update를 막는다.
   secret으로 rollback할 수 있다.
 - Source revision ciphertext는 복구 가능해야 하므로 master key backup과 rotation 절차가
   필요하다. 이는 운영 runbook에서 관리한다.
-- Runtime hot reload, staging service와 관리자 HTTP endpoint는 이 저장 계약 위에 구현한다.
+- Runtime poller와 관리자 HTTP endpoint는 이 저장 계약을 사용한다. 각 runtime은 새
+  generation을 검증한 뒤 source별 catalog/query pool과 metadata cache를 교체한다.

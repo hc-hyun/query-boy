@@ -312,3 +312,47 @@ SELECT
     FROM voc.cases
     WHERE status NOT IN ('RESOLVED', 'CLOSED')
   ) AS unresolved_rows;
+
+\connect support_tickets
+
+DO $$
+DECLARE
+  actual_count bigint;
+BEGIN
+  SELECT count(*) INTO actual_count FROM support.tickets;
+  IF actual_count <> 120 THEN
+    RAISE EXCEPTION 'support.tickets expected 120 rows, got %', actual_count;
+  END IF;
+
+  SELECT count(*) INTO actual_count FROM ai.ticket_overview;
+  IF actual_count <> 120 THEN
+    RAISE EXCEPTION 'ai.ticket_overview expected 120 rows, got %', actual_count;
+  END IF;
+
+  IF has_table_privilege('support_tickets_reader', 'support.tickets', 'SELECT') THEN
+    RAISE EXCEPTION 'support reader unexpectedly has base-table SELECT';
+  END IF;
+
+  IF NOT has_table_privilege('support_tickets_reader', 'ai.ticket_overview', 'SELECT') THEN
+    RAISE EXCEPTION 'support reader is missing AI-view SELECT';
+  END IF;
+
+  IF has_schema_privilege('support_tickets_reader', 'support', 'USAGE') THEN
+    RAISE EXCEPTION 'support reader unexpectedly has base-schema USAGE';
+  END IF;
+
+  IF has_database_privilege('support_tickets_reader', current_database(), 'TEMP') THEN
+    RAISE EXCEPTION 'support reader unexpectedly has database TEMP';
+  END IF;
+
+  IF has_schema_privilege('support_tickets_reader', 'ai', 'CREATE') THEN
+    RAISE EXCEPTION 'support reader unexpectedly has AI-schema CREATE';
+  END IF;
+END;
+$$;
+
+SELECT
+  'support_tickets' AS database_name,
+  count(*) AS primary_rows,
+  count(*) FILTER (WHERE status <> 'RESOLVED') AS unresolved_rows
+FROM support.tickets;

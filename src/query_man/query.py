@@ -226,6 +226,13 @@ class PostgresQueryExecutor:
             await pool.close()
         self._pools.clear()
 
+    async def invalidate(self, source_id: str) -> None:
+        async with self._pool_lock:
+            pool = self._pools.pop(source_id, None)
+            self._semaphores.pop(source_id, None)
+        if pool is not None:
+            await pool.close()
+
     async def _execute_connection(
         self,
         connection: AsyncConnection[dict[str, Any]],
