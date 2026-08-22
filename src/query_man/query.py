@@ -351,6 +351,8 @@ class PostgresQueryExecutor:
             try:
                 await cursor.execute(sql)
                 columns = [column.name for column in cursor.description or ()]
+                if len(columns) != len(set(columns)):
+                    raise QueryRejectedError("QUERY_DUPLICATE_RESULT_COLUMN")
                 while True:
                     row = await cursor.fetchone()
                     if row is None:

@@ -553,6 +553,17 @@ async def test_live_guarded_query_enforces_plan_and_result_limits() -> None:
         assert limited["truncated"] is True
         assert limited["result_bytes"] <= 1_048_576  # type: ignore[operator]
 
+        with pytest.raises(QueryRejectedError) as duplicate_columns:
+            await service.query(
+                "development-issues",
+                "SELECT issue_id AS value, status AS value "
+                "FROM ai.issue_overview LIMIT 1",
+                published.revision,
+            )
+        assert duplicate_columns.value.details == {
+            "reason_code": "QUERY_DUPLICATE_RESULT_COLUMN"
+        }
+
         with pytest.raises(QueryRejectedError) as caught:
             await service.query(
                 "development-issues",

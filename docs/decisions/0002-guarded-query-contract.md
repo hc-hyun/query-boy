@@ -47,8 +47,9 @@ queue_ms, elapsed_ms, plan_summary
 5. Reader connection에서 `BEGIN READ ONLY`와 transaction-local timeout을 적용한다.
 6. Database, session user와 read-only 상태를 재검증한다.
 7. `EXPLAIN (FORMAT JSON)`의 total cost, 최대 plan rows와 node 수를 profile 상한과 비교한다.
-8. Named cursor로 bounded fetch하고 row/UTF-8 byte 상한에서 결과를 truncate한다.
-9. Timeout, cancel과 오류는 rollback하고 connection을 pool에 안전하게 반환한다.
+8. 결과 column 이름이 중복되면 `QUERY_DUPLICATE_RESULT_COLUMN`으로 거부한다.
+9. Named cursor로 bounded fetch하고 row/UTF-8 byte 상한에서 결과를 truncate한다.
+10. Timeout, cancel과 오류는 rollback하고 connection을 pool에 안전하게 반환한다.
 
 `result_bytes`는 `rows` 배열을 compact JSON으로 UTF-8 직렬화한 크기이며 배열 괄호와
 행 사이 쉼표를 포함한다. 상한을 넘길 행은 응답에 넣지 않고 `truncated`를 설정한다.
@@ -56,6 +57,10 @@ queue_ms, elapsed_ms, plan_summary
 Planner cost는 PostgreSQL의 상대적인 추정치이지 시간이나 금액이 아니다. 따라서 plan
 admission은 명백히 비싼 query를 일찍 거부하는 보조 장치이며 statement/transaction
 timeout, concurrency, result size와 cancel을 대체하지 않는다.
+
+응답의 `rows`는 column 이름을 key로 쓰므로 같은 이름을 두 번 반환할 수 없다. 중복
+alias를 허용하면 `columns`에는 두 이름이 남고 dictionary row에서는 앞선 값이 사라져
+HTTP와 MCP 계약이 모순되므로 fetch 전에 fail-closed한다.
 
 초기 reason code는 다음과 같다.
 
