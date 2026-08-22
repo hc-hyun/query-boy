@@ -15,6 +15,8 @@ for sql_file in \
   40-market-voc-seed.sql \
   50-support-tickets-schema.sql \
   60-support-tickets-seed.sql \
+  70-commerce-edges-schema.sql \
+  80-commerce-edges-seed.sql \
   90-validate-mvp.sql
 do
   docker compose exec -T postgres \

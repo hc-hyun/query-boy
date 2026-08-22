@@ -1,0 +1,15 @@
+version: 1
+source_id: commerce-edges
+name: Commerce Edges
+description: quoted identifier, nullable value, rich type와 복합 grain 검증용 주문 데이터
+connection:
+  host: 127.0.0.1
+  port: 5432
+  database: commerce_edges
+  user: commerce_edges_reader
+  password_env: COMMERCE_EDGES_READER_PASSWORD
+  ssl: false
+allowed_schemas: [ai]
+allowed_relation_kinds: [view]
+budget_profile: interactive
+minimum_quality_level: L0

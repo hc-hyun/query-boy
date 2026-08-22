@@ -4,6 +4,7 @@ set -Eeuo pipefail
 : "${DEVELOPMENT_ISSUES_READER_PASSWORD:?missing development reader password}"
 : "${MARKET_VOC_READER_PASSWORD:?missing market VOC reader password}"
 : "${SUPPORT_TICKETS_READER_PASSWORD:?missing support tickets reader password}"
+: "${COMMERCE_EDGES_READER_PASSWORD:?missing commerce edges reader password}"
 
 psql \
   --username "$POSTGRES_USER" \
@@ -12,7 +13,8 @@ psql \
   --set=admin_user="$POSTGRES_USER" \
   --set=development_reader_password="$DEVELOPMENT_ISSUES_READER_PASSWORD" \
   --set=market_voc_reader_password="$MARKET_VOC_READER_PASSWORD" \
-  --set=support_tickets_reader_password="$SUPPORT_TICKETS_READER_PASSWORD" <<'SQL'
+  --set=support_tickets_reader_password="$SUPPORT_TICKETS_READER_PASSWORD" \
+  --set=commerce_edges_reader_password="$COMMERCE_EDGES_READER_PASSWORD" <<'SQL'
 SELECT
   format(
     'CREATE ROLE development_issues_reader LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 3',
@@ -41,6 +43,15 @@ WHERE NOT EXISTS (
 ) \gexec
 
 SELECT
+  format(
+    'CREATE ROLE commerce_edges_reader LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 3',
+    :'commerce_edges_reader_password'
+  )
+WHERE NOT EXISTS (
+  SELECT 1 FROM pg_roles WHERE rolname = 'commerce_edges_reader'
+) \gexec
+
+SELECT
   'CREATE ROLE development_issues_view_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS'
 WHERE NOT EXISTS (
   SELECT 1 FROM pg_roles WHERE rolname = 'development_issues_view_owner'
@@ -58,6 +69,12 @@ WHERE NOT EXISTS (
   SELECT 1 FROM pg_roles WHERE rolname = 'support_tickets_view_owner'
 ) \gexec
 
+SELECT
+  'CREATE ROLE commerce_edges_view_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS'
+WHERE NOT EXISTS (
+  SELECT 1 FROM pg_roles WHERE rolname = 'commerce_edges_view_owner'
+) \gexec
+
 SELECT format(
   'ALTER ROLE development_issues_reader PASSWORD %L',
   :'development_reader_password'
@@ -73,6 +90,11 @@ SELECT format(
   :'support_tickets_reader_password'
 ) \gexec
 
+SELECT format(
+  'ALTER ROLE commerce_edges_reader PASSWORD %L',
+  :'commerce_edges_reader_password'
+) \gexec
+
 ALTER ROLE development_issues_reader
   NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS
   CONNECTION LIMIT 3;
@@ -80,6 +102,9 @@ ALTER ROLE market_voc_reader
   NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS
   CONNECTION LIMIT 3;
 ALTER ROLE support_tickets_reader
+  NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS
+  CONNECTION LIMIT 3;
+ALTER ROLE commerce_edges_reader
   NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS
   CONNECTION LIMIT 3;
 
@@ -110,15 +135,26 @@ WHERE NOT EXISTS (
   SELECT 1 FROM pg_database WHERE datname = 'support_tickets'
 ) \gexec
 
+SELECT format(
+  'CREATE DATABASE commerce_edges OWNER %I ENCODING %L TEMPLATE template0',
+  :'admin_user',
+  'UTF8'
+)
+WHERE NOT EXISTS (
+  SELECT 1 FROM pg_database WHERE datname = 'commerce_edges'
+) \gexec
+
 REVOKE CONNECT, TEMPORARY ON DATABASE development_issues FROM PUBLIC;
 REVOKE CONNECT, TEMPORARY ON DATABASE market_voc FROM PUBLIC;
 REVOKE CONNECT, TEMPORARY ON DATABASE support_tickets FROM PUBLIC;
+REVOKE CONNECT, TEMPORARY ON DATABASE commerce_edges FROM PUBLIC;
 REVOKE CONNECT, TEMPORARY ON DATABASE query_man FROM PUBLIC;
 REVOKE CONNECT, TEMPORARY ON DATABASE postgres FROM PUBLIC;
 
 GRANT CONNECT ON DATABASE development_issues TO development_issues_reader;
 GRANT CONNECT ON DATABASE market_voc TO market_voc_reader;
 GRANT CONNECT ON DATABASE support_tickets TO support_tickets_reader;
+GRANT CONNECT ON DATABASE commerce_edges TO commerce_edges_reader;
 
 REVOKE ALL ON DATABASE market_voc FROM development_issues_reader;
 REVOKE ALL ON DATABASE development_issues FROM market_voc_reader;
@@ -126,6 +162,12 @@ REVOKE ALL ON DATABASE development_issues FROM support_tickets_reader;
 REVOKE ALL ON DATABASE market_voc FROM support_tickets_reader;
 REVOKE ALL ON DATABASE support_tickets FROM development_issues_reader;
 REVOKE ALL ON DATABASE support_tickets FROM market_voc_reader;
+REVOKE ALL ON DATABASE commerce_edges FROM development_issues_reader;
+REVOKE ALL ON DATABASE commerce_edges FROM market_voc_reader;
+REVOKE ALL ON DATABASE commerce_edges FROM support_tickets_reader;
+REVOKE ALL ON DATABASE development_issues FROM commerce_edges_reader;
+REVOKE ALL ON DATABASE market_voc FROM commerce_edges_reader;
+REVOKE ALL ON DATABASE support_tickets FROM commerce_edges_reader;
 
 ALTER ROLE development_issues_reader IN DATABASE development_issues
   SET default_transaction_read_only = on;
@@ -189,6 +231,29 @@ ALTER ROLE support_tickets_reader IN DATABASE support_tickets
   SET jit = off;
 ALTER ROLE support_tickets_reader IN DATABASE support_tickets
   SET search_path = pg_catalog;
+
+ALTER ROLE commerce_edges_reader IN DATABASE commerce_edges
+  SET default_transaction_read_only = on;
+ALTER ROLE commerce_edges_reader IN DATABASE commerce_edges
+  SET statement_timeout = '5s';
+ALTER ROLE commerce_edges_reader IN DATABASE commerce_edges
+  SET lock_timeout = '250ms';
+ALTER ROLE commerce_edges_reader IN DATABASE commerce_edges
+  SET transaction_timeout = '8s';
+ALTER ROLE commerce_edges_reader IN DATABASE commerce_edges
+  SET idle_in_transaction_session_timeout = '2s';
+ALTER ROLE commerce_edges_reader IN DATABASE commerce_edges
+  SET work_mem = '8MB';
+ALTER ROLE commerce_edges_reader IN DATABASE commerce_edges
+  SET temp_file_limit = '64MB';
+ALTER ROLE commerce_edges_reader IN DATABASE commerce_edges
+  SET max_parallel_workers_per_gather = 0;
+ALTER ROLE commerce_edges_reader IN DATABASE commerce_edges
+  SET jit = off;
+ALTER ROLE commerce_edges_reader IN DATABASE commerce_edges
+  SET search_path = pg_catalog;
+ALTER ROLE commerce_edges_reader IN DATABASE commerce_edges
+  SET timezone = 'UTC';
 
 COMMENT ON ROLE development_issues_reader IS
   'Restricted login used by the query gateway for development issue views.';
@@ -196,4 +261,6 @@ COMMENT ON ROLE market_voc_reader IS
   'Restricted login used by the query gateway for market VOC views.';
 COMMENT ON ROLE support_tickets_reader IS
   'Restricted login used by the query gateway for support ticket views.';
+COMMENT ON ROLE commerce_edges_reader IS
+  'Restricted login used by the query gateway for quoted commerce views.';
 SQL

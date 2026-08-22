@@ -1,0 +1,104 @@
+version: 1
+source_id: commerce-edges
+name: Commerce Edges
+description: quoted identifier, nullable value, rich type와 복합 grain 검증용 주문 데이터
+connection:
+  host: 127.0.0.1
+  port: 5432
+  database: commerce_edges
+  user: commerce_edges_reader
+  password_env: COMMERCE_EDGES_READER_PASSWORD
+  ssl: false
+allowed_schemas: [ai]
+allowed_relation_kinds: [view]
+budget_profile: interactive
+minimum_quality_level: L2
+
+semantic_overlay:
+  default_relation: ai.Order
+  relations:
+    - relation: ai.Order
+      role: event
+      description: 주문별 금액, 일정, 채널과 JSON 속성을 제공하는 quoted view
+      aliases: [주문, 주문 요약, commerce order]
+      grain:
+        name: commerce_order
+        description: 주문 1건
+        key_columns: [OrderID]
+      default_time_column: PlacedAt
+      use_for:
+        - 주문별 금액과 일정
+        - 채널별 주문 수와 순매출
+        - 할인이 없는 주문
+        - 라인이 없는 주문
+      column_aliases:
+        OrderID: [주문 ID, 주문 식별자]
+        PlacedAt: [주문 시각, 주문일]
+        Channel: [주문 채널, 판매 채널]
+        DiscountAmount: [할인 금액]
+        NetAmount: [순매출, 순금액]
+        PromisedOn: [약속일, 배송 약속일]
+        Attributes: [주문 속성, JSON 속성]
+      value_hints:
+        Channel: [WEB, STORE, PARTNER]
+        Status: [DRAFT, PAID, REFUNDED]
+      measures:
+        - name: order_count
+          description: 선택된 주문 행의 건수
+          aliases: [주문 수, 주문 건수]
+          aggregation: count_rows
+        - name: net_amount
+          description: 선택된 주문의 할인 반영 순금액 합계
+          aliases: [순매출, 순금액 합계]
+          aggregation: sum
+          column: NetAmount
+
+    - relation: ai.OrderLine
+      role: event
+      description: OrderID와 LineNo 복합 grain의 주문 라인과 nullable 반품 시각을 제공하는 quoted view
+      aliases: [주문 라인, 주문 품목, commerce order line]
+      grain:
+        name: commerce_order_line
+        description: 한 주문 안의 라인 1건
+        key_columns: [OrderID, LineNo]
+      default_time_column: PlacedAt
+      use_for:
+        - 주문별 라인 수
+        - 반품 라인 수
+        - 주문 라인 금액
+      column_aliases:
+        OrderID: [주문 ID, 주문 식별자]
+        LineNo: [라인 번호, 품목 순번]
+        SKU: [상품 코드, SKU]
+        Quantity: [수량]
+        LineAmount: [라인 금액, 품목 금액]
+        ReturnedAt: [반품 시각, 반품일]
+      measures:
+        - name: line_count
+          description: 선택된 주문 라인 행의 건수
+          aliases: [주문 라인 수, 품목 수]
+          aggregation: count_rows
+        - name: line_amount
+          description: 선택된 주문 라인 금액의 합계
+          aliases: [라인 금액 합계, 품목 금액]
+          aggregation: sum
+          column: LineAmount
+
+  business_terms:
+    - name: returned_line
+      description: ReturnedAt이 null이 아닌 반품 완료 주문 라인
+      aliases: [반품 라인, 반품된 품목]
+      predicates:
+        - relation: ai.OrderLine
+          column: ReturnedAt
+          operator: is_not_null
+
+  joins:
+    - left_relation: ai.Order
+      right_relation: ai.OrderLine
+      column_pairs:
+        - left: OrderID
+          right: OrderID
+      cardinality: one_to_many
+      fanout: true
+      guidance: 주문 라인을 OrderID별로 먼저 집계한 뒤 주문에 결합해야 주문 건수와 금액이 중복되지 않는다.

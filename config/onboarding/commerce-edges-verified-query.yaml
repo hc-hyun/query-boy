@@ -1,0 +1,37 @@
+query_id: commerce-order-edge-values
+question: 주문별 금액, 일정, 속성, 주문 라인 수와 반품 라인 수를 보여줘.
+sql: >-
+  WITH line_totals AS (
+    SELECT "OrderID", count(*)::pg_catalog.int8 AS line_count,
+    count(*) FILTER (
+      WHERE "ReturnedAt" IS NOT NULL
+    )::pg_catalog.int8 AS returned_line_count
+    FROM ai."OrderLine"
+    GROUP BY "OrderID"
+  )
+  SELECT orders."OrderID" AS order_id,
+  orders."PlacedAt" AS placed_at,
+  orders."PromisedOn" AS promised_on,
+  orders."DiscountAmount" AS discount_amount,
+  orders."NetAmount" AS net_amount,
+  orders."Attributes" AS attributes,
+  coalesce(line_totals.line_count, 0)::pg_catalog.int8 AS line_count,
+  coalesce(
+    line_totals.returned_line_count, 0
+  )::pg_catalog.int8 AS returned_line_count
+  FROM ai."Order" AS orders
+  LEFT JOIN line_totals ON line_totals."OrderID" = orders."OrderID"
+  ORDER BY orders."OrderID"
+relations: [ai.Order, ai.OrderLine]
+expected:
+  columns:
+    - order_id
+    - placed_at
+    - promised_on
+    - discount_amount
+    - net_amount
+    - attributes
+    - line_count
+    - returned_line_count
+  row_count: 4
+  result_hash: sha256:b935f61fdd91ca7c1249b23c420bd599dac7d5729f143ba8b842cd0c9798ee27
