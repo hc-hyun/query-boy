@@ -42,3 +42,14 @@ def test_rejects_ambiguous_authentication_configuration() -> None:
             },
             ROOT_DIRECTORY,
         )
+
+
+def test_loads_optional_control_dsn_without_exposing_it_on_validation_error() -> None:
+    dsn = "host=control.invalid dbname=query_man user=control password=private-secret"
+    loaded = load_runtime_config({"QUERY_MAN_CONTROL_DSN": dsn}, ROOT_DIRECTORY)
+    assert loaded.control_dsn == dsn
+
+    secret = "sensitive-control-password"
+    with pytest.raises(ValueError) as captured:
+        load_runtime_config({"QUERY_MAN_CONTROL_DSN": secret * 100}, ROOT_DIRECTORY)
+    assert secret not in str(captured.value)

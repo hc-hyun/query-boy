@@ -1,0 +1,255 @@
+from __future__ import annotations
+
+import asyncio
+from typing import Any, Literal, Protocol
+
+from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
+from psycopg_pool import AsyncConnectionPool
+from pydantic import BaseModel, ConfigDict, Field
+
+from query_man.models import (
+    CatalogColumn,
+    CatalogRelation,
+    CatalogRelationKind,
+    CatalogSnapshot,
+    PreparedMetadata,
+    SourceProfile,
+)
+from query_man.revision import create_metadata_revision
+
+
+class MetadataStore(Protocol):
+    async def get_active(self, source: SourceProfile) -> PreparedMetadata | None: ...
+
+    async def publish(self, source: SourceProfile, value: PreparedMetadata) -> PreparedMetadata: ...
+
+    async def activate(self, source: SourceProfile, revision: str) -> PreparedMetadata: ...
+
+    async def unpin(self, source: SourceProfile) -> None: ...
+
+    async def close(self) -> None: ...
+
+
+class StoredMetadataNotFoundError(Exception):
+    pass
+
+
+class StoredMetadataInvalidError(Exception):
+    pass
+
+
+class _StoredModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class _StoredColumn(_StoredModel):
+    name: str = Field(min_length=1, max_length=63)
+    ordinal: int = Field(ge=1, le=1_600)
+    data_type: str = Field(min_length=1, max_length=1_000)
+    nullable: bool | Literal["unknown"]
+    comment: str | None = Field(None, max_length=2_000)
+
+
+class _StoredRelation(_StoredModel):
+    schema_name: str = Field(min_length=1, max_length=63)
+    relation_name: str = Field(min_length=1, max_length=63)
+    kind: CatalogRelationKind
+    columns: list[_StoredColumn] = Field(min_length=1, max_length=1_600)
+    comment: str | None = Field(None, max_length=2_000)
+    definition_hash: str | None = Field(None, pattern=r"^[a-f0-9]{32}$")
+
+
+class _SnapshotDocument(_StoredModel):
+    relations: list[_StoredRelation] = Field(min_length=1, max_length=10_000)
+
+
+class PostgresMetadataStore:
+    def __init__(self, dsn: str) -> None:
+        self._dsn = dsn
+        self._pool: AsyncConnectionPool[Any] | None = None
+        self._pool_lock = asyncio.Lock()
+
+    async def get_active(self, source: SourceProfile) -> PreparedMetadata | None:
+        pool = await self._get_pool()
+        async with pool.connection() as connection:
+            cursor = await connection.execute(
+                "SELECT active.revision, snapshot.snapshot "
+                "FROM control.active_metadata_revisions AS active "
+                "JOIN control.metadata_snapshots AS snapshot "
+                "ON snapshot.source_id = active.source_id "
+                "AND snapshot.revision = active.revision "
+                "WHERE active.source_id = %s",
+                (source.source_id,),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            return None
+        return _decode(source, str(row["revision"]), row["snapshot"])
+
+    async def publish(self, source: SourceProfile, value: PreparedMetadata) -> PreparedMetadata:
+        document = _encode(value.snapshot)
+        pool = await self._get_pool()
+        async with pool.connection() as connection, connection.transaction():
+            await connection.execute(
+                "INSERT INTO control.metadata_snapshots (source_id, revision, snapshot) "
+                "VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
+                (source.source_id, value.revision, Jsonb(document)),
+            )
+            cursor = await connection.execute(
+                "SELECT snapshot FROM control.metadata_snapshots "
+                "WHERE source_id = %s AND revision = %s",
+                (source.source_id, value.revision),
+            )
+            stored = await cursor.fetchone()
+            if stored is None or stored["snapshot"] != document:
+                raise StoredMetadataInvalidError("Stored metadata revision payload does not match")
+            await connection.execute(
+                "INSERT INTO control.active_metadata_revisions "
+                "(source_id, revision, pinned, activated_at) "
+                "VALUES (%s, %s, false, clock_timestamp()) "
+                "ON CONFLICT (source_id) DO UPDATE "
+                "SET revision = EXCLUDED.revision, activated_at = EXCLUDED.activated_at "
+                "WHERE NOT control.active_metadata_revisions.pinned",
+                (source.source_id, value.revision),
+            )
+            cursor = await connection.execute(
+                "SELECT active.revision, snapshot.snapshot "
+                "FROM control.active_metadata_revisions AS active "
+                "JOIN control.metadata_snapshots AS snapshot "
+                "ON snapshot.source_id = active.source_id "
+                "AND snapshot.revision = active.revision "
+                "WHERE active.source_id = %s",
+                (source.source_id,),
+            )
+            active = await cursor.fetchone()
+            if active is None:
+                raise StoredMetadataInvalidError("Active metadata revision is unavailable")
+        return _decode(source, str(active["revision"]), active["snapshot"])
+
+    async def activate(self, source: SourceProfile, revision: str) -> PreparedMetadata:
+        pool = await self._get_pool()
+        async with pool.connection() as connection, connection.transaction():
+            cursor = await connection.execute(
+                "SELECT snapshot FROM control.metadata_snapshots "
+                "WHERE source_id = %s AND revision = %s FOR SHARE",
+                (source.source_id, revision),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                raise StoredMetadataNotFoundError("Stored metadata revision was not found")
+            value = _decode(source, revision, row["snapshot"])
+            await connection.execute(
+                "INSERT INTO control.active_metadata_revisions "
+                "(source_id, revision, pinned, activated_at) "
+                "VALUES (%s, %s, true, clock_timestamp()) "
+                "ON CONFLICT (source_id) DO UPDATE "
+                "SET revision = EXCLUDED.revision, pinned = true, "
+                "activated_at = EXCLUDED.activated_at",
+                (source.source_id, revision),
+            )
+        return value
+
+    async def unpin(self, source: SourceProfile) -> None:
+        pool = await self._get_pool()
+        async with pool.connection() as connection:
+            await connection.execute(
+                "UPDATE control.active_metadata_revisions SET pinned = false "
+                "WHERE source_id = %s",
+                (source.source_id,),
+            )
+
+    async def close(self) -> None:
+        if self._pool is not None:
+            await self._pool.close()
+            self._pool = None
+
+    async def _get_pool(self) -> AsyncConnectionPool[Any]:
+        if self._pool is not None:
+            return self._pool
+        async with self._pool_lock:
+            if self._pool is None:
+                pool = AsyncConnectionPool(
+                    conninfo=self._dsn,
+                    kwargs={
+                        "application_name": "query-man-control",
+                        "connect_timeout": 2,
+                        "row_factory": dict_row,
+                    },
+                    min_size=0,
+                    max_size=2,
+                    timeout=2,
+                    max_idle=10,
+                    open=False,
+                )
+                await pool.open()
+                self._pool = pool
+        return self._pool
+
+
+def _encode(snapshot: CatalogSnapshot) -> dict[str, object]:
+    return {
+        "relations": [
+            {
+                "schema_name": relation.schema,
+                "relation_name": relation.name,
+                "kind": relation.kind,
+                "comment": relation.comment,
+                "definition_hash": relation.definition_hash,
+                "columns": [
+                    {
+                        "name": column.name,
+                        "ordinal": column.ordinal,
+                        "data_type": column.data_type,
+                        "nullable": column.nullable,
+                        "comment": column.comment,
+                    }
+                    for column in sorted(relation.columns, key=lambda item: item.ordinal)
+                ],
+            }
+            for relation in sorted(snapshot.relations, key=lambda item: item.qualified_name)
+        ]
+    }
+
+
+def _decode(source: SourceProfile, revision: str, raw: object) -> PreparedMetadata:
+    try:
+        document = _SnapshotDocument.model_validate(raw)
+        snapshot = CatalogSnapshot(
+            relations=[
+                CatalogRelation(
+                    schema=relation.schema_name,
+                    name=relation.relation_name,
+                    qualified_name=f"{relation.schema_name}.{relation.relation_name}",
+                    sql_name=(
+                        f"{_quote_identifier(relation.schema_name)}."
+                        f"{_quote_identifier(relation.relation_name)}"
+                    ),
+                    kind=relation.kind,
+                    columns=[
+                        CatalogColumn(
+                            name=column.name,
+                            sql_name=_quote_identifier(column.name),
+                            ordinal=column.ordinal,
+                            data_type=column.data_type,
+                            nullable=column.nullable,
+                            comment=column.comment,
+                        )
+                        for column in relation.columns
+                    ],
+                    comment=relation.comment,
+                    estimated_rows=None,
+                    definition_hash=relation.definition_hash,
+                )
+                for relation in document.relations
+            ]
+        )
+    except (TypeError, ValueError) as error:
+        raise StoredMetadataInvalidError("Stored metadata document is invalid") from error
+    if create_metadata_revision(source, snapshot) != revision:
+        raise StoredMetadataInvalidError("Stored metadata is incompatible with the source contract")
+    return PreparedMetadata(snapshot, revision)
+
+
+def _quote_identifier(value: str) -> str:
+    return f'"{value.replace(chr(34), chr(34) * 2)}"'

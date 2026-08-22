@@ -122,3 +122,9 @@ uv run query-man-verify
 전체 golden question의 revision, relation, SQL과 결과 invariant는
 [`docs/verified-queries.md`](docs/verified-queries.md)의 계약에 따라
 `uv run query-man-verify`로 검증합니다.
+
+Production metadata revision을 재시작 후에도 유지하려면 `05-control-plane.sql`을 적용하고
+`query_man_control_writer`를 상속한 전용 login의 PostgreSQL DSN을
+`QUERY_MAN_CONTROL_DSN`에 설정합니다. Snapshot은 immutable하게 저장되며 refresh와 active
+pointer 변경은 한 transaction으로 처리됩니다. Rollback과 pin 동작은
+[ADR 0007](docs/decisions/0007-immutable-metadata-publishing.md)을 따릅니다.

@@ -99,6 +99,13 @@ Catalog refresh가 일시 실패하면 제한된 stale 기간 동안 마지막 �
 `503 METADATA_UNAVAILABLE`을 반환한다. 권한 회수나 schema drift는 stale fallback을
 사용하지 않는다.
 
+Production에서는 `./scripts/apply-db.sh`가 생성하는 `control` schema를 사용하고,
+`query_man_control_writer` role을 상속한 전용 LOGIN의 DSN을
+`QUERY_MAN_CONTROL_DSN`에 설정한다. 정상 refresh는 immutable snapshot과 active pointer를
+원자적으로 publish한다. Rollback한 source는 pin되므로 이후 refresh가 active revision을
+덮지 않으며, 검증 후 automatic publish를 명시적으로 resume해야 한다. Control-plane
+DSN이나 snapshot payload는 metadata/MCP 응답에 포함되지 않는다.
+
 ## Security Checks
 
 - Request에는 `source_id`, `question`, `max_objects` 외 필드를 허용하지 않는다.

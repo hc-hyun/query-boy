@@ -169,6 +169,12 @@ class CatalogSnapshot:
     relations: list[CatalogRelation] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class PreparedMetadata:
+    snapshot: CatalogSnapshot
+    revision: str
+
+
 class CatalogProvider(Protocol):
     async def load(self, source: SourceProfile) -> CatalogSnapshot: ...
 

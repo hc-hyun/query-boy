@@ -8,6 +8,7 @@ docker compose exec -T postgres \
   bash /docker-entrypoint-initdb.d/01-source-bootstrap.sh
 
 for sql_file in \
+  05-control-plane.sql \
   10-development-issues-schema.sql \
   20-development-issues-seed.sql \
   30-market-voc-schema.sql \
@@ -21,4 +22,3 @@ do
       --set=ON_ERROR_STOP=1 \
       --file="/docker-entrypoint-initdb.d/$sql_file"
 done
-

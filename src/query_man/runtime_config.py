@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator
 
 
 class _Environment(BaseModel):
@@ -22,6 +22,12 @@ class _Environment(BaseModel):
     cache_ttl_ms: int = Field(30_000, alias="QUERY_MAN_METADATA_CACHE_TTL_MS", ge=0, le=3_600_000)
     max_stale_ms: int = Field(300_000, alias="QUERY_MAN_METADATA_MAX_STALE_MS", ge=0, le=86_400_000)
     retry_delay_ms: int = Field(5_000, alias="QUERY_MAN_METADATA_RETRY_DELAY_MS", ge=100, le=300_000)
+    control_dsn: SecretStr | None = Field(
+        None,
+        alias="QUERY_MAN_CONTROL_DSN",
+        min_length=1,
+        max_length=2_048,
+    )
 
     @field_validator("log_level")
     @classmethod
@@ -44,6 +50,7 @@ class RuntimeConfig:
     metadata_cache_ttl_ms: int
     metadata_max_stale_ms: int
     metadata_retry_delay_ms: int
+    control_dsn: str | None = None
 
 
 def load_runtime_config(
@@ -75,6 +82,7 @@ def load_runtime_config(
         metadata_cache_ttl_ms=parsed.cache_ttl_ms,
         metadata_max_stale_ms=parsed.max_stale_ms,
         metadata_retry_delay_ms=parsed.retry_delay_ms,
+        control_dsn=(parsed.control_dsn.get_secret_value() if parsed.control_dsn is not None else None),
     )
 
 

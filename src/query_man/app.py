@@ -18,6 +18,7 @@ from query_man.errors import AppError, QueryTimeoutError
 from query_man.gateway import GatewayService
 from query_man.mcp_server import create_mcp_server
 from query_man.metadata import MetadataService
+from query_man.metadata_store import PostgresMetadataStore
 from query_man.models import CatalogProvider
 from query_man.query import PostgresQueryExecutor, QueryExecutor, QueryService
 from query_man.registry import SourceRegistry
@@ -62,6 +63,11 @@ def build_app(
         cache_ttl_ms=runtime_config.metadata_cache_ttl_ms,
         max_stale_ms=runtime_config.metadata_max_stale_ms,
         refresh_retry_ms=runtime_config.metadata_retry_delay_ms,
+        store=(
+            PostgresMetadataStore(runtime_config.control_dsn)
+            if runtime_config.control_dsn is not None
+            else None
+        ),
     )
     query_executor = query_executor or PostgresQueryExecutor()
     query_service = QueryService(registry, metadata, query_executor)
@@ -90,7 +96,10 @@ def build_app(
             try:
                 await query_executor.close()
             finally:
-                await catalog.close()
+                try:
+                    await catalog.close()
+                finally:
+                    await metadata.close()
 
     app = FastAPI(title="query-man", lifespan=lifespan)
     app.state.registry = registry

@@ -8,6 +8,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 
 from query_man.errors import MetadataUnavailableError, SourceNotFoundError
+from query_man.metadata_store import MetadataStore
 from query_man.models import (
     BusinessTermDefinition,
     CatalogColumn,
@@ -17,6 +18,7 @@ from query_man.models import (
     CompositionHint,
     JoinDefinition,
     MeasureDefinition,
+    PreparedMetadata,
     QuestionRule,
     RelationSemantic,
     SourceProfile,
@@ -30,12 +32,6 @@ from query_man.relevance import (
     select_ranked_relations,
 )
 from query_man.revision import create_metadata_revision
-
-
-@dataclass(frozen=True)
-class PreparedMetadata:
-    snapshot: CatalogSnapshot
-    revision: str
 
 
 @dataclass
@@ -56,6 +52,7 @@ class MetadataService:
         max_stale_ms: int = 300_000,
         refresh_retry_ms: int = 5_000,
         now: Callable[[], int] | None = None,
+        store: MetadataStore | None = None,
     ) -> None:
         self._registry = registry
         self._catalog = catalog
@@ -63,6 +60,7 @@ class MetadataService:
         self._max_stale_ms = max_stale_ms
         self._refresh_retry_ms = refresh_retry_ms
         self._now = now or (lambda: int(time.time() * 1000))
+        self._store = store
         self._cache: dict[str, _CacheEntry] = {}
         self._refreshes: dict[str, asyncio.Task[PreparedMetadata]] = {}
 
@@ -128,8 +126,54 @@ class MetadataService:
         prepared, _stale = await self._get_prepared(source)
         return prepared
 
+    async def rollback(self, source_id: str, revision: str) -> PreparedMetadata:
+        source = self._registry.get(source_id)
+        if source is None:
+            raise SourceNotFoundError
+        if self._store is None:
+            raise MetadataUnavailableError
+        try:
+            value = await self._store.activate(source, revision)
+        except Exception as error:
+            raise MetadataUnavailableError from error
+        self._cache_value(source_id, value)
+        return value
+
+    async def close(self) -> None:
+        if self._store is not None:
+            await self._store.close()
+
+    async def resume_automatic_publish(self, source_id: str) -> None:
+        source = self._registry.get(source_id)
+        if source is None:
+            raise SourceNotFoundError
+        if self._store is None:
+            raise MetadataUnavailableError
+        try:
+            await self._store.unpin(source)
+            active = await self._store.get_active(source)
+        except Exception as error:
+            raise MetadataUnavailableError from error
+        if active is None:
+            raise MetadataUnavailableError
+        now = self._now()
+        self._cache[source_id] = _CacheEntry(
+            value=active,
+            loaded_at=now,
+            expires_at=now,
+            next_refresh_at=now,
+        )
+
     async def _get_prepared(self, source: SourceProfile) -> tuple[PreparedMetadata, bool]:
         cached = self._cache.get(source.source_id)
+        if cached is None and self._store is not None:
+            try:
+                stored = await self._store.get_active(source)
+            except Exception as error:
+                raise MetadataUnavailableError from error
+            if stored is not None:
+                self._cache_value(source.source_id, stored)
+                return stored, False
         now = self._now()
         if cached and cached.expires_at > now:
             return cached.value, False
@@ -165,14 +209,19 @@ class MetadataService:
         if issues:
             raise MetadataUnavailableError({"contract_violations": issues})
         value = PreparedMetadata(snapshot, create_metadata_revision(source, snapshot))
+        if self._store is not None:
+            value = await self._store.publish(source, value)
+        self._cache_value(source.source_id, value)
+        return value
+
+    def _cache_value(self, source_id: str, value: PreparedMetadata) -> None:
         loaded_at = self._now()
-        self._cache[source.source_id] = _CacheEntry(
+        self._cache[source_id] = _CacheEntry(
             value=value,
             loaded_at=loaded_at,
             expires_at=loaded_at + self._cache_ttl_ms,
             next_refresh_at=loaded_at + self._cache_ttl_ms,
         )
-        return value
 
 
 def _validate_snapshot(source: SourceProfile, snapshot: CatalogSnapshot) -> list[str]:
