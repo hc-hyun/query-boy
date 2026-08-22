@@ -56,6 +56,7 @@ DEFAULT_ALLOWED_FUNCTIONS = frozenset(
         "regr_slope",
         "replace",
         "right",
+        "row_number",
         "round",
         "rtrim",
         "split_part",

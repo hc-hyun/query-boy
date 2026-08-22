@@ -105,8 +105,8 @@ Metadata 응답은 구현되어 있지만 architecture의 전체 physical catalo
 - [ ] `META-04` Exact phrase 중심 relevance를 대체·보완할 retrieval index와 ranking 평가 harness를 구현한다.
 - [ ] `META-05` Immutable metadata snapshot과 active revision을 control plane에 저장한다.
 - [ ] `META-06` Refresh 결과를 원자적으로 publish하고 이전 정상 revision으로 rollback할 수 있게 한다.
-- [ ] `META-07` Verified question/SQL, 기대 relation, 기대 결과 invariant 저장 모델을 구현한다.
-- [ ] `META-08` Verified query가 참조하는 revision과 현재 schema drift를 검증한다.
+- [x] `META-07` Verified question/SQL, 기대 relation, 기대 결과 invariant 저장 모델을 구현한다.
+- [x] `META-08` Verified query가 참조하는 revision과 현재 schema drift를 검증한다.
 - [ ] `META-09` L0/L1/L2 source 품질 수준과 publish gate를 자동 판정한다.
 - [ ] `META-10` Golden question precision, unsupported/clarification recall과 context byte 크기를 CI 지표로 관리한다.
 
@@ -166,7 +166,7 @@ Dependencies: all required items above
 
 - [ ] `REL-01` 세 개 이상의 서로 다른 PostgreSQL source가 동일한 runtime 코드 경로를 사용하는지 확인한다.
 - [ ] `REL-02` 신규 source를 서비스 재배포 없이 등록하고 MCP에서 조회·실행하는 시나리오를 통과한다.
-- [ ] `REL-03` 모든 golden/verified question의 relation 선택, SQL 안전성과 결과 invariant를 통과한다.
+- [x] `REL-03` 모든 golden/verified question의 relation 선택, SQL 안전성과 결과 invariant를 통과한다.
 - [ ] `REL-04` 공격·오용 corpus에서 write, privilege escalation, system object와 resource limit 우회를 차단한다.
 - [ ] `REL-05` 부하 테스트에서 source별 concurrency와 queue 격리, cancel과 hard limit을 확인한다.
 - [ ] `REL-06` Schema drift, source 장애, stale 만료와 control plane rollback 복구 시나리오를 통과한다.

@@ -22,6 +22,7 @@ from query_man.query import PostgresQueryExecutor, QueryService
 from query_man.registry import SourceRegistry
 from query_man.runtime_config import RuntimeConfig
 from query_man.sql_validation import DEFAULT_ALLOWED_FUNCTIONS, ValidatedSql, validate_sql
+from query_man.verified import VerifiedQueryRegistry
 from tests.helpers import ROOT_DIRECTORY, load_test_registry, minimal_development_snapshot
 
 
@@ -87,12 +88,32 @@ async def test_live_catalog_maps_golden_questions() -> None:
             ["ai.issue_overview", "ai.issue_comments"],
         ),
         (
+            "development-issues",
+            "원인이 아직 입력되지 않은 Critical 또는 High 문제를 찾아줘.",
+            ["ai.issue_overview"],
+        ),
+        (
+            "development-issues",
+            "HW/SW version 조합별로 가장 많이 발생한 문제 유형은 무엇인가?",
+            ["ai.issue_overview"],
+        ),
+        (
             "market-voc",
             "모델별 기기 수, VOC 수와 기기당 VOC 수를 높은 순서로 보여줘.",
             ["ai.device_overview"],
         ),
         ("market-voc", "VOC가 한 번도 없는 기기는 몇 대인가?", ["ai.device_overview"]),
         ("market-voc", "NURI 세대별 힌지 VOC 수를 비교해줘.", ["ai.voc_overview"]),
+        (
+            "market-voc",
+            "제조 lot별 전체 VOC 중 배터리 및 과열 VOC 비율을 비교해줘.",
+            ["ai.voc_overview"],
+        ),
+        (
+            "market-voc",
+            "지역과 월별 미해결 VOC 추이를 보여줘.",
+            ["ai.voc_overview"],
+        ),
     ]
     try:
         for source_id, question, expected in cases:
@@ -100,6 +121,34 @@ async def test_live_catalog_maps_golden_questions() -> None:
             assert [item["name"] for item in response["relations"]] == expected
             assert str(response["metadata_revision"]).startswith("sha256:")
     finally:
+        await catalog.close()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_live_verified_queries_match_revision_relations_and_results() -> None:
+    load_dotenv(ROOT_DIRECTORY / ".env")
+    required = ["DEVELOPMENT_ISSUES_READER_PASSWORD", "MARKET_VOC_READER_PASSWORD"]
+    if any(not os.environ.get(name) for name in required):
+        pytest.skip("local reader credentials are not configured")
+
+    registry = SourceRegistry.load(
+        ROOT_DIRECTORY / "config" / "sources",
+        ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
+    )
+    verified = VerifiedQueryRegistry.load(
+        ROOT_DIRECTORY / "config" / "verified-queries.yaml",
+        {source["source_id"] for source in registry.list()},
+    )
+    catalog = PostgresCatalog()
+    executor = PostgresQueryExecutor()
+    metadata = MetadataService(registry, catalog, cache_ttl_ms=30_000)
+    service = QueryService(registry, metadata, executor)
+    try:
+        results = await verified.verify_all(metadata, service)
+        assert len(results) == 9
+    finally:
+        await executor.close()
         await catalog.close()
 
 

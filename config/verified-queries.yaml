@@ -1,0 +1,181 @@
+version: 1
+
+queries:
+  - query_id: development-recent-model-issues
+    source_id: development-issues
+    question: 최근 90일 동안 모델별 개발 문제 건수와 미해결 건수를 보여줘.
+    metadata_revision: sha256:d04d1afbb0b0652799665e3d9fb0364ada499197d3d6e334b69d4572348bc855
+    relations: [ai.issue_overview]
+    sql: >-
+      SELECT model_name, count(*) AS issue_count,
+      count(*) FILTER (WHERE status <> 'RESOLVED') AS unresolved_issue_count
+      FROM ai.issue_overview
+      WHERE discovered_at >=
+      '2026-05-24T00:00:00+09'::pg_catalog.timestamptz
+      GROUP BY model_name
+      ORDER BY issue_count DESC, model_name
+    expected:
+      columns: [model_name, issue_count, unresolved_issue_count]
+      row_count: 6
+      result_hash: sha256:1b98b84944a15bf8f99ea02d65cb42bbf265dbe9a061fa1bc6f041af3e3aaf1a
+
+  - query_id: development-critical-without-cause
+    source_id: development-issues
+    question: 원인이 아직 입력되지 않은 Critical 또는 High 문제를 찾아줘.
+    metadata_revision: sha256:d04d1afbb0b0652799665e3d9fb0364ada499197d3d6e334b69d4572348bc855
+    relations: [ai.issue_overview]
+    sql: >-
+      SELECT issue_id, issue_no, severity, title, discovered_at
+      FROM ai.issue_overview
+      WHERE cause IS NULL AND severity IN ('CRITICAL', 'HIGH')
+      ORDER BY severity, discovered_at DESC, issue_id
+    expected:
+      columns: [issue_id, issue_no, severity, title, discovered_at]
+      row_count: 62
+      result_hash: sha256:c918e665c3a74cf826f7b38c0eecc48262f0ba01bebb2b61be39a9e5b58e4690
+
+  - query_id: development-user-activity
+    source_id: development-issues
+    question: 사용자별 등록 문제 수, 담당 문제 수와 작성 댓글 수를 비교해줘.
+    metadata_revision: sha256:d04d1afbb0b0652799665e3d9fb0364ada499197d3d6e334b69d4572348bc855
+    relations: [ai.issue_overview, ai.issue_comments]
+    sql: >-
+      WITH registered AS (
+        SELECT reporter_user_id AS user_id, count(*) AS registered_count
+        FROM ai.issue_overview GROUP BY reporter_user_id
+      ), assigned AS (
+        SELECT assignee_user_id AS user_id, count(*) AS assigned_count
+        FROM ai.issue_overview
+        WHERE assignee_user_id IS NOT NULL GROUP BY assignee_user_id
+      ), commented AS (
+        SELECT author_user_id AS user_id, count(*) AS comment_count
+        FROM ai.issue_comments GROUP BY author_user_id
+      )
+      SELECT coalesce(registered.user_id, assigned.user_id, commented.user_id) AS user_id,
+      coalesce(registered.registered_count, 0) AS registered_count,
+      coalesce(assigned.assigned_count, 0) AS assigned_count,
+      coalesce(commented.comment_count, 0) AS comment_count
+      FROM registered FULL JOIN assigned USING (user_id)
+      FULL JOIN commented
+      ON commented.user_id = coalesce(registered.user_id, assigned.user_id)
+      ORDER BY user_id
+    expected:
+      columns: [user_id, registered_count, assigned_count, comment_count]
+      row_count: 18
+      result_hash: sha256:b5d005c989220ef0ff470a874ea402af3bcdc37d6a05c6bf974b7e240672b698
+
+  - query_id: development-top-issue-type-by-version
+    source_id: development-issues
+    question: HW/SW version 조합별로 가장 많이 발생한 문제 유형은 무엇인가?
+    metadata_revision: sha256:d04d1afbb0b0652799665e3d9fb0364ada499197d3d6e334b69d4572348bc855
+    relations: [ai.issue_overview]
+    sql: >-
+      WITH counts AS (
+        SELECT hw_version, sw_version, issue_type, count(*) AS issue_count
+        FROM ai.issue_overview
+        GROUP BY hw_version, sw_version, issue_type
+      ), ranked AS (
+        SELECT hw_version, sw_version, issue_type, issue_count,
+        row_number() OVER (
+          PARTITION BY hw_version, sw_version
+          ORDER BY issue_count DESC, issue_type
+        ) AS rank_no
+        FROM counts
+      )
+      SELECT hw_version, sw_version, issue_type, issue_count
+      FROM ranked WHERE rank_no = 1
+      ORDER BY hw_version, sw_version
+    expected:
+      columns: [hw_version, sw_version, issue_type, issue_count]
+      row_count: 25
+      result_hash: sha256:b5361376f8365c7cabfd88c16265822490e4d64417c22c03956bbb35f813dc31
+
+  - query_id: market-model-voc-rate
+    source_id: market-voc
+    question: 모델별 기기 수, VOC 수와 기기당 VOC 수를 높은 순서로 보여줘.
+    metadata_revision: sha256:aa96fcad874d36b95d7a0261b1571852ea335ea0935484bfb3fe647841e8df63
+    relations: [ai.device_overview]
+    sql: >-
+      SELECT model_name, count(*) AS device_count, sum(voc_count) AS voc_count,
+      round(sum(voc_count)::pg_catalog.numeric / count(*), 2) AS voc_per_device
+      FROM ai.device_overview
+      GROUP BY model_name
+      ORDER BY voc_per_device DESC, model_name
+    expected:
+      columns: [model_name, device_count, voc_count, voc_per_device]
+      row_count: 8
+      result_hash: sha256:b01fd8a8c9087d0b4f0b98a04c1086005eb7a23fd3e690faca7bb272b0fdc7b7
+
+  - query_id: market-devices-without-voc
+    source_id: market-voc
+    question: VOC가 한 번도 없는 기기는 몇 대인가?
+    metadata_revision: sha256:aa96fcad874d36b95d7a0261b1571852ea335ea0935484bfb3fe647841e8df63
+    relations: [ai.device_overview]
+    sql: >-
+      SELECT count(*) AS devices_without_voc
+      FROM ai.device_overview WHERE voc_count = 0
+    expected:
+      columns: [devices_without_voc]
+      row_count: 1
+      result_hash: sha256:d014cdedfb430395e71a57c020b297d9c1c80107af6bd4190b3fbadb1e650990
+
+  - query_id: market-nuri-hinge-voc
+    source_id: market-voc
+    question: NURI 세대별 힌지 VOC 수를 비교해줘.
+    metadata_revision: sha256:aa96fcad874d36b95d7a0261b1571852ea335ea0935484bfb3fe647841e8df63
+    relations: [ai.voc_overview]
+    sql: >-
+      SELECT model_name, count(*) AS hinge_voc_count
+      FROM ai.voc_overview
+      WHERE product_family = 'NURI' AND defect_category = 'HINGE'
+      GROUP BY model_name ORDER BY model_name
+    expected:
+      columns: [model_name, hinge_voc_count]
+      row_count: 2
+      result_hash: sha256:7b255690c9ba4d0aa65837a61ca749e9d4e647f7a722371ff1083502cbb281dc
+
+  - query_id: market-lot-battery-overheat-ratio
+    source_id: market-voc
+    question: 제조 lot별 전체 VOC 중 배터리 및 과열 VOC 비율을 비교해줘.
+    metadata_revision: sha256:aa96fcad874d36b95d7a0261b1571852ea335ea0935484bfb3fe647841e8df63
+    relations: [ai.voc_overview]
+    sql: >-
+      SELECT manufacturing_lot, count(*) AS total_voc_count,
+      count(*) FILTER (
+        WHERE defect_category IN ('BATTERY', 'OVERHEATING')
+      ) AS battery_overheat_count,
+      round(
+        count(*) FILTER (
+          WHERE defect_category IN ('BATTERY', 'OVERHEATING')
+        )::pg_catalog.numeric / count(*), 4
+      ) AS battery_overheat_ratio
+      FROM ai.voc_overview
+      GROUP BY manufacturing_lot
+      ORDER BY battery_overheat_ratio DESC, manufacturing_lot
+    expected:
+      columns:
+        - manufacturing_lot
+        - total_voc_count
+        - battery_overheat_count
+        - battery_overheat_ratio
+      row_count: 15
+      result_hash: sha256:6ea832bb486c22a7ec2875f6e3bc549cc0a3d5bfffe45a37c11f06d4dd3ad762
+
+  - query_id: market-region-month-unresolved
+    source_id: market-voc
+    question: 지역과 월별 미해결 VOC 추이를 보여줘.
+    metadata_revision: sha256:aa96fcad874d36b95d7a0261b1571852ea335ea0935484bfb3fe647841e8df63
+    relations: [ai.voc_overview]
+    sql: >-
+      SELECT market_region,
+      date_trunc('month', received_at) AS received_month,
+      count(*) FILTER (
+        WHERE status NOT IN ('RESOLVED', 'CLOSED')
+      ) AS unresolved_voc_count
+      FROM ai.voc_overview
+      GROUP BY market_region, date_trunc('month', received_at)
+      ORDER BY received_month, market_region
+    expected:
+      columns: [market_region, received_month, unresolved_voc_count]
+      row_count: 186
+      result_hash: sha256:fe472f87adc70e7c5ec0778ee62f0e2c48099bb4d2b2f902b9c78be71d99bc45

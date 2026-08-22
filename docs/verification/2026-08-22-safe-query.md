@@ -24,6 +24,7 @@ uv run pytest             PASS (unit suite)
 uv run pytest -m integration
                           PASS (5 integration tests, including load, live socket and PostgreSQL)
 uv run pytest -m load -s PASS (40 concurrent cross-source queries plus metadata refresh)
+uv run query-man-verify PASS (9/9 golden questions)
 ```
 
 ## Evidence
@@ -43,6 +44,7 @@ uv run pytest -m load -s PASS (40 concurrent cross-source queries plus metadata 
 | Disconnect | Uvicorn TCP socket closes while a query is active | ASGI disconnect cancels the application task |
 | Source authorization | Caller allowlist filters `/sources` and denies `/meta`, `/query` before catalog/executor | PASS; denied and unknown source share 404 |
 | Initial budget load | 40 concurrent queries across two sources with metadata refresh | 0 errors; observed queue max 641ms, elapsed max 729ms |
+| Golden regression | 4 development + 5 market questions | Revision, AST relations, columns, row count and result hash all match |
 
 ## Remaining Gaps
 
