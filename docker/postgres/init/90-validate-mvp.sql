@@ -110,9 +110,17 @@ BEGIN
       AND NOT rolinherit
       AND NOT rolreplication
       AND NOT rolbypassrls
-      AND rolconnlimit = 3
+      AND rolconnlimit = 7
   ) THEN
     RAISE EXCEPTION 'development reader role attributes violate policy';
+  END IF;
+
+  IF NOT has_parameter_privilege(
+    'development_issues_reader',
+    'temp_file_limit',
+    'SET'
+  ) THEN
+    RAISE EXCEPTION 'development reader cannot enforce its temporary-file budget';
   END IF;
 
   IF NOT EXISTS (
@@ -270,9 +278,17 @@ BEGIN
       AND NOT rolinherit
       AND NOT rolreplication
       AND NOT rolbypassrls
-      AND rolconnlimit = 3
+      AND rolconnlimit = 7
   ) THEN
     RAISE EXCEPTION 'market VOC reader role attributes violate policy';
+  END IF;
+
+  IF NOT has_parameter_privilege(
+    'market_voc_reader',
+    'temp_file_limit',
+    'SET'
+  ) THEN
+    RAISE EXCEPTION 'market VOC reader cannot enforce its temporary-file budget';
   END IF;
 
   IF NOT EXISTS (
@@ -347,6 +363,30 @@ BEGIN
 
   IF has_schema_privilege('support_tickets_reader', 'ai', 'CREATE') THEN
     RAISE EXCEPTION 'support reader unexpectedly has AI-schema CREATE';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_roles
+    WHERE rolname = 'support_tickets_reader'
+      AND rolcanlogin
+      AND NOT rolsuper
+      AND NOT rolcreatedb
+      AND NOT rolcreaterole
+      AND NOT rolinherit
+      AND NOT rolreplication
+      AND NOT rolbypassrls
+      AND rolconnlimit = 7
+  ) THEN
+    RAISE EXCEPTION 'support reader role attributes violate policy';
+  END IF;
+
+  IF NOT has_parameter_privilege(
+    'support_tickets_reader',
+    'temp_file_limit',
+    'SET'
+  ) THEN
+    RAISE EXCEPTION 'support reader cannot enforce its temporary-file budget';
   END IF;
 END;
 $$;
@@ -564,9 +604,17 @@ BEGIN
       AND NOT rolinherit
       AND NOT rolreplication
       AND NOT rolbypassrls
-      AND rolconnlimit = 3
+      AND rolconnlimit = 7
   ) THEN
     RAISE EXCEPTION 'commerce reader role attributes violate policy';
+  END IF;
+
+  IF NOT has_parameter_privilege(
+    'commerce_edges_reader',
+    'temp_file_limit',
+    'SET'
+  ) THEN
+    RAISE EXCEPTION 'commerce reader cannot enforce its temporary-file budget';
   END IF;
 
   IF NOT EXISTS (

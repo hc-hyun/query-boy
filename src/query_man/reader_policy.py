@@ -11,6 +11,14 @@ class ReaderSessionPolicyError(RuntimeError):
     pass
 
 
+_SET_READER_SESSION_BUDGET_QUERY = """
+  SELECT
+    pg_catalog.set_config('work_mem', %s, true),
+    pg_catalog.set_config('temp_file_limit', %s, true),
+    pg_catalog.set_config('max_parallel_workers_per_gather', %s, true),
+    pg_catalog.set_config('jit', %s, true)
+"""
+
 _READER_SESSION_POLICY_QUERY = """
   SELECT
     pg_catalog.current_database() = %s AS database_matches,
@@ -35,10 +43,35 @@ _READER_SESSION_POLICY_QUERY = """
       SELECT 1
       FROM pg_catalog.unnest(%s::text[]) AS schema_name
       WHERE pg_catalog.has_schema_privilege(session_user, schema_name, 'CREATE')
-    ) AS no_allowed_schema_create_privilege
+    ) AS no_allowed_schema_create_privilege,
+    pg_catalog.pg_size_bytes(pg_catalog.current_setting('work_mem'))
+      = %s::bigint * 1024 AS work_mem_matches,
+    pg_catalog.pg_size_bytes(pg_catalog.current_setting('temp_file_limit'))
+      = %s::bigint * 1024 AS temp_file_limit_matches,
+    pg_catalog.current_setting('max_parallel_workers_per_gather')::integer
+      = %s AS parallel_workers_match,
+    pg_catalog.current_setting('jit')::boolean = %s AS jit_matches
   FROM pg_catalog.pg_roles AS role
   WHERE role.rolname = session_user
 """
+
+
+async def apply_reader_session_budget(
+    connection: AsyncConnection[Any],
+    source: SourceProfile,
+) -> None:
+    try:
+        await connection.execute(
+            _SET_READER_SESSION_BUDGET_QUERY,
+            (
+                f"{source.budget.work_mem_kb}kB",
+                f"{source.budget.temp_file_limit_kb}kB",
+                str(source.budget.max_parallel_workers_per_gather),
+                "on" if source.budget.jit_enabled else "off",
+            ),
+        )
+    except Exception as error:
+        raise ReaderSessionPolicyError("Source reader session budget could not be applied") from error
 
 
 async def require_reader_session_policy(
@@ -51,6 +84,10 @@ async def require_reader_session_policy(
             source.connection.database,
             source.connection.user,
             source.allowed_schemas,
+            source.budget.work_mem_kb,
+            source.budget.temp_file_limit_kb,
+            source.budget.max_parallel_workers_per_gather,
+            source.budget.jit_enabled,
         ),
     )
     policy = await cursor.fetchone()

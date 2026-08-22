@@ -15,7 +15,7 @@ from query_man.models import (
     CatalogSnapshot,
     SourceProfile,
 )
-from query_man.reader_policy import require_reader_session_policy
+from query_man.reader_policy import apply_reader_session_budget, require_reader_session_policy
 
 CATALOG_QUERY = """
   WITH eligible_relations AS MATERIALIZED (
@@ -248,6 +248,7 @@ class PostgresCatalog:
                         f"{source.budget.lock_timeout_ms}ms",
                     ),
                 )
+                await apply_reader_session_budget(connection, source)
                 await require_reader_session_policy(connection, source)
                 cursor = await connection.execute(
                     CATALOG_QUERY,

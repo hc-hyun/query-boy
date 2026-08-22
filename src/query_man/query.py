@@ -26,6 +26,7 @@ from query_man.models import SourceProfile
 from query_man.operations import operations
 from query_man.reader_policy import (
     ReaderSessionPolicyError,
+    apply_reader_session_budget,
     require_reader_session_policy,
 )
 from query_man.registry import SourceRegistry
@@ -380,6 +381,7 @@ class PostgresQueryExecutor:
                     f"query-man:{query_id}",
                 ),
             )
+            await apply_reader_session_budget(connection, source)
             await require_reader_session_policy(connection, source)
             query_policy_cursor = await connection.execute(
                 "SELECT pg_catalog.current_schemas(false) = ARRAY['pg_catalog']::name[] "

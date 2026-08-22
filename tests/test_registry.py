@@ -30,6 +30,62 @@ def test_loads_public_source_fields_only() -> None:
     assert "database" not in serialized
 
 
+def test_loads_versioned_hard_session_budget() -> None:
+    budget = load_budget_profiles(
+        ROOT_DIRECTORY / "config" / "budget-profiles.yaml"
+    )["interactive"]
+
+    assert budget.version == 2
+    assert budget.work_mem_kb == 8_192
+    assert budget.temp_file_limit_kb == 65_536
+    assert budget.max_parallel_workers_per_gather == 0
+    assert budget.jit_enabled is False
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("work_mem_kb", 63),
+        ("work_mem_kb", 65_537),
+        ("temp_file_limit_kb", -1),
+        ("temp_file_limit_kb", 1_048_577),
+        ("max_parallel_workers_per_gather", -1),
+        ("max_parallel_workers_per_gather", 5),
+        ("jit_enabled", "off"),
+    ],
+)
+def test_rejects_unsafe_hard_session_budget(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    raw = yaml.safe_load(
+        (ROOT_DIRECTORY / "config" / "budget-profiles.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    raw["profiles"]["interactive"][field] = value
+    path = tmp_path / "budget-profiles.yaml"
+    path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+    with pytest.raises(RegistryConfigurationError):
+        load_budget_profiles(path)
+
+
+def test_rejects_older_budget_schema_version(tmp_path: Path) -> None:
+    raw = yaml.safe_load(
+        (ROOT_DIRECTORY / "config" / "budget-profiles.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    raw["version"] = 1
+    path = tmp_path / "budget-profiles.yaml"
+    path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+    with pytest.raises(RegistryConfigurationError, match="version must be 2"):
+        load_budget_profiles(path)
+
+
 def test_missing_secret_fails_closed() -> None:
     with pytest.raises(RegistryConfigurationError, match="DEVELOPMENT_ISSUES_READER_PASSWORD"):
         load_test_registry({"POSTGRES_PORT": "5432", "MARKET_VOC_READER_PASSWORD": "secret"})

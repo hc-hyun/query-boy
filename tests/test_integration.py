@@ -10,6 +10,7 @@ from collections.abc import AsyncIterator, Generator
 from contextlib import asynccontextmanager, suppress
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import httpx
 import httpx2
@@ -22,6 +23,7 @@ from mcp.client import Client
 from mcp.client.streamable_http import streamable_http_client
 from psycopg import AsyncConnection, sql
 from psycopg.conninfo import make_conninfo
+from psycopg.rows import dict_row
 
 from query_man.access import AccessPolicy
 from query_man.app import build_app
@@ -35,11 +37,26 @@ from query_man.errors import (
 from query_man.metadata import MetadataService
 from query_man.models import CatalogSnapshot, SourceProfile
 from query_man.query import PostgresQueryExecutor, QueryService
+from query_man.reader_policy import (
+    ReaderSessionPolicyError,
+    require_reader_session_policy,
+)
 from query_man.registry import SourceRegistry
 from query_man.runtime_config import RuntimeConfig
 from query_man.sql_validation import DEFAULT_ALLOWED_FUNCTIONS, ValidatedSql, validate_sql
 from query_man.verified import VerifiedQueryRegistry, create_result_hash
 from tests.helpers import ROOT_DIRECTORY, load_test_registry, minimal_development_snapshot
+
+_SESSION_BUDGET_SELECT = """
+  SELECT
+    pg_catalog.pg_size_bytes(pg_catalog.current_setting('work_mem')) / 1024
+      AS work_mem_kb,
+    pg_catalog.pg_size_bytes(pg_catalog.current_setting('temp_file_limit')) / 1024
+      AS temp_file_limit_kb,
+    pg_catalog.current_setting('max_parallel_workers_per_gather')::integer
+      AS max_parallel_workers_per_gather,
+    pg_catalog.current_setting('jit')::boolean AS jit_enabled
+"""
 
 
 class BearerAuth(httpx2.Auth):
@@ -367,7 +384,10 @@ async def test_cached_rls_reader_privilege_drift_fails_closed_over_http() -> Non
     safe_role_sql = (
         "ALTER ROLE development_issues_reader "
         "NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT "
-        "NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 3"
+        "NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 7"
+    )
+    grant_temp_limit_sql = (
+        "GRANT SET ON PARAMETER temp_file_limit TO development_issues_reader"
     )
     context_request = {
         "source_id": source.source_id,
@@ -375,6 +395,7 @@ async def test_cached_rls_reader_privilege_drift_fails_closed_over_http() -> Non
     }
     try:
         await admin.execute(safe_role_sql)
+        await admin.execute(grant_temp_limit_sql)
         await admin.commit()
         async with (
             _serve_test_app(query_app) as query_url,
@@ -401,9 +422,20 @@ async def test_cached_rls_reader_privilege_drift_fails_closed_over_http() -> Non
             assert warm.status_code == 200, warm.text
             assert warm.json()["rows"] == []
 
-            for unsafe_role_sql in (
-                "ALTER ROLE development_issues_reader BYPASSRLS",
-                "ALTER ROLE development_issues_reader SUPERUSER",
+            for unsafe_role_sql, restore_sql in (
+                (
+                    "ALTER ROLE development_issues_reader BYPASSRLS",
+                    (safe_role_sql,),
+                ),
+                (
+                    "ALTER ROLE development_issues_reader SUPERUSER",
+                    (safe_role_sql,),
+                ),
+                (
+                    "REVOKE SET ON PARAMETER temp_file_limit "
+                    "FROM development_issues_reader",
+                    (safe_role_sql, grant_temp_limit_sql),
+                ),
             ):
                 try:
                     await admin.execute(unsafe_role_sql)
@@ -433,7 +465,8 @@ async def test_cached_rls_reader_privilege_drift_fails_closed_over_http() -> Non
                     }
                 finally:
                     await admin.rollback()
-                    await admin.execute(safe_role_sql)
+                    for statement in restore_sql:
+                        await admin.execute(statement)
                     await admin.commit()
 
                 recovered = await metadata_client.post("/meta", json=context_request)
@@ -442,8 +475,171 @@ async def test_cached_rls_reader_privilege_drift_fails_closed_over_http() -> Non
     finally:
         await admin.rollback()
         await admin.execute(safe_role_sql)
+        await admin.execute(grant_temp_limit_sql)
         await admin.commit()
         await admin.close()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_catalog_and_query_enforce_versioned_session_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_dotenv(ROOT_DIRECTORY / ".env")
+    required = [
+        "POSTGRES_USER",
+        "POSTGRES_PASSWORD",
+        "DEVELOPMENT_ISSUES_READER_PASSWORD",
+        "MARKET_VOC_READER_PASSWORD",
+    ]
+    if any(not os.environ.get(name) for name in required):
+        pytest.skip("local PostgreSQL administrator credentials are not configured")
+
+    source = load_test_registry(os.environ).get("development-issues")
+    assert source is not None
+    expected_settings = {
+        "work_mem_kb": source.budget.work_mem_kb,
+        "temp_file_limit_kb": source.budget.temp_file_limit_kb,
+        "max_parallel_workers_per_gather": (
+            source.budget.max_parallel_workers_per_gather
+        ),
+        "jit_enabled": source.budget.jit_enabled,
+    }
+    unsafe_settings = {
+        "work_mem_kb": 32_768,
+        "temp_file_limit_kb": 131_072,
+        "max_parallel_workers_per_gather": 2,
+        "jit_enabled": True,
+    }
+    admin = await AsyncConnection.connect(
+        make_conninfo(
+            host="127.0.0.1",
+            port=os.environ.get("POSTGRES_PORT", "5432"),
+            dbname=source.connection.database,
+            user=os.environ["POSTGRES_USER"],
+            password=os.environ["POSTGRES_PASSWORD"],
+            sslmode="disable",
+        )
+    )
+    catalog = PostgresCatalog()
+    executor = PostgresQueryExecutor()
+    reader: AsyncConnection[dict[str, Any]] | None = None
+    try:
+        await admin.execute(
+            "ALTER ROLE development_issues_reader IN DATABASE development_issues "
+            "SET work_mem = '32MB'"
+        )
+        await admin.execute(
+            "ALTER ROLE development_issues_reader IN DATABASE development_issues "
+            "SET temp_file_limit = '128MB'"
+        )
+        await admin.execute(
+            "ALTER ROLE development_issues_reader IN DATABASE development_issues "
+            "SET max_parallel_workers_per_gather = 2"
+        )
+        await admin.execute(
+            "ALTER ROLE development_issues_reader IN DATABASE development_issues "
+            "SET jit = on"
+        )
+        await admin.commit()
+
+        role_cursor = await admin.execute(
+            "SELECT role.rolconnlimit AS connection_limit, "
+            "pg_catalog.has_parameter_privilege("
+            "role.rolname, 'temp_file_limit', 'SET') AS can_set_temp_limit "
+            "FROM pg_catalog.pg_roles AS role "
+            "WHERE role.rolname = 'development_issues_reader'"
+        )
+        role_policy = await role_cursor.fetchone()
+        assert role_policy == (7, True)
+
+        reader = await AsyncConnection.connect(
+            make_conninfo(
+                host=source.connection.host,
+                port=source.connection.port,
+                dbname=source.connection.database,
+                user=source.connection.user,
+                password=source.connection.password,
+                sslmode="disable",
+            ),
+            autocommit=True,
+            row_factory=dict_row,
+        )
+        drift_cursor = await reader.execute(_SESSION_BUDGET_SELECT)
+        assert await drift_cursor.fetchone() == unsafe_settings
+        await reader.execute(
+            "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"
+        )
+        with pytest.raises(ReaderSessionPolicyError):
+            await require_reader_session_policy(reader, source)
+        await reader.execute("ROLLBACK")
+        await reader.close()
+        reader = None
+
+        catalog_settings: list[dict[str, Any]] = []
+
+        async def record_catalog_settings(
+            connection: AsyncConnection[Any],
+            profile: SourceProfile,
+        ) -> None:
+            settings_cursor = await connection.execute(_SESSION_BUDGET_SELECT)
+            settings = await settings_cursor.fetchone()
+            assert settings is not None
+            catalog_settings.append(settings)
+            await require_reader_session_policy(connection, profile)
+
+        monkeypatch.setattr(
+            "query_man.catalog.require_reader_session_policy",
+            record_catalog_settings,
+        )
+        snapshot = await catalog.load(source)
+        assert snapshot.relations
+        assert catalog_settings == [expected_settings]
+
+        query_sql = (
+            f"{_SESSION_BUDGET_SELECT} "
+            "FROM ai.issue_overview ORDER BY issue_id LIMIT 1"
+        )
+        validated = validate_sql(
+            query_sql,
+            allowed_relations=["ai.issue_overview"],
+            allowed_functions=(
+                DEFAULT_ALLOWED_FUNCTIONS | {"current_setting", "pg_size_bytes"}
+            ),
+        )
+        result = await executor.execute(
+            source,
+            query_sql,
+            "session-budget-revision",
+            validated,
+        )
+        assert result["rows"] == [expected_settings]
+    finally:
+        try:
+            if reader is not None:
+                await reader.close()
+            await executor.close()
+            await catalog.close()
+        finally:
+            await admin.rollback()
+            await admin.execute(
+                "ALTER ROLE development_issues_reader IN DATABASE development_issues "
+                "SET work_mem = '8MB'"
+            )
+            await admin.execute(
+                "ALTER ROLE development_issues_reader IN DATABASE development_issues "
+                "SET temp_file_limit = '64MB'"
+            )
+            await admin.execute(
+                "ALTER ROLE development_issues_reader IN DATABASE development_issues "
+                "SET max_parallel_workers_per_gather = 0"
+            )
+            await admin.execute(
+                "ALTER ROLE development_issues_reader IN DATABASE development_issues "
+                "SET jit = off"
+            )
+            await admin.commit()
+            await admin.close()
 
 
 @pytest.mark.integration

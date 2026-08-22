@@ -14,11 +14,16 @@ Nullability = bool | Literal["unknown"]
 @dataclass(frozen=True)
 class BudgetProfile:
     name: str
+    version: int
     metadata_statement_timeout_ms: int
     query_statement_timeout_ms: int
     query_transaction_timeout_ms: int
     query_queue_timeout_ms: int
     lock_timeout_ms: int
+    work_mem_kb: int
+    temp_file_limit_kb: int
+    max_parallel_workers_per_gather: int
+    jit_enabled: bool
     max_pool_size: int
     max_concurrent_queries: int
     max_metadata_relations: int

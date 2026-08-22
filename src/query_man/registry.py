@@ -58,6 +58,10 @@ class _Budget(_StrictModel):
     query_transaction_timeout_ms: int = Field(ge=100, le=300_000)
     query_queue_timeout_ms: int = Field(ge=1, le=60_000)
     lock_timeout_ms: int = Field(ge=1, le=10_000)
+    work_mem_kb: int = Field(ge=64, le=65_536)
+    temp_file_limit_kb: int = Field(ge=0, le=1_048_576)
+    max_parallel_workers_per_gather: int = Field(ge=0, le=4)
+    jit_enabled: bool = Field(strict=True)
     max_pool_size: int = Field(ge=1, le=20)
     max_concurrent_queries: int = Field(ge=1, le=20)
     max_metadata_relations: int = Field(ge=1, le=10_000)
@@ -78,9 +82,9 @@ class _BudgetFile(_StrictModel):
     profiles: dict[str, _Budget]
 
     @model_validator(mode="after")
-    def require_version_one(self) -> _BudgetFile:
-        if self.version != 1:
-            raise ValueError("version must be 1")
+    def require_version_two(self) -> _BudgetFile:
+        if self.version != 2:
+            raise ValueError("version must be 2")
         return self
 
 
@@ -334,7 +338,14 @@ def _parse_source_file(path: Path) -> _SourceFile:
 
 def load_budget_profiles(path: Path) -> dict[str, BudgetProfile]:
     parsed = _parse_model(path, _BudgetFile)
-    return {name: BudgetProfile(name=name, **profile.model_dump()) for name, profile in parsed.profiles.items()}
+    return {
+        name: BudgetProfile(
+            name=name,
+            version=parsed.version,
+            **profile.model_dump(),
+        )
+        for name, profile in parsed.profiles.items()
+    }
 
 
 def validate_source_manifest(
