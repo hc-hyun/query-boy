@@ -135,7 +135,7 @@ Dependencies: `META-05`, `META-06`
 - [x] `ONB-06` Credential rotation을 연결 중단과 secret 노출 없이 반영한다.
 - [x] `ONB-07` Manifest schema version migration과 하위 호환 정책을 구현한다.
 - [x] `ONB-08` 세 번째 fixture source를 애플리케이션 코드 변경 없이 등록하는 acceptance test를 추가한다.
-- [ ] `ONB-09` L0 등록부터 L2 verified query publish까지 운영 runbook을 완성한다.
+- [x] `ONB-09` L0 등록부터 L2 verified query publish까지 운영 runbook을 완성한다.
 
 ## 7. Authorization And Tenant Isolation
 

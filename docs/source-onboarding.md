@@ -72,6 +72,7 @@ Admin endpoint는 operator caller만 사용할 수 있다.
 |---|---|---|
 | Stage + publish | `PUT /admin/sources/{source_id}` | Body의 `manifest`, `credential`을 분리하고 path ID 일치 검증 |
 | Credential rotation | `POST /admin/sources/{source_id}/credential` | 새 credential로 isolated catalog 연결 성공 후 generation 교체 |
+| Verified contract | `POST /admin/sources/{source_id}/verified-queries` | 현재 revision에서 guarded SQL 결과와 expected invariant 일치 |
 | Rollback | `POST /admin/sources/{source_id}/rollback/{generation}` | 대상 profile, secret, metadata와 quality를 먼저 재검증 |
 | Deactivate | `DELETE /admin/sources/{source_id}` | Active pointer만 disable하고 immutable history 유지 |
 
@@ -136,6 +137,30 @@ Control-plane source 변경은 `QUERY_MAN_SOURCE_RELOAD_INTERVAL_MS` 주기로 �
 반영된다. 각 replica는 encrypted credential, manifest, stored metadata revision과 quality를
 다시 검증한 후 registry를 교체한다. 검증 실패 시 해당 replica의 현재 정상 generation을
 유지한다.
+
+## L0 to L2 Promotion Runbook
+
+1. Semantic overlay가 없는 manifest를 `minimum_quality_level: L0`로 publish한다. `/meta`에서
+   reader-visible relation과 column이 의도한 범위인지 확인한다.
+2. 모든 공개 relation에 description, grain과 event/comment/population의 default time을
+   작성한다. Minimum을 L1으로 설정해 publish하고 새 `metadata_revision`을 기록한다.
+3. 실제 사용자 질문과 deterministic SQL을 준비한다. SQL의 expected relation, ordered
+   columns, row count와 canonical result hash를 별도 review한다.
+4. 현재 L1 revision을 포함한 contract를 verified-query admin endpoint에 제출한다. Gateway
+   budget, AST/object policy, 결과 invariant 중 하나라도 실패하면 contract는 저장되지 않는다.
+5. Semantic overlay는 그대로 두고 `minimum_quality_level`만 L2로 바꿔 다시 publish한다.
+   Quality minimum은 revision hash 재료가 아니므로 2단계와 같은 revision이 L2 gate를 통과한다.
+6. `/meta`와 MCP `get_context`의 `quality_level=L2`, 실제 query 결과, `/sources` visibility를
+   확인한다. 다른 replica에서도 reload interval 이후 같은 revision이 보이는지 확인한다.
+7. 문제가 있으면 마지막 정상 source generation으로 rollback한다. Rollback 대상의 encrypted
+   credential, manifest, metadata와 현재 verified contract가 먼저 재검증되므로 실패한 복구가
+   active pointer를 바꾸지 않는다.
+
+Repository fixture에서는 L0
+[`support-tickets.yaml`](../config/onboarding/support-tickets.yaml), semantic/L2
+[`support-tickets-l2.yaml`](../config/onboarding/support-tickets-l2.yaml), reviewed invariant
+[`support-tickets-verified-query.yaml`](../config/onboarding/support-tickets-verified-query.yaml)을
+이 순서로 사용한다.
 
 ## Security Checks
 

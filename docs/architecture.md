@@ -186,6 +186,8 @@ Schema drift로 overlay가 깨지면 신규 revision 발행을 중단하고 마�
   [ADR 0010](decisions/0010-revision-scoped-retrieval-index.md)을 따른다.
 - L0/L1/L2 metadata publish gate는
   [ADR 0011](decisions/0011-metadata-quality-level-publish-gate.md)을 따른다.
+- No-deploy verified query publish는
+  [ADR 0013](decisions/0013-control-plane-verified-query-publishing.md)을 따른다.
 
 ## Open Decisions
 

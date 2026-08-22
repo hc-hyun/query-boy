@@ -1,0 +1,43 @@
+version: 1
+source_id: support-tickets
+name: Support Tickets
+description: 고객 지원 ticket 운영 현황
+connection:
+  host: 127.0.0.1
+  port: 5432
+  port_env: POSTGRES_PORT
+  database: support_tickets
+  user: support_tickets_reader
+  password_env: SUPPORT_TICKETS_READER_PASSWORD
+  ssl: false
+allowed_schemas: [ai]
+allowed_relation_kinds: [view]
+budget_profile: interactive
+minimum_quality_level: L2
+
+semantic_overlay:
+  default_relation: ai.ticket_overview
+  relations:
+    - relation: ai.ticket_overview
+      role: event
+      description: 고객 지원 ticket의 queue, 우선순위, 상태와 처리 시각 조회
+      aliases: [지원 ticket, 고객 문의, 지원 요청]
+      grain:
+        name: support_ticket
+        description: 고객 지원 ticket 1건
+        key_columns: [ticket_id]
+      default_time_column: opened_at
+      use_for: [queue별 ticket 수, 미해결 ticket, 우선순위별 ticket]
+      column_aliases:
+        queue_name: [지원 queue, 담당 queue]
+        opened_at: [접수 시각, 등록 시각]
+        closed_at: [종료 시각, 해결 시각]
+        customer_region: [고객 지역]
+      value_hints:
+        priority: [URGENT, HIGH, NORMAL, LOW]
+        status: [OPEN, PENDING, RESOLVED]
+      measures:
+        - name: ticket_count
+          description: 선택된 고객 지원 ticket 행의 건수
+          aliases: [ticket 수, 문의 건수, 지원 요청 수]
+          aggregation: count_rows

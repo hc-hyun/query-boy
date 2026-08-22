@@ -14,6 +14,7 @@ from query_man.registry import load_budget_profiles, validate_source_manifest
 from query_man.revision import create_metadata_revision
 from query_man.secrets import SourceSecretCipher
 from query_man.source_store import PostgresSourceStore
+from query_man.verified import ExpectedResult, VerifiedQuery, create_result_hash
 from tests.helpers import ROOT_DIRECTORY, minimal_development_snapshot
 
 
@@ -83,6 +84,27 @@ async def test_source_store_publishes_rotates_rolls_back_and_deactivates() -> No
         assert cipher.decrypt(source.source_id, rotated.generation, rotated.encrypted_secret) == (
             "rotated-secret"
         )
+
+        verified_query = VerifiedQuery(
+            query_id="source-store-status-count",
+            source_id=source.source_id,
+            question="상태별 건수를 보여줘",
+            sql="SELECT status, count(*) FROM ai.issue_overview GROUP BY status",
+            metadata_revision=metadata.revision,
+            relations=("ai.issue_overview",),
+            expected=ExpectedResult(
+                columns=("status", "count"),
+                row_count=1,
+                result_hash=create_result_hash(
+                    ("status", "count"),
+                    [{"status": "OPEN", "count": 1}],
+                ),
+            ),
+        )
+        await store.publish_verified_query(verified_query)
+        assert metadata.revision in (
+            await store.verified_revision_map()
+        )[source.source_id]
 
         rolled_back = await store.rollback(
             source.source_id,

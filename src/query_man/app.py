@@ -32,7 +32,7 @@ from query_man.runtime_config import RuntimeConfig
 from query_man.secrets import SourceSecretCipher
 from query_man.source_admin import SourceAdminService, SourcePoolInvalidator, SourceReloader
 from query_man.source_store import PostgresSourceStore
-from query_man.verified import VerifiedQueryRegistry
+from query_man.verified import ExpectedResult, VerifiedQuery, VerifiedQueryRegistry
 
 logger = logging.getLogger("query_man")
 _current_caller: contextvars.ContextVar[CallerContext | None] = contextvars.ContextVar(
@@ -68,6 +68,25 @@ class SourceCredentialRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     credential: SecretStr = Field(min_length=1, max_length=1_024)
+
+
+class VerifiedExpectedRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    columns: list[str] = Field(min_length=1, max_length=1_600)
+    row_count: int = Field(ge=0, le=100_000)
+    result_hash: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
+
+
+class VerifiedQueryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    query_id: str = Field(pattern=r"^[a-z][a-z0-9-]{0,99}$")
+    question: str = Field(min_length=1, max_length=2_000)
+    metadata_revision: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
+    relations: list[str] = Field(min_length=1, max_length=100)
+    sql: str = Field(min_length=1, max_length=100_000)
+    expected: VerifiedExpectedRequest
 
 
 def build_app(
@@ -139,6 +158,8 @@ def build_app(
         source_admin = SourceAdminService(
             source_store,
             source_reloader,
+            metadata,
+            query_service,
             cipher,
             budgets,
             verified_revisions,
@@ -156,7 +177,12 @@ def build_app(
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         reload_task: asyncio.Task[None] | None = None
-        if source_reloader is not None:
+        if source_reloader is not None and source_store is not None:
+            stored_verified = await source_store.verified_revision_map()
+            for source_id, revisions in stored_verified.items():
+                verified_revisions[source_id] = (
+                    verified_revisions.get(source_id, frozenset()) | revisions
+                )
             await source_reloader.sync()
             reload_task = asyncio.create_task(
                 _reload_sources(source_reloader, runtime_config.source_reload_interval_ms)
@@ -323,6 +349,31 @@ def build_app(
         return await source_admin.rotate_credential(
             source_id,
             payload.credential.get_secret_value(),
+        )
+
+    @app.post("/admin/sources/{source_id}/verified-queries")
+    async def publish_verified_query(
+        source_id: str,
+        payload: VerifiedQueryRequest,
+        request: Request,
+    ) -> dict[str, object]:
+        _require_operator(request)
+        if source_admin is None:
+            raise SourceControlUnavailableError
+        return await source_admin.publish_verified_query(
+            VerifiedQuery(
+                query_id=payload.query_id,
+                source_id=source_id,
+                question=payload.question,
+                sql=payload.sql,
+                metadata_revision=payload.metadata_revision,
+                relations=tuple(payload.relations),
+                expected=ExpectedResult(
+                    columns=tuple(payload.expected.columns),
+                    row_count=payload.expected.row_count,
+                    result_hash=payload.expected.result_hash,
+                ),
+            )
         )
 
     @app.post("/admin/sources/{source_id}/rollback/{generation}")

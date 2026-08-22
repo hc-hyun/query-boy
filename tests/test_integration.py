@@ -213,6 +213,19 @@ async def test_onboards_third_source_without_runtime_restart() -> None:
             encoding="utf-8"
         )
     )
+    l2_manifest = yaml.safe_load(
+        (ROOT_DIRECTORY / "config" / "onboarding" / "support-tickets-l2.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    verified_contract = yaml.safe_load(
+        (
+            ROOT_DIRECTORY
+            / "config"
+            / "onboarding"
+            / "support-tickets-verified-query.yaml"
+        ).read_text(encoding="utf-8")
+    )
     credential = os.environ.get(
         "SUPPORT_TICKETS_READER_PASSWORD",
         "support-tickets-local-secret",
@@ -250,6 +263,49 @@ async def test_onboards_third_source_without_runtime_restart() -> None:
             assert [relation["name"] for relation in context.json()["relations"]] == [
                 "ai.ticket_overview"
             ]
+
+            l2_manifest["minimum_quality_level"] = "L1"
+            semantic_published = await session.put(
+                "/admin/sources/support-tickets",
+                json={"manifest": l2_manifest, "credential": credential},
+            )
+            assert semantic_published.status_code == 200
+            assert semantic_published.json()["quality_level"] in {"L1", "L2"}
+            semantic_context = await session.post(
+                "/meta",
+                json={
+                    "source_id": "support-tickets",
+                    "question": "지원 queue별 ticket 수를 보여줘",
+                },
+            )
+            assert semantic_context.status_code == 200
+
+            verified_contract["metadata_revision"] = semantic_context.json()[
+                "metadata_revision"
+            ]
+            verified = await session.post(
+                "/admin/sources/support-tickets/verified-queries",
+                json=verified_contract,
+            )
+            assert verified.status_code == 200
+            assert verified.json()["status"] == "verified"
+
+            l2_manifest["minimum_quality_level"] = "L2"
+            l2_published = await session.put(
+                "/admin/sources/support-tickets",
+                json={"manifest": l2_manifest, "credential": credential},
+            )
+            assert l2_published.status_code == 200
+            assert l2_published.json()["quality_level"] == "L2"
+            context = await session.post(
+                "/meta",
+                json={
+                    "source_id": "support-tickets",
+                    "question": "지원 queue별 ticket 수를 보여줘",
+                },
+            )
+            assert context.status_code == 200
+            assert context.json()["quality_level"] == "L2"
             queried = await session.post(
                 "/query",
                 json={

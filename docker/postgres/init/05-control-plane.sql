@@ -81,6 +81,33 @@ CREATE TABLE IF NOT EXISTS control.active_source_profiles (
     ON DELETE RESTRICT
 );
 
+CREATE TABLE IF NOT EXISTS control.verified_query_contracts (
+  source_id text NOT NULL,
+  query_id text NOT NULL,
+  metadata_revision text NOT NULL,
+  question text NOT NULL,
+  relations jsonb NOT NULL,
+  sql text NOT NULL,
+  expected jsonb NOT NULL,
+  published_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY (source_id, query_id, metadata_revision),
+  CONSTRAINT verified_query_contract_source_exists
+    FOREIGN KEY (source_id, metadata_revision)
+    REFERENCES control.metadata_snapshots (source_id, revision)
+    ON UPDATE RESTRICT
+    ON DELETE RESTRICT,
+  CONSTRAINT verified_query_contract_id_valid
+    CHECK (query_id ~ '^[a-z][a-z0-9-]{0,99}$'),
+  CONSTRAINT verified_query_contract_question_valid
+    CHECK (length(question) BETWEEN 1 AND 2000),
+  CONSTRAINT verified_query_contract_relations_valid
+    CHECK (jsonb_typeof(relations) = 'array' AND jsonb_array_length(relations) > 0),
+  CONSTRAINT verified_query_contract_sql_valid
+    CHECK (length(sql) BETWEEN 1 AND 100000),
+  CONSTRAINT verified_query_contract_expected_valid
+    CHECK (jsonb_typeof(expected) = 'object')
+);
+
 ALTER TABLE control.active_metadata_revisions
   ADD COLUMN IF NOT EXISTS pinned boolean NOT NULL DEFAULT false;
 
@@ -116,6 +143,12 @@ CREATE TRIGGER source_profile_revisions_are_immutable
 BEFORE UPDATE OR DELETE ON control.source_profile_revisions
 FOR EACH ROW EXECUTE FUNCTION control.reject_source_profile_revision_mutation();
 
+DROP TRIGGER IF EXISTS verified_query_contracts_are_immutable
+  ON control.verified_query_contracts;
+CREATE TRIGGER verified_query_contracts_are_immutable
+BEFORE UPDATE OR DELETE ON control.verified_query_contracts
+FOR EACH ROW EXECUTE FUNCTION control.reject_source_profile_revision_mutation();
+
 REVOKE ALL ON ALL TABLES IN SCHEMA control FROM PUBLIC;
 REVOKE ALL ON FUNCTION control.reject_metadata_snapshot_mutation() FROM PUBLIC;
 REVOKE ALL ON FUNCTION control.reject_source_profile_revision_mutation() FROM PUBLIC;
@@ -128,6 +161,8 @@ GRANT SELECT, INSERT ON control.source_profile_revisions
   TO query_man_control_writer;
 GRANT SELECT, INSERT, UPDATE ON control.active_source_profiles
   TO query_man_control_writer;
+GRANT SELECT, INSERT ON control.verified_query_contracts
+  TO query_man_control_writer;
 
 COMMENT ON TABLE control.metadata_snapshots IS
   'Immutable reader-visible catalog snapshots keyed by source and metadata revision.';
@@ -137,5 +172,7 @@ COMMENT ON TABLE control.source_profile_revisions IS
   'Immutable validated source manifests and envelope-encrypted reader credentials.';
 COMMENT ON TABLE control.active_source_profiles IS
   'Atomic active generation and enabled state for each control-plane source.';
+COMMENT ON TABLE control.verified_query_contracts IS
+  'Immutable guarded-query result contracts bound to a metadata revision.';
 
 COMMIT;

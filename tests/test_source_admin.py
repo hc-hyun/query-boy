@@ -9,10 +9,13 @@ import yaml
 from query_man.errors import SourceValidationError
 from query_man.metadata import MetadataService
 from query_man.models import CatalogSnapshot, PreparedMetadata, SourceProfile
+from query_man.query import QueryService
 from query_man.registry import SourceRegistry, load_budget_profiles
 from query_man.secrets import EncryptedSecret, SourceSecretCipher
 from query_man.source_admin import SourceAdminService, SourceReloader
 from query_man.source_store import StoredSource, StoredSourceNotFoundError
+from query_man.sql_validation import ValidatedSql
+from query_man.verified import ExpectedResult, VerifiedQuery, create_result_hash
 from tests.helpers import ROOT_DIRECTORY, minimal_development_snapshot
 
 
@@ -44,6 +47,7 @@ class MemorySourceStore:
         self.metadata = metadata
         self.active: dict[str, StoredSource] = {}
         self.history: dict[tuple[str, int], StoredSource] = {}
+        self.verified: list[VerifiedQuery] = []
 
     async def list_active(self) -> list[StoredSource]:
         return list(self.active.values())
@@ -106,6 +110,19 @@ class MemorySourceStore:
     async def close(self) -> None:
         pass
 
+    async def publish_verified_query(self, query: VerifiedQuery) -> None:
+        self.verified.append(query)
+
+    async def verified_revision_map(self) -> dict[str, frozenset[str]]:
+        return {
+            source_id: frozenset(
+                query.metadata_revision
+                for query in self.verified
+                if query.source_id == source_id
+            )
+            for source_id in {query.source_id for query in self.verified}
+        }
+
 
 class StaticCatalog:
     def __init__(self, snapshot: CatalogSnapshot | None = None) -> None:
@@ -132,6 +149,39 @@ class RecordingInvalidator:
 
     async def invalidate(self, source_id: str) -> None:
         self.source_ids.append(source_id)
+
+
+class StaticQueryExecutor:
+    async def execute(
+        self,
+        _source: SourceProfile,
+        _sql: str,
+        metadata_revision: str,
+        _validated: ValidatedSql,
+        *,
+        query_id: str | None = None,
+    ) -> dict[str, object]:
+        rows = [{"status": "OPEN"}]
+        return {
+            "status": "ok",
+            "query_id": query_id or "verified-query-test",
+            "metadata_revision": metadata_revision,
+            "fingerprint": "test",
+            "columns": ["status"],
+            "rows": rows,
+            "row_count": 1,
+            "result_bytes": 19,
+            "truncated": False,
+            "queue_ms": 0,
+            "elapsed_ms": 1,
+            "plan_summary": {"total_cost": 1.0, "max_rows": 1, "node_count": 1},
+        }
+
+    async def cancel(self, _query_id: str, _allowed_sources: frozenset[str]) -> bool:
+        return False
+
+    async def close(self) -> None:
+        pass
 
 
 def _manifest() -> dict[str, Any]:
@@ -162,6 +212,7 @@ def _services(
     cipher = SourceSecretCipher(b"a" * 32)
     invalidator = RecordingInvalidator()
     budgets = load_budget_profiles(ROOT_DIRECTORY / "config" / "budget-profiles.yaml")
+    verified_revisions: dict[str, frozenset[str]] = {}
     reloader = SourceReloader(
         registry,
         metadata,
@@ -169,15 +220,17 @@ def _services(
         source_store,
         cipher,
         budgets,
-        {},
+        verified_revisions,
         (invalidator,),
     )
     admin = SourceAdminService(
         source_store,
         reloader,
+        metadata,
+        QueryService(registry, metadata, StaticQueryExecutor()),
         cipher,
         budgets,
-        {},
+        verified_revisions,
         catalog_factory,  # type: ignore[arg-type]
     )
     return admin, registry, source_store, invalidator, cipher
@@ -243,3 +296,41 @@ async def test_reloader_applies_external_generation() -> None:
     await reloader.sync()
 
     assert registry.get("third-source") is not None
+
+
+@pytest.mark.asyncio
+async def test_verified_query_contract_enables_l2_publish() -> None:
+    admin, _registry, store, _invalidator, _cipher = _services()
+    manifest = _manifest()
+    await admin.publish("third-source", manifest, "first-secret")
+    current = store.active["third-source"]
+    rows = [{"status": "OPEN"}]
+    query = VerifiedQuery(
+        query_id="third-source-open-status",
+        source_id="third-source",
+        question="상태 예시를 보여줘",
+        sql="SELECT status FROM ai.issue_overview ORDER BY status LIMIT 1",
+        metadata_revision=current.metadata_revision,
+        relations=("ai.issue_overview",),
+        expected=ExpectedResult(
+            columns=("status",),
+            row_count=1,
+            result_hash=create_result_hash(("status",), rows),
+        ),
+    )
+
+    mismatched = replace(
+        query,
+        expected=replace(query.expected, result_hash=f"sha256:{'0' * 64}"),
+    )
+    with pytest.raises(SourceValidationError):
+        await admin.publish_verified_query(mismatched)
+    assert store.verified == []
+
+    verified = await admin.publish_verified_query(query)
+    manifest["minimum_quality_level"] = "L2"
+    promoted = await admin.publish("third-source", manifest, "first-secret")
+
+    assert verified["status"] == "verified"
+    assert promoted["quality_level"] == "L2"
+    assert store.verified == [query]

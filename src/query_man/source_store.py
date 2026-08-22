@@ -12,6 +12,7 @@ from psycopg_pool import AsyncConnectionPool
 from query_man.metadata_store import encode_snapshot
 from query_man.models import PreparedMetadata
 from query_man.secrets import EncryptedSecret
+from query_man.verified import VerifiedQuery
 
 
 class SourceGenerationConflictError(Exception):
@@ -227,6 +228,64 @@ class PostgresSourceStore:
                 (value.metadata_revision, source_id),
             )
         return value
+
+    async def publish_verified_query(self, query: VerifiedQuery) -> None:
+        document = {
+            "columns": list(query.expected.columns),
+            "row_count": query.expected.row_count,
+            "result_hash": query.expected.result_hash,
+        }
+        relations = list(query.relations)
+        pool = await self._get_pool()
+        async with pool.connection() as connection, connection.transaction():
+            await connection.execute(
+                "INSERT INTO control.verified_query_contracts "
+                "(source_id, query_id, metadata_revision, question, relations, sql, expected) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING",
+                (
+                    query.source_id,
+                    query.query_id,
+                    query.metadata_revision,
+                    query.question,
+                    Jsonb(relations),
+                    query.sql,
+                    Jsonb(document),
+                ),
+            )
+            cursor = await connection.execute(
+                "SELECT question, relations, sql, expected "
+                "FROM control.verified_query_contracts "
+                "WHERE source_id = %s AND query_id = %s AND metadata_revision = %s",
+                (query.source_id, query.query_id, query.metadata_revision),
+            )
+            stored = await cursor.fetchone()
+            if (
+                stored is None
+                or stored["question"] != query.question
+                or stored["relations"] != relations
+                or stored["sql"] != query.sql
+                or stored["expected"] != document
+            ):
+                raise SourceGenerationConflictError
+
+    async def verified_revision_map(self) -> dict[str, frozenset[str]]:
+        pool = await self._get_pool()
+        async with pool.connection() as connection:
+            cursor = await connection.execute(
+                "SELECT source_id, metadata_revision "
+                "FROM control.verified_query_contracts "
+                "GROUP BY source_id, metadata_revision"
+            )
+            rows = await cursor.fetchall()
+        revisions: dict[str, set[str]] = {}
+        for row in rows:
+            revisions.setdefault(str(row["source_id"]), set()).add(
+                str(row["metadata_revision"])
+            )
+        return {
+            source_id: frozenset(source_revisions)
+            for source_id, source_revisions in revisions.items()
+        }
 
     async def close(self) -> None:
         if self._pool is not None:

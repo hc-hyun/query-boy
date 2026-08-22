@@ -14,6 +14,7 @@ from query_man.metadata import MetadataService
 from query_man.metadata_store import MetadataStore
 from query_man.models import BudgetProfile, CatalogProvider, PreparedMetadata, SourceProfile
 from query_man.quality_level import assess_quality_level
+from query_man.query import QueryService
 from query_man.registry import (
     RegistryConfigurationError,
     SourceRegistry,
@@ -26,6 +27,8 @@ from query_man.source_store import (
     StoredSource,
     StoredSourceNotFoundError,
 )
+from query_man.sql_validation import SqlValidationError, validate_sql
+from query_man.verified import VerifiedQuery, create_result_hash
 
 logger = logging.getLogger("query_man.source_control")
 
@@ -59,6 +62,10 @@ class SourceStore(Protocol):
     ) -> StoredSource: ...
 
     async def close(self) -> None: ...
+
+    async def publish_verified_query(self, query: VerifiedQuery) -> None: ...
+
+    async def verified_revision_map(self) -> dict[str, frozenset[str]]: ...
 
 
 class SourcePoolInvalidator(Protocol):
@@ -159,13 +166,17 @@ class SourceAdminService:
         self,
         store: SourceStore,
         reloader: SourceReloader,
+        metadata: MetadataService,
+        queries: QueryService,
         cipher: SourceSecretCipher,
         budgets: Mapping[str, BudgetProfile],
-        verified_revisions: Mapping[str, frozenset[str]],
+        verified_revisions: dict[str, frozenset[str]],
         catalog_factory: Callable[[], CatalogProvider],
     ) -> None:
         self._store = store
         self._reloader = reloader
+        self._metadata = metadata
+        self._queries = queries
         self._cipher = cipher
         self._budgets = budgets
         self._verified_revisions = verified_revisions
@@ -252,6 +263,54 @@ class SourceAdminService:
         except Exception as error:
             raise SourceControlUnavailableError from error
         return {"status": "deactivated", "source_id": source_id}
+
+    async def publish_verified_query(self, query: VerifiedQuery) -> dict[str, object]:
+        try:
+            metadata = await self._metadata.get_published(query.source_id)
+            if metadata.revision != query.metadata_revision:
+                raise SourceValidationError
+            validated = validate_sql(
+                query.sql,
+                allowed_relations=(
+                    relation.qualified_name for relation in metadata.snapshot.relations
+                ),
+            )
+            if validated.relations != tuple(sorted(query.relations)):
+                raise SourceValidationError
+            response = await self._queries.query(
+                query.source_id,
+                query.sql,
+                query.metadata_revision,
+            )
+            columns = response.get("columns")
+            rows = response.get("rows")
+            if (
+                not isinstance(columns, list)
+                or not all(isinstance(column, str) for column in columns)
+                or not isinstance(rows, list)
+                or response.get("truncated") is not False
+                or tuple(columns) != query.expected.columns
+                or response.get("row_count") != query.expected.row_count
+                or create_result_hash(tuple(columns), rows) != query.expected.result_hash
+            ):
+                raise SourceValidationError
+            await self._store.publish_verified_query(query)
+            current = self._verified_revisions.get(query.source_id, frozenset())
+            self._verified_revisions[query.source_id] = current | {query.metadata_revision}
+        except SourceValidationError:
+            raise
+        except (SqlValidationError, SourceGenerationConflictError) as error:
+            raise SourceValidationError from error
+        except Exception as error:
+            raise SourceControlUnavailableError from error
+        return {
+            "status": "verified",
+            "query_id": query.query_id,
+            "source_id": query.source_id,
+            "metadata_revision": query.metadata_revision,
+            "row_count": query.expected.row_count,
+            "result_hash": query.expected.result_hash,
+        }
 
     async def rollback(self, source_id: str, generation: int) -> dict[str, object]:
         try:
