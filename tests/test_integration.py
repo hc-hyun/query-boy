@@ -6,9 +6,10 @@ import json
 import os
 import socket
 import uuid
-from collections.abc import Generator
-from contextlib import suppress
+from collections.abc import AsyncIterator, Generator
+from contextlib import asynccontextmanager, suppress
 from dataclasses import replace
+from pathlib import Path
 
 import httpx
 import httpx2
@@ -16,11 +17,13 @@ import pytest
 import uvicorn
 import yaml
 from dotenv import load_dotenv
+from fastapi import FastAPI
 from mcp.client import Client
 from mcp.client.streamable_http import streamable_http_client
 from psycopg import AsyncConnection, sql
 from psycopg.conninfo import make_conninfo
 
+from query_man.access import AccessPolicy
 from query_man.app import build_app
 from query_man.catalog import PostgresCatalog
 from query_man.errors import (
@@ -48,6 +51,45 @@ class BearerAuth(httpx2.Auth):
     ) -> Generator[httpx2.Request, httpx2.Response, None]:
         request.headers["Authorization"] = f"Bearer {self._token}"
         yield request
+
+
+@asynccontextmanager
+async def _serve_test_app(app: FastAPI) -> AsyncIterator[str]:
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server_socket.bind(("127.0.0.1", 0))
+    server_socket.listen(128)
+    server_socket.setblocking(False)
+    port = int(server_socket.getsockname()[1])
+    server = uvicorn.Server(
+        uvicorn.Config(
+            app,
+            log_level="critical",
+            lifespan="on",
+            timeout_graceful_shutdown=2,
+        )
+    )
+    server_task = asyncio.create_task(server.serve(sockets=[server_socket]))
+    try:
+        for _ in range(500):
+            if server.started:
+                break
+            if server_task.done():
+                await server_task
+            await asyncio.sleep(0.01)
+        assert server.started
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        server.should_exit = True
+        try:
+            await asyncio.wait_for(server_task, timeout=5)
+        except TimeoutError:
+            server.force_exit = True
+            server_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await server_task
+        finally:
+            server_socket.close()
 
 
 class DisconnectCatalog:
@@ -516,6 +558,560 @@ async def test_onboards_third_source_without_runtime_restart() -> None:
                 await server_task
         finally:
             server_socket.close()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_onboards_commerce_edges_across_authenticated_mcp_replicas(
+    tmp_path: Path,
+) -> None:
+    load_dotenv(ROOT_DIRECTORY / ".env")
+    required = [
+        "POSTGRES_USER",
+        "POSTGRES_PASSWORD",
+        "POSTGRES_DB",
+        "DEVELOPMENT_ISSUES_READER_PASSWORD",
+        "MARKET_VOC_READER_PASSWORD",
+    ]
+    if any(not os.environ.get(name) for name in required):
+        pytest.skip("local PostgreSQL credentials are not configured")
+
+    control_dsn = make_conninfo(
+        host="127.0.0.1",
+        port=os.environ.get("POSTGRES_PORT", "5432"),
+        dbname=os.environ["POSTGRES_DB"],
+        user=os.environ["POSTGRES_USER"],
+        password=os.environ["POSTGRES_PASSWORD"],
+        sslmode="disable",
+    )
+    encryption_key = base64.urlsafe_b64encode(b"acceptance-source-key-material!!").decode(
+        "ascii"
+    )
+    assert len(base64.urlsafe_b64decode(encryption_key)) == 32
+    operator_token = "commerce-operator-token-with-at-least-32-characters"
+    restricted_token = "commerce-restricted-token-with-at-least-32-characters"
+    policy_file = tmp_path / "commerce-access.yaml"
+    policy_file.write_text(
+        """
+version: 1
+callers:
+  - caller_id: commerce-operator
+    tenant_id: operations
+    token_env: COMMERCE_OPERATOR_TOKEN
+    all_sources: true
+    operator: true
+  - caller_id: development-reader
+    tenant_id: engineering
+    token_env: COMMERCE_RESTRICTED_TOKEN
+    allowed_sources: [development-issues]
+    operator: false
+""".strip(),
+        encoding="utf-8",
+    )
+    access_policy = AccessPolicy.load(
+        policy_file,
+        {"development-issues", "market-voc"},
+        {
+            "COMMERCE_OPERATOR_TOKEN": operator_token,
+            "COMMERCE_RESTRICTED_TOKEN": restricted_token,
+        },
+    )
+    runtime = RuntimeConfig(
+        host="127.0.0.1",
+        port=0,
+        log_level="critical",
+        api_token=None,
+        source_directory=ROOT_DIRECTORY / "config" / "sources",
+        budget_file=ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
+        access_policy_file=None,
+        metadata_cache_ttl_ms=30_000,
+        metadata_max_stale_ms=300_000,
+        metadata_retry_delay_ms=5_000,
+        control_dsn=control_dsn,
+        source_encryption_key=encryption_key,
+        source_reload_interval_ms=250,
+    )
+    l0_manifest = yaml.safe_load(
+        (ROOT_DIRECTORY / "config" / "onboarding" / "commerce-edges.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    l0_manifest["connection"]["port"] = int(  # type: ignore[index]
+        os.environ.get("POSTGRES_PORT", "5432")
+    )
+    semantic_manifest = yaml.safe_load(
+        (
+            ROOT_DIRECTORY / "config" / "onboarding" / "commerce-edges-l2.yaml"
+        ).read_text(encoding="utf-8")
+    )
+    semantic_manifest["connection"]["port"] = int(  # type: ignore[index]
+        os.environ.get("POSTGRES_PORT", "5432")
+    )
+    semantic_manifest["semantic_overlay"]["relations"][0]["description"] += (  # type: ignore[index,operator]
+        f" [{uuid.uuid4().hex}]"
+    )
+    verified_contract = yaml.safe_load(
+        (
+            ROOT_DIRECTORY
+            / "config"
+            / "onboarding"
+            / "commerce-edges-verified-query.yaml"
+        ).read_text(encoding="utf-8")
+    )
+    credential = os.environ.get(
+        "COMMERCE_EDGES_READER_PASSWORD",
+        "commerce-edges-local-secret",
+    )
+    expected_rows = [
+        {
+            "order_id": "00000000-0000-0000-0000-000000000001",
+            "placed_at": "2026-08-01T01:00:00+00:00",
+            "promised_on": "2026-08-05",
+            "discount_amount": None,
+            "net_amount": 100.0,
+            "attributes": {"campaign": "summer", "gift": False},
+            "line_count": 2,
+            "returned_line_count": 1,
+        },
+        {
+            "order_id": "00000000-0000-0000-0000-000000000002",
+            "placed_at": "2026-08-02T02:00:00+00:00",
+            "promised_on": None,
+            "discount_amount": 5.5,
+            "net_amount": 74.5,
+            "attributes": {"campaign": None, "gift": True},
+            "line_count": 1,
+            "returned_line_count": 1,
+        },
+        {
+            "order_id": "00000000-0000-0000-0000-000000000003",
+            "placed_at": "2026-08-03T03:00:00+00:00",
+            "promised_on": "2026-08-03",
+            "discount_amount": 0.0,
+            "net_amount": 50.25,
+            "attributes": {"store": "서울"},
+            "line_count": 0,
+            "returned_line_count": 0,
+        },
+        {
+            "order_id": "00000000-0000-0000-0000-000000000004",
+            "placed_at": "2026-08-04T04:00:00+00:00",
+            "promised_on": "2026-08-10",
+            "discount_amount": 20.0,
+            "net_amount": 100.0,
+            "attributes": {"partner": "alpha", "tags": ["bulk", "priority"]},
+            "line_count": 3,
+            "returned_line_count": 0,
+        },
+    ]
+
+    replica_a = build_app(runtime, access_policy=access_policy)
+    replica_b = build_app(runtime, access_policy=access_policy)
+    admin_connection = await AsyncConnection.connect(control_dsn)
+    source_active = False
+    reader_restricted = True
+    try:
+        async with (
+            _serve_test_app(replica_a) as replica_a_url,
+            _serve_test_app(replica_b) as replica_b_url,
+        ):
+            async with httpx.AsyncClient(
+                base_url=replica_a_url,
+                headers={"Authorization": f"Bearer {operator_token}"},
+            ) as admin_session:
+                async with (
+                    httpx2.AsyncClient(auth=BearerAuth(operator_token)) as operator_http,
+                    Client(
+                        streamable_http_client(
+                            f"{replica_b_url}/mcp",
+                            http_client=operator_http,
+                        )
+                    ) as operator_mcp,
+                    httpx2.AsyncClient(auth=BearerAuth(restricted_token)) as restricted_http,
+                    Client(
+                        streamable_http_client(
+                            f"{replica_b_url}/mcp",
+                            http_client=restricted_http,
+                        )
+                    ) as restricted_mcp,
+                ):
+                    try:
+                        initial_sources = await admin_session.get("/sources")
+                        assert initial_sources.status_code == 200
+                        if "commerce-edges" in {
+                            source["source_id"]
+                            for source in initial_sources.json()["sources"]
+                        }:
+                            initial_deactivate = await admin_session.delete(
+                                "/admin/sources/commerce-edges"
+                            )
+                            assert initial_deactivate.status_code == 200
+                            for _ in range(100):
+                                listed = await operator_mcp.call_tool("list_sources", {})
+                                listed_body = listed.structured_content
+                                if isinstance(listed_body, dict) and "commerce-edges" not in {
+                                    source["source_id"] for source in listed_body["sources"]
+                                }:
+                                    break
+                                await asyncio.sleep(0.1)
+                            else:
+                                pytest.fail("replica B did not remove the initially active source")
+
+                        await admin_connection.execute(
+                            "ALTER ROLE commerce_edges_reader CREATEDB"
+                        )
+                        await admin_connection.commit()
+                        reader_restricted = False
+                        try:
+                            rejected = await admin_session.put(
+                                "/admin/sources/commerce-edges",
+                                json={"manifest": l0_manifest, "credential": credential},
+                            )
+                            assert rejected.status_code == 400, rejected.text
+                            assert rejected.json()["error"]["code"] == (
+                                "SOURCE_VALIDATION_FAILED"
+                            )
+                        finally:
+                            await admin_connection.rollback()
+                            await admin_connection.execute(
+                                "ALTER ROLE commerce_edges_reader NOCREATEDB"
+                            )
+                            await admin_connection.commit()
+                            reader_restricted = True
+
+                        published = await admin_session.put(
+                            "/admin/sources/commerce-edges",
+                            json={"manifest": l0_manifest, "credential": credential},
+                        )
+                        assert published.status_code == 200, published.text
+                        source_active = True
+                        published_body = published.json()
+                        assert published_body["quality_level"] == "L0"
+                        old_revision = published_body["metadata_revision"]
+
+                        l0_context_body: dict[str, object] | None = None
+                        for _ in range(100):
+                            l0_context = await operator_mcp.call_tool(
+                                "get_context",
+                                {
+                                    "source_id": "commerce-edges",
+                                    "question": "commerce order",
+                                },
+                            )
+                            candidate = l0_context.structured_content
+                            if (
+                                isinstance(candidate, dict)
+                                and candidate.get("metadata_revision") == old_revision
+                            ):
+                                l0_context_body = candidate
+                                break
+                            await asyncio.sleep(0.1)
+                        assert l0_context_body is not None, (
+                            "replica B did not apply the L0 source generation"
+                        )
+                        assert l0_context_body["quality_level"] == "L0"
+
+                        restricted_sources = await restricted_mcp.call_tool(
+                            "list_sources", {}
+                        )
+                        restricted_sources_body = restricted_sources.structured_content
+                        assert isinstance(restricted_sources_body, dict)
+                        assert "commerce-edges" not in {
+                            source["source_id"]
+                            for source in restricted_sources_body["sources"]
+                        }
+                        restricted_context = await restricted_mcp.call_tool(
+                            "get_context",
+                            {
+                                "source_id": "commerce-edges",
+                                "question": verified_contract["question"],
+                            },
+                        )
+                        assert restricted_context.structured_content == {
+                            "error": {
+                                "code": "SOURCE_NOT_FOUND",
+                                "message": "The requested source was not found.",
+                            }
+                        }
+
+                        semantic_manifest["minimum_quality_level"] = "L1"
+                        semantic_published = await admin_session.put(
+                            "/admin/sources/commerce-edges",
+                            json={
+                                "manifest": semantic_manifest,
+                                "credential": credential,
+                            },
+                        )
+                        assert semantic_published.status_code == 200, semantic_published.text
+                        semantic_revision = semantic_published.json()["metadata_revision"]
+                        assert semantic_revision != old_revision
+
+                        semantic_context_body: dict[str, object] | None = None
+                        for _ in range(100):
+                            semantic_context = await operator_mcp.call_tool(
+                                "get_context",
+                                {
+                                    "source_id": "commerce-edges",
+                                    "question": verified_contract["question"],
+                                },
+                            )
+                            candidate = semantic_context.structured_content
+                            if (
+                                isinstance(candidate, dict)
+                                and candidate.get("metadata_revision")
+                                == semantic_revision
+                            ):
+                                semantic_context_body = candidate
+                                break
+                            await asyncio.sleep(0.1)
+                        assert semantic_context_body is not None, (
+                            "replica B did not apply the semantic source generation"
+                        )
+
+                        stale_query = await operator_mcp.call_tool(
+                            "query",
+                            {
+                                "source_id": "commerce-edges",
+                                "sql": verified_contract["sql"],
+                                "metadata_revision": old_revision,
+                            },
+                        )
+                        assert stale_query.structured_content is not None
+                        assert stale_query.structured_content["error"]["code"] == (  # type: ignore[index]
+                            "METADATA_REVISION_MISMATCH"
+                        )
+
+                        verified_contract["metadata_revision"] = semantic_revision
+                        verified = await admin_session.post(
+                            "/admin/sources/commerce-edges/verified-queries",
+                            json=verified_contract,
+                        )
+                        assert verified.status_code == 200, verified.text
+                        assert verified.json()["result_hash"] == verified_contract[
+                            "expected"
+                        ]["result_hash"]
+
+                        semantic_manifest["minimum_quality_level"] = "L2"
+                        l2_published = await admin_session.put(
+                            "/admin/sources/commerce-edges",
+                            json={
+                                "manifest": semantic_manifest,
+                                "credential": credential,
+                            },
+                        )
+                        assert l2_published.status_code == 200, l2_published.text
+                        assert l2_published.json()["metadata_revision"] == semantic_revision
+                        assert l2_published.json()["quality_level"] == "L2"
+
+                        final_context_body: dict[str, object] | None = None
+                        for _ in range(100):
+                            final_context = await operator_mcp.call_tool(
+                                "get_context",
+                                {
+                                    "source_id": "commerce-edges",
+                                    "question": verified_contract["question"],
+                                },
+                            )
+                            candidate = final_context.structured_content
+                            if (
+                                isinstance(candidate, dict)
+                                and candidate.get("metadata_revision")
+                                == semantic_revision
+                                and candidate.get("quality_level") == "L2"
+                            ):
+                                final_context_body = candidate
+                                break
+                            await asyncio.sleep(0.1)
+                        assert final_context_body is not None, (
+                            "replica B did not apply the verified L2 generation"
+                        )
+                        assert final_context_body["metadata_revision"] == semantic_revision
+                        assert final_context_body["quality_level"] == "L2"
+                        relations = {
+                            relation["name"]: relation
+                            for relation in final_context_body["relations"]  # type: ignore[union-attr]
+                        }
+                        assert set(relations) == {"ai.Order", "ai.OrderLine"}
+                        assert relations["ai.Order"]["sql_name"] == '"ai"."Order"'
+                        assert relations["ai.OrderLine"]["sql_name"] == (
+                            '"ai"."OrderLine"'
+                        )
+                        assert relations["ai.Order"]["grain"]["key_columns"] == [  # type: ignore[index]
+                            "OrderID"
+                        ]
+                        assert relations["ai.OrderLine"]["grain"]["key_columns"] == [  # type: ignore[index]
+                            "OrderID",
+                            "LineNo",
+                        ]
+                        order_columns = {
+                            column["name"]: column
+                            for column in relations["ai.Order"]["columns"]
+                        }
+                        assert {
+                            name: (
+                                order_columns[name]["sql_name"],
+                                order_columns[name]["data_type"],
+                                order_columns[name]["nullable"],
+                            )
+                            for name in [
+                                "OrderID",
+                                "PlacedAt",
+                                "DiscountAmount",
+                                "PromisedOn",
+                                "Attributes",
+                            ]
+                        } == {
+                            "OrderID": ('"OrderID"', "uuid", "unknown"),
+                            "PlacedAt": (
+                                '"PlacedAt"',
+                                "timestamp with time zone",
+                                "unknown",
+                            ),
+                            "DiscountAmount": (
+                                '"DiscountAmount"',
+                                "numeric(12,2)",
+                                "unknown",
+                            ),
+                            "PromisedOn": ('"PromisedOn"', "date", "unknown"),
+                            "Attributes": ('"Attributes"', "jsonb", "unknown"),
+                        }
+                        assert final_context_body["joins"] == [
+                            {
+                                "left_relation": "ai.Order",
+                                "right_relation": "ai.OrderLine",
+                                "column_pairs": [
+                                    {"left": "OrderID", "right": "OrderID"}
+                                ],
+                                "cardinality": "one_to_many",
+                                "fanout": True,
+                                "guidance": (
+                                    "주문 라인을 OrderID별로 먼저 집계한 뒤 주문에 결합해야 "
+                                    "주문 건수와 금액이 중복되지 않는다."
+                                ),
+                            }
+                        ]
+
+                        result = await operator_mcp.call_tool(
+                            "query",
+                            {
+                                "source_id": "commerce-edges",
+                                "sql": verified_contract["sql"],
+                                "metadata_revision": final_context_body[
+                                    "metadata_revision"
+                                ],
+                            },
+                        )
+                        result_body = result.structured_content
+                        assert isinstance(result_body, dict)
+                        assert result_body["columns"] == verified_contract["expected"][
+                            "columns"
+                        ]
+                        assert result_body["row_count"] == verified_contract["expected"][
+                            "row_count"
+                        ]
+                        assert result_body["rows"] == expected_rows
+                        assert result_body["metadata_revision"] == semantic_revision
+                        assert result_body["truncated"] is False
+                        assert result_body["result_bytes"] == len(
+                            json.dumps(
+                                expected_rows,
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                            ).encode("utf-8")
+                        )
+                        assert create_result_hash(
+                            tuple(result_body["columns"]),  # type: ignore[arg-type]
+                            result_body["rows"],
+                        ) == verified_contract["expected"]["result_hash"]
+
+                        http_result = await admin_session.post(
+                            "/query",
+                            json={
+                                "source_id": "commerce-edges",
+                                "sql": verified_contract["sql"],
+                                "metadata_revision": semantic_revision,
+                            },
+                        )
+                        assert http_result.status_code == 200, http_result.text
+                        http_result_body = http_result.json()
+                        for key in [
+                            "metadata_revision",
+                            "fingerprint",
+                            "columns",
+                            "rows",
+                            "row_count",
+                            "result_bytes",
+                            "truncated",
+                        ]:
+                            assert http_result_body[key] == result_body[key]
+
+                        duplicate = await operator_mcp.call_tool(
+                            "query",
+                            {
+                                "source_id": "commerce-edges",
+                                "sql": (
+                                    'SELECT "OrderID" AS duplicate, '
+                                    '"Status" AS duplicate FROM ai."Order" LIMIT 1'
+                                ),
+                                "metadata_revision": semantic_revision,
+                            },
+                        )
+                        assert duplicate.structured_content is not None
+                        assert duplicate.structured_content["error"]["code"] == (  # type: ignore[index]
+                            "QUERY_REJECTED"
+                        )
+                        assert duplicate.structured_content["error"]["details"] == {  # type: ignore[index]
+                            "reason_code": "QUERY_DUPLICATE_RESULT_COLUMN"
+                        }
+
+                        deactivated = await admin_session.delete(
+                            "/admin/sources/commerce-edges"
+                        )
+                        assert deactivated.status_code == 200, deactivated.text
+                        source_active = False
+                        for _ in range(100):
+                            listed = await operator_mcp.call_tool("list_sources", {})
+                            missing = await operator_mcp.call_tool(
+                                "get_context",
+                                {
+                                    "source_id": "commerce-edges",
+                                    "question": verified_contract["question"],
+                                },
+                            )
+                            listed_body = listed.structured_content
+                            missing_body = missing.structured_content
+                            if (
+                                isinstance(listed_body, dict)
+                                and "commerce-edges"
+                                not in {
+                                    source["source_id"]
+                                    for source in listed_body["sources"]
+                                }
+                                and isinstance(missing_body, dict)
+                                and missing_body.get("error", {}).get("code")
+                                == "SOURCE_NOT_FOUND"
+                            ):
+                                break
+                            await asyncio.sleep(0.1)
+                        else:
+                            pytest.fail(
+                                "the open replica B MCP client retained the deactivated source"
+                            )
+                    finally:
+                        if source_active:
+                            cleanup = await admin_session.delete(
+                                "/admin/sources/commerce-edges"
+                            )
+                            assert cleanup.status_code == 200, cleanup.text
+                            source_active = False
+    finally:
+        if not reader_restricted:
+            await admin_connection.rollback()
+            await admin_connection.execute(
+                "ALTER ROLE commerce_edges_reader NOCREATEDB"
+            )
+            await admin_connection.commit()
+        await admin_connection.close()
 
 
 @pytest.mark.integration
