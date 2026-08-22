@@ -279,6 +279,21 @@ async def test_failed_staging_preserves_current_source() -> None:
 
 
 @pytest.mark.asyncio
+async def test_connection_identity_change_is_rejected_without_reusing_verification() -> None:
+    admin, registry, store, _invalidator, _cipher = _services()
+    await admin.publish("third-source", _manifest(), "first-secret")
+    before = store.active["third-source"]
+    rebound = _manifest()
+    rebound["connection"]["host"] = "alternate-database.example"  # type: ignore[index]
+
+    with pytest.raises(SourceValidationError):
+        await admin.publish("third-source", rebound, "second-secret")
+
+    assert store.active["third-source"] == before
+    assert registry.get("third-source").connection.password == "first-secret"  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
 async def test_reloader_applies_external_generation() -> None:
     admin, _registry, store, _invalidator, cipher = _services()
     await admin.publish("third-source", _manifest(), "first-secret")
@@ -297,6 +312,49 @@ async def test_reloader_applies_external_generation() -> None:
     await reloader.sync()
 
     assert registry.get("third-source") is not None
+
+
+@pytest.mark.asyncio
+async def test_reloader_refreshes_external_verified_revisions_for_l2_generation() -> None:
+    admin, _registry, store, _invalidator, cipher = _services()
+    manifest = _manifest()
+    await admin.publish("third-source", manifest, "first-secret")
+    current = store.active["third-source"]
+    rows = [{"status": "OPEN"}]
+    query = VerifiedQuery(
+        query_id="third-source-open-status",
+        source_id="third-source",
+        question="상태 예시를 보여줘",
+        sql="SELECT status FROM ai.issue_overview ORDER BY status LIMIT 1",
+        metadata_revision=current.metadata_revision,
+        relations=("ai.issue_overview",),
+        expected=ExpectedResult(
+            columns=("status",),
+            row_count=1,
+            result_hash=create_result_hash(("status",), rows),
+        ),
+    )
+    await admin.publish_verified_query(query, "engineering")
+    manifest["minimum_quality_level"] = "L2"
+    await admin.publish("third-source", manifest, "first-secret")
+
+    external_registry = SourceRegistry([])
+    metadata = MetadataService(external_registry, StaticCatalog(), store=store.metadata)
+    external_verified: dict[str, frozenset[str]] = {}
+    reloader = SourceReloader(
+        external_registry,
+        metadata,
+        store.metadata,
+        store,
+        cipher,
+        load_budget_profiles(ROOT_DIRECTORY / "config" / "budget-profiles.yaml"),
+        external_verified,
+    )
+
+    await reloader.sync()
+
+    assert external_registry.get("third-source") is not None
+    assert current.metadata_revision in external_verified["third-source"]
 
 
 @pytest.mark.asyncio

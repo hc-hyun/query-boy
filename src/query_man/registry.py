@@ -349,15 +349,23 @@ def validate_source_manifest(
         parsed = _SourceFile.model_validate(migrated)
     except (ValidationError, ValueError) as error:
         raise RegistryConfigurationError(f"Invalid configuration in {origin}: {error}") from error
+    environment = dict(os.environ)
+    environment[parsed.connection.password_env] = secret
     profile = _resolve_source(
         parsed,
         dict(budgets),
-        {parsed.connection.password_env: secret},
+        environment,
         origin,
     )
+    document = parsed.model_dump(mode="json", exclude_none=True)
+    connection = document["connection"]
+    if not isinstance(connection, dict):
+        raise RegistryConfigurationError("Control-plane connection must be an object")
+    connection["port"] = profile.connection.port
+    connection.pop("port_env", None)
     return ValidatedSourceManifest(
         profile,
-        parsed.model_dump(mode="json", exclude_none=True),
+        document,
     )
 
 

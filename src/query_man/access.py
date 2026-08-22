@@ -6,7 +6,7 @@ import os
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -44,8 +44,15 @@ class _Caller(_StrictModel):
     caller_id: Identifier
     tenant_id: Identifier
     token_env: EnvironmentName
-    allowed_sources: list[Identifier] = Field(min_length=1, max_length=1_000)
+    allowed_sources: list[Identifier] | None = Field(default=None, min_length=1, max_length=1_000)
+    all_sources: Literal[True] | None = None
     operator: bool = False
+
+    @model_validator(mode="after")
+    def valid_source_scope(self) -> _Caller:
+        if (self.allowed_sources is None) == (self.all_sources is None):
+            raise ValueError("configure exactly one of allowed_sources or all_sources: true")
+        return self
 
 
 class _PolicyFile(_StrictModel):
@@ -62,7 +69,11 @@ class _PolicyFile(_StrictModel):
             raise ValueError("caller_id values must be unique")
         if len(set(token_envs)) != len(token_envs):
             raise ValueError("token_env values must be unique")
-        if any(len(set(caller.allowed_sources)) != len(caller.allowed_sources) for caller in self.callers):
+        if any(
+            caller.allowed_sources is not None
+            and len(set(caller.allowed_sources)) != len(caller.allowed_sources)
+            for caller in self.callers
+        ):
             raise ValueError("allowed_sources values must be unique per caller")
         return self
 
@@ -119,7 +130,8 @@ class AccessPolicy:
         credentials: list[_Credential] = []
         seen_digests: set[bytes] = set()
         for configured in parsed.callers:
-            unknown = set(configured.allowed_sources) - source_ids
+            allowed_sources = frozenset(configured.allowed_sources or ())
+            unknown = allowed_sources - source_ids
             if unknown:
                 raise AccessPolicyConfigurationError(
                     f"Access policy caller {configured.caller_id} references unknown sources"
@@ -139,8 +151,9 @@ class AccessPolicy:
                     CallerContext(
                         caller_id=configured.caller_id,
                         tenant_id=configured.tenant_id,
-                        allowed_sources=frozenset(configured.allowed_sources),
+                        allowed_sources=allowed_sources,
                         operator=configured.operator,
+                        all_sources=configured.all_sources is True,
                     ),
                 )
             )

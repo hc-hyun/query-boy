@@ -251,24 +251,26 @@ class PostgresCatalog:
                     "SELECT pg_catalog.current_database() = %s AS database_matches, "
                     "session_user = %s AS user_matches, "
                     "pg_catalog.current_setting('transaction_read_only') = 'on' AS read_only, "
-                    "role.rolsuper AS superuser, "
-                    "role.rolbypassrls AS bypasses_rls "
+                    "pg_catalog.current_setting('default_transaction_read_only') = 'on' "
+                    "AS defaults_read_only, "
+                    "role.rolcanlogin AND NOT role.rolsuper AND NOT role.rolcreatedb "
+                    "AND NOT role.rolcreaterole AND NOT role.rolinherit "
+                    "AND NOT role.rolreplication AND NOT role.rolbypassrls "
+                    "AND role.rolconnlimit > 0 AS restricted_role, "
+                    "NOT pg_catalog.has_database_privilege(session_user, current_database(), 'TEMP') "
+                    "AS no_temp_privilege, "
+                    "NOT EXISTS (SELECT 1 FROM pg_catalog.unnest(%s::text[]) AS schema_name "
+                    "WHERE pg_catalog.has_schema_privilege(session_user, schema_name, 'CREATE')) "
+                    "AS no_allowed_schema_create_privilege "
                     "FROM pg_catalog.pg_roles AS role WHERE role.rolname = session_user",
-                    (source.connection.database, source.connection.user),
+                    (
+                        source.connection.database,
+                        source.connection.user,
+                        source.allowed_schemas,
+                    ),
                 )
                 identity = await cursor.fetchone()
-                identity_matches = bool(
-                    identity
-                    and identity["database_matches"]
-                    and identity["user_matches"]
-                    and identity["read_only"]
-                )
-                unsafe_rls_role = bool(
-                    identity
-                    and source.tenant_isolation == "rls"
-                    and (identity["superuser"] or identity["bypasses_rls"])
-                )
-                if not identity_matches or unsafe_rls_role:
+                if not identity or not all(identity.values()):
                     raise RuntimeError("Source session identity or read-only policy mismatch")
                 cursor = await connection.execute(
                     CATALOG_QUERY,

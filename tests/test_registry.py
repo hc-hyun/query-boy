@@ -102,9 +102,12 @@ def test_migrates_v0_budget_field_and_rejects_future_versions() -> None:
         migrate_source_manifest({"version": 2})
 
 
-def test_validates_control_plane_manifest_without_storing_secret() -> None:
+def test_validates_control_plane_manifest_without_storing_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     source_path = ROOT_DIRECTORY / "config" / "sources" / "development-issues.yaml"
     raw = yaml.safe_load(source_path.read_text(encoding="utf-8"))
+    monkeypatch.setenv("POSTGRES_PORT", "55432")
     validated = validate_source_manifest(
         raw,
         load_budget_profiles(ROOT_DIRECTORY / "config" / "budget-profiles.yaml"),
@@ -114,6 +117,9 @@ def test_validates_control_plane_manifest_without_storing_secret() -> None:
     assert validated.profile.connection.password == "control-plane-secret"
     assert "control-plane-secret" not in str(validated.document)
     assert validated.document["version"] == 1
+    assert validated.profile.connection.port == 55_432
+    assert validated.document["connection"]["port"] == 55_432  # type: ignore[index]
+    assert "port_env" not in validated.document["connection"]  # type: ignore[operator]
 
 
 def test_rls_manifest_requires_security_invoker_view_only_surface() -> None:

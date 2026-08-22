@@ -81,7 +81,7 @@ class SourceReloader:
         source_store: SourceStore,
         cipher: SourceSecretCipher,
         budgets: Mapping[str, BudgetProfile],
-        verified_revisions: Mapping[str, frozenset[str]],
+        verified_revisions: dict[str, frozenset[str]],
         invalidators: tuple[SourcePoolInvalidator, ...] = (),
     ) -> None:
         self._registry = registry
@@ -97,10 +97,17 @@ class SourceReloader:
 
     async def sync(self) -> None:
         try:
-            records = await self._source_store.list_active()
+            records, stored_verified = await asyncio.gather(
+                self._source_store.list_active(),
+                self._source_store.verified_revision_map(),
+            )
         except Exception:
             logger.exception("source_reload_scan_failed")
             return
+        for source_id, revisions in stored_verified.items():
+            self._verified_revisions[source_id] = (
+                self._verified_revisions.get(source_id, frozenset()) | revisions
+            )
         for record in records:
             if self._applied.get(record.source_id) == (record.generation, record.enabled):
                 continue
@@ -193,6 +200,12 @@ class SourceAdminService:
             if validated.profile.source_id != source_id:
                 raise RegistryConfigurationError("Path source_id does not match manifest")
             current = await self._store.get_active(source_id)
+            if current is not None and _connection_identity(current.manifest) != _connection_identity(
+                validated.document
+            ):
+                raise RegistryConfigurationError(
+                    "A source_id cannot be rebound to a different connection identity"
+                )
             expected_generation = 0 if current is None else current.generation
             generation = await self._store.next_generation(source_id)
             metadata = await self._stage(validated.profile)
@@ -356,3 +369,10 @@ class SourceAdminService:
             raise SourceValidationError from error
         finally:
             await catalog.close()
+
+
+def _connection_identity(manifest: Mapping[str, object]) -> tuple[object, ...]:
+    connection = manifest.get("connection")
+    if not isinstance(connection, dict):
+        raise RegistryConfigurationError("Stored source connection must be an object")
+    return tuple(connection.get(key) for key in ("host", "port", "database", "user", "ssl"))

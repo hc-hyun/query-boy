@@ -11,7 +11,7 @@ callers:
   - caller_id: quality-operator
     tenant_id: quality
     token_env: QUALITY_OPERATOR_API_TOKEN
-    allowed_sources:
-      - development-issues
-      - market-voc
+    # Explicitly trusts this caller with current and future control-plane sources.
+    # Use allowed_sources instead when the caller must remain source-limited.
+    all_sources: true
     operator: true
