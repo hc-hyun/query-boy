@@ -185,6 +185,8 @@ Schema drift로 overlay가 깨지면 신규 revision 발행을 중단하고 마�
   [ADR 0008](decisions/0008-physical-key-and-index-disclosure.md)을 따른다.
 - Wide relation의 question-scoped column disclosure는
   [ADR 0009](decisions/0009-question-scoped-column-disclosure.md)을 따른다.
+- Revision-scoped token/IDF metadata retrieval index는
+  [ADR 0010](decisions/0010-revision-scoped-retrieval-index.md)을 따른다.
 
 ## Open Decisions
 

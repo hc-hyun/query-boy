@@ -26,9 +26,9 @@ from query_man.models import (
 from query_man.registry import SourceRegistry
 from query_man.relevance import (
     RankedRelation,
+    RelationRetrievalIndex,
     SelectionReason,
     normalize_business_text,
-    rank_relations,
     select_ranked_relations,
 )
 from query_man.revision import create_metadata_revision
@@ -63,18 +63,23 @@ class MetadataService:
         self._store = store
         self._cache: dict[str, _CacheEntry] = {}
         self._refreshes: dict[str, asyncio.Task[PreparedMetadata]] = {}
+        self._retrieval_indexes: dict[tuple[str, str], RelationRetrievalIndex] = {}
 
     async def get_context(self, source_id: str, question: str, max_objects: int = 2) -> dict[str, object]:
         source = self._registry.get(source_id)
         if source is None:
             raise SourceNotFoundError
         prepared, stale = await self._get_prepared(source)
-        ranked = rank_relations(
-            question,
-            prepared.snapshot.relations,
-            source.semantic_overlay.relations,
-            source.semantic_overlay.default_relation,
-        )
+        index_key = (source.source_id, prepared.revision)
+        retrieval = self._retrieval_indexes.get(index_key)
+        if retrieval is None:
+            retrieval = RelationRetrievalIndex(
+                prepared.snapshot.relations,
+                source.semantic_overlay.relations,
+                source.semantic_overlay.default_relation,
+            )
+            self._retrieval_indexes[index_key] = retrieval
+        ranked = retrieval.rank(question)
         selected, truncated = select_ranked_relations(ranked, max_objects)
         selected_names = {item.relation.qualified_name for item in selected}
         composition_hints = _select_composition_hints(question, source.semantic_overlay.composition_hints)
@@ -125,8 +130,14 @@ class MetadataService:
     def invalidate(self, source_id: str | None = None) -> None:
         if source_id is None:
             self._cache.clear()
+            self._retrieval_indexes.clear()
         else:
             self._cache.pop(source_id, None)
+            self._retrieval_indexes = {
+                key: value
+                for key, value in self._retrieval_indexes.items()
+                if key[0] != source_id
+            }
 
     async def get_published(self, source_id: str) -> PreparedMetadata:
         source = self._registry.get(source_id)

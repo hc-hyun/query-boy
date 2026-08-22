@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
+from math import log
 
 from query_man.models import CatalogRelation, RelationSemantic
 
@@ -67,73 +68,137 @@ class RankedRelation:
     reasons: list[SelectionReason]
 
 
+@dataclass
+class _IndexedRelation:
+    relation: CatalogRelation
+    semantic: RelationSemantic | None
+    token_weights: dict[str, float]
+    token_columns: dict[str, str]
+
+
+class RelationRetrievalIndex:
+    def __init__(
+        self,
+        relations: list[CatalogRelation],
+        semantics: list[RelationSemantic],
+        default_relation: str | None = None,
+    ) -> None:
+        semantic_by_name = {item.relation: item for item in semantics}
+        self._documents = [
+            _index_relation(relation, semantic_by_name.get(relation.qualified_name))
+            for relation in relations
+        ]
+        self._default_relation = default_relation
+        document_frequency: dict[str, int] = {}
+        for document in self._documents:
+            for token in document.token_weights:
+                document_frequency[token] = document_frequency.get(token, 0) + 1
+        count = len(self._documents)
+        self._idf = {
+            token: log((count + 1) / (frequency + 0.5)) + 1
+            for token, frequency in document_frequency.items()
+        }
+
+    def rank(self, question: str) -> list[RankedRelation]:
+        normalized_question = _normalize(question)
+        question_tokens = _search_tokens(question)
+        ranked: list[RankedRelation] = []
+        for document in self._documents:
+            semantic = document.semantic
+            reasons: list[SelectionReason] = []
+            score = 0.0
+            for token in question_tokens:
+                weight = document.token_weights.get(token)
+                if weight is not None:
+                    score += weight * self._idf[token]
+                    reasons.append(
+                        SelectionReason(
+                            "retrieval_token",
+                            token,
+                            document.token_columns.get(token),
+                        )
+                    )
+            for phrase in semantic.use_for if semantic else []:
+                if _contains_phrase(normalized_question, phrase):
+                    score += 28
+                    reasons.append(SelectionReason("use_for", phrase))
+            for alias in semantic.aliases if semantic else []:
+                if _contains_phrase(normalized_question, alias):
+                    score += 18
+                    reasons.append(SelectionReason("relation_alias", alias))
+            for alias_column, aliases in semantic.column_aliases.items() if semantic else []:
+                for alias in aliases:
+                    if _contains_phrase(normalized_question, alias):
+                        score += 10
+                        reasons.append(SelectionReason("column_alias", alias, alias_column))
+            ranked.append(
+                RankedRelation(
+                    document.relation,
+                    semantic,
+                    score,
+                    _deduplicate_reasons(reasons),
+                )
+            )
+        ranked.sort(key=lambda item: (-item.score, item.relation.qualified_name))
+        if ranked and ranked[0].score == 0:
+            index = next(
+                (
+                    i
+                    for i, item in enumerate(ranked)
+                    if item.relation.qualified_name == self._default_relation
+                ),
+                0,
+            )
+            fallback = ranked.pop(index)
+            fallback.reasons = [
+                SelectionReason("default_relation", fallback.relation.qualified_name)
+            ]
+            ranked.insert(0, fallback)
+        return ranked
+
+
 def rank_relations(
     question: str,
     relations: list[CatalogRelation],
     semantics: list[RelationSemantic],
     default_relation: str | None = None,
 ) -> list[RankedRelation]:
-    normalized_question = _normalize(question)
-    question_tokens = _search_tokens(question)
-    semantic_by_name = {item.relation: item for item in semantics}
-    ranked: list[RankedRelation] = []
-    for relation in relations:
-        semantic = semantic_by_name.get(relation.qualified_name)
-        reasons: list[SelectionReason] = []
-        score = 0.0
-        for phrase in semantic.use_for if semantic else []:
-            if _contains_phrase(normalized_question, phrase):
-                score += 28
-                reasons.append(SelectionReason("use_for", phrase))
-        for alias in semantic.aliases if semantic else []:
-            if _contains_phrase(normalized_question, alias):
-                score += 18
-                reasons.append(SelectionReason("relation_alias", alias))
-        for alias_column, aliases in semantic.column_aliases.items() if semantic else []:
+    return RelationRetrievalIndex(relations, semantics, default_relation).rank(question)
+
+
+def _index_relation(
+    relation: CatalogRelation,
+    semantic: RelationSemantic | None,
+) -> _IndexedRelation:
+    weights: dict[str, float] = {}
+    columns: dict[str, str] = {}
+
+    def add(value: str | None, weight: float, column: str | None = None) -> None:
+        if value is None:
+            return
+        for token in _search_tokens(value):
+            weights[token] = max(weights.get(token, 0), weight)
+            if column is not None:
+                columns.setdefault(token, column)
+
+    add(relation.qualified_name, 4)
+    add(relation.comment, 1)
+    for catalog_column in relation.columns:
+        add(catalog_column.name, 3, catalog_column.name)
+        add(catalog_column.comment, 1, catalog_column.name)
+    if semantic is not None:
+        add(semantic.description, 2)
+        for phrase in semantic.use_for:
+            add(phrase, 5)
+        for alias in semantic.aliases:
+            add(alias, 4)
+        for column_name, aliases in semantic.column_aliases.items():
             for alias in aliases:
-                if _contains_phrase(normalized_question, alias):
-                    score += 10
-                    reasons.append(SelectionReason("column_alias", alias, alias_column))
-        relation_matches = sorted(question_tokens & _search_tokens(relation.qualified_name))
-        if relation_matches:
-            score += len(relation_matches) * 8
-            reasons.extend(SelectionReason("lexical_metadata", term) for term in relation_matches[:5])
-        column_matches: dict[str, str] = {}
-        for catalog_column in relation.columns:
-            for term in question_tokens & _search_tokens(catalog_column.name):
-                column_matches.setdefault(term, catalog_column.name)
-        if column_matches:
-            score += min(18, len(column_matches) * 3)
-            reasons.extend(
-                SelectionReason("column_name", term, column)
-                for term, column in list(sorted(column_matches.items()))[:5]
-            )
-        descriptive_text = " ".join(
-            value
-            for value in [
-                semantic.description if semantic else None,
-                *(semantic.aliases if semantic else []),
-                *(semantic.use_for if semantic else []),
-                relation.comment,
-                *(column.comment for column in relation.columns),
-            ]
-            if value
-        )
-        descriptive_matches = sorted(question_tokens & _search_tokens(descriptive_text))
-        if descriptive_matches:
-            score += min(15, len(descriptive_matches) * 1.5)
-            reasons.extend(SelectionReason("lexical_metadata", term) for term in descriptive_matches[:5])
-        ranked.append(RankedRelation(relation, semantic, score, _deduplicate_reasons(reasons)))
-    ranked.sort(key=lambda item: (-item.score, item.relation.qualified_name))
-    if ranked and ranked[0].score == 0:
-        index = next(
-            (i for i, item in enumerate(ranked) if item.relation.qualified_name == default_relation),
-            0,
-        )
-        fallback = ranked.pop(index)
-        fallback.reasons = [SelectionReason("default_relation", fallback.relation.qualified_name)]
-        ranked.insert(0, fallback)
-    return ranked
+                add(alias, 5, column_name)
+        for column_name, hints in semantic.value_hints.items():
+            for hint in hints:
+                add(hint, 4, column_name)
+    return _IndexedRelation(relation, semantic, weights, columns)
 
 
 def select_ranked_relations(ranked: list[RankedRelation], max_objects: int) -> tuple[list[RankedRelation], bool]:

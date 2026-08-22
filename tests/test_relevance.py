@@ -32,6 +32,12 @@ def test_selects_comment_grain() -> None:
     assert _select("development-issues", "댓글 본문을 작성자별로 보여줘") == ["ai.issue_comments"]
 
 
+def test_token_index_handles_a_non_exact_comment_paraphrase() -> None:
+    assert _select("development-issues", "작성자가 남긴 코멘트 내용을 읽고 싶어") == [
+        "ai.issue_comments"
+    ]
+
+
 def test_selects_device_population_for_zero_voc() -> None:
     relations = [
         relation("ai.device_overview", [column("device_id", "bigint"), column("voc_count")]),
