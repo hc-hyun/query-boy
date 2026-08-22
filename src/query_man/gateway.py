@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 
 from query_man.access import AccessPolicy, CallerContext
-from query_man.errors import OperatorRequiredError, QueryNotFoundError, SourceNotFoundError
+from query_man.errors import AppError, OperatorRequiredError, QueryNotFoundError, SourceNotFoundError
 from query_man.metadata import MetadataService
 from query_man.query import QueryService
 from query_man.registry import SourceRegistry
@@ -60,13 +61,63 @@ class GatewayService:
             caller.tenant_id,
             source_id,
         )
-        return await self._queries.query(
+        try:
+            result = await self._queries.query(
+                source_id,
+                sql,
+                metadata_revision,
+                query_id=query_id,
+                tenant_id=caller.tenant_id,
+            )
+        except asyncio.CancelledError:
+            logger.info(
+                "query_interrupted query_id=%s caller_id=%s tenant_id=%s source_id=%s",
+                query_id,
+                caller.caller_id,
+                caller.tenant_id,
+                source_id,
+            )
+            raise
+        except AppError as error:
+            logger.info(
+                "query_failed query_id=%s caller_id=%s tenant_id=%s source_id=%s error_code=%s",
+                query_id,
+                caller.caller_id,
+                caller.tenant_id,
+                source_id,
+                error.code,
+            )
+            raise
+        except Exception:
+            logger.exception(
+                "query_failed query_id=%s caller_id=%s tenant_id=%s source_id=%s "
+                "error_code=INTERNAL_ERROR",
+                query_id,
+                caller.caller_id,
+                caller.tenant_id,
+                source_id,
+            )
+            raise
+
+        plan = result.get("plan_summary")
+        total_cost = plan.get("total_cost") if isinstance(plan, dict) else None
+        logger.info(
+            "query_succeeded query_id=%s caller_id=%s tenant_id=%s source_id=%s "
+            "fingerprint=%s queue_ms=%s elapsed_ms=%s row_count=%s result_bytes=%s "
+            "truncated=%s plan_total_cost=%s",
+            query_id,
+            caller.caller_id,
+            caller.tenant_id,
             source_id,
-            sql,
-            metadata_revision,
-            query_id=query_id,
-            tenant_id=caller.tenant_id,
+            result.get("fingerprint"),
+            result.get("queue_ms"),
+            result.get("elapsed_ms"),
+            result.get("row_count"),
+            result.get("result_bytes"),
+            result.get("truncated"),
+            total_cost,
         )
+        return result
 
     async def cancel_query(self, caller: CallerContext, query_id: str) -> dict[str, str]:
         if not caller.operator:

@@ -261,9 +261,12 @@ async def test_schema_drift_details_are_not_disclosed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_executes_query_with_current_metadata_revision() -> None:
+async def test_executes_query_with_current_metadata_revision(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     catalog = ReturningCatalog(minimal_development_snapshot())
     executor = RecordingQueryExecutor()
+    caplog.set_level(logging.INFO, logger="query_man.audit")
     async with client(catalog, query_executor=executor) as session:
         context = await session.post(
             "/meta",
@@ -282,11 +285,19 @@ async def test_executes_query_with_current_metadata_revision() -> None:
     assert response.json()["rows"] == [{"issue_count": 600}]
     assert executor.calls[0][0] == "development-issues"
     assert executor.calls[0][2] == "local-development"
+    assert "query_started query_id=" in caplog.text
+    assert "query_succeeded query_id=" in caplog.text
+    assert "fingerprint=pg_query:" in caplog.text
+    assert "elapsed_ms=1 row_count=1 result_bytes=21" in caplog.text
+    assert "plan_total_cost=10.0" in caplog.text
 
 
 @pytest.mark.asyncio
-async def test_query_rejects_stale_revision_without_echoing_sql() -> None:
+async def test_query_rejects_stale_revision_without_echoing_sql(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     secret_literal = "private-customer-secret"
+    caplog.set_level(logging.INFO, logger="query_man.audit")
     async with client(ReturningCatalog(minimal_development_snapshot())) as session:
         response = await session.post(
             "/query",
@@ -300,6 +311,9 @@ async def test_query_rejects_stale_revision_without_echoing_sql() -> None:
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "METADATA_REVISION_MISMATCH"
     assert secret_literal not in response.text
+    assert "query_failed query_id=" in caplog.text
+    assert "error_code=METADATA_REVISION_MISMATCH" in caplog.text
+    assert secret_literal not in caplog.text
 
 
 @pytest.mark.asyncio
