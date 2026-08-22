@@ -37,9 +37,10 @@ Source Registry
 PostgreSQL Reader / Analytics Replica
 ```
 
-Bootstrap은 `development_issues`와 `market_voc` 독립 source database를 사용한다. Release
-acceptance는 세 번째 `support_tickets` database를 control plane으로 실행 중 등록해 동일한
-runtime과 MCP 경로로 검증한다. Bootstrap source의 구체적인 grain, seed와 검증 범위는
+Bootstrap은 `development_issues`와 `market_voc` 독립 source database를 사용한다. M6 release
+acceptance는 `support_tickets` database를 control plane으로 실행 중 등록한다. 이후 M7
+extension assurance는 quoted/rich-type `commerce_edges` database를 같은 runtime과 MCP
+경로로 검증한다. Bootstrap source의 구체적인 grain, seed와 검증 범위는
 [mvp.md](mvp.md)에 기록한다.
 
 ## Component Boundaries
@@ -85,6 +86,10 @@ Bootstrap registry는 `config/sources/*.yaml`을 읽는다. Credential 값은 ma
 저장하지 않고 환경 변수 이름만 참조한다. Control-plane source revision과 암호화된
 credential 계약은 [ADR 0012](decisions/0012-control-plane-source-revisions.md)를 따르며,
 runtime hot reload와 관리자 staging API가 bootstrap 이후 변경을 반영한다.
+
+No-deploy source 등록과 caller별 접근 grant는 서로 다른 변경이다. 미래 source까지
+명시적으로 신뢰한 `all_sources` caller는 hot-added source를 즉시 사용할 수 있다. 제한
+caller의 개별 allowlist는 현재 startup 설정이므로 grant 변경에는 restart가 필요하다.
 
 ### Query Gateway
 
@@ -199,3 +204,5 @@ Production acceptance까지의 구현 순서와 완료 증거는
 [implementation-roadmap.md](implementation-roadmap.md)와
 [completion audit](verification/2026-08-23-completion-audit.md)에서 관리한다. 이후 범위
 변경은 완료된 ID를 재사용하지 않고 새 decision과 roadmap ID로 추가한다.
+네 번째 source 확장 감사와 남은 경계는
+[source extension assurance](verification/2026-08-23-source-extension.md)에 기록한다.

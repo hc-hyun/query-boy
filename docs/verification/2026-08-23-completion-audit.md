@@ -5,13 +5,13 @@ Status: Complete
 ## Audit Method
 
 최종 목적은 [architecture](../architecture.md)의 Success Criteria와
-[implementation roadmap](../implementation-roadmap.md)의 92개 checklist 항목이다. 완료 여부는
+[implementation roadmap](../implementation-roadmap.md)의 100개 checklist 항목이다. 완료 여부는
 checkbox 자체가 아니라 아래 순서로 판정했다.
 
 1. 요구사항을 stable ID별로 구현 module, database constraint/role, executable test와 운영
    문서에 연결한다.
-2. Bootstrap 두 source와 실행 중 등록한 세 번째 source에서 동일 경로가 동작하는지 실제
-   PostgreSQL/MCP로 검증한다.
+2. Bootstrap 두 source와 실행 중 등록한 세 번째·네 번째 source에서 동일 경로가 동작하는지
+   실제 PostgreSQL/MCP로 검증한다.
 3. 정상 경로뿐 아니라 공격, schema drift, source outage, stale expiry, overload, cancel,
    shutdown과 control-plane restore 실패 경계를 실행한다.
 4. 정적 검사, 전체 unit/integration, quality/verified contract, 복구와 보안 scan을 독립적으로
@@ -69,8 +69,9 @@ row/byte truncation의 다중 경계로 제한한다.
 | `ONB-01`~`ONB-03` | `source_admin.py`, encrypted `source_store.py`, isolated staging/atomic generation | PASS |
 | `ONB-04`~`ONB-07` | Bounded hot reload, failed update isolation, rotation, manifest migration tests | PASS |
 | `ONB-08`~`ONB-09` | Third `support_tickets` DB의 L0→L1→verified→L2→MCP acceptance/runbook | PASS |
+| `EXT-01`~`EXT-08` | Fourth `commerce_edges` DB의 production-auth two-replica MCP extension assurance | PASS |
 
-Runtime Python package에는 세 fixture source ID/database 이름 literal이 없다. 세 번째 source는
+Runtime Python package에는 네 fixture source ID/database 이름 literal이 없다. 동적 source는
 bootstrap manifest나 source별 code branch 없이 control plane에서 publish된다.
 
 ## Authorization And Operations
@@ -93,21 +94,23 @@ rollback은 [source onboarding](../source-onboarding.md), RPO/RTO와 복구 순�
 
 | IDs | Authoritative implementation/evidence | Audit result |
 |---|---|---|
-| `REL-01`~`REL-02` | 세 독립 DB와 no-redeploy live MCP onboarding | PASS |
+| `REL-01`~`REL-02` | 네 독립 DB와 no-redeploy live MCP onboarding | PASS |
 | `REL-03`~`REL-04` | 16 quality cases, 9 verified results, 22 attack/misuse cases | PASS |
 | `REL-05`~`REL-06` | 40-query load와 isolation/cancel/hard-limit/drift/outage/stale/rollback scenarios | PASS |
 | `REL-07`~`REL-08` | Operations/security/DR review와 Architecture Success Criteria mapping | PASS |
 
 세부 release 수치와 failure matrix는
-[production release acceptance](2026-08-23-release-acceptance.md)에 기록한다.
+[production release acceptance](2026-08-23-release-acceptance.md)에 기록한다. 네 번째 source의
+확장 회귀와 발견한 경계는
+[source extension assurance](2026-08-23-source-extension.md)에 기록한다.
 
 ## Final Executed Evidence
 
 ```text
 uv run ruff check .                 PASS
 uv run mypy src                     PASS (24 source files)
-uv run pytest                       PASS (144 unit tests)
-uv run pytest -m integration        PASS (13 PostgreSQL/MCP/load tests)
+uv run pytest                       PASS (158 unit tests)
+uv run pytest -m integration        PASS (14 PostgreSQL/MCP/load tests)
 uv run pytest -m load -s            PASS (40 queries, 2 sources)
 uv run query-man-evaluate           PASS (16/16; relation/answerability 1.0)
 uv run query-man-verify             PASS (9/9 result contracts)

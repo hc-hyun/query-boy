@@ -23,8 +23,10 @@ Operator는 question, SQL, expected relations, columns, row count와 canonical r
 5. Contract를 immutable control-plane row로 저장한 뒤 runtime revision quality map에 추가한다.
 
 `control.verified_query_contracts`는 source, query ID와 metadata revision으로 식별하며 update와
-delete를 금지한다. Runtime startup은 filesystem contract와 control-plane revision 집합을
-합친 후 source generation을 load한다.
+delete를 금지한다. Runtime은 startup과 source reload poll마다 filesystem contract와
+control-plane revision 집합을 합친 후 source generation을 검증한다. 따라서 한 replica가
+contract와 L2 generation을 publish하면 다른 replica도 재시작 없이 같은 quality gate를
+통과한다.
 
 ## Consequences
 
@@ -35,3 +37,6 @@ delete를 금지한다. Runtime startup은 filesystem contract와 control-plane 
   올려 같은 revision을 재publish할 수 있다.
 - Contract 폐기가 필요하면 기존 row를 수정하지 않고 새 metadata revision과 새 contract를
   publish한다.
+- 이 계약은 publish 시점의 실행 gate다. Bootstrap `query-man-verify`는 filesystem contract를
+  반복 실행하며, control-plane source의 주기적 data-invariant 재실행은 현재 운영 smoke/
+  monitoring 절차로 수행한다.

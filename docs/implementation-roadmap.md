@@ -173,6 +173,29 @@ Dependencies: all required items above
 - [x] `REL-07` 운영 dashboard, alert, audit와 runbook 검토를 완료한다.
 - [x] `REL-08` Architecture의 Success Criteria를 전부 충족하고 문서 상태를 `Production ready`로 갱신한다.
 
+## 10. Source Extension Assurance
+
+Dependencies: `ONB-*`, `AUTH-*`, `MCP-*`, `REL-*`
+
+- [x] `EXT-01` 네 번째 독립 PostgreSQL fixture에서 quoted identifier, rich/nullable type,
+  composite grain, one-to-many fanout과 zero-child row를 검증한다.
+- [x] `EXT-02` 신규 source의 항상 필수·조건부·불필요 작업을 운영 checklist로 분리한다.
+- [x] `EXT-03` Production 전권 caller가 명시적 opt-in으로 미래 control-plane source를
+  재시작 없이 사용하고 제한 caller는 계속 숨김 처리되는지 검증한다.
+- [x] `EXT-04` Publish staging에서 reader role 안전 속성을 검사하고 같은 source ID의
+  connection endpoint 재지정을 fail-closed한다.
+- [x] `EXT-05` 다른 runtime replica가 control-plane verified revision을 poll해 L2 generation을
+  재시작 없이 적용한다.
+- [x] `EXT-06` MCP가 추가 입력과 내부 예외를 비공개 거부하고 duplicate result column을
+  안정적인 reason code로 거부한다.
+- [x] `EXT-07` 두 runtime replica와 실제 bearer caller를 사용해 L0→L2 publish, revision
+  refresh, exact MCP result, authorization isolation과 deactivate를 end-to-end 검증한다.
+- [x] `EXT-08` 전체 unit/integration/quality/verified/security 회귀와 runtime source-specific
+  branch 부재를 확인하고 기존 Production-ready 목표의 유지 여부를 기록한다.
+
+상세 반복 절차와 현재 한계는
+[`source-extension-checklist.md`](source-extension-checklist.md)에 유지한다.
+
 ## Recommended Milestones
 
 | Milestone | Scope | Exit |
@@ -183,6 +206,7 @@ Dependencies: all required items above
 | M4 No-Deploy Onboarding | `ONB-*` | 세 번째 source를 코드 변경과 재배포 없이 등록한다. |
 | M5 Multi-Tenant Operations | `AUTH-*`, `OPS-*` | Tenant 격리, 관측성, 복구와 운영 안전 기준을 충족한다. |
 | M6 Production Acceptance | `REL-*` | 최종 성공 기준과 공격·장애·부하 시나리오를 모두 통과한다. |
+| M7 Extension Assurance | `EXT-*` | 네 번째 source와 production-authenticated multi-replica MCP 회귀를 통과한다. |
 
 위 milestone은 완료된 구현 순서를 보존한 기록이다. 새로운 기능은 기존 완료 ID를
 재사용하지 않고 별도 roadmap 항목과 검증 가능한 exit condition을 추가한다.

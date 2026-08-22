@@ -40,8 +40,11 @@ trust boundary에서 review·publish한다. 낮은 권한의 self-service 입력
 7. `/sources`, `/meta`, `/query` 또는 MCP에서 실제 질문과 결과를 검증한다.
 
 Production caller에게 source를 공개할 때는 access-policy manifest의
-`allowed_sources`에도 source ID를 명시하고, token 값은 manifest가 참조하는 환경
-변수에만 저장한다. 예시는
+`allowed_sources`에 source ID를 명시한다. 미래의 control-plane source를 모두 신뢰하도록
+정책 소유자가 명시적으로 승인한 caller만 `all_sources: true`를 사용할 수 있으며 이 caller는
+재시작 없이 신규 source를 본다. 이 범위는 admin `operator` 권한과 독립적이다. 제한 caller의
+allowlist는 startup에 고정되므로 현재 개별 grant 변경에는 service restart가 필요하다. Token
+값은 manifest가 참조하는 환경 변수에만 저장한다. 예시는
 [`config/access-policies.example.yaml`](../config/access-policies.example.yaml)을 따른다.
 
 최소 manifest는 semantic overlay 없이도 동작한다.
@@ -114,6 +117,17 @@ catalog 기반 best-effort, `L1`은 모든 공개 relation의 설명·grain과 �
 상태, `L2`는 현재 metadata revision과 일치하는 verified query 계약까지 통과한 상태다.
 요구 수준에 미달한 refresh나 rollback은 거부되며 기존 active revision은 유지된다.
 
+Control-plane publish는 `port_env`가 있으면 publisher 환경에서 실제 port를 한 번 resolve해
+저장하므로 다른 replica가 자신의 환경 변수로 endpoint를 바꾸지 않는다. 같은 `source_id`의
+host, port, database, user와 TLS 설정은 이후 generation에서도 고정한다. 다른 endpoint는
+새 source ID로 등록하고 현재 데이터에 대한 verified contract를 다시 검토한다. Credential
+값만 바꾸는 rotation은 metadata revision을 바꾸지 않는다.
+
+Reader staging은 login/non-superuser, 생성·복제·상속·RLS 우회 금지, 유한한 양수 connection
+limit, default read-only, database TEMP 금지와 공개 schema CREATE 금지를 검사한다. 숨긴 base
+schema의 전체 권한과 network/TLS 설정은 source owner도 별도 검토해야 하며, 반복 절차는
+[`source-extension-checklist.md`](source-extension-checklist.md)에 있다.
+
 Catalog refresh가 일시 실패하면 제한된 stale 기간 동안 마지막 정상 revision을
 `stale` 상태와 함께 반환하고 backoff 후 다시 시도한다. 정상 snapshot이 한 번도
 없거나 stale 상한을 넘었거나 overlay가 현재 schema와 맞지 않으면 `/meta`는
@@ -161,6 +175,13 @@ Repository fixture에서는 L0
 [`support-tickets-l2.yaml`](../config/onboarding/support-tickets-l2.yaml), reviewed invariant
 [`support-tickets-verified-query.yaml`](../config/onboarding/support-tickets-verified-query.yaml)을
 이 순서로 사용한다.
+
+Quoted identifier와 rich type 코너 케이스는 `commerce-edges` fixture의 L0
+[`commerce-edges.yaml`](../config/onboarding/commerce-edges.yaml), semantic/L2
+[`commerce-edges-l2.yaml`](../config/onboarding/commerce-edges-l2.yaml), reviewed invariant
+[`commerce-edges-verified-query.yaml`](../config/onboarding/commerce-edges-verified-query.yaml)을
+사용한다. Manifest의 canonical name과 실제 SQL identifier가 다를 수 있으므로 MCP client는
+relation/column의 `sql_name`을 사용해야 한다.
 
 ## Security Checks
 

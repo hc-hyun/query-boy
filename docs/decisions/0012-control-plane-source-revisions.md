@@ -28,6 +28,16 @@ Source profile revision, metadata snapshot과 두 active pointer는 동일한 Po
 transaction에서 publish한다. Optimistic generation check가 동시 관리자 update의
 lost update를 막는다.
 
+Publisher는 `port_env`를 실제 port로 resolve하고 저장 document에서는 환경 변수 참조를
+제거한다. `source_id`는 bootstrap profile 또는 최초 control-plane publish의 host, port,
+database, user와 TLS mode에 고정되며 후속 generation이 다른 endpoint로 바꾸려 하면 기존
+active generation을 유지하고 거부한다. Credential rotation만 이 identity 제약에서 제외된다.
+
+Staging catalog 연결은 session/database identity와 default read-only뿐 아니라 login role의
+superuser, database/role 생성, 상속, replication, RLS bypass, 유한한 양수 connection limit,
+database TEMP와 공개 schema CREATE 금지를 검사한다. Fixture validation은 숨긴 base schema와
+교차 DB 권한도 별도로 검사한다.
+
 ## Consequences
 
 - 실패한 staging이나 transaction은 기존 active source와 metadata pointer를 유지한다.
@@ -37,3 +47,4 @@ lost update를 막는다.
   필요하다. 이는 운영 runbook에서 관리한다.
 - Runtime poller와 관리자 HTTP endpoint는 이 저장 계약을 사용한다. 각 runtime은 새
   generation을 검증한 뒤 source별 catalog/query pool과 metadata cache를 교체한다.
+- 다른 endpoint로 전환하려면 별도 source ID와 새 verified contract를 사용해야 한다.

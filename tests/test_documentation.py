@@ -18,6 +18,7 @@ EXPECTED_ID_COUNTS = {
     "AUTH": 7,
     "OPS": 8,
     "REL": 8,
+    "EXT": 8,
 }
 
 
@@ -26,7 +27,7 @@ def test_roadmap_has_one_completed_checkbox_for_every_expected_id() -> None:
     matches = re.findall(r"^- \[([ x])\] `([A-Z]+)-(\d{2})`", text, re.MULTILINE)
     ids = [f"{prefix}-{number}" for _checked, prefix, number in matches]
 
-    assert len(ids) == sum(EXPECTED_ID_COUNTS.values()) == 92
+    assert len(ids) == sum(EXPECTED_ID_COUNTS.values()) == 100
     assert len(ids) == len(set(ids))
     assert all(checked == "x" for checked, _prefix, _number in matches)
     for prefix, count in EXPECTED_ID_COUNTS.items():
@@ -56,6 +57,8 @@ def test_runtime_has_no_fixture_source_specialization() -> None:
         "market_voc",
         "support-tickets",
         "support_tickets",
+        "commerce-edges",
+        "commerce_edges",
     }
     for path in (ROOT_DIRECTORY / "src" / "query_man").glob("*.py"):
         content = path.read_text(encoding="utf-8")
