@@ -45,11 +45,15 @@ Replica를 늘리려면 role hard cap과 database `max_connections` 여유를 �
 grouped query를 동시에 제출했다.
 
 ```text
-elapsed p50 <= 483ms, p95 <= 712ms, max 729ms
-queue   p95 <= 600ms, max 641ms
+observed service-call wall p50 483ms, p95 712ms, max 729ms
+observed source queue      p95 600ms, max 641ms
 max plan total_cost 215.55
 timeout 0, overload 0, error 0
 ```
+
+이 당시 harness의 elapsed 표기는 metadata/revision 확인, source queue, pool wait와 DB 실행을
+포함한 `QueryService.query` 전체 wall-clock이었다. API 응답의 DB connection 획득 이후
+`elapsed_ms`와는 다른 측정이며, 이후 harness는 두 값을 별도 field로 출력한다.
 
 별도 saturation test는 concurrency 1 profile에서 두 번째 동일-source query를 queue
 timeout으로 거부하면서 다른 source query가 성공함을 확인한다. 216M 조합 cross join은

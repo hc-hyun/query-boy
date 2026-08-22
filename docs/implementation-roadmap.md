@@ -1,13 +1,14 @@
 # Query Man Implementation Roadmap
 
-Status: Production hardening in progress
+Status: Production ready
 
 이 문서는 Query Man의 최종 목적을 구현하기 위한 TODO의 단일 관리 문서다.
 세부 설계 원칙은 [architecture.md](architecture.md), 현재 검증용 데이터와 계약은
 [mvp.md](mvp.md), source 등록 규칙은 [source-onboarding.md](source-onboarding.md)를
 따른다. 전체 항목의 구현·검증 연결은
-[completion audit](verification/2026-08-23-completion-audit.md)에 production baseline으로
-기록되어 있다. 이번 refactoring assurance 증거는 `REF-15`에서 별도 audit으로 확정한다.
+[completion audit](verification/2026-08-23-completion-audit.md)에 production baseline으로,
+[refactoring assurance](verification/2026-08-23-refactoring-assurance.md)에 현재 최종 회귀와
+의도적인 운영 경계로 기록한다.
 
 ## Final Outcome
 
@@ -203,7 +204,7 @@ Dependencies: completed production baseline and extension assurance
 
 완료 표시에는 재현 테스트, 최소 수정, 관련 운영 계약 정비와 전체 회귀 검증이 모두
 필요하다. 과거 verification 문서는 당시 실행 증거로 보존하고, 이번 보강의 새 증거는
-별도 completion audit에 기록한다.
+[refactoring assurance audit](verification/2026-08-23-refactoring-assurance.md)에 기록한다.
 
 - [x] `REF-01` Composite key·foreign-key pairing·index column 순서가 metadata revision에서
   보존되는지 검증하고 순서 변경을 서로 다른 revision으로 판정한다.
@@ -233,7 +234,7 @@ Dependencies: completed production baseline and extension assurance
   실행되는지 검증하고 process manager timeout을 일관되게 설정한다.
 - [x] `REF-14` Metric·audit·dashboard·restore 문구를 실제 수집 가능한 신호와 검증 범위에
   맞추고 비용 통제 운영 절차를 실행 가능한 runbook으로 정비한다.
-- [ ] `REF-15` Ruff, mypy, unit/integration/load/evaluation/verified/security 회귀와 문서 링크
+- [x] `REF-15` Ruff, mypy, unit/integration/load/evaluation/verified/security 회귀와 문서 링크
   검사를 통과한 최종 completion audit을 남긴다.
 
 ## Recommended Milestones

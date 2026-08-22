@@ -1,6 +1,6 @@
 # Query Man Architecture
 
-Status: Production hardening in progress
+Status: Production ready
 
 ## Goal
 
@@ -215,7 +215,8 @@ Schema drift로 overlay가 깨지면 신규 revision 발행을 중단하고 마�
 Production acceptance까지의 구현 순서와 완료 증거는
 [implementation-roadmap.md](implementation-roadmap.md)와
 [completion audit](verification/2026-08-23-completion-audit.md)에서 baseline으로 관리한다.
-진행 중인 refactoring assurance는 roadmap `REF-*`에서 추적하고, 이후 범위 변경도 완료된
-ID를 재사용하지 않고 새 decision과 roadmap ID로 추가한다.
+현재 코드의 refactoring assurance와 의도적인 운영 경계는
+[refactoring assurance audit](verification/2026-08-23-refactoring-assurance.md)에 기록한다.
+이후 범위 변경도 완료된 ID를 재사용하지 않고 새 decision과 roadmap ID로 추가한다.
 네 번째 source 확장 감사와 남은 경계는
 [source extension assurance](verification/2026-08-23-source-extension.md)에 기록한다.

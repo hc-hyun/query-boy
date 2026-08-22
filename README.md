@@ -40,8 +40,8 @@ docker compose down
 전체 설계 기준은 [docs/architecture.md](docs/architecture.md), 현재 MVP 범위는
 [docs/mvp.md](docs/mvp.md), 최종 목적 기반 구현 TODO는
 [docs/implementation-roadmap.md](docs/implementation-roadmap.md), 기존 production baseline 증거는
-[completion audit](docs/verification/2026-08-23-completion-audit.md)를 참고합니다. 진행 중인
-refactoring assurance의 완료 증거는 roadmap `REF-15`에서 별도 문서로 확정합니다.
+[completion audit](docs/verification/2026-08-23-completion-audit.md), 현재 최종 회귀와 운영 경계는
+[refactoring assurance](docs/verification/2026-08-23-refactoring-assurance.md)를 참고합니다.
 
 ## Metadata And Query API
 

@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
+from urllib.parse import unquote
 
 from tests.helpers import ROOT_DIRECTORY
 
 ROADMAP = ROOT_DIRECTORY / "docs" / "implementation-roadmap.md"
 ARCHITECTURE = ROOT_DIRECTORY / "docs" / "architecture.md"
-AUDIT = ROOT_DIRECTORY / "docs" / "verification" / "2026-08-23-completion-audit.md"
+BASELINE_AUDIT = (
+    ROOT_DIRECTORY / "docs" / "verification" / "2026-08-23-completion-audit.md"
+)
+REFACTORING_AUDIT = (
+    ROOT_DIRECTORY
+    / "docs"
+    / "verification"
+    / "2026-08-23-refactoring-assurance.md"
+)
 EXPECTED_ID_COUNTS = {
     "BASE": 10,
     "DEC": 9,
@@ -19,6 +29,7 @@ EXPECTED_ID_COUNTS = {
     "OPS": 8,
     "REL": 8,
     "EXT": 8,
+    "REF": 15,
 }
 
 
@@ -27,7 +38,7 @@ def test_roadmap_has_one_completed_checkbox_for_every_expected_id() -> None:
     matches = re.findall(r"^- \[([ x])\] `([A-Z]+)-(\d{2})`", text, re.MULTILINE)
     ids = [f"{prefix}-{number}" for _checked, prefix, number in matches]
 
-    assert len(ids) == sum(EXPECTED_ID_COUNTS.values()) == 100
+    assert len(ids) == sum(EXPECTED_ID_COUNTS.values()) == 115
     assert len(ids) == len(set(ids))
     assert all(checked == "x" for checked, _prefix, _number in matches)
     for prefix, count in EXPECTED_ID_COUNTS.items():
@@ -36,17 +47,26 @@ def test_roadmap_has_one_completed_checkbox_for_every_expected_id() -> None:
         ]
 
 
-def test_production_status_and_completion_audit_cover_every_roadmap_group() -> None:
+def test_production_status_and_completion_audits_cover_every_roadmap_group() -> None:
     roadmap = ROADMAP.read_text(encoding="utf-8")
     architecture = ARCHITECTURE.read_text(encoding="utf-8")
-    audit = AUDIT.read_text(encoding="utf-8")
+    baseline_audit = BASELINE_AUDIT.read_text(encoding="utf-8")
+    refactoring_audit = REFACTORING_AUDIT.read_text(encoding="utf-8")
 
     assert "Status: Production ready" in roadmap
     assert "Status: Production ready" in architecture
-    assert "Status: Complete" in audit
+    assert "Status: Complete" in baseline_audit
+    assert "Status: Complete" in refactoring_audit
+    assert REFACTORING_AUDIT.name in roadmap
+    assert REFACTORING_AUDIT.name in architecture
     for prefix, count in EXPECTED_ID_COUNTS.items():
-        assert f"`{prefix}-01`" in audit
-        assert f"`{prefix}-{count:02}`" in audit
+        audit = refactoring_audit if prefix == "REF" else baseline_audit
+        if prefix == "REF":
+            for number in range(1, count + 1):
+                assert f"`{prefix}-{number:02}`" in audit
+        else:
+            assert f"`{prefix}-01`" in audit
+            assert f"`{prefix}-{count:02}`" in audit
 
 
 def test_runtime_has_no_fixture_source_specialization() -> None:
@@ -63,3 +83,45 @@ def test_runtime_has_no_fixture_source_specialization() -> None:
     for path in (ROOT_DIRECTORY / "src" / "query_man").glob("*.py"):
         content = path.read_text(encoding="utf-8")
         assert not any(value in content for value in forbidden), path
+
+
+def _markdown_heading_anchors(path: Path) -> set[str]:
+    content = path.read_text(encoding="utf-8")
+    anchors: set[str] = set()
+    occurrences: dict[str, int] = {}
+    for match in re.finditer(r"^#{1,6}\s+(.+?)\s*#*\s*$", content, re.MULTILINE):
+        heading = re.sub(r"[`*_~]", "", match.group(1))
+        base = re.sub(r"[^\w -]", "", heading.lower()).strip().replace(" ", "-")
+        occurrence = occurrences.get(base, 0)
+        occurrences[base] = occurrence + 1
+        anchors.add(base if occurrence == 0 else f"{base}-{occurrence}")
+    return anchors
+
+
+def test_local_markdown_links_resolve() -> None:
+    markdown_paths = [ROOT_DIRECTORY / "README.md"]
+    markdown_paths.extend(sorted((ROOT_DIRECTORY / "docs").rglob("*.md")))
+    missing: list[str] = []
+
+    for path in markdown_paths:
+        content = path.read_text(encoding="utf-8")
+        for match in re.finditer(r"!?\[[^\]]*\]\(([^)]+)\)", content):
+            raw_target = match.group(1).strip()
+            if raw_target.startswith("<") and ">" in raw_target:
+                target = raw_target[1 : raw_target.index(">")]
+            else:
+                target = raw_target.split(maxsplit=1)[0]
+            if target.startswith(("http://", "https://", "mailto:", "//")):
+                continue
+            path_target, _separator, fragment = target.partition("#")
+            relative_target = unquote(path_target.split("?", 1)[0])
+            resolved = path if not relative_target else path.parent / relative_target
+            if not resolved.exists():
+                missing.append(f"{path.relative_to(ROOT_DIRECTORY)} -> {target}")
+            elif fragment and resolved.suffix.lower() == ".md":
+                if unquote(fragment) not in _markdown_heading_anchors(resolved):
+                    missing.append(
+                        f"{path.relative_to(ROOT_DIRECTORY)} -> {target} (missing anchor)"
+                    )
+
+    assert not missing, "Missing local Markdown links:\n" + "\n".join(missing)

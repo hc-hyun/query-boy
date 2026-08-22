@@ -62,16 +62,19 @@ ACL이 포함되지 않으므로 이를 database backup과 별도 change record/
 `./scripts/control-plane-drill.sh`는 기존 `query_man_restore_drill` DB가 있으면 덮어쓰지 않고
 중단한다. 임시 DB를 생성해 live control schema의 custom archive를 `--no-owner
 --no-privileges`로 restore하고 current schema migration을 두 번 적용한다. 5개 control table
-row count, 4개 FK, 3개 immutable trigger와 writer group ACL을 확인한 뒤 임시 DB를 삭제한다.
+row count, 4개 FK, 3개 non-internal user trigger 등록과 writer group ACL을 확인한 뒤 임시 DB를
+삭제한다.
 Production data가 아닌 격리 fixture/복제본에서 분기별로 실행하고 결과를 change record에
 첨부한다.
 
-현재 자동 drill은 archive restore, schema migration idempotency, row count, FK/trigger와 group
-ACL까지만 증명한다. Dedicated LOGIN 생성·실제 인증, ciphertext decrypt, active
-generation/metadata의 의미 일치와 실제 source query는 위 Restore 3~7단계에서 별도로 확인해야
-한다. 이를 실행하지 않은 drill을 full service recovery로 기록하지 않는다. 위 RPO/RTO는 운영
-목표이며 현재 repository drill이 실제 backup age나 end-to-end recovery 시간을 측정했다는
-뜻이 아니다.
+현재 자동 drill은 같은 cluster/current PostgreSQL에서의 archive restore, current migration
+2회 무오류, row count, FK/user-trigger 개수와 group ACL까지만 증명한다. Trigger 이름·정의와
+immutable mutation 거부를 실행하지 않고, archive content hash, cross-host/version 또는
+old-schema upgrade도 확인하지 않는다. Source business DB/global role, dedicated LOGIN 생성·실제
+인증, ciphertext decrypt, active generation/metadata의 의미 일치와 실제 source query는 위
+Restore 3~7단계에서 별도로 확인해야 한다. 이를 실행하지 않은 drill을 full service recovery로
+기록하지 않는다. 위 RPO/RTO는 운영 목표이며 현재 repository drill이 실제 backup age나
+end-to-end recovery 시간을 측정했다는 뜻이 아니다.
 
 ## Master-Key Change Boundary
 

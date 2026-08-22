@@ -31,6 +31,10 @@ assurance의 현재 설정 근거로 재사용하지 않는다.
  "queue_ms_p95":350,"sources":["development-issues","market-voc"]}
 ```
 
+이 historical output의 `elapsed_ms_*` label은 API 응답 field가 아니라 metadata/revision 확인,
+source queue, pool wait와 DB 실행을 포함한 `QueryService.query` 전체 wall-clock이었다. 이후 load
+harness는 `service_wall_ms_*`와 response `execution_ms_*`를 분리한다.
+
 별도 통합 시나리오는 한 source의 slot이 찬 동안 다른 source query가 완료되는지,
 queue timeout, client/operator cancel, rollback 후 connection 재사용, 1,000-row truncation,
 1 MiB byte 상한, plan rejection과 statement timeout을 검증한다. 부하 측정은 다른 DB stress

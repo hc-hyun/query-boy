@@ -59,7 +59,10 @@ async def test_interactive_budget_under_representative_local_load() -> None:
             for source_id, sql in cases.items()
         ]
         results = await asyncio.gather(*queries)
-        elapsed = [duration for _source_id, duration, _result in results]
+        service_wall = [duration for _source_id, duration, _result in results]
+        execution = [
+            int(result["elapsed_ms"]) for _source_id, _duration, result in results
+        ]
         queue = [int(result["queue_ms"]) for _source_id, _duration, result in results]
         plan_costs = [
             float(result["plan_summary"]["total_cost"])  # type: ignore[index]
@@ -68,9 +71,12 @@ async def test_interactive_budget_under_representative_local_load() -> None:
         summary = {
             "queries": len(results),
             "sources": sorted(cases),
-            "elapsed_ms_p50": _percentile(elapsed, 0.50),
-            "elapsed_ms_p95": _percentile(elapsed, 0.95),
-            "elapsed_ms_max": max(elapsed),
+            "service_wall_ms_p50": _percentile(service_wall, 0.50),
+            "service_wall_ms_p95": _percentile(service_wall, 0.95),
+            "service_wall_ms_max": max(service_wall),
+            "execution_ms_p50": _percentile(execution, 0.50),
+            "execution_ms_p95": _percentile(execution, 0.95),
+            "execution_ms_max": max(execution),
             "queue_ms_p95": _percentile(queue, 0.95),
             "queue_ms_max": max(queue),
             "plan_total_cost_max": max(plan_costs),
@@ -79,7 +85,8 @@ async def test_interactive_budget_under_representative_local_load() -> None:
 
         assert all(result["status"] == "ok" for _source_id, _duration, result in results)
         assert all(int(result["row_count"]) > 0 for _source_id, _duration, result in results)
-        assert max(elapsed) < 8_000
+        assert max(service_wall) < 8_000
+        assert max(execution) < 8_000
         assert max(queue) <= 1_000
         assert max(plan_costs) <= 100_000
     finally:

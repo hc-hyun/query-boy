@@ -323,6 +323,67 @@ async def test_drain_cancels_active_and_queued_admitted_queries() -> None:
 
 
 @pytest.mark.asyncio
+async def test_drain_cancels_admitted_query_waiting_for_pool_connection() -> None:
+    operations.reset()
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+    source = replace(
+        source,
+        budget=replace(source.budget, max_concurrent_queries=1),
+    )
+    executor = PostgresQueryExecutor()
+    lease_waiting = asyncio.Event()
+    lease_released = asyncio.Event()
+
+    class FakeConnection:
+        pass
+
+    class ConnectionContext:
+        async def __aenter__(self) -> FakeConnection:
+            lease_waiting.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                lease_released.set()
+            raise AssertionError("pool lease unexpectedly acquired")
+
+        async def __aexit__(self, *_args: object) -> None:
+            pass
+
+    class FakePool:
+        def connection(self, *, timeout: float) -> ConnectionContext:
+            assert timeout > 0
+            return ConnectionContext()
+
+    async def get_pool(_source: SourceProfile) -> FakePool:
+        return FakePool()
+
+    executor._get_pool = get_pool  # type: ignore[method-assign]
+    pending = asyncio.create_task(
+        executor.execute(
+            source,
+            "SELECT 1",
+            "test-revision",
+            ValidatedSql("fingerprint", (), (), ()),
+        )
+    )
+    try:
+        await asyncio.wait_for(lease_waiting.wait(), 1)
+        await asyncio.wait_for(executor.drain(1), 2)
+
+        with pytest.raises(QueryUnavailableError):
+            await asyncio.wait_for(pending, 1)
+        assert lease_released.is_set()
+        assert executor._inflight == set()
+        assert not executor._semaphores[source.source_id].locked()
+    finally:
+        if not pending.done():
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+        operations.reset()
+
+
+@pytest.mark.asyncio
 async def test_client_disconnect_cancels_active_query() -> None:
     cancelled = asyncio.Event()
 
