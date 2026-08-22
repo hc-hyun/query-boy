@@ -101,6 +101,7 @@ def build_app(
 ) -> FastAPI:
     operations.reset()
     registry = registry or SourceRegistry.load(runtime_config.source_directory, runtime_config.budget_file)
+    operations.reconcile_sources(registry.source_ids())
     catalog = catalog or PostgresCatalog()
     source_ids = [source["source_id"] for source in registry.list()]
     verified = VerifiedQueryRegistry.load(
@@ -180,13 +181,12 @@ def build_app(
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         reload_task: asyncio.Task[None] | None = None
-        if source_reloader is not None and source_store is not None:
-            stored_verified = await source_store.verified_revision_map()
-            for source_id, revisions in stored_verified.items():
-                verified_revisions[source_id] = (
-                    verified_revisions.get(source_id, frozenset()) | revisions
-                )
+        if source_reloader is not None:
+            operations.set_component_health("source_reload", "initializing")
             await source_reloader.sync()
+        operations.reconcile_sources(registry.source_ids())
+        await _probe_registered_sources(registry, metadata)
+        if source_reloader is not None:
             reload_task = asyncio.create_task(
                 _reload_sources(source_reloader, runtime_config.source_reload_interval_ms)
             )
@@ -323,7 +323,7 @@ def build_app(
     async def readiness() -> JSONResponse:
         status = operations.public_status()
         return JSONResponse(
-            status_code=200 if status == "ready" else 503,
+            status_code=200 if status in {"ready", "degraded"} else 503,
             content={"status": status},
         )
 
@@ -335,6 +335,7 @@ def build_app(
             "status": operations.public_status(),
             "accepting": snapshot["accepting"],
             "sources": snapshot["sources"],
+            "components": snapshot["components"],
         }
 
     @app.get("/admin/metrics")
@@ -518,3 +519,24 @@ async def _reload_sources(reloader: SourceReloader, interval_ms: int) -> None:
     while True:
         await asyncio.sleep(interval_ms / 1_000)
         await reloader.sync()
+
+
+async def _probe_registered_sources(
+    registry: SourceRegistry,
+    metadata: MetadataService,
+) -> None:
+    async def probe(source_id: str) -> None:
+        source = registry.get(source_id)
+        if source is None:
+            return
+        try:
+            async with asyncio.timeout(
+                max(1, source.budget.metadata_statement_timeout_ms) / 1_000
+            ):
+                await metadata.get_published(source_id)
+        except Exception:
+            operations.increment("startup_metadata_probe_failed", source_id)
+            operations.set_source_health(source_id, "unavailable")
+            logger.exception("startup_metadata_probe_failed source_id=%s", source_id)
+
+    await asyncio.gather(*(probe(source_id) for source_id in registry.source_ids()))

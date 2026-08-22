@@ -14,6 +14,7 @@ from query_man.errors import SourceGenerationConflictError as SourceGenerationCo
 from query_man.metadata import MetadataService
 from query_man.metadata_store import MetadataStore
 from query_man.models import BudgetProfile, CatalogProvider, PreparedMetadata, SourceProfile
+from query_man.operations import operations
 from query_man.quality_level import assess_quality_level
 from query_man.query import QueryService
 from query_man.registry import (
@@ -119,23 +120,33 @@ class SourceReloader:
                 self._source_store.verified_revision_map(),
             )
         except Exception:
+            operations.increment("source_reload_scan_failed")
+            operations.set_component_health("source_reload", "unavailable")
             logger.exception("source_reload_scan_failed")
             return
         for source_id, revisions in stored_verified.items():
             self._verified_revisions[source_id] = (
                 self._verified_revisions.get(source_id, frozenset()) | revisions
             )
+        apply_failed = False
         for record in records:
             if self._applied.get(record.source_id) == record:
                 continue
             try:
                 await self.apply(record)
             except Exception:
+                apply_failed = True
+                operations.increment("source_reload_apply_failed", record.source_id)
                 logger.exception(
                     "source_reload_rejected source_id=%s generation=%s",
                     record.source_id,
                     record.generation,
                 )
+        operations.reconcile_sources(self._registry.source_ids())
+        operations.set_component_health(
+            "source_reload",
+            "unavailable" if apply_failed else "healthy",
+        )
 
     async def apply(self, record: StoredSource) -> SourceProfile | None:
         async with self._lock:
@@ -146,18 +157,24 @@ class SourceReloader:
                 if record.state_version == current.state_version:
                     if record != current:
                         raise SourceGenerationConflictError
-                    return self._registry.get(record.source_id) if record.enabled else None
+                    profile = self._registry.get(record.source_id) if record.enabled else None
+                    operations.reconcile_sources(self._registry.source_ids())
+                    return profile
             if not record.enabled:
                 await self._invalidate(record.source_id)
                 self._registry.remove(record.source_id)
                 self._metadata.invalidate(record.source_id)
                 self._applied[record.source_id] = record
+                operations.reconcile_sources(self._registry.source_ids())
                 return None
             profile = await self.validate(record)
             await self._invalidate(record.source_id)
             self._registry.upsert(profile)
             self._metadata.invalidate(record.source_id)
             self._applied[record.source_id] = record
+            operations.reconcile_sources(self._registry.source_ids())
+            operations.set_source_health(record.source_id, "initializing")
+            await self._probe(profile)
             return profile
 
     async def validate(self, record: StoredSource) -> SourceProfile:
@@ -205,6 +222,20 @@ class SourceReloader:
     async def _invalidate(self, source_id: str) -> None:
         for invalidator in self._invalidators:
             await invalidator.invalidate(source_id)
+
+    async def _probe(self, source: SourceProfile) -> None:
+        try:
+            async with asyncio.timeout(
+                max(1, source.budget.metadata_statement_timeout_ms) / 1_000
+            ):
+                await self._metadata.get_published(source.source_id)
+        except Exception:
+            operations.increment("source_reload_metadata_probe_failed", source.source_id)
+            operations.set_source_health(source.source_id, "unavailable")
+            logger.exception(
+                "source_reload_metadata_probe_failed source_id=%s",
+                source.source_id,
+            )
 
 
 class SourceAdminService:
@@ -432,12 +463,13 @@ class SourceAdminService:
             catalog,
             verified_revisions=self._verified_revisions,
         )
-        try:
-            return await service.get_published(source.source_id)
-        except Exception as error:
-            raise SourceValidationError from error
-        finally:
-            await catalog.close()
+        with operations.suppress_source_health_updates():
+            try:
+                return await service.get_published(source.source_id)
+            except Exception as error:
+                raise SourceValidationError from error
+            finally:
+                await catalog.close()
 
 
 def _connection_identity(manifest: Mapping[str, object]) -> tuple[object, ...]:

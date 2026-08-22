@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
@@ -10,6 +13,7 @@ from query_man.access import AccessPolicy
 from query_man.app import build_app
 from query_man.models import CatalogSnapshot, SourceProfile
 from query_man.query import QueryExecutor
+from query_man.registry import SourceRegistry
 from query_man.runtime_config import RuntimeConfig
 from query_man.sql_validation import ValidatedSql
 from tests.helpers import ROOT_DIRECTORY, load_test_registry, minimal_development_snapshot
@@ -34,6 +38,14 @@ class ReturningCatalog(NeverCalledCatalog):
 
     async def load(self, _source: SourceProfile) -> CatalogSnapshot:
         return self.snapshot
+
+
+class PartiallyHangingCatalog(ReturningCatalog):
+    async def load(self, source: SourceProfile) -> CatalogSnapshot:
+        if source.source_id == "development-issues":
+            return self.snapshot
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
 
 
 class RecordingQueryExecutor:
@@ -120,22 +132,83 @@ async def test_lists_sources_without_connection_information() -> None:
 @pytest.mark.asyncio
 async def test_public_readiness_hides_inventory_and_operator_metrics_are_detailed() -> None:
     async with client(ReturningCatalog(minimal_development_snapshot())) as session:
-        ready = await session.get("/ready")
+        initializing = await session.get("/ready")
         await session.post(
             "/meta",
             json={"source_id": "development-issues", "question": "최근 문제"},
         )
+        degraded = await session.get("/ready")
         detailed = await session.get("/admin/health")
         metrics = await session.get("/admin/metrics")
 
-    assert ready.status_code == 200
-    assert ready.json() == {"status": "ready"}
-    assert "development-issues" not in ready.text
+    assert initializing.status_code == 503
+    assert initializing.json() == {"status": "initializing"}
+    assert degraded.status_code == 200
+    assert degraded.json() == {"status": "degraded"}
+    assert "development-issues" not in degraded.text
+    assert detailed.json()["status"] == "degraded"
     assert detailed.json()["sources"]["development-issues"] == "healthy"
     assert any(
         metric["name"] == "metadata_refresh_succeeded"
         for metric in metrics.json()["metrics"]
     )
+
+
+@pytest.mark.asyncio
+async def test_startup_probe_is_bounded_and_keeps_usable_gateway_degraded() -> None:
+    loaded = load_test_registry()
+    registry = SourceRegistry(
+        [
+            replace(
+                source,
+                budget=replace(source.budget, metadata_statement_timeout_ms=20),
+            )
+            for source_id in ("development-issues", "market-voc")
+            if (source := loaded.get(source_id)) is not None
+        ]
+    )
+    app = build_app(
+        runtime_config(),
+        registry=registry,
+        catalog=PartiallyHangingCatalog(minimal_development_snapshot()),
+    )
+
+    started = time.monotonic()
+    async with app.router.lifespan_context(app):
+        startup_elapsed = time.monotonic() - started
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://test",
+        ) as session:
+            ready = await session.get("/ready")
+            detailed = await session.get("/admin/health")
+
+    assert startup_elapsed < 0.5
+    assert ready.status_code == 200
+    assert ready.json() == {"status": "degraded"}
+    assert detailed.json()["sources"] == {
+        "development-issues": "healthy",
+        "market-voc": "unavailable",
+    }
+
+
+@pytest.mark.asyncio
+async def test_startup_probe_returns_unavailable_when_every_source_fails() -> None:
+    app = build_app(
+        runtime_config(),
+        registry=load_test_registry(),
+        catalog=FailingCatalog(),
+    )
+
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://test",
+        ) as session:
+            ready = await session.get("/ready")
+
+    assert ready.status_code == 503
+    assert ready.json() == {"status": "unavailable"}
 
 
 @pytest.mark.asyncio

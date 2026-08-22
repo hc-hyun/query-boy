@@ -5,6 +5,9 @@ import logging
 import re
 import threading
 from collections import defaultdict
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import Any
 
@@ -13,6 +16,10 @@ _SECRET_ASSIGNMENT = re.compile(
     r"(?i)\b(password|credential|token|secret)\s*[=:]\s*[^\s,;]+"
 )
 _SQL_LITERAL = re.compile(r"'(?:''|[^'])*'")
+_source_health_updates_suppressed: ContextVar[bool] = ContextVar(
+    "query_man_source_health_updates_suppressed",
+    default=False,
+)
 
 
 class SafeJsonFormatter(logging.Formatter):
@@ -48,6 +55,8 @@ class OperationalState:
         self._counters: defaultdict[tuple[str, str | None], int] = defaultdict(int)
         self._totals: defaultdict[tuple[str, str | None], float] = defaultdict(float)
         self._source_health: dict[str, str] = {}
+        self._active_sources: set[str] | None = None
+        self._component_health: dict[str, str] = {}
         self._accepting = True
 
     def reset(self) -> None:
@@ -55,6 +64,8 @@ class OperationalState:
             self._counters.clear()
             self._totals.clear()
             self._source_health.clear()
+            self._active_sources = None
+            self._component_health.clear()
             self._accepting = True
 
     def increment(self, name: str, source_id: str | None = None, value: int = 1) -> None:
@@ -67,8 +78,33 @@ class OperationalState:
             self._totals[(f"{name}_sum", source_id)] += value
 
     def set_source_health(self, source_id: str, status: str) -> None:
+        if _source_health_updates_suppressed.get():
+            return
         with self._lock:
+            if self._active_sources is not None and source_id not in self._active_sources:
+                return
             self._source_health[source_id] = status
+
+    def reconcile_sources(self, source_ids: Iterable[str]) -> None:
+        active = set(source_ids)
+        with self._lock:
+            self._active_sources = active
+            self._source_health = {
+                source_id: self._source_health.get(source_id, "initializing")
+                for source_id in active
+            }
+
+    def set_component_health(self, component: str, status: str) -> None:
+        with self._lock:
+            self._component_health[component] = status
+
+    @contextmanager
+    def suppress_source_health_updates(self) -> Iterator[None]:
+        token = _source_health_updates_suppressed.set(True)
+        try:
+            yield
+        finally:
+            _source_health_updates_suppressed.reset(token)
 
     def set_accepting(self, accepting: bool) -> None:
         with self._lock:
@@ -78,7 +114,23 @@ class OperationalState:
         with self._lock:
             if not self._accepting:
                 return "shutting_down"
-            if any(status == "unavailable" for status in self._source_health.values()):
+            if not self._source_health:
+                return "initializing" if self._active_sources is None else "unavailable"
+            usable = any(
+                status in {"healthy", "stale"}
+                for status in self._source_health.values()
+            )
+            if not usable:
+                if all(
+                    status == "initializing"
+                    for status in self._source_health.values()
+                ):
+                    return "initializing"
+                return "unavailable"
+            if (
+                any(status != "healthy" for status in self._source_health.values())
+                or any(status != "healthy" for status in self._component_health.values())
+            ):
                 return "degraded"
             return "ready"
 
@@ -103,6 +155,7 @@ class OperationalState:
             return {
                 "accepting": self._accepting,
                 "sources": dict(sorted(self._source_health.items())),
+                "components": dict(sorted(self._component_health.items())),
                 "metrics": metrics,
             }
 

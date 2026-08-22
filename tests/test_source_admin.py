@@ -9,6 +9,7 @@ import yaml
 from query_man.errors import SourceValidationError
 from query_man.metadata import MetadataService
 from query_man.models import CatalogSnapshot, PreparedMetadata, SourceProfile
+from query_man.operations import operations
 from query_man.query import QueryService
 from query_man.registry import (
     RegistryConfigurationError,
@@ -453,6 +454,128 @@ async def test_failed_staging_preserves_current_source() -> None:
 
     assert store.active["third-source"] == before
     assert registry.get("third-source").connection.password == "first-secret"  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+async def test_failed_staging_does_not_pollute_production_health() -> None:
+    operations.reset()
+    try:
+        catalog_factory = SwitchingCatalogFactory()
+        admin, _registry, _store, _invalidator, _cipher, _reloader = _services(
+            catalog_factory
+        )
+        await admin.publish("third-source", _manifest(), "first-secret")
+        assert operations.snapshot()["sources"] == {"third-source": "healthy"}
+
+        incomplete = minimal_development_snapshot()
+        incomplete.relations = incomplete.relations[:1]
+        catalog_factory.snapshot = incomplete
+        with pytest.raises(SourceValidationError):
+            await admin.publish("third-source", _manifest(), "bad-update-secret")
+
+        assert operations.snapshot()["sources"] == {"third-source": "healthy"}
+        assert operations.public_status() == "ready"
+    finally:
+        operations.reset()
+
+
+@pytest.mark.asyncio
+async def test_dynamic_apply_and_deactivate_reconcile_source_inventory() -> None:
+    operations.reset()
+    try:
+        admin, _registry, _store, _invalidator, _cipher, _reloader = _services()
+
+        await admin.publish("third-source", _manifest(), "first-secret")
+        assert operations.snapshot()["sources"] == {"third-source": "healthy"}
+
+        await admin.deactivate("third-source")
+        operations.set_source_health("third-source", "unavailable")
+        assert operations.snapshot()["sources"] == {}
+        assert operations.public_status() == "unavailable"
+
+        await admin.rollback("third-source", 1)
+        assert operations.snapshot()["sources"] == {"third-source": "healthy"}
+        assert operations.public_status() == "ready"
+    finally:
+        operations.reset()
+
+
+@pytest.mark.asyncio
+async def test_reload_scan_failure_degrades_but_keeps_usable_inventory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operations.reset()
+    try:
+        admin, _registry, store, _invalidator, _cipher, reloader = _services()
+        await admin.publish("third-source", _manifest(), "first-secret")
+
+        async def fail_scan() -> list[StoredSource]:
+            raise RuntimeError("control database unavailable")
+
+        successful_scan = store.list_active
+        monkeypatch.setattr(store, "list_active", fail_scan)
+        await reloader.sync()
+
+        snapshot = operations.snapshot()
+        assert snapshot["sources"] == {"third-source": "healthy"}
+        assert snapshot["components"] == {"source_reload": "unavailable"}
+        assert any(
+            metric["name"] == "source_reload_scan_failed"
+            and metric["value"] == 1
+            for metric in snapshot["metrics"]
+        )
+        assert operations.public_status() == "degraded"
+
+        monkeypatch.setattr(store, "list_active", successful_scan)
+        await reloader.sync()
+        assert operations.snapshot()["components"] == {"source_reload": "healthy"}
+        assert operations.public_status() == "ready"
+    finally:
+        operations.reset()
+
+
+@pytest.mark.asyncio
+async def test_reload_apply_failure_keeps_component_degraded_until_clean_scan() -> None:
+    operations.reset()
+    try:
+        admin, registry, store, _invalidator, _cipher, reloader = _services()
+        await admin.publish("third-source", _manifest(), "first-secret")
+        current = store.active["third-source"]
+        connection = current.manifest["connection"]
+        assert isinstance(connection, dict)
+        store.active["third-source"] = replace(
+            current,
+            manifest={
+                **current.manifest,
+                "connection": {
+                    **connection,
+                    "host": "alternate-database.example",
+                },
+            },
+            state_version=current.state_version + 1,
+        )
+
+        await reloader.sync()
+
+        snapshot = operations.snapshot()
+        assert registry.get("third-source") is not None
+        assert registry.get("third-source").connection.host == "127.0.0.1"  # type: ignore[union-attr]
+        assert snapshot["sources"] == {"third-source": "healthy"}
+        assert snapshot["components"] == {"source_reload": "unavailable"}
+        assert any(
+            metric["name"] == "source_reload_apply_failed"
+            and metric["source_id"] == "third-source"
+            and metric["value"] == 1
+            for metric in snapshot["metrics"]
+        )
+        assert operations.public_status() == "degraded"
+
+        store.active["third-source"] = current
+        await reloader.sync()
+        assert operations.snapshot()["components"] == {"source_reload": "healthy"}
+        assert operations.public_status() == "ready"
+    finally:
+        operations.reset()
 
 
 @pytest.mark.asyncio
