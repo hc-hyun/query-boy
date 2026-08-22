@@ -198,5 +198,5 @@ docker compose up -d
 - [x] invariant validation과 reader smoke test
 - [x] source registry 구현
 - [x] question-scoped metadata retrieval
-- [ ] SQL AST validation과 guarded query execution
-- [ ] MCP server와 공통 Text-to-SQL Skill
+- [ ] SQL AST validation과 guarded query execution ([roadmap M1](implementation-roadmap.md#recommended-milestones))
+- [ ] MCP server와 공통 Text-to-SQL Skill ([roadmap M2](implementation-roadmap.md#recommended-milestones))

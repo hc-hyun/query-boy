@@ -38,7 +38,8 @@ docker compose down
 데이터 손실을 확인한 후 `docker compose down -v`를 사용합니다.
 
 전체 설계 기준은 [docs/architecture.md](docs/architecture.md), 현재 MVP 범위는
-[docs/mvp.md](docs/mvp.md)를 참고합니다.
+[docs/mvp.md](docs/mvp.md), 최종 목적 기반 구현 TODO는
+[docs/implementation-roadmap.md](docs/implementation-roadmap.md)를 참고합니다.
 
 ## Metadata API
 

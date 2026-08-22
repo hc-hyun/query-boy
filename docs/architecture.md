@@ -166,6 +166,9 @@ Schema drift로 overlay가 깨지면 신규 revision 발행을 중단하고 마�
 
 ## Open Decisions
 
+구현 순서와 완료 조건은 [implementation-roadmap.md](implementation-roadmap.md)의
+안정적인 TODO ID로 관리한다.
+
 - PostgreSQL AST parser와 canonical query fingerprint 구현
 - Budget profile의 초기 hard limit
 - Reader role, RLS와 함수 allowlist 정책
