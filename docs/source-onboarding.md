@@ -94,6 +94,11 @@ Registry와 metadata refresh는 다음 조건을 만족하지 않으면 source�
 - 승인된 join 양쪽 column이 존재하고 data type이 같음
 - Relation/column 수와 metadata response가 budget 상한 안에 있음
 
+Manifest의 `minimum_quality_level`은 publish 가능한 최소 수준을 선언한다. `L0`는 물리
+catalog 기반 best-effort, `L1`은 모든 공개 relation의 설명·grain과 시간 역할이 완성된
+상태, `L2`는 현재 metadata revision과 일치하는 verified query 계약까지 통과한 상태다.
+요구 수준에 미달한 refresh나 rollback은 거부되며 기존 active revision은 유지된다.
+
 Catalog refresh가 일시 실패하면 제한된 stale 기간 동안 마지막 정상 revision을
 `stale` 상태와 함께 반환하고 backoff 후 다시 시도한다. 정상 snapshot이 한 번도
 없거나 stale 상한을 넘었거나 overlay가 현재 schema와 맞지 않으면 `/meta`는

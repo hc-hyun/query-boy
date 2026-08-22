@@ -24,6 +24,8 @@ from query_man.revision import create_metadata_revision
 class MetadataStore(Protocol):
     async def get_active(self, source: SourceProfile) -> PreparedMetadata | None: ...
 
+    async def get_revision(self, source: SourceProfile, revision: str) -> PreparedMetadata: ...
+
     async def publish(self, source: SourceProfile, value: PreparedMetadata) -> PreparedMetadata: ...
 
     async def activate(self, source: SourceProfile, revision: str) -> PreparedMetadata: ...
@@ -103,6 +105,19 @@ class PostgresMetadataStore:
         if row is None:
             return None
         return _decode(source, str(row["revision"]), row["snapshot"])
+
+    async def get_revision(self, source: SourceProfile, revision: str) -> PreparedMetadata:
+        pool = await self._get_pool()
+        async with pool.connection() as connection:
+            cursor = await connection.execute(
+                "SELECT snapshot FROM control.metadata_snapshots "
+                "WHERE source_id = %s AND revision = %s",
+                (source.source_id, revision),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            raise StoredMetadataNotFoundError("Stored metadata revision was not found")
+        return _decode(source, revision, row["snapshot"])
 
     async def publish(self, source: SourceProfile, value: PreparedMetadata) -> PreparedMetadata:
         document = _encode(value.snapshot)

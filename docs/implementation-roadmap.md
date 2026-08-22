@@ -107,7 +107,7 @@ Metadata 응답은 구현되어 있지만 architecture의 전체 physical catalo
 - [x] `META-06` Refresh 결과를 원자적으로 publish하고 이전 정상 revision으로 rollback할 수 있게 한다.
 - [x] `META-07` Verified question/SQL, 기대 relation, 기대 결과 invariant 저장 모델을 구현한다.
 - [x] `META-08` Verified query가 참조하는 revision과 현재 schema drift를 검증한다.
-- [ ] `META-09` L0/L1/L2 source 품질 수준과 publish gate를 자동 판정한다.
+- [x] `META-09` L0/L1/L2 source 품질 수준과 publish gate를 자동 판정한다.
 - [x] `META-10` Golden question precision, unsupported/clarification recall과 context byte 크기를 CI 지표로 관리한다.
 
 ## 5. MCP And Text-to-SQL Workflow

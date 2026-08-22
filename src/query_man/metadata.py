@@ -4,7 +4,7 @@ import asyncio
 import json
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 
 from query_man.errors import MetadataUnavailableError, SourceNotFoundError
@@ -23,6 +23,7 @@ from query_man.models import (
     RelationSemantic,
     SourceProfile,
 )
+from query_man.quality_level import QualityLevelReport, assess_quality_level
 from query_man.registry import SourceRegistry
 from query_man.relevance import (
     RankedRelation,
@@ -53,6 +54,7 @@ class MetadataService:
         refresh_retry_ms: int = 5_000,
         now: Callable[[], int] | None = None,
         store: MetadataStore | None = None,
+        verified_revisions: Mapping[str, frozenset[str]] | None = None,
     ) -> None:
         self._registry = registry
         self._catalog = catalog
@@ -61,6 +63,7 @@ class MetadataService:
         self._refresh_retry_ms = refresh_retry_ms
         self._now = now or (lambda: int(time.time() * 1000))
         self._store = store
+        self._verified_revisions = verified_revisions
         self._cache: dict[str, _CacheEntry] = {}
         self._refreshes: dict[str, asyncio.Task[PreparedMetadata]] = {}
         self._retrieval_indexes: dict[tuple[str, str], RelationRetrievalIndex] = {}
@@ -70,6 +73,7 @@ class MetadataService:
         if source is None:
             raise SourceNotFoundError
         prepared, stale = await self._get_prepared(source)
+        quality = self._require_quality(source, prepared)
         index_key = (source.source_id, prepared.revision)
         retrieval = self._retrieval_indexes.get(index_key)
         if retrieval is None:
@@ -111,6 +115,7 @@ class MetadataService:
             "question": question,
             "metadata_revision": prepared.revision,
             "snapshot_status": "stale" if stale else "fresh",
+            "quality_level": quality.level,
             "answerability": _build_answerability(question, source.semantic_overlay.question_rules, ambiguities),
             "relations": relation_responses,
             "joins": [_to_join_response(join) for join in joins],
@@ -144,6 +149,7 @@ class MetadataService:
         if source is None:
             raise SourceNotFoundError
         prepared, _stale = await self._get_prepared(source)
+        self._require_quality(source, prepared)
         return prepared
 
     async def rollback(self, source_id: str, revision: str) -> PreparedMetadata:
@@ -152,6 +158,11 @@ class MetadataService:
             raise SourceNotFoundError
         if self._store is None:
             raise MetadataUnavailableError
+        try:
+            candidate = await self._store.get_revision(source, revision)
+        except Exception as error:
+            raise MetadataUnavailableError from error
+        self._require_quality(source, candidate)
         try:
             value = await self._store.activate(source, revision)
         except Exception as error:
@@ -229,6 +240,7 @@ class MetadataService:
         if issues:
             raise MetadataUnavailableError({"contract_violations": issues})
         value = PreparedMetadata(snapshot, create_metadata_revision(source, snapshot))
+        self._require_quality(source, value)
         if self._store is not None:
             value = await self._store.publish(source, value)
         self._cache_value(source.source_id, value)
@@ -242,6 +254,23 @@ class MetadataService:
             expires_at=loaded_at + self._cache_ttl_ms,
             next_refresh_at=loaded_at + self._cache_ttl_ms,
         )
+
+    def _require_quality(
+        self,
+        source: SourceProfile,
+        value: PreparedMetadata,
+    ) -> QualityLevelReport:
+        report = assess_quality_level(
+            source,
+            value.snapshot,
+            value.revision,
+            self._verified_revisions or {},
+        )
+        if self._verified_revisions is not None and not report.publishable:
+            raise MetadataUnavailableError(
+                {"contract_violations": list(report.violations)}
+            )
+        return report
 
 
 def _validate_snapshot(source: SourceProfile, snapshot: CatalogSnapshot) -> list[str]:

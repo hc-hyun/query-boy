@@ -91,6 +91,17 @@ class VerifiedQueryRegistry:
     def __init__(self, queries: list[VerifiedQuery]) -> None:
         self.queries = tuple(queries)
 
+    def revision_map(self) -> dict[str, frozenset[str]]:
+        source_ids = {query.source_id for query in self.queries}
+        return {
+            source_id: frozenset(
+                query.metadata_revision
+                for query in self.queries
+                if query.source_id == source_id
+            )
+            for source_id in source_ids
+        }
+
     @classmethod
     def load(cls, path: Path, known_sources: set[str]) -> VerifiedQueryRegistry:
         try:

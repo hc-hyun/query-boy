@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from query_man.catalog import PostgresCatalog
 from query_man.metadata import MetadataService
 from query_man.registry import SourceRegistry
+from query_man.verified import VerifiedQueryRegistry
 
 Identifier = Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,99}$")]
 RelationName = Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_$]*\.[A-Za-z_][A-Za-z0-9_$]*$")]
@@ -188,8 +189,16 @@ async def _run(root: Path) -> None:
         root / "config" / "quality-evaluation.yaml",
         {source["source_id"] for source in registry.list()},
     )
+    verified = VerifiedQueryRegistry.load(
+        root / "config" / "verified-queries.yaml",
+        {source["source_id"] for source in registry.list()},
+    )
     catalog = PostgresCatalog()
-    metadata = MetadataService(registry, catalog)
+    metadata = MetadataService(
+        registry,
+        catalog,
+        verified_revisions=verified.revision_map(),
+    )
     try:
         try:
             report = await evaluation.evaluate(metadata)

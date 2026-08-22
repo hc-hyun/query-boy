@@ -16,6 +16,7 @@ allowed_schemas:
 allowed_relation_kinds:
   - view
 budget_profile: interactive
+minimum_quality_level: L2
 
 semantic_overlay:
   default_relation: ai.voc_overview

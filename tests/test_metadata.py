@@ -62,6 +62,9 @@ class MemoryMetadataStore:
         revision = self.active.get(source.source_id)
         return None if revision is None else self.values[source.source_id][revision]
 
+    async def get_revision(self, source: SourceProfile, revision: str) -> PreparedMetadata:
+        return self.values[source.source_id][revision]
+
     async def publish(self, source: SourceProfile, value: PreparedMetadata) -> PreparedMetadata:
         self.values.setdefault(source.source_id, {})[value.revision] = value
         if source.source_id not in self.pinned:

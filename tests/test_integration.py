@@ -443,6 +443,7 @@ async def test_streamable_http_mcp_runs_all_golden_queries() -> None:
                 )
                 context_body = context.structured_content
                 assert context_body is not None
+                assert context_body["quality_level"] == "L2"
                 assert len(json.dumps(context_body, default=str).encode()) <= (
                     source.budget.max_metadata_response_bytes
                 )

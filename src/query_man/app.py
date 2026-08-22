@@ -23,6 +23,7 @@ from query_man.models import CatalogProvider
 from query_man.query import PostgresQueryExecutor, QueryExecutor, QueryService
 from query_man.registry import SourceRegistry
 from query_man.runtime_config import RuntimeConfig
+from query_man.verified import VerifiedQueryRegistry
 
 logger = logging.getLogger("query_man")
 _current_caller: contextvars.ContextVar[CallerContext | None] = contextvars.ContextVar(
@@ -57,6 +58,12 @@ def build_app(
 ) -> FastAPI:
     registry = registry or SourceRegistry.load(runtime_config.source_directory, runtime_config.budget_file)
     catalog = catalog or PostgresCatalog()
+    source_ids = [source["source_id"] for source in registry.list()]
+    verified = VerifiedQueryRegistry.load(
+        runtime_config.source_directory.parent / "verified-queries.yaml",
+        set(source_ids),
+    )
+    verified_revisions = verified.revision_map()
     metadata = MetadataService(
         registry,
         catalog,
@@ -68,10 +75,10 @@ def build_app(
             if runtime_config.control_dsn is not None
             else None
         ),
+        verified_revisions=verified_revisions,
     )
     query_executor = query_executor or PostgresQueryExecutor()
     query_service = QueryService(registry, metadata, query_executor)
-    source_ids = [source["source_id"] for source in registry.list()]
     if access_policy is None:
         if runtime_config.access_policy_file is not None:
             access_policy = AccessPolicy.load(runtime_config.access_policy_file, source_ids)

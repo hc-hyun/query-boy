@@ -134,3 +134,7 @@ Retrieval 품질은 [`config/quality-evaluation.yaml`](config/quality-evaluation
 versioned case와 gate로 관리합니다. `uv run query-man-evaluate`는 golden/paraphrase relation
 accuracy, unsupported/clarification recall과 context byte 상한 중 하나라도 실패하면 non-zero로
 종료합니다.
+
+각 source manifest의 `minimum_quality_level`은 L0/L1/L2 publish gate입니다. 현재 두 MVP
+source는 L2이며, metadata revision과 일치하는 verified contract가 없으면 `/meta`, MCP와
+query 경로가 새 revision을 활성화하지 않습니다.

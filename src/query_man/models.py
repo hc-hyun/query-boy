@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
 RelationRole = Literal["event", "comment", "population", "dimension", "other"]
+QualityLevel = Literal["L0", "L1", "L2"]
 AllowedRelationKind = Literal["table", "partitioned_table", "view", "materialized_view"]
 CatalogRelationKind = Literal["table", "partitioned_table", "view", "materialized_view", "foreign_table"]
 Nullability = bool | Literal["unknown"]
@@ -140,6 +141,7 @@ class SourceProfile:
     allowed_relation_kinds: list[AllowedRelationKind]
     budget: BudgetProfile
     semantic_overlay: SemanticOverlay
+    minimum_quality_level: QualityLevel = "L0"
 
 
 @dataclass

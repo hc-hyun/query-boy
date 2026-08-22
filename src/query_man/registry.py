@@ -17,6 +17,7 @@ from query_man.models import (
     GrainDefinition,
     JoinDefinition,
     MeasureDefinition,
+    QualityLevel,
     QuestionRule,
     RelationSemantic,
     ResolvedConnection,
@@ -227,6 +228,7 @@ class _SourceFile(_StrictModel):
     allowed_schemas: list[Identifier] = Field(min_length=1, max_length=20)
     allowed_relation_kinds: list[str] = Field(default_factory=lambda: ["view"], min_length=1, max_length=4)
     budget_profile: Identifier
+    minimum_quality_level: QualityLevel = "L0"
     semantic_overlay: _SemanticOverlay = Field(default_factory=_SemanticOverlay)
 
     @model_validator(mode="after")
@@ -348,6 +350,7 @@ def _resolve_source(
         allowed_relation_kinds=list(dict.fromkeys(parsed.allowed_relation_kinds)),  # type: ignore[arg-type]
         budget=budget,
         semantic_overlay=overlay,
+        minimum_quality_level=parsed.minimum_quality_level,
     )
 
 
