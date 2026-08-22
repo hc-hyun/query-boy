@@ -44,6 +44,11 @@ def test_rejects_ambiguous_authentication_configuration() -> None:
         )
 
 
+def test_rejects_unsupported_trace_log_level() -> None:
+    with pytest.raises(ValueError, match="invalid log level"):
+        load_runtime_config({"QUERY_MAN_LOG_LEVEL": "trace"}, ROOT_DIRECTORY)
+
+
 def test_loads_optional_control_dsn_without_exposing_it_on_validation_error() -> None:
     dsn = "host=control.invalid dbname=query_man user=control password=private-secret"
     loaded = load_runtime_config({"QUERY_MAN_CONTROL_DSN": dsn}, ROOT_DIRECTORY)

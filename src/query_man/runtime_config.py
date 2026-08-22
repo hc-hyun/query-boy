@@ -50,7 +50,7 @@ class _Environment(BaseModel):
     @field_validator("log_level")
     @classmethod
     def valid_log_level(cls, value: str) -> str:
-        allowed = {"critical", "fatal", "error", "warning", "warn", "info", "debug", "trace"}
+        allowed = {"critical", "fatal", "error", "warning", "warn", "info", "debug"}
         if value.lower() not in allowed:
             raise ValueError("invalid log level")
         return value.lower()
