@@ -22,7 +22,8 @@ uv run mypy src           PASS
 ./scripts/apply-db.sh     PASS
 uv run pytest             PASS (unit suite)
 uv run pytest -m integration
-                          PASS (4 integration tests, including live socket and PostgreSQL)
+                          PASS (5 integration tests, including load, live socket and PostgreSQL)
+uv run pytest -m load -s PASS (40 concurrent cross-source queries plus metadata refresh)
 ```
 
 ## Evidence
@@ -41,9 +42,9 @@ uv run pytest -m integration
 | Cancel/rollback | Active four-way cross join cancelled by task and operator query ID, then same source queried again | Cancelled and connection reusable |
 | Disconnect | Uvicorn TCP socket closes while a query is active | ASGI disconnect cancels the application task |
 | Source authorization | Caller allowlist filters `/sources` and denies `/meta`, `/query` before catalog/executor | PASS; denied and unknown source share 404 |
+| Initial budget load | 40 concurrent queries across two sources with metadata refresh | 0 errors; observed queue max 641ms, elapsed max 729ms |
 
 ## Remaining Gaps
 
-- Initial production budget은 반복 부하 시험과 운영 workload 자료가 없어 아직 provisional이다
-  (`DEC-06`).
+- 현재 budget은 local fixture의 초기 hard limit이며 production SLO로 일반화하지 않는다.
 - RLS source는 아직 등록하지 않으며 trusted tenant context와 pool reset 검증이 필요하다.

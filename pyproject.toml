@@ -38,7 +38,10 @@ packages = ["src/query_man"]
 addopts = "-ra -m 'not integration'"
 asyncio_mode = "auto"
 testpaths = ["tests"]
-markers = ["integration: requires the local PostgreSQL services"]
+markers = [
+  "integration: requires the local PostgreSQL services",
+  "load: runs the bounded local load verification",
+]
 
 [tool.ruff]
 target-version = "py312"

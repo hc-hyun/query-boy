@@ -175,15 +175,15 @@ Schema drift로 overlay가 깨지면 신규 revision 발행을 중단하고 마�
   [ADR 0003](decisions/0003-reader-and-resolved-object-policy.md)를 따른다.
 - Caller identity, tenant와 source authorization은
   [ADR 0004](decisions/0004-caller-source-authorization.md)를 따른다.
+- 초기 hard limit, connection budget과 override 정책은
+  [ADR 0005](decisions/0005-initial-query-budgets.md)를 따른다.
 
 ## Open Decisions
 
 구현 순서와 완료 조건은 [implementation-roadmap.md](implementation-roadmap.md)의
 안정적인 TODO ID로 관리한다.
 
-- 부하 테스트에 근거한 production budget hard limit
-- Reader role, RLS와 함수 allowlist 정책
+- RLS source의 trusted tenant session context
 - Schema revision 및 verified query 저장소
 - Wide view를 위한 column-scoped progressive disclosure
 - HTTP application contract를 재사용하는 MCP transport
-- 다중 tenant 환경의 caller identity와 source별 authorization policy

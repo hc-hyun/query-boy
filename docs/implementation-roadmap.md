@@ -55,7 +55,7 @@ Status: Active
 - [x] `DEC-03` Canonical SQL과 query fingerprint 규칙을 명세하고 literal 처리 원칙을 확정한다.
 - [x] `DEC-04` `query` 요청·응답, reason code, truncation, plan summary와 error 계약을 확정한다.
 - [x] `DEC-05` Metadata revision 불일치 시 거부와 context 재조회 흐름을 확정한다.
-- [ ] `DEC-06` 초기 budget hard limit과 source별 override 허용 범위를 부하 테스트 근거로 확정한다.
+- [x] `DEC-06` 초기 budget hard limit과 source별 override 허용 범위를 부하 테스트 근거로 확정한다.
 - [x] `DEC-07` Reader role, RLS, SECURITY DEFINER/INVOKER view와 함수 allowlist 정책을 확정한다.
 - [ ] `DEC-08` MCP transport, 인증 경계와 HTTP application service 재사용 방식을 확정한다.
 - [x] `DEC-09` Caller identity, tenant, source authorization 정책 모델을 확정한다.

@@ -141,7 +141,8 @@ class PostgresCatalog:
                 "row_factory": dict_row,
             },
             min_size=0,
-            max_size=source.budget.max_pool_size,
+            # MetadataService coalesces refreshes per source, so one catalog connection is sufficient.
+            max_size=1,
             timeout=2,
             max_idle=10,
             open=False,
