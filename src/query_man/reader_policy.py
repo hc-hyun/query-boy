@@ -24,6 +24,8 @@ _READER_SESSION_POLICY_QUERY = """
     pg_catalog.current_database() = %s AS database_matches,
     session_user = %s AS user_matches,
     pg_catalog.current_setting('transaction_read_only') = 'on' AS read_only,
+    pg_catalog.current_setting('transaction_isolation') = 'repeatable read'
+      AS repeatable_read,
     pg_catalog.current_setting('default_transaction_read_only') = 'on'
       AS defaults_read_only,
     role.rolcanlogin

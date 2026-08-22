@@ -36,6 +36,7 @@ from query_man.sql_validation import SqlValidationError, ValidatedSql, validate_
 
 audit_logger = logging.getLogger("query_man.audit")
 _RESULT_CURSOR_NAME = "query_man_result"
+_RESULT_FETCH_BATCH_ROWS = 16
 
 _FUNCTION_POLICY_QUERY = """
   SELECT
@@ -516,28 +517,34 @@ class PostgresQueryExecutor:
                 columns = [column.name for column in cursor.description or ()]
                 if len(columns) != len(set(columns)):
                     raise QueryRejectedError("QUERY_DUPLICATE_RESULT_COLUMN")
-                while True:
-                    row = await cursor.fetchone()
-                    if row is None:
-                        break
-                    if len(rows) >= source.budget.max_result_rows:
-                        truncated = True
-                        break
-                    encoded_row = encode_result_value(row)
-                    row_bytes = len(
-                        json.dumps(
-                            encoded_row,
-                            ensure_ascii=False,
-                            separators=(",", ":"),
-                            allow_nan=False,
-                        ).encode("utf-8")
+                while not truncated:
+                    remaining_with_sentinel = source.budget.max_result_rows - len(rows) + 1
+                    batch = await cursor.fetchmany(
+                        min(_RESULT_FETCH_BATCH_ROWS, remaining_with_sentinel)
                     )
-                    separator_bytes = 1 if rows else 0
-                    if result_bytes + separator_bytes + row_bytes > source.budget.max_result_bytes:
-                        truncated = True
+                    if not batch:
                         break
-                    rows.append(encoded_row)
-                    result_bytes += separator_bytes + row_bytes
+                    # ponytail: a small fixed batch bounds pre-accounting memory while avoiding
+                    # one network round trip per result row.
+                    for row in batch:
+                        if len(rows) >= source.budget.max_result_rows:
+                            truncated = True
+                            break
+                        encoded_row = encode_result_value(row)
+                        row_bytes = len(
+                            json.dumps(
+                                encoded_row,
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                                allow_nan=False,
+                            ).encode("utf-8")
+                        )
+                        separator_bytes = 1 if rows else 0
+                        if result_bytes + separator_bytes + row_bytes > source.budget.max_result_bytes:
+                            truncated = True
+                            break
+                        rows.append(encoded_row)
+                        result_bytes += separator_bytes + row_bytes
             finally:
                 try:
                     await cursor.close()
@@ -592,6 +599,8 @@ class PostgresQueryExecutor:
                     "sslmode": "verify-full" if connection.ssl else "disable",
                     "application_name": f"query-man-query:{source.source_id}",
                     "connect_timeout": 2,
+                    # ponytail: explicit BEGIN must not be preceded by psycopg's implicit BEGIN.
+                    "autocommit": True,
                     "row_factory": dict_row,
                 },
                 min_size=0,

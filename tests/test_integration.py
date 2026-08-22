@@ -55,7 +55,9 @@ _SESSION_BUDGET_SELECT = """
       AS temp_file_limit_kb,
     pg_catalog.current_setting('max_parallel_workers_per_gather')::integer
       AS max_parallel_workers_per_gather,
-    pg_catalog.current_setting('jit')::boolean AS jit_enabled
+    pg_catalog.current_setting('jit')::boolean AS jit_enabled,
+    pg_catalog.current_setting('transaction_isolation') AS transaction_isolation,
+    pg_catalog.current_setting('transaction_read_only')::boolean AS transaction_read_only
 """
 
 
@@ -504,12 +506,16 @@ async def test_catalog_and_query_enforce_versioned_session_budget(
             source.budget.max_parallel_workers_per_gather
         ),
         "jit_enabled": source.budget.jit_enabled,
+        "transaction_isolation": "repeatable read",
+        "transaction_read_only": True,
     }
     unsafe_settings = {
         "work_mem_kb": 32_768,
         "temp_file_limit_kb": 131_072,
         "max_parallel_workers_per_gather": 2,
         "jit_enabled": True,
+        "transaction_isolation": "read committed",
+        "transaction_read_only": True,
     }
     admin = await AsyncConnection.connect(
         make_conninfo(

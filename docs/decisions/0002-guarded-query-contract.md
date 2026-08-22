@@ -44,11 +44,12 @@ queue_ms, elapsed_ms, plan_summary
 2. 요청 revision이 현재 revision과 다르면 `409 METADATA_REVISION_MISMATCH`로 거부한다.
 3. ADR 0001의 AST validation으로 현재 snapshot relation allowlist를 검사한다.
 4. Source별 concurrency slot을 제한 시간 안에 획득한다.
-5. Reader connection에서 `BEGIN READ ONLY`와 transaction-local timeout을 적용한다.
-6. Database, session user와 read-only 상태를 재검증한다.
+5. Reader connection에서 명시적인 `REPEATABLE READ READ ONLY` transaction과
+   transaction-local timeout을 적용한다.
+6. Database, session user, isolation과 read-only 상태를 재검증한다.
 7. `EXPLAIN (FORMAT JSON)`의 total cost, 최대 plan rows와 node 수를 profile 상한과 비교한다.
 8. 결과 column 이름이 중복되면 `QUERY_DUPLICATE_RESULT_COLUMN`으로 거부한다.
-9. Named cursor로 bounded fetch하고 row/UTF-8 byte 상한에서 결과를 truncate한다.
+9. Named cursor로 작은 bounded batch를 fetch하고 row/UTF-8 byte 상한에서 결과를 truncate한다.
 10. Timeout, cancel과 오류는 rollback하고 connection을 pool에 안전하게 반환한다.
 
 `result_bytes`는 `rows` 배열을 compact JSON으로 UTF-8 직렬화한 크기이며 배열 괄호와

@@ -316,6 +316,8 @@ class PostgresCatalog:
                     "sslmode": "verify-full" if connection.ssl else "disable",
                     "application_name": f"query-man-meta:{source.source_id}",
                     "connect_timeout": 2,
+                    # ponytail: explicit BEGIN must not be preceded by psycopg's implicit BEGIN.
+                    "autocommit": True,
                     "row_factory": dict_row,
                 },
                 min_size=0,
