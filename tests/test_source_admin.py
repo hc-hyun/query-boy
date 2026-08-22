@@ -310,11 +310,13 @@ async def test_publish_rotate_deactivate_and_rollback_apply_without_restart() ->
     assert registry.get("third-source") is not None
     assert registry.get("third-source").connection.password == "first-secret"  # type: ignore[union-attr]
     assert registry.get("third-source").control_generation == 1  # type: ignore[union-attr]
+    assert registry.get("third-source").control_state_version == 1  # type: ignore[union-attr]
 
     rotated = await admin.rotate_credential("third-source", "rotated-secret")
     assert rotated["generation"] == 2
     assert registry.get("third-source").connection.password == "rotated-secret"  # type: ignore[union-attr]
     assert registry.get("third-source").control_generation == 2  # type: ignore[union-attr]
+    assert registry.get("third-source").control_state_version == 2  # type: ignore[union-attr]
 
     await admin.deactivate("third-source")
     assert registry.get("third-source") is None
@@ -323,6 +325,7 @@ async def test_publish_rotate_deactivate_and_rollback_apply_without_restart() ->
     assert rolled_back["generation"] == 1
     assert registry.get("third-source").connection.password == "first-secret"  # type: ignore[union-attr]
     assert registry.get("third-source").control_generation == 1  # type: ignore[union-attr]
+    assert registry.get("third-source").control_state_version == 4  # type: ignore[union-attr]
     assert store.active["third-source"].generation == 1
     assert store.active["third-source"].state_version == 4
     assert invalidator.source_ids == ["third-source"] * 4

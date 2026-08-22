@@ -193,12 +193,16 @@ class PostgresMetadataStore:
 
     async def unpin(self, source: SourceProfile) -> None:
         pool = await self._get_pool()
-        async with pool.connection() as connection:
-            await connection.execute(
+        async with pool.connection() as connection, connection.transaction():
+            await _lock_source_transition(connection, source.source_id)
+            await _require_current_source(connection, source)
+            cursor = await connection.execute(
                 "UPDATE control.active_metadata_revisions SET pinned = false "
-                "WHERE source_id = %s",
+                "WHERE source_id = %s RETURNING source_id",
                 (source.source_id,),
             )
+            if await cursor.fetchone() is None:
+                raise StoredMetadataNotFoundError("Active metadata revision is unavailable")
 
     async def close(self) -> None:
         if self._pool is not None:
@@ -238,6 +242,8 @@ async def _lock_source_transition(connection: Any, source_id: str) -> None:
 
 async def _require_current_source(connection: Any, source: SourceProfile) -> None:
     if source.control_generation is None:
+        if source.control_state_version is not None:
+            raise StoredMetadataSupersededError
         cursor = await connection.execute(
             "SELECT 1 FROM control.active_source_profiles WHERE source_id = %s",
             (source.source_id,),
@@ -245,10 +251,16 @@ async def _require_current_source(connection: Any, source: SourceProfile) -> Non
         if await cursor.fetchone() is not None:
             raise StoredMetadataSupersededError
         return
+    if source.control_state_version is None:
+        raise StoredMetadataSupersededError
     cursor = await connection.execute(
         "SELECT 1 FROM control.active_source_profiles "
-        "WHERE source_id = %s AND generation = %s AND enabled",
-        (source.source_id, source.control_generation),
+        "WHERE source_id = %s AND generation = %s AND state_version = %s AND enabled",
+        (
+            source.source_id,
+            source.control_generation,
+            source.control_state_version,
+        ),
     )
     if await cursor.fetchone() is None:
         raise StoredMetadataSupersededError

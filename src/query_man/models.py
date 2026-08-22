@@ -150,6 +150,7 @@ class SourceProfile:
     minimum_quality_level: QualityLevel = "L0"
     tenant_isolation: TenantIsolation = "none"
     control_generation: int | None = None
+    control_state_version: int | None = None
 
 
 @dataclass

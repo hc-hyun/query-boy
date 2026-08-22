@@ -187,7 +187,11 @@ class SourceReloader:
         )
         if not quality.publishable:
             raise RegistryConfigurationError("Stored source does not meet its quality level")
-        return replace(validated.profile, control_generation=record.generation)
+        return replace(
+            validated.profile,
+            control_generation=record.generation,
+            control_state_version=record.state_version,
+        )
 
     def _require_connection_identity(self, record: StoredSource) -> None:
         current_identity = self.connection_identity(record.source_id)

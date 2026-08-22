@@ -138,8 +138,20 @@ async def test_metadata_publish_rejects_superseded_control_generation() -> None:
     metadata_store = PostgresMetadataStore(dsn)
     cipher = SourceSecretCipher(b"m" * 32)
     try:
-        await metadata_store.unpin(validated.profile)
         current = await source_store.get_active(validated.profile.source_id)
+        unpin_source = (
+            validated.profile
+            if current is None
+            else replace(
+                validated.profile,
+                control_generation=current.generation,
+                control_state_version=current.state_version,
+            )
+        )
+        try:
+            await metadata_store.unpin(unpin_source)
+        except StoredMetadataNotFoundError:
+            pass
         expected_generation = 0 if current is None else current.generation
 
         first_generation = await source_store.next_generation(validated.profile.source_id)
@@ -186,10 +198,12 @@ async def test_metadata_publish_rejects_superseded_control_generation() -> None:
         stale_source = replace(
             validated.profile,
             control_generation=first.generation,
+            control_state_version=first.state_version,
         )
         current_source = replace(
             validated.profile,
             control_generation=second.generation,
+            control_state_version=second.state_version,
         )
         refreshed_snapshot = minimal_development_snapshot()
         refreshed_snapshot.relations[0].comment = (
@@ -210,6 +224,41 @@ async def test_metadata_publish_rejects_superseded_control_generation() -> None:
             await metadata_store.publish(validated.profile, first_metadata)
 
         assert await metadata_store.get_active(current_source) == refreshed_metadata
+
+        inactive_state_version = await source_store.deactivate(
+            validated.profile.source_id,
+            second.generation,
+            expected_state_version=second.state_version,
+        )
+        rolled_back = await source_store.rollback(
+            validated.profile.source_id,
+            second.generation,
+            second.generation,
+            expected_state_version=inactive_state_version,
+        )
+        rolled_back_source = replace(
+            validated.profile,
+            control_generation=rolled_back.generation,
+            control_state_version=rolled_back.state_version,
+        )
+
+        with pytest.raises(StoredMetadataSupersededError):
+            await metadata_store.unpin(current_source)
+        with pytest.raises(StoredMetadataSupersededError):
+            await metadata_store.publish(current_source, refreshed_metadata)
+
+        connection = await AsyncConnection.connect(dsn)
+        try:
+            pinned_cursor = await connection.execute(
+                "SELECT pinned FROM control.active_metadata_revisions "
+                "WHERE source_id = %s",
+                (validated.profile.source_id,),
+            )
+            assert await pinned_cursor.fetchone() == (True,)
+        finally:
+            await connection.close()
+
+        await metadata_store.unpin(rolled_back_source)
     finally:
         await metadata_store.close()
         await source_store.close()
