@@ -15,7 +15,21 @@ from query_man.models import (
     CatalogSnapshot,
     SourceProfile,
 )
-from query_man.reader_policy import apply_reader_session_budget, require_reader_session_policy
+from query_man.reader_policy import (
+    READER_SESSION_BUDGET_SETTERS,
+    ReaderSessionPolicyError,
+    reader_session_budget_values,
+    require_reader_session_policy,
+)
+
+_CATALOG_SESSION_SETTINGS = (
+    "SELECT pg_catalog.set_config('statement_timeout', %s, true), "
+    "pg_catalog.set_config('lock_timeout', %s, true), "
+    "pg_catalog.set_config('search_path', 'pg_catalog', true), "
+    "pg_catalog.set_config('row_security', 'on', true), "
+    "pg_catalog.set_config('query_man.tenant_id', '', true), "
+    + READER_SESSION_BUDGET_SETTERS
+)
 
 CATALOG_QUERY = """
   WITH eligible_relations AS MATERIALIZED (
@@ -240,15 +254,19 @@ class PostgresCatalog:
         async with pool.connection() as connection:
             try:
                 await connection.execute("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
-                await connection.execute(
-                    "SELECT pg_catalog.set_config('statement_timeout', %s, true), "
-                    "pg_catalog.set_config('lock_timeout', %s, true)",
-                    (
-                        f"{source.budget.metadata_statement_timeout_ms}ms",
-                        f"{source.budget.lock_timeout_ms}ms",
-                    ),
-                )
-                await apply_reader_session_budget(connection, source)
+                try:
+                    await connection.execute(
+                        _CATALOG_SESSION_SETTINGS,
+                        (
+                            f"{source.budget.metadata_statement_timeout_ms}ms",
+                            f"{source.budget.lock_timeout_ms}ms",
+                            *reader_session_budget_values(source),
+                        ),
+                    )
+                except Exception as error:
+                    raise ReaderSessionPolicyError(
+                        "Source reader session budget could not be applied"
+                    ) from error
                 await require_reader_session_policy(connection, source)
                 cursor = await connection.execute(
                     CATALOG_QUERY,

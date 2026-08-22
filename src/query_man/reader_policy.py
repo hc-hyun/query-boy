@@ -11,12 +11,11 @@ class ReaderSessionPolicyError(RuntimeError):
     pass
 
 
-_SET_READER_SESSION_BUDGET_QUERY = """
-  SELECT
-    pg_catalog.set_config('work_mem', %s, true),
-    pg_catalog.set_config('temp_file_limit', %s, true),
-    pg_catalog.set_config('max_parallel_workers_per_gather', %s, true),
-    pg_catalog.set_config('jit', %s, true)
+READER_SESSION_BUDGET_SETTERS = """
+  pg_catalog.set_config('work_mem', %s, true),
+  pg_catalog.set_config('temp_file_limit', %s, true),
+  pg_catalog.set_config('max_parallel_workers_per_gather', %s, true),
+  pg_catalog.set_config('jit', %s, true)
 """
 
 _READER_SESSION_POLICY_QUERY = """
@@ -52,33 +51,33 @@ _READER_SESSION_POLICY_QUERY = """
       = %s::bigint * 1024 AS temp_file_limit_matches,
     pg_catalog.current_setting('max_parallel_workers_per_gather')::integer
       = %s AS parallel_workers_match,
-    pg_catalog.current_setting('jit')::boolean = %s AS jit_matches
+    pg_catalog.current_setting('jit')::boolean = %s AS jit_matches,
+    pg_catalog.current_schemas(false) = ARRAY['pg_catalog']::name[]
+      AS trusted_search_path,
+    pg_catalog.current_setting('row_security') = 'on' AS row_security_enabled,
+    coalesce(
+      pg_catalog.current_setting('query_man.tenant_id', true), ''
+    ) = %s AS trusted_tenant_context
   FROM pg_catalog.pg_roles AS role
   WHERE role.rolname = session_user
 """
 
 
-async def apply_reader_session_budget(
-    connection: AsyncConnection[Any],
+def reader_session_budget_values(
     source: SourceProfile,
-) -> None:
-    try:
-        await connection.execute(
-            _SET_READER_SESSION_BUDGET_QUERY,
-            (
-                f"{source.budget.work_mem_kb}kB",
-                f"{source.budget.temp_file_limit_kb}kB",
-                str(source.budget.max_parallel_workers_per_gather),
-                "on" if source.budget.jit_enabled else "off",
-            ),
-        )
-    except Exception as error:
-        raise ReaderSessionPolicyError("Source reader session budget could not be applied") from error
+) -> tuple[str, str, str, str]:
+    return (
+        f"{source.budget.work_mem_kb}kB",
+        f"{source.budget.temp_file_limit_kb}kB",
+        str(source.budget.max_parallel_workers_per_gather),
+        "on" if source.budget.jit_enabled else "off",
+    )
 
 
 async def require_reader_session_policy(
     connection: AsyncConnection[Any],
     source: SourceProfile,
+    trusted_tenant: str = "",
 ) -> None:
     cursor = await connection.execute(
         _READER_SESSION_POLICY_QUERY,
@@ -90,6 +89,7 @@ async def require_reader_session_policy(
             source.budget.temp_file_limit_kb,
             source.budget.max_parallel_workers_per_gather,
             source.budget.jit_enabled,
+            trusted_tenant,
         ),
     )
     policy = await cursor.fetchone()

@@ -26,8 +26,8 @@ from query_man.metadata import MetadataService
 from query_man.models import SourceProfile
 from query_man.operations import operations
 from query_man.reader_policy import (
-    ReaderSessionPolicyError,
-    apply_reader_session_budget,
+    READER_SESSION_BUDGET_SETTERS,
+    reader_session_budget_values,
     require_reader_session_policy,
 )
 from query_man.registry import SourceRegistry
@@ -37,6 +37,18 @@ from query_man.sql_validation import SqlValidationError, ValidatedSql, validate_
 audit_logger = logging.getLogger("query_man.audit")
 _RESULT_CURSOR_NAME = "query_man_result"
 _RESULT_FETCH_BATCH_ROWS = 16
+
+_QUERY_SESSION_SETTINGS = (
+    "SELECT pg_catalog.set_config('statement_timeout', %s, true), "
+    "pg_catalog.set_config('transaction_timeout', %s, true), "
+    "pg_catalog.set_config('lock_timeout', %s, true), "
+    "pg_catalog.set_config('idle_in_transaction_session_timeout', %s, true), "
+    "pg_catalog.set_config('search_path', 'pg_catalog', true), "
+    "pg_catalog.set_config('row_security', 'on', true), "
+    "pg_catalog.set_config('query_man.tenant_id', %s, true), "
+    "pg_catalog.set_config('application_name', %s, true), "
+    + READER_SESSION_BUDGET_SETTERS
+)
 
 _FUNCTION_POLICY_QUERY = """
   SELECT
@@ -432,16 +444,13 @@ class PostgresQueryExecutor:
         started_at = time.monotonic()
         try:
             await connection.execute("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
-            trusted_tenant = tenant_id if source.tenant_isolation == "rls" else ""
+            trusted_tenant = (
+                tenant_id
+                if source.tenant_isolation == "rls" and tenant_id is not None
+                else ""
+            )
             await connection.execute(
-                "SELECT pg_catalog.set_config('statement_timeout', %s, true), "
-                "pg_catalog.set_config('transaction_timeout', %s, true), "
-                "pg_catalog.set_config('lock_timeout', %s, true), "
-                "pg_catalog.set_config('idle_in_transaction_session_timeout', %s, true), "
-                "pg_catalog.set_config('search_path', 'pg_catalog', true), "
-                "pg_catalog.set_config('row_security', 'on', true), "
-                "pg_catalog.set_config('query_man.tenant_id', %s, true), "
-                "pg_catalog.set_config('application_name', %s, true)",
+                _QUERY_SESSION_SETTINGS,
                 (
                     f"{source.budget.query_statement_timeout_ms}ms",
                     f"{source.budget.query_transaction_timeout_ms}ms",
@@ -449,21 +458,10 @@ class PostgresQueryExecutor:
                     f"{source.budget.query_transaction_timeout_ms}ms",
                     trusted_tenant,
                     f"query-man:{query_id}",
+                    *reader_session_budget_values(source),
                 ),
             )
-            await apply_reader_session_budget(connection, source)
-            await require_reader_session_policy(connection, source)
-            query_policy_cursor = await connection.execute(
-                "SELECT pg_catalog.current_schemas(false) = ARRAY['pg_catalog']::name[] "
-                "AS trusted_search_path, "
-                "pg_catalog.current_setting('row_security') = 'on' AS row_security_enabled, "
-                "pg_catalog.current_setting('query_man.tenant_id', true) = %s "
-                "AS trusted_tenant_context",
-                (trusted_tenant,),
-            )
-            query_policy = await query_policy_cursor.fetchone()
-            if not query_policy or not all(query_policy.values()):
-                raise ReaderSessionPolicyError("Source query session policy mismatch")
+            await require_reader_session_policy(connection, source, trusted_tenant)
 
             await _validate_resolved_objects(connection, validated)
             plan_cursor = await connection.execute(f"EXPLAIN (FORMAT JSON) {sql}")
