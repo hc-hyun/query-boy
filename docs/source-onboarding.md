@@ -9,6 +9,7 @@ metadata를 분리한다.
 
 - reader가 `SELECT`할 수 있는 relation과 column
 - data type, relation kind와 database comment
+- 권한 범위 안의 primary key, foreign key와 단순 non-partial index key
 - view definition의 revision hash 재료
 
 사람이 선언:
@@ -111,6 +112,8 @@ DSN이나 snapshot payload는 metadata/MCP 응답에 포함되지 않는다.
 - Request에는 `source_id`, `question`, `max_objects` 외 필드를 허용하지 않는다.
 - Loopback 밖에 HTTP를 bind할 때는 bearer token 없이는 process가 시작되지 않는다.
 - Metadata catalog는 allowed schema, relation kind, schema/table/column 권한을 모두 확인한다.
+- Foreign key의 양쪽 relation/column이 모두 허용된 경우에만 공개하고 physical key를
+  approved semantic join으로 자동 승격하지 않는다.
 - System schema는 manifest 단계에서 거부하고 base/temp schema와 `pg_stat_statements`는 API에 노출하지 않는다.
 - `password_env`는 `<SOURCE_ID>_READER_PASSWORD` 형식의 source-scoped secret만 허용한다.
 - Reader search path는 `pg_catalog, ai` 순서로 둔다.

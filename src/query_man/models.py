@@ -151,6 +151,20 @@ class CatalogColumn:
     comment: str | None = None
 
 
+@dataclass(frozen=True)
+class CatalogForeignKey:
+    columns: list[str]
+    referenced_relation: str
+    referenced_columns: list[str]
+
+
+@dataclass(frozen=True)
+class CatalogIndex:
+    columns: list[str]
+    unique: bool
+    primary: bool
+
+
 @dataclass
 class CatalogRelation:
     schema: str
@@ -162,6 +176,9 @@ class CatalogRelation:
     comment: str | None = None
     estimated_rows: int | None = None
     definition_hash: str | None = None
+    primary_key: list[str] = field(default_factory=list)
+    foreign_keys: list[CatalogForeignKey] = field(default_factory=list)
+    indexes: list[CatalogIndex] = field(default_factory=list)
 
 
 @dataclass

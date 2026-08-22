@@ -21,6 +21,17 @@ def create_metadata_revision(source: SourceProfile, catalog: CatalogSnapshot) ->
                 "kind": relation.kind,
                 "comment": relation.comment,
                 "definition_hash": relation.definition_hash,
+                **({"primary_key": relation.primary_key} if relation.primary_key else {}),
+                **(
+                    {"foreign_keys": [asdict(key) for key in relation.foreign_keys]}
+                    if relation.foreign_keys
+                    else {}
+                ),
+                **(
+                    {"indexes": [asdict(index) for index in relation.indexes]}
+                    if relation.indexes
+                    else {}
+                ),
                 "columns": [
                     {
                         "name": column.name,

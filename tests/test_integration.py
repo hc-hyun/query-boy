@@ -134,6 +134,9 @@ async def test_live_catalog_maps_golden_questions() -> None:
         for source_id, question, expected in cases:
             response = await service.get_context(source_id, question)
             assert [item["name"] for item in response["relations"]] == expected
+            assert all(not item["primary_key"] for item in response["relations"])
+            assert all(not item["foreign_keys"] for item in response["relations"])
+            assert all(not item["indexes"] for item in response["relations"])
             assert str(response["metadata_revision"]).startswith("sha256:")
     finally:
         await catalog.close()

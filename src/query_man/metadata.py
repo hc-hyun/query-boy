@@ -229,6 +229,37 @@ def _validate_snapshot(source: SourceProfile, snapshot: CatalogSnapshot) -> list
     if not snapshot.relations:
         return ["No selectable relations were discovered in the allowed schemas."]
     relations = {relation.qualified_name: relation for relation in snapshot.relations}
+    for structure_relation in snapshot.relations:
+        structure_columns = {column.name for column in structure_relation.columns}
+        if any(column not in structure_columns for column in structure_relation.primary_key):
+            issues.append(
+                f"Primary key targets a missing column: {structure_relation.qualified_name}"
+            )
+        for physical_key in structure_relation.foreign_keys:
+            referenced = relations.get(physical_key.referenced_relation)
+            referenced_columns = (
+                set() if referenced is None else {column.name for column in referenced.columns}
+            )
+            if (
+                not physical_key.columns
+                or len(physical_key.columns) != len(physical_key.referenced_columns)
+                or any(column not in structure_columns for column in physical_key.columns)
+                or any(
+                    column not in referenced_columns
+                    for column in physical_key.referenced_columns
+                )
+            ):
+                issues.append(
+                    "Foreign key targets unavailable columns: "
+                    f"{structure_relation.qualified_name}"
+                )
+        for physical_index in structure_relation.indexes:
+            if not physical_index.columns or any(
+                column not in structure_columns for column in physical_index.columns
+            ):
+                issues.append(
+                    f"Index targets a missing column: {structure_relation.qualified_name}"
+                )
     for semantic in source.semantic_overlay.relations:
         relation = relations.get(semantic.relation)
         if relation is None:
@@ -299,6 +330,9 @@ def _to_relation_response(candidate: RankedRelation, rank: int, all_joins: list[
         "default_time_column": semantic.default_time_column if semantic else None,
         "selection_reasons": [_reason_dict(reason) for reason in candidate.reasons],
         "measures": [_to_measure_response(measure) for measure in semantic.measures] if semantic else [],
+        "primary_key": relation.primary_key,
+        "foreign_keys": [asdict(key) for key in relation.foreign_keys],
+        "indexes": [asdict(index) for index in relation.indexes],
         "columns": [_to_column_response(column, relation, semantic, all_joins) for column in relation.columns],
     }
     if relation.estimated_rows is not None:
@@ -326,6 +360,10 @@ def _to_column_response(
         roles.append("default_time")
     if _is_join_key(relation.qualified_name, column.name, all_joins):
         roles.append("join_key")
+    if column.name in relation.primary_key:
+        roles.append("primary_key")
+    if any(column.name in key.columns for key in relation.foreign_keys):
+        roles.append("foreign_key")
     return {
         "name": column.name,
         "sql_name": column.sql_name,

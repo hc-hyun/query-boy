@@ -10,6 +10,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from query_man.models import (
     CatalogColumn,
+    CatalogForeignKey,
+    CatalogIndex,
     CatalogRelation,
     CatalogRelationKind,
     CatalogSnapshot,
@@ -51,6 +53,18 @@ class _StoredColumn(_StoredModel):
     comment: str | None = Field(None, max_length=2_000)
 
 
+class _StoredForeignKey(_StoredModel):
+    columns: list[str] = Field(min_length=1, max_length=1_600)
+    referenced_relation: str = Field(min_length=3, max_length=127)
+    referenced_columns: list[str] = Field(min_length=1, max_length=1_600)
+
+
+class _StoredIndex(_StoredModel):
+    columns: list[str] = Field(min_length=1, max_length=1_600)
+    unique: bool
+    primary: bool
+
+
 class _StoredRelation(_StoredModel):
     schema_name: str = Field(min_length=1, max_length=63)
     relation_name: str = Field(min_length=1, max_length=63)
@@ -58,6 +72,9 @@ class _StoredRelation(_StoredModel):
     columns: list[_StoredColumn] = Field(min_length=1, max_length=1_600)
     comment: str | None = Field(None, max_length=2_000)
     definition_hash: str | None = Field(None, pattern=r"^[a-f0-9]{32}$")
+    primary_key: list[str] = Field(default_factory=list, max_length=1_600)
+    foreign_keys: list[_StoredForeignKey] = Field(default_factory=list, max_length=10_000)
+    indexes: list[_StoredIndex] = Field(default_factory=list, max_length=10_000)
 
 
 class _SnapshotDocument(_StoredModel):
@@ -196,6 +213,35 @@ def _encode(snapshot: CatalogSnapshot) -> dict[str, object]:
                 "kind": relation.kind,
                 "comment": relation.comment,
                 "definition_hash": relation.definition_hash,
+                **({"primary_key": relation.primary_key} if relation.primary_key else {}),
+                **(
+                    {
+                        "foreign_keys": [
+                            {
+                                "columns": key.columns,
+                                "referenced_relation": key.referenced_relation,
+                                "referenced_columns": key.referenced_columns,
+                            }
+                            for key in relation.foreign_keys
+                        ]
+                    }
+                    if relation.foreign_keys
+                    else {}
+                ),
+                **(
+                    {
+                        "indexes": [
+                            {
+                                "columns": index.columns,
+                                "unique": index.unique,
+                                "primary": index.primary,
+                            }
+                            for index in relation.indexes
+                        ]
+                    }
+                    if relation.indexes
+                    else {}
+                ),
                 "columns": [
                     {
                         "name": column.name,
@@ -240,12 +286,51 @@ def _decode(source: SourceProfile, revision: str, raw: object) -> PreparedMetada
                     comment=relation.comment,
                     estimated_rows=None,
                     definition_hash=relation.definition_hash,
+                    primary_key=relation.primary_key,
+                    foreign_keys=[
+                        CatalogForeignKey(
+                            columns=key.columns,
+                            referenced_relation=key.referenced_relation,
+                            referenced_columns=key.referenced_columns,
+                        )
+                        for key in relation.foreign_keys
+                    ],
+                    indexes=[
+                        CatalogIndex(
+                            columns=index.columns,
+                            unique=index.unique,
+                            primary=index.primary,
+                        )
+                        for index in relation.indexes
+                    ],
                 )
                 for relation in document.relations
             ]
         )
     except (TypeError, ValueError) as error:
         raise StoredMetadataInvalidError("Stored metadata document is invalid") from error
+    relations = {relation.qualified_name: relation for relation in snapshot.relations}
+    for relation in snapshot.relations:
+        columns = {column.name for column in relation.columns}
+        if any(column not in columns for column in relation.primary_key):
+            raise StoredMetadataInvalidError("Stored primary key columns are invalid")
+        for key in relation.foreign_keys:
+            referenced = relations.get(key.referenced_relation)
+            referenced_columns = (
+                set() if referenced is None else {column.name for column in referenced.columns}
+            )
+            if (
+                len(key.columns) != len(key.referenced_columns)
+                or any(column not in columns for column in key.columns)
+                or any(column not in referenced_columns for column in key.referenced_columns)
+            ):
+                raise StoredMetadataInvalidError("Stored foreign key columns are invalid")
+        if any(
+            column not in columns
+            for index in relation.indexes
+            for column in index.columns
+        ):
+            raise StoredMetadataInvalidError("Stored index columns are invalid")
     if create_metadata_revision(source, snapshot) != revision:
         raise StoredMetadataInvalidError("Stored metadata is incompatible with the source contract")
     return PreparedMetadata(snapshot, revision)

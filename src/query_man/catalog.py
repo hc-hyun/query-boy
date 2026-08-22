@@ -6,7 +6,14 @@ from typing import Any
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
-from query_man.models import CatalogColumn, CatalogRelation, CatalogSnapshot, SourceProfile
+from query_man.models import (
+    CatalogColumn,
+    CatalogForeignKey,
+    CatalogIndex,
+    CatalogRelation,
+    CatalogSnapshot,
+    SourceProfile,
+)
 
 CATALOG_QUERY = """
   WITH eligible_relations AS MATERIALIZED (
@@ -50,6 +57,156 @@ CATALOG_QUERY = """
       current_user, relation.relation_oid, attribute.attnum, 'SELECT'
     )
   ORDER BY relation.schema_name, relation.relation_name, attribute.attnum
+  LIMIT %s
+"""
+
+STRUCTURE_QUERY = """
+  WITH eligible_relations AS MATERIALIZED (
+    SELECT
+      relation.oid AS relation_oid,
+      namespace.nspname::text AS schema_name,
+      relation.relname::text AS relation_name
+    FROM pg_catalog.pg_class AS relation
+    JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+    WHERE namespace.nspname::text = ANY(%s::text[])
+      AND relation.relkind::text = ANY(%s::text[])
+      AND pg_catalog.has_schema_privilege(current_user, namespace.oid, 'USAGE')
+      AND pg_catalog.has_table_privilege(current_user, relation.oid, 'SELECT')
+  ),
+  primary_keys AS (
+    SELECT
+      local_relation.schema_name,
+      local_relation.relation_name,
+      key_columns.column_names
+    FROM pg_catalog.pg_constraint AS constraint_row
+    JOIN eligible_relations AS local_relation
+      ON local_relation.relation_oid = constraint_row.conrelid
+    JOIN LATERAL (
+      SELECT
+        pg_catalog.array_agg(attribute.attname::text ORDER BY key.position) AS column_names,
+        pg_catalog.bool_and(
+          pg_catalog.has_column_privilege(
+            current_user, local_relation.relation_oid, attribute.attnum, 'SELECT'
+          )
+        ) AS columns_visible,
+        pg_catalog.count(*) = pg_catalog.cardinality(constraint_row.conkey) AS complete
+      FROM pg_catalog.unnest(constraint_row.conkey) WITH ORDINALITY AS key(attnum, position)
+      JOIN pg_catalog.pg_attribute AS attribute
+        ON attribute.attrelid = local_relation.relation_oid
+        AND attribute.attnum = key.attnum
+    ) AS key_columns ON key_columns.columns_visible AND key_columns.complete
+    WHERE constraint_row.contype = 'p'
+  ),
+  foreign_keys AS (
+    SELECT
+      local_relation.schema_name,
+      local_relation.relation_name,
+      key_columns.local_columns AS column_names,
+      referenced_relation.schema_name || '.' || referenced_relation.relation_name
+        AS referenced_relation,
+      key_columns.referenced_columns
+    FROM pg_catalog.pg_constraint AS constraint_row
+    JOIN eligible_relations AS local_relation
+      ON local_relation.relation_oid = constraint_row.conrelid
+    JOIN eligible_relations AS referenced_relation
+      ON referenced_relation.relation_oid = constraint_row.confrelid
+    JOIN LATERAL (
+      SELECT
+        pg_catalog.array_agg(local_attribute.attname::text ORDER BY local_key.position)
+          AS local_columns,
+        pg_catalog.array_agg(
+          referenced_attribute.attname::text ORDER BY local_key.position
+        )
+          AS referenced_columns,
+        pg_catalog.bool_and(
+          pg_catalog.has_column_privilege(
+            current_user, local_relation.relation_oid, local_attribute.attnum, 'SELECT'
+          )
+          AND pg_catalog.has_column_privilege(
+            current_user,
+            referenced_relation.relation_oid,
+            referenced_attribute.attnum,
+            'SELECT'
+          )
+        ) AS columns_visible,
+        pg_catalog.count(*) = pg_catalog.cardinality(constraint_row.conkey) AS complete
+      FROM pg_catalog.unnest(constraint_row.conkey)
+        WITH ORDINALITY AS local_key(attnum, position)
+      JOIN pg_catalog.unnest(constraint_row.confkey)
+        WITH ORDINALITY AS referenced_key(attnum, position)
+        ON referenced_key.position = local_key.position
+      JOIN pg_catalog.pg_attribute AS local_attribute
+        ON local_attribute.attrelid = local_relation.relation_oid
+        AND local_attribute.attnum = local_key.attnum
+      JOIN pg_catalog.pg_attribute AS referenced_attribute
+        ON referenced_attribute.attrelid = referenced_relation.relation_oid
+        AND referenced_attribute.attnum = referenced_key.attnum
+    ) AS key_columns ON key_columns.columns_visible AND key_columns.complete
+    WHERE constraint_row.contype = 'f'
+  ),
+  simple_indexes AS (
+    SELECT
+      local_relation.schema_name,
+      local_relation.relation_name,
+      key_columns.column_names,
+      index_row.indisunique AS is_unique,
+      index_row.indisprimary AS is_primary
+    FROM pg_catalog.pg_index AS index_row
+    JOIN eligible_relations AS local_relation
+      ON local_relation.relation_oid = index_row.indrelid
+    JOIN LATERAL (
+      SELECT
+        pg_catalog.array_agg(attribute.attname::text ORDER BY key.position) AS column_names,
+        pg_catalog.bool_and(
+          pg_catalog.has_column_privilege(
+            current_user, local_relation.relation_oid, attribute.attnum, 'SELECT'
+          )
+        ) AS columns_visible,
+        pg_catalog.count(*) = index_row.indnkeyatts AS complete
+      FROM pg_catalog.unnest(index_row.indkey::smallint[])
+        WITH ORDINALITY AS key(attnum, position)
+      JOIN pg_catalog.pg_attribute AS attribute
+        ON attribute.attrelid = local_relation.relation_oid
+        AND attribute.attnum = key.attnum
+      WHERE key.position <= index_row.indnkeyatts
+    ) AS key_columns ON key_columns.columns_visible AND key_columns.complete
+    WHERE index_row.indisvalid
+      AND index_row.indisready
+      AND index_row.indpred IS NULL
+  )
+  SELECT
+    'primary_key'::text AS structure_kind,
+    schema_name,
+    relation_name,
+    column_names,
+    NULL::text AS referenced_relation,
+    NULL::text[] AS referenced_columns,
+    NULL::boolean AS is_unique,
+    true AS is_primary
+  FROM primary_keys
+  UNION ALL
+  SELECT
+    'foreign_key',
+    schema_name,
+    relation_name,
+    column_names,
+    referenced_relation,
+    referenced_columns,
+    NULL::boolean,
+    false
+  FROM foreign_keys
+  UNION ALL
+  SELECT
+    'index',
+    schema_name,
+    relation_name,
+    column_names,
+    NULL::text,
+    NULL::text[],
+    is_unique,
+    is_primary
+  FROM simple_indexes
+  ORDER BY schema_name, relation_name, structure_kind, column_names
   LIMIT %s
 """
 
@@ -105,12 +262,24 @@ class PostgresCatalog:
                 rows = await cursor.fetchall()
                 if len(rows) > source.budget.max_metadata_columns:
                     raise RuntimeError("Catalog column limit exceeded")
+                structure_cursor = await connection.execute(
+                    STRUCTURE_QUERY,
+                    (
+                        source.allowed_schemas,
+                        [_POSTGRES_KINDS[kind] for kind in source.allowed_relation_kinds],
+                        source.budget.max_metadata_columns + 1,
+                    ),
+                )
+                structures = await structure_cursor.fetchall()
+                if len(structures) > source.budget.max_metadata_columns:
+                    raise RuntimeError("Catalog structure limit exceeded")
                 await connection.execute("COMMIT")
             except Exception:
                 await connection.rollback()
                 raise
 
         relations = _rows_to_relations(rows)
+        _apply_structures(relations, structures)
         if len(relations) > source.budget.max_metadata_relations:
             raise RuntimeError("Catalog relation limit exceeded")
         if any(len(relation.columns) > source.budget.max_columns_per_relation for relation in relations):
@@ -183,6 +352,42 @@ def _rows_to_relations(rows: list[dict[str, Any]]) -> list[CatalogRelation]:
             )
         )
     return sorted(relations.values(), key=lambda item: item.qualified_name)
+
+
+def _apply_structures(
+    relations: list[CatalogRelation],
+    rows: list[dict[str, Any]],
+) -> None:
+    by_name = {relation.qualified_name: relation for relation in relations}
+    for row in rows:
+        qualified_name = f"{row['schema_name']}.{row['relation_name']}"
+        relation = by_name.get(qualified_name)
+        if relation is None:
+            raise RuntimeError("Catalog structure references an unavailable relation")
+        columns = [str(column) for column in row["column_names"]]
+        kind = row["structure_kind"]
+        if kind == "primary_key":
+            if relation.primary_key:
+                raise RuntimeError("Catalog relation has multiple primary keys")
+            relation.primary_key = columns
+        elif kind == "foreign_key":
+            relation.foreign_keys.append(
+                CatalogForeignKey(
+                    columns=columns,
+                    referenced_relation=str(row["referenced_relation"]),
+                    referenced_columns=[str(column) for column in row["referenced_columns"]],
+                )
+            )
+        elif kind == "index":
+            relation.indexes.append(
+                CatalogIndex(
+                    columns=columns,
+                    unique=bool(row["is_unique"]),
+                    primary=bool(row["is_primary"]),
+                )
+            )
+        else:
+            raise RuntimeError("Catalog returned an unknown structure kind")
 
 
 def _quote_identifier(value: str) -> str:

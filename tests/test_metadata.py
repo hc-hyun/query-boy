@@ -4,7 +4,13 @@ import pytest
 
 from query_man.errors import MetadataUnavailableError
 from query_man.metadata import MetadataService
-from query_man.models import CatalogSnapshot, PreparedMetadata, SourceProfile
+from query_man.models import (
+    CatalogForeignKey,
+    CatalogIndex,
+    CatalogSnapshot,
+    PreparedMetadata,
+    SourceProfile,
+)
 from tests.helpers import load_test_registry, minimal_development_snapshot
 
 
@@ -123,6 +129,35 @@ async def test_returns_verified_user_activity_composition() -> None:
         "ai.issue_comments",
     ]
     assert response["composition_hints"][0]["name"] == "user_activity_by_role"
+    assert response["joins"] == []
+
+
+@pytest.mark.asyncio
+async def test_exposes_physical_keys_without_approving_a_semantic_join() -> None:
+    snapshot = minimal_development_snapshot()
+    by_name = {relation.qualified_name: relation for relation in snapshot.relations}
+    by_name["ai.issue_overview"].primary_key = ["issue_id"]
+    by_name["ai.issue_overview"].indexes = [
+        CatalogIndex(["discovered_at"], unique=False, primary=False)
+    ]
+    by_name["ai.issue_comments"].foreign_keys = [
+        CatalogForeignKey(["issue_id"], "ai.issue_overview", ["issue_id"])
+    ]
+    service = MetadataService(load_test_registry(), StaticCatalog(snapshot))
+    response = await service.get_context(
+        "development-issues",
+        "사용자별 등록 문제 수, 담당 문제 수와 작성 댓글 수를 비교해줘.",
+    )
+    relations = {relation["name"]: relation for relation in response["relations"]}
+    assert relations["ai.issue_overview"]["primary_key"] == ["issue_id"]
+    assert relations["ai.issue_comments"]["foreign_keys"][0] == {
+        "columns": ["issue_id"],
+        "referenced_relation": "ai.issue_overview",
+        "referenced_columns": ["issue_id"],
+    }
+    assert relations["ai.issue_overview"]["indexes"] == [
+        {"columns": ["discovered_at"], "unique": False, "primary": False}
+    ]
     assert response["joins"] == []
 
 

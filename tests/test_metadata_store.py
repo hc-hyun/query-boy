@@ -13,7 +13,7 @@ from query_man.metadata_store import (
     StoredMetadataInvalidError,
     StoredMetadataNotFoundError,
 )
-from query_man.models import PreparedMetadata
+from query_man.models import CatalogForeignKey, CatalogIndex, PreparedMetadata
 from query_man.revision import create_metadata_revision
 from tests.helpers import ROOT_DIRECTORY, load_test_registry, minimal_development_snapshot
 
@@ -38,6 +38,16 @@ async def test_postgres_metadata_store_publishes_immutable_revisions_and_rolls_b
     source = replace(source, source_id="metadata-store-fixture-v2")
     first_snapshot = minimal_development_snapshot()
     first_snapshot.relations[0].comment = "immutable revision one"
+    first_by_name = {
+        relation.qualified_name: relation for relation in first_snapshot.relations
+    }
+    first_by_name["ai.issue_overview"].primary_key = ["issue_id"]
+    first_by_name["ai.issue_overview"].indexes = [
+        CatalogIndex(["discovered_at"], unique=False, primary=False)
+    ]
+    first_by_name["ai.issue_comments"].foreign_keys = [
+        CatalogForeignKey(["issue_id"], "ai.issue_overview", ["issue_id"])
+    ]
     second_snapshot = minimal_development_snapshot()
     second_snapshot.relations[0].comment = "immutable revision two"
     first = PreparedMetadata(first_snapshot, create_metadata_revision(source, first_snapshot))

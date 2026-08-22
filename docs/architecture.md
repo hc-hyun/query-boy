@@ -181,6 +181,8 @@ Schema drift로 overlay가 깨지면 신규 revision 발행을 중단하고 마�
   [ADR 0006](decisions/0006-mcp-transport-and-workflow.md)을 따른다.
 - Immutable metadata publish, active revision과 rollback pin은
   [ADR 0007](decisions/0007-immutable-metadata-publishing.md)을 따른다.
+- Physical primary/foreign key와 index 공개 범위는
+  [ADR 0008](decisions/0008-physical-key-and-index-disclosure.md)을 따른다.
 
 ## Open Decisions
 
