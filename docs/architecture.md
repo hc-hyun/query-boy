@@ -193,7 +193,9 @@ Schema drift로 overlay가 깨지면 신규 revision 발행을 중단하고 마�
 - RLS tenant session context와 pool reset은
   [ADR 0014](decisions/0014-trusted-rls-tenant-context.md)를 따른다.
 
-## Open Decisions
+## Completion Tracking
 
-남은 구현 순서와 완료 조건은 [implementation-roadmap.md](implementation-roadmap.md)의
-안정적인 TODO ID로 관리한다.
+Production acceptance까지의 구현 순서와 완료 증거는
+[implementation-roadmap.md](implementation-roadmap.md)와
+[completion audit](verification/2026-08-23-completion-audit.md)에서 관리한다. 이후 범위
+변경은 완료된 ID를 재사용하지 않고 새 decision과 roadmap ID로 추가한다.

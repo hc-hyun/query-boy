@@ -1,6 +1,6 @@
 # Query Man MVP
 
-Status: Question-scoped metadata API implemented
+Status: Completed baseline; production architecture verified separately
 
 ## Objective
 
@@ -12,9 +12,9 @@ Status: Question-scoped metadata API implemented
 | `development-issues` | `development_issues` | 개발 및 검증 과정에서 발견한 문제, 원인, 대책, 댓글 조회 |
 | `market-voc` | `market_voc` | 시장 VOC, 제품 모델, 시리얼, HW/SW version과 처리 이력 조회 |
 
-`query_man` database는 향후 source registry와 정책을 저장할 control plane으로
-남겨둔다. Query 한 번은 정확히 한 source만 대상으로 하며 두 source 사이의 SQL
-join은 MVP 범위에 포함하지 않는다.
+`query_man` database는 이후 source registry, encrypted credential, metadata revision과
+verified query를 저장하는 control plane으로 확장되었다. Query 한 번은 정확히 한
+source만 대상으로 하며 source 사이의 SQL join은 지원 범위에 포함하지 않는다.
 
 ## Development Issues Source
 
@@ -90,7 +90,7 @@ View와 column의 `COMMENT ON` metadata에는 grain, 시간 의미, nullable 의
 join key를 기록한다. `get_context`는 이 metadata를 그대로 전체 반환하지 않고 질문과
 관련된 view만 선택해야 한다.
 
-## Provisional MCP Contract
+## MCP Contract Baseline
 
 ```text
 list_sources()
@@ -121,8 +121,9 @@ MVP의 source registry는 다음 두 항목을 정적으로 등록하는 것으�
 
 Client는 DSN이나 role을 선택하지 않고 opaque `source_id`만 전달한다.
 
-현재 HTTP MVP는 위 계약의 `list_sources`와 `get_context`를 각각 `GET /sources`,
-`POST /meta`로 제공한다. `/meta` 요청 예시는 다음과 같다.
+HTTP와 MCP 구현은 위 계약을 공통 application service로 제공한다. HTTP의
+`list_sources`, `get_context`, `query`는 각각 `GET /sources`, `POST /meta`,
+`POST /query`에 대응한다. `/meta` 요청 예시는 다음과 같다.
 
 ```json
 {

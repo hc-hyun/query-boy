@@ -29,8 +29,9 @@ uv run mypy src                                   PASS (18 source files)
 | Resume | Explicit unpin 뒤 다음 refresh가 newer revision을 활성화 | PASS |
 | Secret boundary | DSN validation error, snapshot JSON과 public response | Credential value 미노출 |
 
-## Remaining Gaps
+## Subsequent Completion
 
-- 다중 replica에 active pointer 변경을 즉시 push하는 invalidation channel은 아직 없다.
-- Source manifest와 secret 자체의 control-plane 등록/hot reload는 `ONB-*` 범위다.
-- Snapshot retention, backup과 restore runbook은 `OPS-07`에서 정의한다.
+- 다중 replica 반영은 push channel 대신 generation 기반 bounded polling으로 구현했다.
+- Source manifest와 encrypted secret의 control-plane 등록/hot reload는 `ONB-01`~`ONB-08`에서
+  구현했다.
+- Backup, restore와 복구 훈련은 `OPS-07`에서 완료했다.

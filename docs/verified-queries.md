@@ -1,6 +1,6 @@
 # Verified Query Contract
 
-Status: Active
+Status: Active production contract
 
 [`config/verified-queries.yaml`](../config/verified-queries.yaml)은 MVP golden question의
 versioned executable contract다. 각 항목은 다음을 함께 고정한다.
@@ -24,5 +24,5 @@ uv run query-man-verify
 의도적인 revision과 expected hash review로만 수행한다.
 
 현재 파일은 Git이 immutable history와 rollback을 제공하는 bootstrap 저장소다.
-Runtime active snapshot과 no-deploy publish를 위한 control-plane 저장은 `META-05/06`에서
-이 계약을 그대로 수용해야 한다.
+Runtime은 동일한 계약을 control plane의 revision-scoped verified query로 저장하며,
+no-deploy source의 L2 publish 전에 실제 guarded execution과 결과 invariant를 검증한다.

@@ -70,7 +70,7 @@ metadata connection 1개를 의도적으로 강제하기 때문이다.
 ```text
 uv run ruff check .                 PASS
 uv run mypy src                     PASS (24 source files)
-uv run pytest                       PASS (141 unit tests)
+uv run pytest                       PASS (144 unit tests)
 uv run pytest -m integration        PASS (13 PostgreSQL/MCP/load tests)
 uv run query-man-evaluate           PASS (16/16, max context 13,509 bytes)
 uv run query-man-verify             PASS (9/9 verified SQL contracts)

@@ -5,7 +5,8 @@ Status: Production ready
 이 문서는 Query Man의 최종 목적을 구현하기 위한 TODO의 단일 관리 문서다.
 세부 설계 원칙은 [architecture.md](architecture.md), 현재 검증용 데이터와 계약은
 [mvp.md](mvp.md), source 등록 규칙은 [source-onboarding.md](source-onboarding.md)를
-따른다.
+따른다. 전체 항목의 구현·검증 연결은
+[completion audit](verification/2026-08-23-completion-audit.md)에 기록한다.
 
 ## Final Outcome
 
@@ -96,8 +97,7 @@ Dependencies: `SQL-01`~`SQL-09`, `DEC-06`
 
 ## 4. Metadata Quality And Revision Publishing
 
-Metadata 응답은 구현되어 있지만 architecture의 전체 physical catalog와 immutable publish
-모델은 아직 완성되지 않았다.
+Physical catalog, immutable publish와 품질 gate를 하나의 revision 계약으로 제공한다.
 
 - [x] `META-01` Primary key, foreign key와 index metadata를 `pg_catalog`에서 권한 범위 내 수집한다.
 - [x] `META-02` 수집 metadata가 revision과 API 응답에 포함될 범위를 정하고 정보 노출 테스트를 추가한다.
@@ -184,6 +184,5 @@ Dependencies: all required items above
 | M5 Multi-Tenant Operations | `AUTH-*`, `OPS-*` | Tenant 격리, 관측성, 복구와 운영 안전 기준을 충족한다. |
 | M6 Production Acceptance | `REL-*` | 최종 성공 기준과 공격·장애·부하 시나리오를 모두 통과한다. |
 
-M1과 M2는 현재 MVP의 직접적인 다음 단계다. Control plane 기반인 M3과 M4는
-설계는 함께 진행할 수 있지만, query 실행 안전 경계를 우회하지 않도록 M1 계약을 먼저
-고정한다.
+위 milestone은 완료된 구현 순서를 보존한 기록이다. 새로운 기능은 기존 완료 ID를
+재사용하지 않고 별도 roadmap 항목과 검증 가능한 exit condition을 추가한다.

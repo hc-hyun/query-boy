@@ -3,7 +3,8 @@
 ## Scope
 
 PostgreSQL 18.6 local fixture에서 guarded query의 현재 안전 경계를 검증했다. 이 문서는
-완료 선언이 아니라 roadmap 항목별 실행 증거와 남은 gap을 기록한다.
+당시 safe-query milestone의 실행 증거를 기록한다. 이후 milestone의 완료 상태는
+[completion audit](2026-08-23-completion-audit.md)을 따른다.
 
 ## Environment
 
@@ -46,7 +47,8 @@ uv run query-man-verify PASS (9/9 golden questions)
 | Initial budget load | 40 concurrent queries across two sources with metadata refresh | 0 errors; observed queue max 641ms, elapsed max 729ms |
 | Golden regression | 4 development + 5 market questions | Revision, AST relations, columns, row count and result hash all match |
 
-## Remaining Gaps
+## Historical Boundaries And Follow-Up
 
 - 현재 budget은 local fixture의 초기 hard limit이며 production SLO로 일반화하지 않는다.
-- RLS source는 아직 등록하지 않으며 trusted tenant context와 pool reset 검증이 필요하다.
+- 당시 미구현이던 RLS trusted tenant context와 pool reset은 `AUTH-05`~`AUTH-06`에서
+  구현·통합 검증했다.

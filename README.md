@@ -39,7 +39,8 @@ docker compose down
 
 전체 설계 기준은 [docs/architecture.md](docs/architecture.md), 현재 MVP 범위는
 [docs/mvp.md](docs/mvp.md), 최종 목적 기반 구현 TODO는
-[docs/implementation-roadmap.md](docs/implementation-roadmap.md)를 참고합니다.
+[docs/implementation-roadmap.md](docs/implementation-roadmap.md), 항목별 최종 증거는
+[completion audit](docs/verification/2026-08-23-completion-audit.md)를 참고합니다.
 
 ## Metadata And Query API
 
