@@ -164,12 +164,16 @@ Schema drift로 overlay가 깨지면 신규 revision 발행을 중단하고 마�
 - 복잡한 DB만 필요한 만큼 semantic overlay 또는 curated view를 추가한다.
 - 실제 질문과 SQL로 source별 품질을 회귀 검증할 수 있다.
 
+## Decisions
+
+- PostgreSQL AST parser와 canonical query fingerprint는
+  [ADR 0001](decisions/0001-postgresql-ast-validation.md)을 따른다.
+
 ## Open Decisions
 
 구현 순서와 완료 조건은 [implementation-roadmap.md](implementation-roadmap.md)의
 안정적인 TODO ID로 관리한다.
 
-- PostgreSQL AST parser와 canonical query fingerprint 구현
 - Budget profile의 초기 hard limit
 - Reader role, RLS와 함수 allowlist 정책
 - Schema revision 및 verified query 저장소

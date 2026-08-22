@@ -50,9 +50,9 @@ Status: Active
 안전 경계를 먼저 고정해야 SQL parser나 실행기를 교체해도 외부 계약과 정책이 흔들리지
 않는다.
 
-- [ ] `DEC-01` 지원할 PostgreSQL SQL 문법 범위와 AST parser 선정 기준을 decision record로 확정한다.
-- [ ] `DEC-02` 허용·거부할 relation kind, operator, function, system object 정책을 명세한다.
-- [ ] `DEC-03` Canonical SQL과 query fingerprint 규칙을 명세하고 literal 처리 원칙을 확정한다.
+- [x] `DEC-01` 지원할 PostgreSQL SQL 문법 범위와 AST parser 선정 기준을 decision record로 확정한다.
+- [x] `DEC-02` 허용·거부할 relation kind, operator, function, system object 정책을 명세한다.
+- [x] `DEC-03` Canonical SQL과 query fingerprint 규칙을 명세하고 literal 처리 원칙을 확정한다.
 - [ ] `DEC-04` `query` 요청·응답, reason code, truncation, plan summary와 error 계약을 확정한다.
 - [ ] `DEC-05` Metadata revision 불일치 시 거부와 context 재조회 흐름을 확정한다.
 - [ ] `DEC-06` 초기 budget hard limit과 source별 override 허용 범위를 부하 테스트 근거로 확정한다.
@@ -62,18 +62,19 @@ Status: Active
 
 ## 2. SQL Validation
 
-Dependencies: `DEC-01`~`DEC-05`, `DEC-07`
+Dependencies: `SQL-01`~`SQL-05`, `SQL-07`~`SQL-10`은 `DEC-01`~`DEC-03`을 따른다.
+`SQL-06`은 `DEC-05`, 실행 시점의 OID 검증은 `DEC-07`과 `EXEC-13`을 따른다.
 
-- [ ] `SQL-01` PostgreSQL SQL을 AST로 parse하고 정확히 한 문장만 허용한다.
-- [ ] `SQL-02` `SELECT`와 허용된 read-only `WITH` 외 DDL, DML, transaction, session statement를 거부한다.
-- [ ] `SQL-03` AST에서 참조 relation과 schema를 추출하고 현재 source의 published catalog allowlist와 대조한다.
-- [ ] `SQL-04` 함수와 operator를 추출해 위험 함수와 비승인 확장을 거부한다.
-- [ ] `SQL-05` system schema, temp object, cross-database 접근과 client 지정 search path를 거부한다.
+- [x] `SQL-01` PostgreSQL SQL을 AST로 parse하고 정확히 한 문장만 허용한다.
+- [x] `SQL-02` `SELECT`와 허용된 read-only `WITH` 외 DDL, DML, transaction, session statement를 거부한다.
+- [x] `SQL-03` AST에서 참조 relation과 schema를 추출하고 현재 source의 published catalog allowlist와 대조한다.
+- [x] `SQL-04` 함수와 operator를 추출해 위험 함수와 비승인 확장을 거부한다.
+- [x] `SQL-05` system schema, temp object, cross-database 접근과 client 지정 search path를 거부한다.
 - [ ] `SQL-06` 요청의 `metadata_revision`이 실행 직전 published revision과 같은지 검증한다.
-- [ ] `SQL-07` SQL을 canonicalize하고 민감 literal을 노출하지 않는 query fingerprint를 생성한다.
-- [ ] `SQL-08` 모든 거부 경로를 안정적인 reason code로 반환하고 parser 내부 오류를 공개하지 않는다.
-- [ ] `SQL-09` 허용·거부 corpus, 우회 문법, nested query, CTE와 Unicode identifier 회귀 테스트를 추가한다.
-- [ ] `SQL-10` Property/fuzz test로 parser failure가 실행으로 이어지지 않는 fail-closed 성질을 검증한다.
+- [x] `SQL-07` SQL을 canonicalize하고 민감 literal을 노출하지 않는 query fingerprint를 생성한다.
+- [x] `SQL-08` 모든 거부 경로를 안정적인 reason code로 반환하고 parser 내부 오류를 공개하지 않는다.
+- [x] `SQL-09` 허용·거부 corpus, 우회 문법, nested query, CTE와 Unicode identifier 회귀 테스트를 추가한다.
+- [x] `SQL-10` Property/fuzz test로 parser failure가 실행으로 이어지지 않는 fail-closed 성질을 검증한다.
 
 ## 3. Guarded Query Execution
 
@@ -91,6 +92,7 @@ Dependencies: `SQL-01`~`SQL-09`, `DEC-06`
 - [ ] `EXEC-10` DB 오류, timeout, cancel과 serialization failure를 비공개 오류 계약으로 매핑한다.
 - [ ] `EXEC-11` 동시성, timeout, large result, disconnect, cancel과 rollback 통합 테스트를 추가한다.
 - [ ] `EXEC-12` Reader가 base schema, write statement와 비승인 함수를 실행할 수 없는지 end-to-end로 검증한다.
+- [ ] `EXEC-13` PostgreSQL이 해석한 function/operator OID, namespace와 volatility를 검증해 AST name allowlist를 보강한다.
 
 ## 4. Metadata Quality And Revision Publishing
 
