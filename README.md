@@ -39,3 +39,47 @@ docker compose down
 
 전체 설계 기준은 [docs/architecture.md](docs/architecture.md), 현재 MVP 범위는
 [docs/mvp.md](docs/mvp.md)를 참고합니다.
+
+## Metadata API
+
+질문 범위형 metadata API는 Python 3.12와 `uv` 환경에서 실행합니다.
+
+```bash
+uv sync
+uv run query-man
+```
+
+기본 주소는 `http://127.0.0.1:3000`입니다.
+
+```bash
+curl http://127.0.0.1:3000/sources
+
+curl -s http://127.0.0.1:3000/meta \
+  -H 'content-type: application/json' \
+  -d '{
+    "source_id": "market-voc",
+    "question": "모델별 기기 수, VOC 수와 기기당 VOC 수를 보여줘"
+  }'
+```
+
+Client는 DSN, host, database 또는 role을 전달할 수 없습니다. `source_id`는
+[`config/sources`](config/sources)의 server-side manifest에서만 연결 정보로 해석됩니다.
+Column, type과 database comment는 reader 권한으로 `pg_catalog`에서 자동 수집하고,
+grain, 한국어 alias, 승인된 join, 검증된 measure와 business predicate만 manifest의
+semantic overlay로 보강합니다. `/meta`의 `answerability`가 `needs_clarification` 또는
+`unsupported`이면 SQL 생성을 진행하지 않아야 합니다.
+기본 loopback bind에서는 로컬 개발을 위해 인증을 생략할 수 있다. 외부 주소에 bind할
+때는 32자 이상의 `QUERY_MAN_API_TOKEN`이 필수이며 `/sources`와 `/meta`에
+`Authorization: Bearer ...` header를 보내야 합니다.
+
+개발 검증은 다음 명령으로 실행합니다.
+
+```bash
+uv run ruff check .
+uv run mypy src
+uv run pytest
+```
+
+`uv run pytest`는 기본적으로 단위 테스트를 실행합니다. 실행 중인 로컬 PostgreSQL을
+사용하는 통합 테스트는 `uv run pytest -m integration`으로 별도 실행합니다. 신규 source 등록 절차는
+[docs/source-onboarding.md](docs/source-onboarding.md)를 참고합니다.

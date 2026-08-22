@@ -1,6 +1,6 @@
 # Query Man Architecture
 
-Status: Draft
+Status: Metadata MVP implemented
 
 ## Goal
 
@@ -57,6 +57,8 @@ comment와 row estimate를 공통 형식으로 생성한다. 결과는 revision�
 - 대표 시간 column
 - 승인된 join key, cardinality와 fanout 위험
 - business metric과 민감정보 분류
+- source별 상태 predicate, enum value hint와 답변 불가능 조건
+- 여러 grain을 독립 집계해야 하는 검증된 composition
 - 검증된 질문 및 SQL 예제
 
 모든 table을 코드 객체로 다시 모델링하지 않는다. 복잡한 유효기간 join, 다대다
@@ -76,6 +78,14 @@ Source profile에는 다음 운영 설정만 둔다.
 - 동시 실행 수
 - 결과 row와 byte 제한
 - plan admission 정책 profile
+
+현재 MVP registry는 `config/sources/*.yaml`을 읽는다. Credential 값은 manifest에
+저장하지 않고 환경 변수 이름만 참조한다. 신규 source는 manifest와 secret을 추가하면
+되고 runtime의 `source_id` 분기문은 추가하지 않는다.
+
+MVP는 manifest를 process 시작 시 한 번 읽으므로 변경 후 재시작이 필요하다. 최종
+성공 기준의 무배포 onboarding을 위해서는 이후 control plane publish 또는 검증된
+hot reload가 필요하다.
 
 ### Query Gateway
 
@@ -115,6 +125,18 @@ Source가 사용자 session에 고정되는 환경에서는 `list_sources`를 �
 하나의 query는 하나의 source만 대상으로 하며 cross-database federation은 별도
 기능으로 취급한다.
 
+MCP를 붙이기 전 동일한 application contract를 HTTP로 먼저 검증한다.
+
+```text
+GET  /sources
+POST /meta { source_id, question, max_objects? }
+```
+
+`/meta`는 reader가 실제로 조회할 수 있는 allowed schema/relation kind만 catalog에서
+읽는다. DB comment는 길이와 제어 문자를 제한한 비신뢰 description data이며, join은
+comment 문장을 파싱하지 않고 manifest에 승인된 edge만 반환한다. Schema, view
+definition, comment 또는 overlay가 바뀌면 `metadata_revision`도 바뀐다.
+
 ## Onboarding Levels
 
 - L0: source 등록과 자동 catalog. 단순 질의를 best-effort로 지원한다.
@@ -145,7 +167,9 @@ Schema drift로 overlay가 깨지면 신규 revision 발행을 중단하고 마�
 ## Open Decisions
 
 - PostgreSQL AST parser와 canonical query fingerprint 구현
-- Metadata 검색 방식과 join graph 확장 범위
 - Budget profile의 초기 hard limit
 - Reader role, RLS와 함수 allowlist 정책
 - Schema revision 및 verified query 저장소
+- Wide view를 위한 column-scoped progressive disclosure
+- HTTP application contract를 재사용하는 MCP transport
+- 다중 tenant 환경의 caller identity와 source별 authorization policy

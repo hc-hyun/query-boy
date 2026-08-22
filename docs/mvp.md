@@ -1,6 +1,6 @@
 # Query Man MVP
 
-Status: Database foundation implemented
+Status: Question-scoped metadata API implemented
 
 ## Objective
 
@@ -121,6 +121,27 @@ MVP의 source registry는 다음 두 항목을 정적으로 등록하는 것으�
 
 Client는 DSN이나 role을 선택하지 않고 opaque `source_id`만 전달한다.
 
+현재 HTTP MVP는 위 계약의 `list_sources`와 `get_context`를 각각 `GET /sources`,
+`POST /meta`로 제공한다. `/meta` 요청 예시는 다음과 같다.
+
+```json
+{
+  "source_id": "market-voc",
+  "question": "VOC가 한 번도 없는 기기는 몇 대인가?",
+  "max_objects": 2
+}
+```
+
+응답은 `metadata_revision`, `answerability`, 선택된 relation과 전체 column, grain,
+기본 시간 column, measure, value hint, source별 business predicate, 승인된 join과
+composition/fanout 경고를 포함한다. PostgreSQL view의 nullability는 catalog에서
+정확히 전파되지 않으므로 추측하지 않고 `"unknown"`으로 반환한다.
+
+`answerability`는 SQL 정답을 보증하지 않고 `best_effort`, `low_confidence`,
+`needs_clarification`, `unsupported` 중 하나를 반환한다. 예를 들어 시장 VOC의 미해결은
+`status NOT IN ('RESOLVED', 'CLOSED')`, 개발 문제의 미해결은
+`status <> 'RESOLVED'`라는 서로 다른 predicate로 전달한다.
+
 ## Reader Safety Baseline
 
 각 source는 별도 login role을 사용한다.
@@ -150,7 +171,7 @@ Market VOC:
 1. 모델별 기기 수, VOC 수와 기기당 VOC 수를 높은 순서로 보여줘.
 2. VOC가 한 번도 없는 기기는 몇 대인가?
 3. NURI 세대별 힌지 VOC 수를 비교해줘.
-4. 제조 lot별 배터리 및 과열 VOC 비율을 비교해줘.
+4. 제조 lot별 전체 VOC 중 배터리 및 과열 VOC 비율을 비교해줘.
 5. 지역과 월별 미해결 VOC 추이를 보여줘.
 
 기기 수와 VOC 수를 함께 묻는 질문은 `device_overview`, 댓글 상세 질문은
@@ -175,8 +196,7 @@ docker compose up -d
 - [x] 결정적이고 재실행 가능한 한국어 seed
 - [x] grain별 curated view와 database comment metadata
 - [x] invariant validation과 reader smoke test
-- [ ] source registry 구현
-- [ ] question-scoped metadata retrieval
+- [x] source registry 구현
+- [x] question-scoped metadata retrieval
 - [ ] SQL AST validation과 guarded query execution
 - [ ] MCP server와 공통 Text-to-SQL Skill
-

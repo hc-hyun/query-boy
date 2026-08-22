@@ -71,6 +71,30 @@ BEGIN
     RAISE EXCEPTION 'development reader is missing test-unit view SELECT';
   END IF;
 
+  IF NOT has_table_privilege(
+    'development_issues_reader',
+    'ai.issue_comments',
+    'SELECT'
+  ) THEN
+    RAISE EXCEPTION 'development reader is missing issue-comment view SELECT';
+  END IF;
+
+  IF has_schema_privilege('development_issues_reader', 'development', 'USAGE') THEN
+    RAISE EXCEPTION 'development reader unexpectedly has base-schema USAGE';
+  END IF;
+
+  IF has_schema_privilege('development_issues_reader', 'public', 'USAGE') THEN
+    RAISE EXCEPTION 'development reader unexpectedly has public-schema USAGE';
+  END IF;
+
+  IF has_table_privilege(
+    'development_issues_reader',
+    'public.pg_stat_statements',
+    'SELECT'
+  ) THEN
+    RAISE EXCEPTION 'development reader unexpectedly has pg_stat_statements SELECT';
+  END IF;
+
   IF obj_description('ai.issue_overview'::regclass, 'pg_class') IS NULL THEN
     RAISE EXCEPTION 'ai.issue_overview is missing relation metadata';
   END IF;
@@ -171,6 +195,26 @@ BEGIN
 
   IF NOT has_table_privilege('market_voc_reader', 'ai.device_overview', 'SELECT') THEN
     RAISE EXCEPTION 'market VOC reader is missing device view SELECT';
+  END IF;
+
+  IF NOT has_table_privilege('market_voc_reader', 'ai.voc_comments', 'SELECT') THEN
+    RAISE EXCEPTION 'market VOC reader is missing VOC-comment view SELECT';
+  END IF;
+
+  IF has_schema_privilege('market_voc_reader', 'voc', 'USAGE') THEN
+    RAISE EXCEPTION 'market VOC reader unexpectedly has base-schema USAGE';
+  END IF;
+
+  IF has_schema_privilege('market_voc_reader', 'public', 'USAGE') THEN
+    RAISE EXCEPTION 'market VOC reader unexpectedly has public-schema USAGE';
+  END IF;
+
+  IF has_table_privilege(
+    'market_voc_reader',
+    'public.pg_stat_statements',
+    'SELECT'
+  ) THEN
+    RAISE EXCEPTION 'market VOC reader unexpectedly has pg_stat_statements SELECT';
   END IF;
 
   IF obj_description('ai.voc_overview'::regclass, 'pg_class') IS NULL THEN
