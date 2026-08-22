@@ -555,6 +555,11 @@ def _has_meaningful_reason(candidate: RankedRelation) -> bool:
     generic = {"id", "no", "name", "number", "key", "code"}
     return any(
         reason.kind in {"use_for", "relation_alias", "column_alias"}
+        or (
+            reason.kind == "retrieval_token"
+            and reason.column is not None
+            and reason.term not in generic
+        )
         or (reason.kind == "column_name" and reason.term not in generic)
         for reason in candidate.reasons
     )

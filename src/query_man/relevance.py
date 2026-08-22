@@ -204,7 +204,7 @@ def _index_relation(
 def select_ranked_relations(ranked: list[RankedRelation], max_objects: int) -> tuple[list[RankedRelation], bool]:
     if not ranked:
         return [], False
-    threshold = max(8, ranked[0].score * 0.5)
+    threshold = max(8, ranked[0].score * 0.8)
     eligible = [
         item
         for index, item in enumerate(ranked)

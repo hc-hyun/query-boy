@@ -28,5 +28,5 @@ fallback contract는 유지한다.
 - Exact word order가 다른 paraphrase도 shared business token으로 relation을 찾을 수 있다.
 - In-memory index는 source 수와 published metadata 크기에 비례한다. Immutable control-plane
   snapshot 자체에는 파생 index를 저장하지 않는다.
-- Ranking quality 완료 판정은 별도 versioned evaluation cases와 metric gate가 필요하며
-  `META-04`, `META-10`의 다음 slice에서 추가한다.
+- Ranking quality는 versioned `quality-evaluation.yaml`의 relation accuracy, answerability
+  recall과 context byte gate로 판정하고 CI에서 실행한다.

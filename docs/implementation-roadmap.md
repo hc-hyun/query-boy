@@ -102,13 +102,13 @@ Metadata 응답은 구현되어 있지만 architecture의 전체 physical catalo
 - [x] `META-01` Primary key, foreign key와 index metadata를 `pg_catalog`에서 권한 범위 내 수집한다.
 - [x] `META-02` 수집 metadata가 revision과 API 응답에 포함될 범위를 정하고 정보 노출 테스트를 추가한다.
 - [x] `META-03` Wide view에서 질문 관련 column만 단계적으로 반환하는 column-scoped disclosure를 구현한다.
-- [ ] `META-04` Exact phrase 중심 relevance를 대체·보완할 retrieval index와 ranking 평가 harness를 구현한다.
+- [x] `META-04` Exact phrase 중심 relevance를 대체·보완할 retrieval index와 ranking 평가 harness를 구현한다.
 - [x] `META-05` Immutable metadata snapshot과 active revision을 control plane에 저장한다.
 - [x] `META-06` Refresh 결과를 원자적으로 publish하고 이전 정상 revision으로 rollback할 수 있게 한다.
 - [x] `META-07` Verified question/SQL, 기대 relation, 기대 결과 invariant 저장 모델을 구현한다.
 - [x] `META-08` Verified query가 참조하는 revision과 현재 schema drift를 검증한다.
 - [ ] `META-09` L0/L1/L2 source 품질 수준과 publish gate를 자동 판정한다.
-- [ ] `META-10` Golden question precision, unsupported/clarification recall과 context byte 크기를 CI 지표로 관리한다.
+- [x] `META-10` Golden question precision, unsupported/clarification recall과 context byte 크기를 CI 지표로 관리한다.
 
 ## 5. MCP And Text-to-SQL Workflow
 

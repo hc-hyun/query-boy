@@ -17,6 +17,7 @@ dependencies = [
 
 [project.scripts]
 query-man = "query_man.server:main"
+query-man-evaluate = "query_man.quality:main"
 query-man-verify = "query_man.verified:main"
 
 [dependency-groups]

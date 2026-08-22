@@ -112,6 +112,7 @@ uv run ruff check .
 uv run mypy src
 uv run pytest
 uv run pytest -m load -s
+uv run query-man-evaluate
 uv run query-man-verify
 ```
 
@@ -128,3 +129,8 @@ Production metadata revision을 재시작 후에도 유지하려면 `05-control-
 `QUERY_MAN_CONTROL_DSN`에 설정합니다. Snapshot은 immutable하게 저장되며 refresh와 active
 pointer 변경은 한 transaction으로 처리됩니다. Rollback과 pin 동작은
 [ADR 0007](docs/decisions/0007-immutable-metadata-publishing.md)을 따릅니다.
+
+Retrieval 품질은 [`config/quality-evaluation.yaml`](config/quality-evaluation.yaml)의
+versioned case와 gate로 관리합니다. `uv run query-man-evaluate`는 golden/paraphrase relation
+accuracy, unsupported/clarification recall과 context byte 상한 중 하나라도 실패하면 non-zero로
+종료합니다.

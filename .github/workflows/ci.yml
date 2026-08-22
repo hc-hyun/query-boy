@@ -1,0 +1,35 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install locked environment
+        run: uv sync --locked
+      - name: Start deterministic PostgreSQL fixtures
+        run: |
+          cp .env.example .env
+          docker compose up -d --wait
+          ./scripts/apply-db.sh
+      - name: Static and unit checks
+        run: |
+          uv run ruff check .
+          uv run mypy src
+          uv run pytest
+      - name: Database, retrieval and golden checks
+        run: |
+          uv run pytest -m integration
+          uv run query-man-evaluate
+          uv run query-man-verify
+      - name: Stop fixtures
+        if: always()
+        run: docker compose down -v
