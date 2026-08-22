@@ -79,13 +79,10 @@ Source profile에는 다음 운영 설정만 둔다.
 - 결과 row와 byte 제한
 - plan admission 정책 profile
 
-현재 MVP registry는 `config/sources/*.yaml`을 읽는다. Credential 값은 manifest에
-저장하지 않고 환경 변수 이름만 참조한다. 신규 source는 manifest와 secret을 추가하면
-되고 runtime의 `source_id` 분기문은 추가하지 않는다.
-
-MVP는 manifest를 process 시작 시 한 번 읽으므로 변경 후 재시작이 필요하다. 최종
-성공 기준의 무배포 onboarding을 위해서는 이후 control plane publish 또는 검증된
-hot reload가 필요하다.
+Bootstrap registry는 `config/sources/*.yaml`을 읽는다. Credential 값은 manifest에
+저장하지 않고 환경 변수 이름만 참조한다. Control-plane source revision과 암호화된
+credential 계약은 [ADR 0012](decisions/0012-control-plane-source-revisions.md)를 따르며,
+runtime hot reload와 관리자 staging API가 bootstrap 이후 변경을 반영한다.
 
 ### Query Gateway
 

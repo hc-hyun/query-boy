@@ -4,8 +4,15 @@ import shutil
 from pathlib import Path
 
 import pytest
+import yaml
 
-from query_man.registry import RegistryConfigurationError, SourceRegistry
+from query_man.registry import (
+    RegistryConfigurationError,
+    SourceRegistry,
+    load_budget_profiles,
+    migrate_source_manifest,
+    validate_source_manifest,
+)
 from tests.helpers import DUMMY_ENVIRONMENT, ROOT_DIRECTORY, load_test_registry
 
 
@@ -65,3 +72,45 @@ budget_profile: interactive
             ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
             {"SYSTEM_TEST_READER_PASSWORD": "secret"},
         )
+
+
+def test_migrates_v0_budget_field_and_rejects_future_versions() -> None:
+    raw = {
+        "version": 0,
+        "source_id": "legacy-source",
+        "name": "Legacy Source",
+        "description": "Legacy source contract",
+        "connection": {
+            "host": "127.0.0.1",
+            "port": 5432,
+            "database": "legacy",
+            "user": "legacy_reader",
+            "password_env": "LEGACY_SOURCE_READER_PASSWORD",
+            "ssl": False,
+        },
+        "allowed_schemas": ["ai"],
+        "allowed_relation_kinds": ["view"],
+        "budget": "interactive",
+    }
+
+    migrated = migrate_source_manifest(raw)
+    assert migrated["version"] == 1
+    assert migrated["budget_profile"] == "interactive"
+    assert "budget" not in migrated
+    assert raw["version"] == 0
+    with pytest.raises(ValueError, match="unsupported"):
+        migrate_source_manifest({"version": 2})
+
+
+def test_validates_control_plane_manifest_without_storing_secret() -> None:
+    source_path = ROOT_DIRECTORY / "config" / "sources" / "development-issues.yaml"
+    raw = yaml.safe_load(source_path.read_text(encoding="utf-8"))
+    validated = validate_source_manifest(
+        raw,
+        load_budget_profiles(ROOT_DIRECTORY / "config" / "budget-profiles.yaml"),
+        "control-plane-secret",
+    )
+
+    assert validated.profile.connection.password == "control-plane-secret"
+    assert "control-plane-secret" not in str(validated.document)
+    assert validated.document["version"] == 1

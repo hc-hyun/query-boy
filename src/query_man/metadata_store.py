@@ -120,7 +120,7 @@ class PostgresMetadataStore:
         return _decode(source, revision, row["snapshot"])
 
     async def publish(self, source: SourceProfile, value: PreparedMetadata) -> PreparedMetadata:
-        document = _encode(value.snapshot)
+        document = encode_snapshot(value.snapshot)
         pool = await self._get_pool()
         async with pool.connection() as connection, connection.transaction():
             await connection.execute(
@@ -219,7 +219,7 @@ class PostgresMetadataStore:
         return self._pool
 
 
-def _encode(snapshot: CatalogSnapshot) -> dict[str, object]:
+def encode_snapshot(snapshot: CatalogSnapshot) -> dict[str, object]:
     return {
         "relations": [
             {

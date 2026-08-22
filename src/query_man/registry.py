@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Mapping
+from copy import deepcopy
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated
 
@@ -37,6 +39,12 @@ _FORBIDDEN_SCHEMA = re.compile(
 
 class RegistryConfigurationError(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class ValidatedSourceManifest:
+    profile: SourceProfile
+    document: dict[str, object]
 
 
 class _StrictModel(BaseModel):
@@ -253,7 +261,7 @@ class SourceRegistry:
         environment: Mapping[str, str] | None = None,
     ) -> SourceRegistry:
         env = os.environ if environment is None else environment
-        budgets = _load_budgets(budget_file)
+        budgets = load_budget_profiles(budget_file)
         try:
             files = sorted(
                 path
@@ -267,7 +275,7 @@ class SourceRegistry:
         sources: list[SourceProfile] = []
         seen: set[str] = set()
         for path in files:
-            parsed = _parse_model(path, _SourceFile)
+            parsed = _parse_source_file(path)
             if parsed.source_id in seen:
                 raise RegistryConfigurationError(f"Duplicate source_id: {parsed.source_id}")
             seen.add(parsed.source_id)
@@ -299,16 +307,62 @@ def _parse_model[T: BaseModel](path: Path, model: type[T]) -> T:
         raise RegistryConfigurationError(f"Invalid configuration in {path}: {error}") from error
 
 
-def _load_budgets(path: Path) -> dict[str, BudgetProfile]:
+def _parse_source_file(path: Path) -> _SourceFile:
+    try:
+        with path.open(encoding="utf-8") as stream:
+            return _SourceFile.model_validate(migrate_source_manifest(yaml.safe_load(stream)))
+    except (OSError, yaml.YAMLError, ValidationError, ValueError) as error:
+        raise RegistryConfigurationError(f"Invalid configuration in {path}: {error}") from error
+
+
+def load_budget_profiles(path: Path) -> dict[str, BudgetProfile]:
     parsed = _parse_model(path, _BudgetFile)
     return {name: BudgetProfile(name=name, **profile.model_dump()) for name, profile in parsed.profiles.items()}
+
+
+def validate_source_manifest(
+    raw: object,
+    budgets: Mapping[str, BudgetProfile],
+    secret: str,
+    *,
+    origin: str = "control-plane source manifest",
+) -> ValidatedSourceManifest:
+    try:
+        migrated = migrate_source_manifest(raw)
+        parsed = _SourceFile.model_validate(migrated)
+    except (ValidationError, ValueError) as error:
+        raise RegistryConfigurationError(f"Invalid configuration in {origin}: {error}") from error
+    profile = _resolve_source(
+        parsed,
+        dict(budgets),
+        {parsed.connection.password_env: secret},
+        origin,
+    )
+    return ValidatedSourceManifest(
+        profile,
+        parsed.model_dump(mode="json", exclude_none=True),
+    )
+
+
+def migrate_source_manifest(raw: object) -> dict[str, object]:
+    if not isinstance(raw, dict):
+        raise ValueError("source manifest must be an object")
+    document = deepcopy(raw)
+    version = document.get("version")
+    if version == 0:
+        if "budget" in document and "budget_profile" not in document:
+            document["budget_profile"] = document.pop("budget")
+        document["version"] = 1
+    elif version != 1:
+        raise ValueError("unsupported source manifest version")
+    return document
 
 
 def _resolve_source(
     parsed: _SourceFile,
     budgets: dict[str, BudgetProfile],
     environment: Mapping[str, str],
-    path: Path,
+    path: Path | str,
 ) -> SourceProfile:
     budget = budgets.get(parsed.budget_profile)
     if budget is None:
@@ -445,7 +499,7 @@ def _build_overlay(raw: _SemanticOverlay) -> SemanticOverlay:
     )
 
 
-def _validate_overlay(path: Path, allowed_schemas: list[str], overlay: SemanticOverlay) -> None:
+def _validate_overlay(path: Path | str, allowed_schemas: list[str], overlay: SemanticOverlay) -> None:
     relation_names = [item.relation for item in overlay.relations]
     _require_unique(path, "relation semantics", relation_names)
     names = set(relation_names)
@@ -474,7 +528,7 @@ def _validate_overlay(path: Path, allowed_schemas: list[str], overlay: SemanticO
             raise RegistryConfigurationError(f"{path} business term {term.name} references an unknown relation")
 
 
-def _require_unique(path: Path, kind: str, values: list[str]) -> None:
+def _require_unique(path: Path | str, kind: str, values: list[str]) -> None:
     if len(set(values)) != len(values):
         raise RegistryConfigurationError(f"{path} contains duplicate {kind}")
 
