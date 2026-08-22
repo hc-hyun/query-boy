@@ -26,6 +26,47 @@ from query_man.models import SourceProfile
 from query_man.registry import SourceRegistry
 from query_man.sql_validation import SqlValidationError, ValidatedSql, validate_sql
 
+_FUNCTION_POLICY_QUERY = """
+  SELECT
+    routine.proname::text AS object_name,
+    pg_catalog.bool_and(
+      namespace.nspname = 'pg_catalog'
+      AND routine.provolatile <> 'v'
+      AND NOT routine.prosecdef
+      AND pg_catalog.has_function_privilege(session_user, routine.oid, 'EXECUTE')
+    ) AS is_safe
+  FROM pg_catalog.pg_proc AS routine
+  JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = routine.pronamespace
+  WHERE routine.proname::text = ANY(%s::text[])
+    AND pg_catalog.pg_function_is_visible(routine.oid)
+  GROUP BY routine.proname
+"""
+
+_OPERATOR_POLICY_QUERY = """
+  SELECT
+    operator_row.oprname::text AS object_name,
+    pg_catalog.bool_and(
+      operator_namespace.nspname = 'pg_catalog'
+      AND implementation_namespace.nspname = 'pg_catalog'
+      AND implementation.provolatile <> 'v'
+      AND NOT implementation.prosecdef
+      AND pg_catalog.has_function_privilege(
+        session_user,
+        implementation.oid,
+        'EXECUTE'
+      )
+    ) AS is_safe
+  FROM pg_catalog.pg_operator AS operator_row
+  JOIN pg_catalog.pg_namespace AS operator_namespace
+    ON operator_namespace.oid = operator_row.oprnamespace
+  JOIN pg_catalog.pg_proc AS implementation ON implementation.oid = operator_row.oprcode
+  JOIN pg_catalog.pg_namespace AS implementation_namespace
+    ON implementation_namespace.oid = implementation.pronamespace
+  WHERE operator_row.oprname::text = ANY(%s::text[])
+    AND pg_catalog.pg_operator_is_visible(operator_row.oid)
+  GROUP BY operator_row.oprname
+"""
+
 
 @dataclass(frozen=True)
 class PlanSummary:
@@ -153,24 +194,34 @@ class PostgresQueryExecutor:
                 "SELECT pg_catalog.set_config('statement_timeout', %s, true), "
                 "pg_catalog.set_config('transaction_timeout', %s, true), "
                 "pg_catalog.set_config('lock_timeout', %s, true), "
-                "pg_catalog.set_config('idle_in_transaction_session_timeout', %s, true)",
+                "pg_catalog.set_config('idle_in_transaction_session_timeout', %s, true), "
+                "pg_catalog.set_config('search_path', 'pg_catalog', true), "
+                "pg_catalog.set_config('application_name', %s, true)",
                 (
                     f"{source.budget.query_statement_timeout_ms}ms",
                     f"{source.budget.query_transaction_timeout_ms}ms",
                     f"{source.budget.lock_timeout_ms}ms",
                     f"{source.budget.query_transaction_timeout_ms}ms",
+                    f"query-man:{query_id}",
                 ),
             )
             identity_cursor = await connection.execute(
                 "SELECT pg_catalog.current_database() = %s AS database_matches, "
                 "session_user = %s AS user_matches, "
-                "pg_catalog.current_setting('transaction_read_only') = 'on' AS read_only",
+                "pg_catalog.current_setting('transaction_read_only') = 'on' AS read_only, "
+                "pg_catalog.current_schemas(false) = ARRAY['pg_catalog']::name[] "
+                "AS trusted_search_path, "
+                "NOT pg_catalog.has_database_privilege(session_user, current_database(), 'TEMP') "
+                "AS no_temp_privilege, "
+                "NOT pg_catalog.has_schema_privilege(session_user, 'ai', 'CREATE') "
+                "AS no_ai_create_privilege",
                 (source.connection.database, source.connection.user),
             )
             identity = await identity_cursor.fetchone()
             if not identity or not all(identity.values()):
                 raise RuntimeError("Source session identity or read-only policy mismatch")
 
+            await _validate_resolved_objects(connection, validated)
             plan_cursor = await connection.execute(f"EXPLAIN (FORMAT JSON) {sql}")
             plan_row = await plan_cursor.fetchone()
             plan = _summarize_plan(_extract_plan(plan_row))
@@ -318,3 +369,21 @@ async def _rollback_quietly(connection: AsyncConnection[Any]) -> None:
         await connection.rollback()
     except Exception:
         pass
+
+
+async def _validate_resolved_objects(
+    connection: AsyncConnection[dict[str, Any]],
+    validated: ValidatedSql,
+) -> None:
+    functions = {name.removeprefix("pg_catalog.") for name in validated.functions}
+    operators = set(validated.operators)
+    if functions:
+        cursor = await connection.execute(_FUNCTION_POLICY_QUERY, (sorted(functions),))
+        rows = await cursor.fetchall()
+        if {str(row["object_name"]) for row in rows if row["is_safe"]} != functions:
+            raise QueryRejectedError("QUERY_RESOLVED_FUNCTION_NOT_ALLOWED")
+    if operators:
+        cursor = await connection.execute(_OPERATOR_POLICY_QUERY, (sorted(operators),))
+        rows = await cursor.fetchall()
+        if {str(row["object_name"]) for row in rows if row["is_safe"]} != operators:
+            raise QueryRejectedError("QUERY_RESOLVED_OPERATOR_NOT_ALLOWED")

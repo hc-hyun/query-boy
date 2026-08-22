@@ -87,6 +87,48 @@ BEGIN
     RAISE EXCEPTION 'development reader unexpectedly has public-schema USAGE';
   END IF;
 
+  IF has_database_privilege(
+    'development_issues_reader',
+    current_database(),
+    'TEMP'
+  ) THEN
+    RAISE EXCEPTION 'development reader unexpectedly has database TEMP';
+  END IF;
+
+  IF has_schema_privilege('development_issues_reader', 'ai', 'CREATE') THEN
+    RAISE EXCEPTION 'development reader unexpectedly has AI-schema CREATE';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_roles
+    WHERE rolname = 'development_issues_reader'
+      AND rolcanlogin
+      AND NOT rolsuper
+      AND NOT rolcreatedb
+      AND NOT rolcreaterole
+      AND NOT rolinherit
+      AND NOT rolreplication
+      AND NOT rolbypassrls
+      AND rolconnlimit = 3
+  ) THEN
+    RAISE EXCEPTION 'development reader role attributes violate policy';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_roles
+    WHERE rolname = 'development_issues_view_owner'
+      AND NOT rolcanlogin
+      AND NOT rolsuper
+      AND NOT rolcreatedb
+      AND NOT rolcreaterole
+      AND NOT rolreplication
+      AND NOT rolbypassrls
+  ) THEN
+    RAISE EXCEPTION 'development view-owner role attributes violate policy';
+  END IF;
+
   IF has_table_privilege(
     'development_issues_reader',
     'public.pg_stat_statements',
@@ -207,6 +249,44 @@ BEGIN
 
   IF has_schema_privilege('market_voc_reader', 'public', 'USAGE') THEN
     RAISE EXCEPTION 'market VOC reader unexpectedly has public-schema USAGE';
+  END IF;
+
+  IF has_database_privilege('market_voc_reader', current_database(), 'TEMP') THEN
+    RAISE EXCEPTION 'market VOC reader unexpectedly has database TEMP';
+  END IF;
+
+  IF has_schema_privilege('market_voc_reader', 'ai', 'CREATE') THEN
+    RAISE EXCEPTION 'market VOC reader unexpectedly has AI-schema CREATE';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_roles
+    WHERE rolname = 'market_voc_reader'
+      AND rolcanlogin
+      AND NOT rolsuper
+      AND NOT rolcreatedb
+      AND NOT rolcreaterole
+      AND NOT rolinherit
+      AND NOT rolreplication
+      AND NOT rolbypassrls
+      AND rolconnlimit = 3
+  ) THEN
+    RAISE EXCEPTION 'market VOC reader role attributes violate policy';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_roles
+    WHERE rolname = 'market_voc_view_owner'
+      AND NOT rolcanlogin
+      AND NOT rolsuper
+      AND NOT rolcreatedb
+      AND NOT rolcreaterole
+      AND NOT rolreplication
+      AND NOT rolbypassrls
+  ) THEN
+    RAISE EXCEPTION 'market VOC view-owner role attributes violate policy';
   END IF;
 
   IF has_table_privilege(

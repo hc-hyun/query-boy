@@ -106,7 +106,7 @@ ALTER ROLE development_issues_reader IN DATABASE development_issues
 ALTER ROLE development_issues_reader IN DATABASE development_issues
   SET jit = off;
 ALTER ROLE development_issues_reader IN DATABASE development_issues
-  SET search_path = pg_catalog, ai;
+  SET search_path = pg_catalog;
 
 ALTER ROLE market_voc_reader IN DATABASE market_voc
   SET default_transaction_read_only = on;
@@ -127,7 +127,7 @@ ALTER ROLE market_voc_reader IN DATABASE market_voc
 ALTER ROLE market_voc_reader IN DATABASE market_voc
   SET jit = off;
 ALTER ROLE market_voc_reader IN DATABASE market_voc
-  SET search_path = pg_catalog, ai;
+  SET search_path = pg_catalog;
 
 COMMENT ON ROLE development_issues_reader IS
   'Restricted login used by the query gateway for development issue views.';

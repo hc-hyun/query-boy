@@ -56,7 +56,7 @@ Status: Active
 - [x] `DEC-04` `query` 요청·응답, reason code, truncation, plan summary와 error 계약을 확정한다.
 - [x] `DEC-05` Metadata revision 불일치 시 거부와 context 재조회 흐름을 확정한다.
 - [ ] `DEC-06` 초기 budget hard limit과 source별 override 허용 범위를 부하 테스트 근거로 확정한다.
-- [ ] `DEC-07` Reader role, RLS, SECURITY DEFINER/INVOKER view와 함수 allowlist 정책을 확정한다.
+- [x] `DEC-07` Reader role, RLS, SECURITY DEFINER/INVOKER view와 함수 allowlist 정책을 확정한다.
 - [ ] `DEC-08` MCP transport, 인증 경계와 HTTP application service 재사용 방식을 확정한다.
 - [ ] `DEC-09` Caller identity, tenant, source authorization 정책 모델을 확정한다.
 
@@ -91,8 +91,8 @@ Dependencies: `SQL-01`~`SQL-09`, `DEC-06`
 - [x] `EXEC-09` `query_id`, fingerprint, elapsed time, row/byte 수, truncation과 plan summary를 반환한다.
 - [x] `EXEC-10` DB 오류, timeout, cancel과 serialization failure를 비공개 오류 계약으로 매핑한다.
 - [ ] `EXEC-11` 동시성, timeout, large result, disconnect, cancel과 rollback 통합 테스트를 추가한다.
-- [ ] `EXEC-12` Reader가 base schema, write statement와 비승인 함수를 실행할 수 없는지 end-to-end로 검증한다.
-- [ ] `EXEC-13` PostgreSQL이 해석한 function/operator OID, namespace와 volatility를 검증해 AST name allowlist를 보강한다.
+- [x] `EXEC-12` Reader가 base schema, write statement와 비승인 함수를 실행할 수 없는지 end-to-end로 검증한다.
+- [x] `EXEC-13` PostgreSQL이 해석한 function/operator OID, namespace와 volatility를 검증해 AST name allowlist를 보강한다.
 
 ## 4. Metadata Quality And Revision Publishing
 
