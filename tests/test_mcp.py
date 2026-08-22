@@ -243,3 +243,46 @@ async def test_mcp_sanitizes_unexpected_tool_errors(
     assert all(result.structured_content == expected for result in results)
     assert all(ExplodingGateway.detail not in str(result.content) for result in results)
     assert caplog.messages.count("Unhandled MCP tool error") == 3
+
+
+async def test_mcp_sanitizes_unexpected_caller_provider_errors(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    detail = "sensitive-caller-provider-detail"
+
+    def exploding_caller_provider() -> CallerContext:
+        raise RuntimeError(detail)
+
+    server = create_mcp_server(
+        cast(GatewayService, ExplodingGateway()),
+        exploding_caller_provider,
+    )
+    caplog.set_level(logging.ERROR, logger="query_man")
+
+    async with Client(server) as client:
+        results = [
+            await client.call_tool("list_sources", {}),
+            await client.call_tool(
+                "get_context",
+                {"source_id": "development-issues", "question": "문제 수"},
+            ),
+            await client.call_tool(
+                "query",
+                {
+                    "source_id": "development-issues",
+                    "sql": "SELECT count(*) FROM ai.issue_overview",
+                    "metadata_revision": f"sha256:{'0' * 64}",
+                },
+            ),
+        ]
+
+    expected = {
+        "error": {
+            "code": "INTERNAL_ERROR",
+            "message": "An internal error occurred.",
+        }
+    }
+    assert all(result.is_error is False for result in results)
+    assert all(result.structured_content == expected for result in results)
+    assert all(detail not in str(result.content) for result in results)
+    assert caplog.messages.count("Unhandled MCP tool error") == 3

@@ -48,11 +48,8 @@ def create_mcp_server(
         max_objects: MaxObjects = 2,
     ) -> dict[str, object]:
         return await _safe_call(
-            gateway.get_context(
-                caller_provider(),
-                source_id,
-                question,
-                max_objects,
+            lambda: gateway.get_context(
+                caller_provider(), source_id, question, max_objects
             )
         )
 
@@ -63,11 +60,8 @@ def create_mcp_server(
         metadata_revision: MetadataRevision,
     ) -> dict[str, object]:
         return await _safe_call(
-            gateway.query(
-                caller_provider(),
-                source_id,
-                sql,
-                metadata_revision,
+            lambda: gateway.query(
+                caller_provider(), source_id, sql, metadata_revision
             )
         )
 
@@ -75,9 +69,11 @@ def create_mcp_server(
     return server
 
 
-async def _safe_call(pending: Awaitable[dict[str, object]]) -> dict[str, object]:
+async def _safe_call(
+    call: Callable[[], Awaitable[dict[str, object]]],
+) -> dict[str, object]:
     try:
-        result: dict[str, object] = await pending
+        result: dict[str, object] = await call()
         return result
     except AppError as error:
         return _app_error_response(error)
