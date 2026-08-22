@@ -60,6 +60,12 @@ class GatewayService:
             caller.caller_id,
             caller.tenant_id,
             source_id,
+            extra={
+                "query_id": query_id,
+                "caller_id": caller.caller_id,
+                "tenant_id": caller.tenant_id,
+                "source_id": source_id,
+            },
         )
         try:
             result = await self._queries.query(
@@ -76,16 +82,38 @@ class GatewayService:
                 caller.caller_id,
                 caller.tenant_id,
                 source_id,
+                extra={
+                    "query_id": query_id,
+                    "caller_id": caller.caller_id,
+                    "tenant_id": caller.tenant_id,
+                    "source_id": source_id,
+                    "cancel_reason": "interrupted",
+                },
             )
             raise
         except AppError as error:
+            reason_code = (
+                error.details.get("reason_code")
+                if isinstance(error.details, dict)
+                else None
+            )
             logger.info(
-                "query_failed query_id=%s caller_id=%s tenant_id=%s source_id=%s error_code=%s",
+                "query_failed query_id=%s caller_id=%s tenant_id=%s source_id=%s "
+                "error_code=%s reason_code=%s",
                 query_id,
                 caller.caller_id,
                 caller.tenant_id,
                 source_id,
                 error.code,
+                reason_code,
+                extra={
+                    "query_id": query_id,
+                    "caller_id": caller.caller_id,
+                    "tenant_id": caller.tenant_id,
+                    "source_id": source_id,
+                    "error_code": error.code,
+                    "reason_code": reason_code,
+                },
             )
             raise
         except Exception:
@@ -96,15 +124,24 @@ class GatewayService:
                 caller.caller_id,
                 caller.tenant_id,
                 source_id,
+                extra={
+                    "query_id": query_id,
+                    "caller_id": caller.caller_id,
+                    "tenant_id": caller.tenant_id,
+                    "source_id": source_id,
+                    "error_code": "INTERNAL_ERROR",
+                },
             )
             raise
 
         plan = result.get("plan_summary")
         total_cost = plan.get("total_cost") if isinstance(plan, dict) else None
+        max_rows = plan.get("max_rows") if isinstance(plan, dict) else None
+        node_count = plan.get("node_count") if isinstance(plan, dict) else None
         logger.info(
             "query_succeeded query_id=%s caller_id=%s tenant_id=%s source_id=%s "
             "fingerprint=%s queue_ms=%s elapsed_ms=%s row_count=%s result_bytes=%s "
-            "truncated=%s plan_total_cost=%s",
+            "truncated=%s plan_total_cost=%s plan_max_rows=%s plan_node_count=%s",
             query_id,
             caller.caller_id,
             caller.tenant_id,
@@ -116,6 +153,23 @@ class GatewayService:
             result.get("result_bytes"),
             result.get("truncated"),
             total_cost,
+            max_rows,
+            node_count,
+            extra={
+                "query_id": query_id,
+                "caller_id": caller.caller_id,
+                "tenant_id": caller.tenant_id,
+                "source_id": source_id,
+                "fingerprint": result.get("fingerprint"),
+                "queue_ms": result.get("queue_ms"),
+                "elapsed_ms": result.get("elapsed_ms"),
+                "row_count": result.get("row_count"),
+                "result_bytes": result.get("result_bytes"),
+                "truncated": result.get("truncated"),
+                "plan_total_cost": total_cost,
+                "plan_max_rows": max_rows,
+                "plan_node_count": node_count,
+            },
         )
         return result
 
@@ -138,6 +192,12 @@ class GatewayService:
             query_id,
             caller.caller_id,
             caller.tenant_id,
+            extra={
+                "query_id": query_id,
+                "caller_id": caller.caller_id,
+                "tenant_id": caller.tenant_id,
+                "cancel_reason": "operator",
+            },
         )
         return {"status": "cancel_requested", "query_id": query_id}
 

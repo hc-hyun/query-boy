@@ -2,17 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 import time
 import uuid
 from dataclasses import asdict, dataclass
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from psycopg import AsyncConnection, errors
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool, PoolTimeout
 
 from query_man.errors import (
+    AppError,
     MetadataRevisionMismatchError,
     QueryOverloadedError,
     QueryRejectedError,
@@ -31,6 +33,9 @@ from query_man.reader_policy import (
 from query_man.registry import SourceRegistry
 from query_man.result_encoding import encode_result_value
 from query_man.sql_validation import SqlValidationError, ValidatedSql, validate_sql
+
+audit_logger = logging.getLogger("query_man.audit")
+_RESULT_CURSOR_NAME = "query_man_result"
 
 _FUNCTION_POLICY_QUERY = """
   SELECT
@@ -81,11 +86,12 @@ class PlanSummary:
     node_count: int
 
 
-@dataclass(frozen=True)
+@dataclass
 class _ActiveQuery:
     source_id: str
     connection: AsyncConnection[dict[str, Any]]
     task: asyncio.Task[Any]
+    cancel_reason: Literal["operator", "shutdown"] | None = None
 
 
 class QueryExecutor(Protocol):
@@ -179,6 +185,7 @@ class PostgresQueryExecutor:
         task = asyncio.current_task()
         if task is None:
             raise QueryUnavailableError
+        effective_query_id = query_id or str(uuid.uuid4())
         async with self._active_lock:
             if not self._accepting:
                 raise QueryUnavailableError
@@ -190,12 +197,53 @@ class PostgresQueryExecutor:
                 metadata_revision,
                 validated,
                 task,
-                query_id=query_id,
+                query_id=effective_query_id,
                 tenant_id=tenant_id,
             )
         except asyncio.CancelledError as error:
             if not self._accepting:
+                audit_logger.info(
+                    "query_execution_failed query_id=%s source_id=%s fingerprint=%s "
+                    "error_code=QUERY_UNAVAILABLE",
+                    effective_query_id,
+                    source.source_id,
+                    validated.fingerprint,
+                    extra={
+                        "query_id": effective_query_id,
+                        "source_id": source.source_id,
+                        "fingerprint": validated.fingerprint,
+                        "error_code": "QUERY_UNAVAILABLE",
+                    },
+                )
                 raise QueryUnavailableError from error
+            operations.increment("query_interrupted", source.source_id)
+            audit_logger.info(
+                "query_execution_interrupted query_id=%s source_id=%s fingerprint=%s",
+                effective_query_id,
+                source.source_id,
+                validated.fingerprint,
+                extra={
+                    "query_id": effective_query_id,
+                    "source_id": source.source_id,
+                    "fingerprint": validated.fingerprint,
+                    "cancel_reason": "interrupted",
+                },
+            )
+            raise
+        except AppError as error:
+            audit_logger.info(
+                "query_execution_failed query_id=%s source_id=%s fingerprint=%s error_code=%s",
+                effective_query_id,
+                source.source_id,
+                validated.fingerprint,
+                error.code,
+                extra={
+                    "query_id": effective_query_id,
+                    "source_id": source.source_id,
+                    "fingerprint": validated.fingerprint,
+                    "error_code": error.code,
+                },
+            )
             raise
         finally:
             async with self._active_lock:
@@ -209,10 +257,9 @@ class PostgresQueryExecutor:
         validated: ValidatedSql,
         task: asyncio.Task[Any],
         *,
-        query_id: str | None,
+        query_id: str,
         tenant_id: str | None,
     ) -> dict[str, object]:
-        query_id = query_id or str(uuid.uuid4())
         if source.tenant_isolation == "rls" and tenant_id is None:
             raise QueryRejectedError("TENANT_CONTEXT_REQUIRED")
         # ponytail: process-local limit; use a distributed limiter when replicas share a source quota.
@@ -233,6 +280,7 @@ class PostgresQueryExecutor:
         queue_ms = round((time.monotonic() - queued_at) * 1000)
         operations.observe("query_queue_ms", queue_ms, source.source_id)
         operations.increment("query_execution_started", source.source_id)
+        active_query: _ActiveQuery | None = None
         try:
             pool = await self._get_pool(source)
             try:
@@ -241,11 +289,12 @@ class PostgresQueryExecutor:
                         timeout=source.budget.query_queue_timeout_ms / 1000
                     ) as connection:
                         async with self._active_lock:
-                            self._active[query_id] = _ActiveQuery(
+                            active_query = _ActiveQuery(
                                 source.source_id,
                                 connection,
                                 task,
                             )
+                            self._active[query_id] = active_query
                         try:
                             return await self._execute_connection(
                                 connection,
@@ -267,7 +316,13 @@ class PostgresQueryExecutor:
                 operations.increment("query_timeout", source.source_id)
                 raise QueryTimeoutError from error
             except errors.QueryCanceled as error:
-                operations.increment("query_cancelled", source.source_id)
+                reason = active_query.cancel_reason if active_query is not None else None
+                metric = {
+                    "operator": "query_cancelled",
+                    "shutdown": "query_shutdown_cancelled",
+                    None: "query_timeout",
+                }[reason]
+                operations.increment(metric, source.source_id)
                 raise QueryTimeoutError from error
             except QueryRejectedError:
                 operations.increment("query_rejected", source.source_id)
@@ -285,8 +340,19 @@ class PostgresQueryExecutor:
             active = self._active.get(query_id)
             if active is None or active.source_id not in allowed_sources:
                 return False
+            active.cancel_reason = "operator"
             await active.connection.cancel_safe(timeout=1)
             operations.increment("query_cancel_requested", active.source_id)
+            audit_logger.info(
+                "query_cancel_signal query_id=%s source_id=%s cancel_reason=operator",
+                query_id,
+                active.source_id,
+                extra={
+                    "query_id": query_id,
+                    "source_id": active.source_id,
+                    "cancel_reason": "operator",
+                },
+            )
             return True
 
     def stop_accepting(self) -> None:
@@ -331,6 +397,9 @@ class PostgresQueryExecutor:
         for task in inflight:
             if task not in active_tasks:
                 task.cancel()
+        for query in active:
+            if query.cancel_reason is None:
+                query.cancel_reason = "shutdown"
         await asyncio.gather(
             *(query.connection.cancel_safe(timeout=1) for query in active),
             return_exceptions=True,
@@ -399,12 +468,49 @@ class PostgresQueryExecutor:
             plan_cursor = await connection.execute(f"EXPLAIN (FORMAT JSON) {sql}")
             plan_row = await plan_cursor.fetchone()
             plan = _summarize_plan(_extract_plan(plan_row))
-            _admit_plan(source, plan)
+            try:
+                _admit_plan(source, plan)
+            except QueryRejectedError as error:
+                reason_code = (
+                    error.details.get("reason_code")
+                    if isinstance(error.details, dict)
+                    else "QUERY_REJECTED"
+                )
+                audit_logger.info(
+                    "query_plan_rejected query_id=%s source_id=%s fingerprint=%s "
+                    "reason_code=%s plan_total_cost=%s plan_max_rows=%s plan_node_count=%s "
+                    "plan_cost_limit=%s plan_rows_limit=%s plan_nodes_limit=%s",
+                    query_id,
+                    source.source_id,
+                    validated.fingerprint,
+                    reason_code,
+                    plan.total_cost,
+                    plan.max_rows,
+                    plan.node_count,
+                    source.budget.max_plan_total_cost,
+                    source.budget.max_plan_rows,
+                    source.budget.max_plan_nodes,
+                    extra={
+                        "query_id": query_id,
+                        "source_id": source.source_id,
+                        "fingerprint": validated.fingerprint,
+                        "reason_code": reason_code,
+                        "plan_total_cost": plan.total_cost,
+                        "plan_max_rows": plan.max_rows,
+                        "plan_node_count": plan.node_count,
+                        "plan_cost_limit": source.budget.max_plan_total_cost,
+                        "plan_rows_limit": source.budget.max_plan_rows,
+                        "plan_nodes_limit": source.budget.max_plan_nodes,
+                    },
+                )
+                raise
 
             rows: list[object] = []
             result_bytes = 2  # JSON array brackets.
             truncated = False
-            cursor = connection.cursor(name=f"qm_{query_id.replace('-', '')}", row_factory=dict_row)
+            # ponytail: a pool lease serializes use of one connection; a fixed name avoids
+            # one pg_stat_statements entry per request UUID.
+            cursor = connection.cursor(name=_RESULT_CURSOR_NAME, row_factory=dict_row)
             try:
                 await cursor.execute(sql)
                 columns = [column.name for column in cursor.description or ()]

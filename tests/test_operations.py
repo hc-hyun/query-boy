@@ -32,6 +32,32 @@ def test_safe_json_formatter_redacts_secrets_literals_and_exception_details() ->
     assert "abc.def" not in serialized
 
 
+def test_safe_json_formatter_emits_bounded_audit_fields_as_top_level_json() -> None:
+    formatter = SafeJsonFormatter()
+    record = logging.LogRecord(
+        "query_man.audit",
+        logging.INFO,
+        __file__,
+        1,
+        "query_succeeded query_id=%s",
+        ("query-1",),
+        exc_info=None,
+    )
+    record.query_id = "query-1"
+    record.source_id = "development-issues"
+    record.fingerprint = "pg_query:abc"
+    record.elapsed_ms = 12
+    record.plan_total_cost = 42.5
+
+    payload = json.loads(formatter.format(record))
+
+    assert payload["query_id"] == "query-1"
+    assert payload["source_id"] == "development-issues"
+    assert payload["fingerprint"] == "pg_query:abc"
+    assert payload["elapsed_ms"] == 12
+    assert payload["plan_total_cost"] == 42.5
+
+
 def test_operational_state_hides_source_inventory_from_public_status() -> None:
     state = OperationalState()
     state.set_source_health("private-source", "unavailable")
@@ -64,12 +90,22 @@ def test_inventory_reconcile_removes_inactive_and_ignores_late_health_write() ->
     state.reconcile_sources(["active-source", "removed-source"])
     state.set_source_health("active-source", "healthy")
     state.set_source_health("removed-source", "stale")
+    state.increment("query_execution_started", "active-source")
+    state.increment("query_execution_started", "removed-source")
+    state.increment("source_reload_scan_failed")
 
     state.reconcile_sources(["active-source"])
     state.set_source_health("removed-source", "unavailable")
 
     assert state.snapshot()["sources"] == {"active-source": "healthy"}
     assert state.public_status() == "ready"
+    assert {
+        (metric["name"], metric.get("source_id"))
+        for metric in state.snapshot()["metrics"]
+    } == {
+        ("query_execution_started", "active-source"),
+        ("source_reload_scan_failed", None),
+    }
 
 
 def test_staging_scope_does_not_mutate_production_source_health() -> None:

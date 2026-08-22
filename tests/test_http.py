@@ -363,6 +363,7 @@ async def test_executes_query_with_current_metadata_revision(
     assert "fingerprint=pg_query:" in caplog.text
     assert "elapsed_ms=1 row_count=1 result_bytes=21" in caplog.text
     assert "plan_total_cost=10.0" in caplog.text
+    assert "plan_max_rows=1 plan_node_count=2" in caplog.text
 
 
 @pytest.mark.asyncio

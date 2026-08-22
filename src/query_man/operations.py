@@ -20,6 +20,27 @@ _source_health_updates_suppressed: ContextVar[bool] = ContextVar(
     "query_man_source_health_updates_suppressed",
     default=False,
 )
+_STRUCTURED_LOG_FIELDS = (
+    "query_id",
+    "caller_id",
+    "tenant_id",
+    "source_id",
+    "fingerprint",
+    "error_code",
+    "reason_code",
+    "cancel_reason",
+    "queue_ms",
+    "elapsed_ms",
+    "row_count",
+    "result_bytes",
+    "truncated",
+    "plan_total_cost",
+    "plan_max_rows",
+    "plan_node_count",
+    "plan_cost_limit",
+    "plan_rows_limit",
+    "plan_nodes_limit",
+)
 
 
 class SafeJsonFormatter(logging.Formatter):
@@ -32,6 +53,16 @@ class SafeJsonFormatter(logging.Formatter):
         }
         if record.exc_info is not None and record.exc_info[0] is not None:
             payload["exception_type"] = record.exc_info[0].__name__
+        for field in _STRUCTURED_LOG_FIELDS:
+            if field not in record.__dict__:
+                continue
+            value = record.__dict__[field]
+            if isinstance(value, str):
+                payload[field] = redact(value)
+            elif value is None or isinstance(value, bool | int | float):
+                payload[field] = value
+            else:
+                payload[field] = redact(str(value))
         return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
@@ -93,6 +124,22 @@ class OperationalState:
                 source_id: self._source_health.get(source_id, "initializing")
                 for source_id in active
             }
+            self._counters = defaultdict(
+                int,
+                {
+                    key: value
+                    for key, value in self._counters.items()
+                    if key[1] is None or key[1] in active
+                },
+            )
+            self._totals = defaultdict(
+                float,
+                {
+                    key: value
+                    for key, value in self._totals.items()
+                    if key[1] is None or key[1] in active
+                },
+            )
 
     def set_component_health(self, component: str, status: str) -> None:
         with self._lock:
