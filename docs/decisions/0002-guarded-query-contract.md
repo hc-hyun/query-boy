@@ -54,6 +54,20 @@ queue_ms, elapsed_ms, plan_summary
 `result_bytes`는 `rows` 배열을 compact JSON으로 UTF-8 직렬화한 크기이며 배열 괄호와
 행 사이 쉼표를 포함한다. 상한을 넘길 행은 응답에 넣지 않고 `truncated`를 설정한다.
 
+JSON scalar 계약은 HTTP와 MCP에서 동일하다.
+
+- PostgreSQL integer, boolean, text와 finite floating point는 JSON의 대응 scalar를 사용한다.
+- `numeric`은 precision과 scale을 잃지 않도록 decimal 문자열로 반환한다.
+- `bytea`는 `base64:<standard-base64>` 문자열로 반환한다.
+- Date/time, interval, UUID와 network type은 안정적인 ISO/text 문자열로 반환한다.
+- 비유한 float는 JSON number로 내보내지 않고 `NaN`, `Infinity`, `-Infinity` 문자열로
+  반환한다.
+- 지원하지 않는 driver value와 string이 아닌 object key는 비공개 `QUERY_UNAVAILABLE`로
+  fail-closed한다.
+
+Byte accounting, verified result hash와 protocol serialization은 이 canonical value를 함께
+사용한다. 따라서 정확한 numeric 표현을 바꾸는 것은 결과 계약 변경이다.
+
 Planner cost는 PostgreSQL의 상대적인 추정치이지 시간이나 금액이 아니다. 따라서 plan
 admission은 명백히 비싼 query를 일찍 거부하는 보조 장치이며 statement/transaction
 timeout, concurrency, result size와 cancel을 대체하지 않는다.
@@ -86,4 +100,9 @@ HTTP와 MCP 계약이 모순되므로 fetch 전에 fail-closed한다.
   `ponytail:` replica가 source quota를 공유해야 할 때 distributed limiter로 교체한다.
 - Function/operator의 resolved candidate와 volatility 검증은 ADR 0003을 따른다.
 - Query ID는 실행 전에 생성되어 audit log와 PostgreSQL `application_name`에 동일하게
-  기록된다. Cancel lookup과 connection의 pool 반환은 lock으로 직렬화한다.
+  기록된다. 완료 audit는 query ID, caller/tenant/source, fingerprint, queue/elapsed,
+  row/byte/truncation과 plan cost를 남기고 실패 audit는 공개 가능한 application error code만
+  남긴다. SQL text, literal과 database error detail은 기록하지 않는다. Cancel lookup과
+  connection의 pool 반환은 lock으로 직렬화한다.
+- 비용과 resource 운영 절차는
+  [query cost runbook](../query-cost-control.md)을 따른다.

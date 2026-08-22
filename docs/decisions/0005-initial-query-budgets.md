@@ -12,25 +12,34 @@ gateway는 무제한 실행보다 검증된 보수적 hard limit이 필요하다
 
 ## Decision
 
-초기 `interactive` profile은 다음 경계를 강제한다.
+Budget schema version 2의 `interactive` profile은 다음 경계를 강제한다.
 
 | Limit | Value | Role |
 |---|---:|---|
 | Query concurrency | source당 2 | 동시에 DB 자원을 쓰는 query 상한 |
 | Query pool | source당 2 | concurrency와 동일한 connection 상한 |
 | Metadata pool | source당 1 | single-flight refresh 전용 |
-| Reader connection limit | source당 3 | query 2 + metadata 1의 DB hard cap |
+| Reader connection limit | fixture source당 7 | replica 2 × (query 2 + metadata 1) + staging 1 |
 | Queue timeout | 1,000ms | 대기 요청의 빠른 overload 반환 |
 | Statement timeout | 5,000ms | 한 SQL statement 실행 상한 |
 | Transaction timeout | 8,000ms | setup, plan, fetch, commit 전체 상한 |
 | Lock timeout | 250ms | 분석 query의 lock 대기 상한 |
+| Work memory | operation당 8MiB | 정렬/hash 등의 transaction-local memory 기준 |
+| Temporary file | backend당 64MiB | spill 피해의 transaction-local hard cap |
+| Parallel/JIT | gather worker 0 / JIT off | query 하나의 CPU 증폭과 compile overhead 차단 |
 | Result | 1,000 rows / 1MiB | 응답 메모리·전송 상한 |
 | SQL text | 100,000 UTF-8 bytes | parser 입력 상한 |
 | Plan | cost 100,000 / rows 1,000,000 / nodes 100 | 명백히 비싼 plan의 보조 admission |
 
 Source manifest는 숫자를 직접 override하지 않고 중앙의 versioned budget profile 이름만
 참조한다. 신규 profile은 registry schema의 절대 상한, representative load test와
-review를 통과해야 한다.
+review를 통과해야 한다. Query와 metadata transaction은 `work_mem`, `temp_file_limit`,
+`max_parallel_workers_per_gather`, `jit`를 local setting으로 적용한 뒤 effective 값을
+재검증한다. Reader가 필요한 parameter `SET` 권한을 잃거나 값이 drift하면 fail-closed한다.
+
+Reader connection capacity는 `replica 수 × (query pool + metadata pool) + 동시 staging`으로
+계산한다. 현재 acceptance는 두 replica와 한 staging connection을 동시에 사용하므로 7이다.
+Replica를 늘리려면 role hard cap과 database `max_connections` 여유를 먼저 다시 산정한다.
 
 2026-08-22 PostgreSQL 18.6 fixture에서 metadata refresh와 함께 source당 20개, 총 40개
 grouped query를 동시에 제출했다.
@@ -54,3 +63,7 @@ plan admission으로 거부되고, admission을 test에서 해제한 query는 st
 - Replica가 여러 개면 process-local concurrency를 replica 수만큼 곱하게 된다. Shared
   source quota가 필요할 때 distributed limiter 없이는 replica 수를 늘리지 않는다.
 - Plan threshold는 timeout, connection, row/byte hard limit을 대체하지 않는다.
+- Budget 전체는 metadata revision 재료다. 더 엄격하거나 느슨한 실행 정책으로 바꾸면
+  기존 L2 verified contract를 새 revision에서 다시 실행해 승인해야 한다.
+- 통화 단위 비용과 운영 조사 절차는
+  [query cost runbook](../query-cost-control.md)을 따른다.

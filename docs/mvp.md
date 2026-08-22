@@ -97,10 +97,14 @@ list_sources()
   -> source_id, description
 
 get_context(source_id, question)
-  -> metadata_revision, relevant_views, columns, grains, join_hints
+  -> source metadata, question, metadata_revision, snapshot_status, quality_level,
+     answerability, relations[{columns, measures, grain, keys, indexes}], joins,
+     business_terms, composition_hints, ambiguities, truncated
 
 query(source_id, sql, metadata_revision)
-  -> status, reason_code, columns, rows, truncated, query_id
+  -> success: status, query_id, metadata_revision, fingerprint, columns, rows,
+              row_count, result_bytes, truncated, queue_ms, elapsed_ms, plan_summary
+  -> failure: error.code, error.message, error.details?.reason_code
 ```
 
 MVP의 source registry는 다음 두 항목을 정적으로 등록하는 것으로 시작한다.
@@ -153,10 +157,12 @@ composition/fanout 경고를 포함한다. PostgreSQL view의 nullability는 cat
 - `default_transaction_read_only=on`
 - `statement_timeout=5s`, `lock_timeout=250ms`, `transaction_timeout=8s`
 - `work_mem=8MB`, `temp_file_limit=64MB`
-- parallel gather 비활성화, JIT 비활성화, connection limit 3
+- parallel gather 비활성화, JIT 비활성화
+- 현재 two-replica acceptance capacity를 포함한 reader connection limit 7
 
 이 기본값은 gateway의 AST 검증, `BEGIN READ ONLY`, 동시성 제한과 결과 byte 제한을
-대체하지 않는다.
+대체하지 않는다. Connection 값은 replica 수가 바뀌면
+`replicas × (query pool 2 + metadata pool 1) + staging 1`로 다시 계산한다.
 
 ## Golden Questions
 
@@ -186,7 +192,8 @@ docker compose up -d
 ./scripts/apply-db.sh
 ```
 
-`apply-db.sh`는 두 source와 reader role을 만들고 schema, seed, validation을 순서대로
+`apply-db.sh`는 두 bootstrap source와 `support_tickets`, `commerce_edges` onboarding
+acceptance source의 database·reader role을 만들고 schema, seed, validation을 순서대로
 적용한다. 여러 번 실행해도 row 수가 증가하지 않는다. Validation은 exact row count,
 시간 순서, 의미 분포, view metadata와 reader 권한을 검사한다.
 

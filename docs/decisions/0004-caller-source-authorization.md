@@ -25,7 +25,8 @@ MCP와 HTTP가 서로 다른 authorization을 적용할 위험이 있다. 반대
   반환한다. Source authorization은 metadata load, SQL validation, concurrency slot보다
   먼저 수행한다.
 - Tenant ID는 SQL text, `search_path` 또는 client-controlled session setting에 넣지
-  않는다. RLS source가 필요해질 때 별도의 trusted session-context 계약을 추가한다.
+  않는다. RLS source는 ADR 0014의 server-derived transaction-local trusted session context를
+  사용한다.
 - Loopback에서 인증 설정이 없을 때만 모든 등록 source를 볼 수 있는
   `local-development` caller를 암시적으로 사용한다.
 - 기존 단일 `QUERY_MAN_API_TOKEN`은 migration 호환성을 위해 모든 등록 source를 가진

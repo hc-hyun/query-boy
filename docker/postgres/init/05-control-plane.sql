@@ -1,5 +1,3 @@
-\connect query_man
-
 BEGIN;
 
 DO $$
@@ -173,7 +171,14 @@ FOR EACH ROW EXECUTE FUNCTION control.reject_source_profile_revision_mutation();
 REVOKE ALL ON ALL TABLES IN SCHEMA control FROM PUBLIC;
 REVOKE ALL ON FUNCTION control.reject_metadata_snapshot_mutation() FROM PUBLIC;
 REVOKE ALL ON FUNCTION control.reject_source_profile_revision_mutation() FROM PUBLIC;
-GRANT CONNECT ON DATABASE query_man TO query_man_control_writer;
+DO $$
+BEGIN
+  EXECUTE format(
+    'GRANT CONNECT ON DATABASE %I TO query_man_control_writer',
+    pg_catalog.current_database()
+  );
+END;
+$$;
 GRANT USAGE ON SCHEMA control TO query_man_control_writer;
 GRANT SELECT, INSERT ON control.metadata_snapshots TO query_man_control_writer;
 GRANT SELECT, INSERT, UPDATE ON control.active_metadata_revisions
@@ -190,7 +195,7 @@ COMMENT ON TABLE control.metadata_snapshots IS
 COMMENT ON TABLE control.active_metadata_revisions IS
   'Atomic active metadata revision pointer for each source.';
 COMMENT ON TABLE control.source_profile_revisions IS
-  'Immutable validated source manifests and envelope-encrypted reader credentials.';
+  'Immutable validated source manifests and AES-GCM-encrypted reader credentials.';
 COMMENT ON TABLE control.active_source_profiles IS
   'Atomic active generation and enabled state for each control-plane source.';
 COMMENT ON TABLE control.verified_query_contracts IS

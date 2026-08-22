@@ -22,7 +22,8 @@ authorization, SQL validation, executor와 MCP code path를 사용한다.
 ## Load And Hard-Limit Evidence
 
 격리된 local fixture에서 `uv run pytest -m load -s`로 source당 20개, 총 40개 query를
-실행했다.
+실행했다. 아래 수치와 capacity는 이 문서가 기록된 당시 baseline 증거이며 이후 refactoring
+assurance의 현재 설정 근거로 재사용하지 않는다.
 
 ```json
 {"elapsed_ms_max":448,"elapsed_ms_p50":283,"elapsed_ms_p95":424,
@@ -33,8 +34,9 @@ authorization, SQL validation, executor와 MCP code path를 사용한다.
 별도 통합 시나리오는 한 source의 slot이 찬 동안 다른 source query가 완료되는지,
 queue timeout, client/operator cancel, rollback 후 connection 재사용, 1,000-row truncation,
 1 MiB byte 상한, plan rejection과 statement timeout을 검증한다. 부하 측정은 다른 DB stress
-test와 동시에 실행하지 않는다. Fixture reader의 `CONNECTION LIMIT 3`은 query pool 2개와
-metadata connection 1개를 의도적으로 강제하기 때문이다.
+test와 동시에 실행하지 않는다. 당시 single-replica fixture reader의 `CONNECTION LIMIT 3`은
+query pool 2개와 metadata connection 1개를 의도적으로 강제했다. 현재 connection capacity는
+[ADR 0005](../decisions/0005-initial-query-budgets.md)와 최신 assurance 문서를 따른다.
 
 ## Failure Recovery Evidence
 

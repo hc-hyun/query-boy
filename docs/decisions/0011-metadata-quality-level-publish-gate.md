@@ -22,7 +22,7 @@ Runtime은 catalog validation 뒤 immutable snapshot을 저장·활성화하기 
 - L2: L1 + source와 현재 metadata revision이 일치하는 하나 이상의 verified query contract
 
 실제 level이 manifest의 minimum보다 낮으면 `METADATA_UNAVAILABLE`로 fail-closed하며
-snapshot active pointer를 갱신하지 않는다. `GET /meta`와 MCP context는 판정된
+snapshot active pointer를 갱신하지 않는다. `POST /meta`와 MCP context는 판정된
 `quality_level`을 반환한다. 두 MVP source는 L2를 요구한다.
 
 Verified contract는 startup에 strict schema로 load하고 source별 revision set으로

@@ -22,9 +22,9 @@ MVP source database와 결정적 seed를 현재 volume에 적용하려면 다음
 ./scripts/apply-db.sh
 ```
 
-생성되는 source는 서로 독립된 `development_issues`, `market_voc` database입니다.
-각 source의 AI reader 접속 정보는 `.env`에 있고, reader는 해당 database의 `ai`
-schema view만 조회할 수 있습니다.
+생성되는 database는 bootstrap source인 `development_issues`, `market_voc`와 no-deploy
+onboarding acceptance용 `support_tickets`, `commerce_edges`입니다. 각 source의 AI reader
+접속 정보는 `.env`에 있고, reader는 해당 database의 `ai` schema view만 조회할 수 있습니다.
 
 PostgreSQL은 `127.0.0.1:${POSTGRES_PORT:-5432}`에서만 접근할 수 있습니다.
 데이터는 Compose named volume인 `query-man_postgres_data`에 저장됩니다. PostgreSQL
@@ -39,8 +39,9 @@ docker compose down
 
 전체 설계 기준은 [docs/architecture.md](docs/architecture.md), 현재 MVP 범위는
 [docs/mvp.md](docs/mvp.md), 최종 목적 기반 구현 TODO는
-[docs/implementation-roadmap.md](docs/implementation-roadmap.md), 항목별 최종 증거는
-[completion audit](docs/verification/2026-08-23-completion-audit.md)를 참고합니다.
+[docs/implementation-roadmap.md](docs/implementation-roadmap.md), 기존 production baseline 증거는
+[completion audit](docs/verification/2026-08-23-completion-audit.md)를 참고합니다. 진행 중인
+refactoring assurance의 완료 증거는 roadmap `REF-15`에서 별도 문서로 확정합니다.
 
 ## Metadata And Query API
 
@@ -78,10 +79,13 @@ curl -s http://127.0.0.1:3000/query \
 
 Gateway는 현재 revision과 AST allowlist를 확인한 뒤 source별 동시 실행 수를 제한합니다.
 실행 시 read-only transaction, statement/transaction/lock timeout을 강제하고, 명백히 비싼
-`EXPLAIN` plan을 거부하며, 결과가 profile의 row 또는 UTF-8 byte 상한을 넘으면
+`EXPLAIN` plan을 거부합니다. `work_mem`, temporary file, parallel worker와 JIT도
+transaction-local profile 값으로 고정하며, 결과가 row 또는 UTF-8 byte 상한을 넘으면
 `truncated: true`로 종료합니다. Planner cost는 보조적인 admission 신호이고 실제 실행
 피해의 상한은 timeout, concurrency와 결과 제한이 담당합니다. 기본값은
 [`config/budget-profiles.yaml`](config/budget-profiles.yaml)에서 관리합니다.
+측정 신호, live query 조사와 budget 변경 순서는
+[`docs/query-cost-control.md`](docs/query-cost-control.md)를 따릅니다.
 Operator caller는 audit log에 기록된 실행 중 `query_id`를
 `DELETE /queries/{query_id}`로 취소할 수 있으며, 자기 source allowlist 밖의 query는
 조회하거나 취소할 수 없습니다.
@@ -125,11 +129,13 @@ uv run query-man-verify
 [`docs/verified-queries.md`](docs/verified-queries.md)의 계약에 따라
 `uv run query-man-verify`로 검증합니다.
 
-Production metadata revision을 재시작 후에도 유지하려면 `05-control-plane.sql`을 적용하고
-`query_man_control_writer`를 상속한 전용 login의 PostgreSQL DSN을
-`QUERY_MAN_CONTROL_DSN`에 설정합니다. Snapshot은 immutable하게 저장되며 refresh와 active
-pointer 변경은 한 transaction으로 처리됩니다. Rollback과 pin 동작은
-[ADR 0007](docs/decisions/0007-immutable-metadata-publishing.md)을 따릅니다.
+Production metadata revision을 재시작 후에도 유지하려면 database owner/관리자용 표준 libpq
+환경에서 `scripts/apply-control-schema.sh`를 실행하고, 별도로 생성한 최소 권한 LOGIN에
+`query_man_control_writer` membership을 부여합니다. `scripts/apply-db.sh`는 네 fixture
+database·role·seed를 만드는 local/CI bootstrap이며 production migration이 아닙니다. Runtime은
+전용 LOGIN의 TLS DSN을 `QUERY_MAN_CONTROL_DSN`에 사용합니다. 자세한 설치·복구 순서는
+[source onboarding](docs/source-onboarding.md)과
+[disaster recovery](docs/disaster-recovery.md)를 따릅니다.
 
 Retrieval 품질은 [`config/quality-evaluation.yaml`](config/quality-evaluation.yaml)의
 versioned case와 gate로 관리합니다. `uv run query-man-evaluate`는 golden/paraphrase relation

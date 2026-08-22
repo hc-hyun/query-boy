@@ -1,6 +1,6 @@
 # Query Man Architecture
 
-Status: Production ready
+Status: Production hardening in progress
 
 ## Goal
 
@@ -24,15 +24,16 @@ endpoint로 제공한다. 신규 데이터베이스 추가 과정에서 애플�
 ```text
 Text-to-SQL Skill
         |
-Single MCP Server
+Single MCP Server / HTTP API
   |-- list_sources
   |-- get_context
   `-- query
         |
-Source Registry
-  |-- Physical Catalog
-  |-- Semantic Overlay
-  `-- Budget Profile
+Query Gateway + Source Registry <--- validated hot reload --- Control Plane
+  |-- Physical Catalog                                  |-- Source Generations
+  |-- Semantic Overlay                                  |-- Metadata Revisions
+  |-- Budget Profile                                    `-- Verified Contracts
+  `-- guarded connection
         |
 PostgreSQL Reader / Analytics Replica
 ```
@@ -47,9 +48,10 @@ extension assurance는 quoted/rich-type `commerce_edges` database를 같은 runt
 
 ### Physical Catalog
 
-`pg_catalog`에서 relation, column, type, primary key, foreign key, index,
-comment와 row estimate를 공통 형식으로 생성한다. 결과는 revision을 갖는 snapshot으로
-발행한다.
+`pg_catalog`에서 relation, column, type, primary key, foreign key, index와 comment를 공통
+형식으로 생성해 revision snapshot으로 발행한다. Planner 통계의 row estimate는 fresh catalog
+응답에만 포함될 수 있는 best-effort hint이며 revision 재료나 persisted snapshot contract가
+아니다. Restart 복원 뒤 없을 수 있으므로 안전·정확성 판단에 사용하지 않는다.
 
 ### Semantic Overlay
 
@@ -59,7 +61,7 @@ comment와 row estimate를 공통 형식으로 생성한다. 결과는 revision�
 - 한 행이 무엇을 의미하는지 나타내는 grain
 - 대표 시간 column
 - 승인된 join key, cardinality와 fanout 위험
-- business metric과 민감정보 분류
+- business measure와 계산 규칙
 - source별 상태 predicate, enum value hint와 답변 불가능 조건
 - 여러 grain을 독립 집계해야 하는 검증된 composition
 - 검증된 질문 및 SQL 예제
@@ -78,7 +80,7 @@ Source profile에는 다음 운영 설정만 둔다.
 - credential reference와 허용 schema
 - reader 또는 replica 요구 조건
 - statement, lock 및 queue timeout
-- 동시 실행 수
+- work memory, temporary file, parallel worker, JIT와 동시 실행 수
 - 결과 row와 byte 제한
 - plan admission 정책 profile
 
@@ -119,10 +121,14 @@ tool을 생성하지 않는다.
 list_sources()
 
 get_context(source_id, question, max_objects?)
-  -> metadata_revision, relations, columns, joins, metrics, ambiguities
+  -> source metadata, question, metadata_revision, snapshot_status, quality_level,
+     answerability, relations[{columns, measures, grain, keys, indexes}], joins,
+     business_terms, composition_hints, ambiguities, truncated
 
 query(source_id, sql, metadata_revision)
-  -> status, reason_code, plan_summary, rows, truncated, query_id
+  -> success: status, query_id, metadata_revision, fingerprint, columns, rows,
+              row_count, result_bytes, truncated, queue_ms, elapsed_ms, plan_summary
+  -> failure: error.code, error.message, error.details?.reason_code
 ```
 
 Source가 사용자 session에 고정되는 환경에서는 `list_sources`를 생략할 수 있다.
@@ -140,13 +146,17 @@ POST /query { source_id, sql, metadata_revision }
 `/meta`는 reader가 실제로 조회할 수 있는 allowed schema/relation kind만 catalog에서
 읽는다. DB comment는 길이와 제어 문자를 제한한 비신뢰 description data이며, join은
 comment 문장을 파싱하지 않고 manifest에 승인된 edge만 반환한다. Schema, view
-definition, comment 또는 overlay가 바뀌면 `metadata_revision`도 바뀐다.
+definition, comment, overlay, source execution budget 또는 revision-scoped source policy가
+바뀌면 `metadata_revision`도 바뀐다. 이 revision에 묶인 L2 verified SQL은 현재 실행
+경계에서 다시 통과해야 한다. Application 전역 SQL parser/function policy의 code 변경은
+별도 release 회귀 대상이며 자동으로 metadata revision을 바꾸지는 않는다.
 
 ## Onboarding Levels
 
 - L0: source 등록과 자동 catalog. 단순 질의를 best-effort로 지원한다.
 - L1: description, grain, 시간 column과 비표준 join을 보강한다.
-- L2: 관리되는 metric, verified query와 curated view를 제공한다.
+- L2: L1 조건과 현재 metadata revision의 verified query contract를 충족한다. Measure와
+  curated view는 source 의미에 필요할 때만 추가한다.
 
 권장 onboarding 흐름은 다음과 같다.
 
@@ -193,6 +203,8 @@ Schema drift로 overlay가 깨지면 신규 revision 발행을 중단하고 마�
   [ADR 0010](decisions/0010-revision-scoped-retrieval-index.md)을 따른다.
 - L0/L1/L2 metadata publish gate는
   [ADR 0011](decisions/0011-metadata-quality-level-publish-gate.md)을 따른다.
+- Source revision, encrypted credential과 control-plane 상태 전이는
+  [ADR 0012](decisions/0012-control-plane-source-revisions.md)를 따른다.
 - No-deploy verified query publish는
   [ADR 0013](decisions/0013-control-plane-verified-query-publishing.md)을 따른다.
 - RLS tenant session context와 pool reset은
@@ -202,7 +214,8 @@ Schema drift로 overlay가 깨지면 신규 revision 발행을 중단하고 마�
 
 Production acceptance까지의 구현 순서와 완료 증거는
 [implementation-roadmap.md](implementation-roadmap.md)와
-[completion audit](verification/2026-08-23-completion-audit.md)에서 관리한다. 이후 범위
-변경은 완료된 ID를 재사용하지 않고 새 decision과 roadmap ID로 추가한다.
+[completion audit](verification/2026-08-23-completion-audit.md)에서 baseline으로 관리한다.
+진행 중인 refactoring assurance는 roadmap `REF-*`에서 추적하고, 이후 범위 변경도 완료된
+ID를 재사용하지 않고 새 decision과 roadmap ID로 추가한다.
 네 번째 source 확장 감사와 남은 경계는
 [source extension assurance](verification/2026-08-23-source-extension.md)에 기록한다.

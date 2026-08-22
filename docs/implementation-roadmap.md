@@ -1,12 +1,13 @@
 # Query Man Implementation Roadmap
 
-Status: Production ready
+Status: Production hardening in progress
 
 이 문서는 Query Man의 최종 목적을 구현하기 위한 TODO의 단일 관리 문서다.
 세부 설계 원칙은 [architecture.md](architecture.md), 현재 검증용 데이터와 계약은
 [mvp.md](mvp.md), source 등록 규칙은 [source-onboarding.md](source-onboarding.md)를
 따른다. 전체 항목의 구현·검증 연결은
-[completion audit](verification/2026-08-23-completion-audit.md)에 기록한다.
+[completion audit](verification/2026-08-23-completion-audit.md)에 production baseline으로
+기록되어 있다. 이번 refactoring assurance 증거는 `REF-15`에서 별도 audit으로 확정한다.
 
 ## Final Outcome
 
@@ -196,6 +197,45 @@ Dependencies: `ONB-*`, `AUTH-*`, `MCP-*`, `REL-*`
 상세 반복 절차와 현재 한계는
 [`source-extension-checklist.md`](source-extension-checklist.md)에 유지한다.
 
+## 11. Refactoring Assurance
+
+Dependencies: completed production baseline and extension assurance
+
+완료 표시에는 재현 테스트, 최소 수정, 관련 운영 계약 정비와 전체 회귀 검증이 모두
+필요하다. 과거 verification 문서는 당시 실행 증거로 보존하고, 이번 보강의 새 증거는
+별도 completion audit에 기록한다.
+
+- [x] `REF-01` Composite key·foreign-key pairing·index column 순서가 metadata revision에서
+  보존되는지 검증하고 순서 변경을 서로 다른 revision으로 판정한다.
+- [x] `REF-02` MCP caller context provider 실패가 세 tool 모두에서 내부 정보 없는
+  `INTERNAL_ERROR`로 수렴하는지 실제 MCP client로 검증한다.
+- [x] `REF-03` Runtime이 실제 logging backend에서 지원하지 않는 log level을 설정 단계에서
+  거부한다.
+- [x] `REF-04` 이전 source generation의 지연된 metadata refresh가 새 generation의 active
+  revision을 덮지 못하도록 process epoch와 control-plane CAS를 함께 강제한다.
+- [x] `REF-05` Catalog와 query 직전에 동일한 reader role/session 정책을 검사하고 privilege
+  drift에는 stale metadata를 제공하지 않는다.
+- [x] `REF-06` Graceful drain이 semaphore queue·pool wait·DB 실행을 포함해 이미 수락한 모든
+  query를 추적하고 grace 이후 남은 작업을 취소·rollback한다.
+- [x] `REF-07` Disabled source의 credential rotation, rollback pin resume, stale generation
+  apply와 source identity 변경을 명시적인 상태 전이로 fail-closed한다.
+- [x] `REF-08` Work memory, temporary file, parallel worker와 JIT 상한을 versioned budget으로
+  transaction-local 강제하고 replica 수를 포함한 reader connection capacity를 문서화한다.
+- [x] `REF-09` Startup·control-plane polling·dynamic deactivate 상태가 readiness와 operator
+  health에 누락되지 않게 한다.
+- [x] `REF-10` Process restart가 stored metadata의 stale age를 초기화하지 않도록 publish
+  provenance에 기반한 상한을 적용한다.
+- [x] `REF-11` L2 verified contract가 현재 metadata뿐 아니라 source 실행 budget/policy와도
+  호환되는지 publish 시점에 재검증한다.
+- [x] `REF-12` PostgreSQL `numeric`, binary와 시간 값을 손실·인코딩 오류 없이 전달하는 JSON
+  scalar 계약을 고정하고 byte accounting과 API serialization을 일치시킨다.
+- [x] `REF-13` 실제 server SIGTERM 순서에서 readiness 전환과 application drain grace가
+  실행되는지 검증하고 process manager timeout을 일관되게 설정한다.
+- [x] `REF-14` Metric·audit·dashboard·restore 문구를 실제 수집 가능한 신호와 검증 범위에
+  맞추고 비용 통제 운영 절차를 실행 가능한 runbook으로 정비한다.
+- [ ] `REF-15` Ruff, mypy, unit/integration/load/evaluation/verified/security 회귀와 문서 링크
+  검사를 통과한 최종 completion audit을 남긴다.
+
 ## Recommended Milestones
 
 | Milestone | Scope | Exit |
@@ -207,6 +247,7 @@ Dependencies: `ONB-*`, `AUTH-*`, `MCP-*`, `REL-*`
 | M5 Multi-Tenant Operations | `AUTH-*`, `OPS-*` | Tenant 격리, 관측성, 복구와 운영 안전 기준을 충족한다. |
 | M6 Production Acceptance | `REL-*` | 최종 성공 기준과 공격·장애·부하 시나리오를 모두 통과한다. |
 | M7 Extension Assurance | `EXT-*` | 네 번째 source와 production-authenticated multi-replica MCP 회귀를 통과한다. |
+| M8 Refactoring Assurance | `REF-*` | 상태 경쟁, 권한 drift, 종료·비용 경계를 재검증하고 문서와 실제 보장을 일치시킨다. |
 
 위 milestone은 완료된 구현 순서를 보존한 기록이다. 새로운 기능은 기존 완료 ID를
 재사용하지 않고 별도 roadmap 항목과 검증 가능한 exit condition을 추가한다.
