@@ -23,6 +23,13 @@ POST /query
 }
 ```
 
+Operator caller는 실행 시작 audit log의 `query_id`로 활성 query를 취소할 수 있다.
+
+```text
+DELETE /queries/{query_id}
+  -> { "status": "cancel_requested", "query_id": "..." }
+```
+
 성공 응답은 원본 SQL을 반복하지 않고 다음 정보를 반환한다.
 
 ```text
@@ -55,7 +62,9 @@ timeout, concurrency, result size와 cancel을 대체하지 않는다.
 | HTTP | Code | Meaning |
 |---:|---|---|
 | 400 | `QUERY_REJECTED` | AST 또는 plan policy가 query를 허용하지 않음 |
+| 403 | `OPERATOR_REQUIRED` | Query cancel에 operator 권한이 없음 |
 | 404 | `SOURCE_NOT_FOUND` | Source를 공개하지 않는 기존 오류 |
+| 404 | `QUERY_NOT_FOUND` | Operator의 허용 source 안에 활성 query가 없음 |
 | 408 | `QUERY_TIMEOUT` | 실행 deadline 초과 또는 취소 |
 | 409 | `METADATA_REVISION_MISMATCH` | SQL 생성에 사용한 revision이 현재 revision과 다름 |
 | 429 | `QUERY_OVERLOADED` | Source concurrency/connection queue 상한 초과 |
@@ -70,4 +79,6 @@ timeout, concurrency, result size와 cancel을 대체하지 않는다.
   간주하지 않는다.
 - Process-local semaphore는 단일 replica 안에서만 concurrency를 제한한다.
   `ponytail:` replica가 source quota를 공유해야 할 때 distributed limiter로 교체한다.
-- Function/operator의 실제 OID와 volatility 검증은 `EXEC-13`에서 추가한다.
+- Function/operator의 resolved candidate와 volatility 검증은 ADR 0003을 따른다.
+- Query ID는 실행 전에 생성되어 audit log와 PostgreSQL `application_name`에 동일하게
+  기록된다. Cancel lookup과 connection의 pool 반환은 lock으로 직렬화한다.

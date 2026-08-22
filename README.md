@@ -81,6 +81,9 @@ Gateway는 현재 revision과 AST allowlist를 확인한 뒤 source별 동시 �
 `truncated: true`로 종료합니다. Planner cost는 보조적인 admission 신호이고 실제 실행
 피해의 상한은 timeout, concurrency와 결과 제한이 담당합니다. 기본값은
 [`config/budget-profiles.yaml`](config/budget-profiles.yaml)에서 관리합니다.
+Operator caller는 audit log에 기록된 실행 중 `query_id`를
+`DELETE /queries/{query_id}`로 취소할 수 있으며, 자기 source allowlist 밖의 query는
+조회하거나 취소할 수 없습니다.
 
 Client는 DSN, host, database 또는 role을 전달할 수 없습니다. `source_id`는
 [`config/sources`](config/sources)의 server-side manifest에서만 연결 정보로 해석됩니다.

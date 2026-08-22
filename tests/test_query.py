@@ -32,11 +32,13 @@ class RecordingExecutor:
         sql: str,
         metadata_revision: str,
         validated: ValidatedSql,
+        *,
+        query_id: str | None = None,
     ) -> dict[str, object]:
         self.calls.append((source, sql, metadata_revision, validated))
         return {
             "status": "ok",
-            "query_id": "test-query-id",
+            "query_id": query_id or "test-query-id",
             "metadata_revision": metadata_revision,
             "fingerprint": validated.fingerprint,
             "columns": ["issue_count"],
@@ -51,6 +53,9 @@ class RecordingExecutor:
 
     async def close(self) -> None:
         pass
+
+    async def cancel(self, _query_id: str, _allowed_sources: frozenset[str]) -> bool:
+        return False
 
 
 def query_service() -> tuple[QueryService, MetadataService, RecordingExecutor]:
@@ -127,8 +132,8 @@ async def test_client_disconnect_cancels_active_query() -> None:
             cancelled.set()
 
     class DisconnectedRequest:
-        async def is_disconnected(self) -> bool:
-            return True
+        async def receive(self) -> dict[str, str]:
+            return {"type": "http.disconnect"}
 
     with pytest.raises(QueryTimeoutError):
         await _until_disconnect(DisconnectedRequest(), pending())  # type: ignore[arg-type]

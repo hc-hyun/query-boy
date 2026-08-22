@@ -45,11 +45,13 @@ class RecordingQueryExecutor:
         _sql: str,
         metadata_revision: str,
         validated: ValidatedSql,
+        *,
+        query_id: str | None = None,
     ) -> dict[str, object]:
         self.calls.append((source.source_id, validated.fingerprint))
         return {
             "status": "ok",
-            "query_id": "test-query-id",
+            "query_id": query_id or "test-query-id",
             "metadata_revision": metadata_revision,
             "fingerprint": validated.fingerprint,
             "columns": ["issue_count"],
@@ -64,6 +66,9 @@ class RecordingQueryExecutor:
 
     async def close(self) -> None:
         pass
+
+    async def cancel(self, _query_id: str, _allowed_sources: frozenset[str]) -> bool:
+        return False
 
 
 def runtime_config(api_token: str | None = None) -> RuntimeConfig:
@@ -272,3 +277,47 @@ callers:
     assert denied_query.json() == unknown.json()
     assert executor.calls == []
     assert unauthenticated.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_only_operator_can_request_query_cancellation(tmp_path: Path) -> None:
+    policy_path = tmp_path / "access.yaml"
+    policy_path.write_text(
+        """
+version: 1
+callers:
+  - caller_id: analyst
+    tenant_id: engineering
+    token_env: ANALYST_TOKEN
+    allowed_sources: [development-issues]
+    operator: false
+  - caller_id: operator
+    tenant_id: operations
+    token_env: OPERATOR_TOKEN
+    allowed_sources: [development-issues]
+    operator: true
+""".strip(),
+        encoding="utf-8",
+    )
+    analyst_token = "analyst-token-value-with-at-least-32-characters"
+    operator_token = "operator-token-value-with-at-least-32-characters"
+    policy = AccessPolicy.load(
+        policy_path,
+        ["development-issues", "market-voc"],
+        {"ANALYST_TOKEN": analyst_token, "OPERATOR_TOKEN": operator_token},
+    )
+    query_id = "30c7b03d-659d-47d4-b6f5-cb2ea9a9eaf0"
+    async with client(NeverCalledCatalog(), access_policy=policy) as session:
+        forbidden = await session.delete(
+            f"/queries/{query_id}",
+            headers={"authorization": f"Bearer {analyst_token}"},
+        )
+        missing = await session.delete(
+            f"/queries/{query_id}",
+            headers={"authorization": f"Bearer {operator_token}"},
+        )
+
+    assert forbidden.status_code == 403
+    assert forbidden.json()["error"]["code"] == "OPERATOR_REQUIRED"
+    assert missing.status_code == 404
+    assert missing.json()["error"]["code"] == "QUERY_NOT_FOUND"

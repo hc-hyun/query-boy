@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import logging
+import uuid
+
 from query_man.access import AccessPolicy, CallerContext
+from query_man.errors import OperatorRequiredError, QueryNotFoundError
 from query_man.metadata import MetadataService
 from query_man.query import QueryService
 from query_man.registry import SourceRegistry
+
+logger = logging.getLogger("query_man.audit")
 
 
 class GatewayService:
@@ -46,4 +52,31 @@ class GatewayService:
         metadata_revision: str,
     ) -> dict[str, object]:
         self._access.require_source(caller, source_id)
-        return await self._queries.query(source_id, sql, metadata_revision)
+        query_id = str(uuid.uuid4())
+        logger.info(
+            "query_started query_id=%s caller_id=%s tenant_id=%s source_id=%s",
+            query_id,
+            caller.caller_id,
+            caller.tenant_id,
+            source_id,
+        )
+        return await self._queries.query(
+            source_id,
+            sql,
+            metadata_revision,
+            query_id=query_id,
+        )
+
+    async def cancel_query(self, caller: CallerContext, query_id: str) -> dict[str, str]:
+        if not caller.operator:
+            raise OperatorRequiredError
+        cancelled = await self._queries.cancel(query_id, caller.allowed_sources)
+        if not cancelled:
+            raise QueryNotFoundError
+        logger.info(
+            "query_cancel_requested query_id=%s caller_id=%s tenant_id=%s",
+            query_id,
+            caller.caller_id,
+            caller.tenant_id,
+        )
+        return {"status": "cancel_requested", "query_id": query_id}

@@ -75,6 +75,12 @@ class PlanSummary:
     node_count: int
 
 
+@dataclass(frozen=True)
+class _ActiveQuery:
+    source_id: str
+    connection: AsyncConnection[dict[str, Any]]
+
+
 class QueryExecutor(Protocol):
     async def execute(
         self,
@@ -82,7 +88,11 @@ class QueryExecutor(Protocol):
         sql: str,
         metadata_revision: str,
         validated: ValidatedSql,
+        *,
+        query_id: str | None = None,
     ) -> dict[str, object]: ...
+
+    async def cancel(self, query_id: str, allowed_sources: frozenset[str]) -> bool: ...
 
     async def close(self) -> None: ...
 
@@ -98,7 +108,14 @@ class QueryService:
         self._metadata = metadata
         self._executor = executor
 
-    async def query(self, source_id: str, sql: str, metadata_revision: str) -> dict[str, object]:
+    async def query(
+        self,
+        source_id: str,
+        sql: str,
+        metadata_revision: str,
+        *,
+        query_id: str | None = None,
+    ) -> dict[str, object]:
         source = self._registry.get(source_id)
         if source is None:
             raise SourceNotFoundError
@@ -113,7 +130,16 @@ class QueryService:
             )
         except SqlValidationError as error:
             raise QueryRejectedError(error.code) from error
-        return await self._executor.execute(source, sql, published.revision, validated)
+        return await self._executor.execute(
+            source,
+            sql,
+            published.revision,
+            validated,
+            query_id=query_id,
+        )
+
+    async def cancel(self, query_id: str, allowed_sources: frozenset[str]) -> bool:
+        return await self._executor.cancel(query_id, allowed_sources)
 
 
 class PostgresQueryExecutor:
@@ -121,6 +147,8 @@ class PostgresQueryExecutor:
         self._pools: dict[str, AsyncConnectionPool[Any]] = {}
         self._semaphores: dict[str, asyncio.Semaphore] = {}
         self._pool_lock = asyncio.Lock()
+        self._active_lock = asyncio.Lock()
+        self._active: dict[str, _ActiveQuery] = {}
 
     async def execute(
         self,
@@ -128,7 +156,10 @@ class PostgresQueryExecutor:
         sql: str,
         metadata_revision: str,
         validated: ValidatedSql,
+        *,
+        query_id: str | None = None,
     ) -> dict[str, object]:
+        query_id = query_id or str(uuid.uuid4())
         # ponytail: process-local limit; use a distributed limiter when replicas share a source quota.
         semaphore = self._semaphores.setdefault(
             source.source_id,
@@ -151,14 +182,21 @@ class PostgresQueryExecutor:
                     async with pool.connection(
                         timeout=source.budget.query_queue_timeout_ms / 1000
                     ) as connection:
-                        return await self._execute_connection(
-                            connection,
-                            source,
-                            sql,
-                            metadata_revision,
-                            validated,
-                            queue_ms,
-                        )
+                        async with self._active_lock:
+                            self._active[query_id] = _ActiveQuery(source.source_id, connection)
+                        try:
+                            return await self._execute_connection(
+                                connection,
+                                source,
+                                sql,
+                                metadata_revision,
+                                validated,
+                                queue_ms,
+                                query_id,
+                            )
+                        finally:
+                            async with self._active_lock:
+                                self._active.pop(query_id, None)
             except PoolTimeout as error:
                 raise QueryOverloadedError from error
             except TimeoutError as error:
@@ -172,7 +210,18 @@ class PostgresQueryExecutor:
         finally:
             semaphore.release()
 
+    async def cancel(self, query_id: str, allowed_sources: frozenset[str]) -> bool:
+        async with self._active_lock:
+            active = self._active.get(query_id)
+            if active is None or active.source_id not in allowed_sources:
+                return False
+            await active.connection.cancel_safe(timeout=1)
+            return True
+
     async def close(self) -> None:
+        async with self._active_lock:
+            for active in self._active.values():
+                await active.connection.cancel_safe(timeout=1)
         for pool in self._pools.values():
             await pool.close()
         self._pools.clear()
@@ -185,8 +234,8 @@ class PostgresQueryExecutor:
         metadata_revision: str,
         validated: ValidatedSql,
         queue_ms: int,
+        query_id: str,
     ) -> dict[str, object]:
-        query_id = str(uuid.uuid4())
         started_at = time.monotonic()
         try:
             await connection.execute("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")

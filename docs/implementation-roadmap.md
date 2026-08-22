@@ -85,12 +85,12 @@ Dependencies: `SQL-01`~`SQL-09`, `DEC-06`
 - [x] `EXEC-03` `BEGIN READ ONLY` transaction과 transaction-local statement, lock, idle timeout을 강제한다.
 - [x] `EXEC-04` Source profile의 reader identity, database와 read-only session 상태를 실행 직전에 검증한다.
 - [x] `EXEC-05` 결과를 전부 메모리에 올리지 않고 stream하며 row와 UTF-8 byte 상한에서 중단한다.
-- [ ] `EXEC-06` Client disconnect, deadline과 운영자 요청 시 PostgreSQL query를 cancel하고 rollback한다.
+- [x] `EXEC-06` Client disconnect, deadline과 운영자 요청 시 PostgreSQL query를 cancel하고 rollback한다.
 - [x] `EXEC-07` Queue timeout과 pool 고갈을 안정적인 overload reason code로 반환한다.
 - [x] `EXEC-08` Optional `EXPLAIN` admission을 구현하되 planner cost만으로 안전을 보장하지 않도록 한다.
 - [x] `EXEC-09` `query_id`, fingerprint, elapsed time, row/byte 수, truncation과 plan summary를 반환한다.
 - [x] `EXEC-10` DB 오류, timeout, cancel과 serialization failure를 비공개 오류 계약으로 매핑한다.
-- [ ] `EXEC-11` 동시성, timeout, large result, disconnect, cancel과 rollback 통합 테스트를 추가한다.
+- [x] `EXEC-11` 동시성, timeout, large result, disconnect, cancel과 rollback 통합 테스트를 추가한다.
 - [x] `EXEC-12` Reader가 base schema, write statement와 비승인 함수를 실행할 수 없는지 end-to-end로 검증한다.
 - [x] `EXEC-13` PostgreSQL이 해석한 function/operator OID, namespace와 volatility를 검증해 AST name allowlist를 보강한다.
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from collections.abc import AsyncIterator, Coroutine
 from contextlib import asynccontextmanager, suppress
 
@@ -179,6 +180,10 @@ def build_app(
         )
         return await _until_disconnect(request, pending)
 
+    @app.delete("/queries/{query_id}")
+    async def cancel_query(query_id: uuid.UUID, request: Request) -> dict[str, str]:
+        return await gateway.cancel_query(_caller(request), str(query_id))
+
     return app
 
 
@@ -187,20 +192,33 @@ async def _until_disconnect(
     pending: Coroutine[object, object, dict[str, object]],
 ) -> dict[str, object]:
     task: asyncio.Task[dict[str, object]] = asyncio.create_task(pending)
+    disconnected = asyncio.create_task(_wait_for_disconnect(request))
     try:
-        while not task.done():
-            await asyncio.wait({task}, timeout=0.1)
-            if not task.done() and await request.is_disconnected() and not task.done():
-                task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await task
-                raise QueryTimeoutError
-        return task.result()
+        done, _pending = await asyncio.wait(
+            {task, disconnected},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if task in done:
+            return task.result()
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+        raise QueryTimeoutError
     finally:
+        disconnected.cancel()
+        with suppress(asyncio.CancelledError):
+            await disconnected
         if not task.done():
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
+
+
+async def _wait_for_disconnect(request: Request) -> None:
+    while True:
+        message = await request.receive()
+        if message["type"] == "http.disconnect":
+            return
 
 
 def _caller(request: Request) -> CallerContext:

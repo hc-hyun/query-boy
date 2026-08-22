@@ -1,20 +1,64 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import socket
+import uuid
 from contextlib import suppress
 from dataclasses import replace
 
+import httpx
 import pytest
+import uvicorn
 from dotenv import load_dotenv
 
+from query_man.app import build_app
 from query_man.catalog import PostgresCatalog
 from query_man.errors import QueryOverloadedError, QueryRejectedError, QueryTimeoutError
 from query_man.metadata import MetadataService
+from query_man.models import CatalogSnapshot, SourceProfile
 from query_man.query import PostgresQueryExecutor, QueryService
 from query_man.registry import SourceRegistry
-from query_man.sql_validation import DEFAULT_ALLOWED_FUNCTIONS, validate_sql
-from tests.helpers import ROOT_DIRECTORY
+from query_man.runtime_config import RuntimeConfig
+from query_man.sql_validation import DEFAULT_ALLOWED_FUNCTIONS, ValidatedSql, validate_sql
+from tests.helpers import ROOT_DIRECTORY, load_test_registry, minimal_development_snapshot
+
+
+class DisconnectCatalog:
+    async def load(self, _source: SourceProfile) -> CatalogSnapshot:
+        return minimal_development_snapshot()
+
+    async def close(self) -> None:
+        pass
+
+
+class DisconnectExecutor:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.cancelled = asyncio.Event()
+
+    async def execute(
+        self,
+        _source: SourceProfile,
+        _sql: str,
+        _metadata_revision: str,
+        _validated: ValidatedSql,
+        *,
+        query_id: str | None = None,
+    ) -> dict[str, object]:
+        self.started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            self.cancelled.set()
+        return {"query_id": query_id or "unreachable"}
+
+    async def cancel(self, _query_id: str, _allowed_sources: frozenset[str]) -> bool:
+        return False
+
+    async def close(self) -> None:
+        pass
 
 
 @pytest.mark.integration
@@ -166,6 +210,89 @@ async def test_live_guarded_query_enforces_plan_and_result_limits() -> None:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_socket_disconnect_cancels_http_query() -> None:
+    executor = DisconnectExecutor()
+    runtime = RuntimeConfig(
+        host="127.0.0.1",
+        port=0,
+        log_level="critical",
+        api_token=None,
+        source_directory=ROOT_DIRECTORY / "config" / "sources",
+        budget_file=ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
+        access_policy_file=None,
+        metadata_cache_ttl_ms=30_000,
+        metadata_max_stale_ms=300_000,
+        metadata_retry_delay_ms=5_000,
+    )
+    app = build_app(
+        runtime,
+        registry=load_test_registry(),
+        catalog=DisconnectCatalog(),
+        query_executor=executor,
+    )
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server_socket.bind(("127.0.0.1", 0))
+    server_socket.listen(128)
+    server_socket.setblocking(False)
+    port = int(server_socket.getsockname()[1])
+    server = uvicorn.Server(
+        uvicorn.Config(
+            app,
+            log_level="critical",
+            lifespan="on",
+            timeout_graceful_shutdown=1,
+        )
+    )
+    server_task = asyncio.create_task(server.serve(sockets=[server_socket]))
+    try:
+        for _ in range(100):
+            if server.started:
+                break
+            await asyncio.sleep(0.01)
+        assert server.started
+
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as session:
+            context = await session.post(
+                "/meta",
+                json={"source_id": "development-issues", "question": "문제 수"},
+            )
+        body = json.dumps(
+            {
+                "source_id": "development-issues",
+                "sql": "SELECT count(*) FROM ai.issue_overview",
+                "metadata_revision": context.json()["metadata_revision"],
+            }
+        ).encode()
+        _reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.write(
+            b"POST /query HTTP/1.1\r\n"
+            b"Host: 127.0.0.1\r\n"
+            b"Content-Type: application/json\r\n"
+            + f"Content-Length: {len(body)}\r\n".encode()
+            + b"Connection: close\r\n\r\n"
+            + body
+        )
+        await writer.drain()
+        await asyncio.wait_for(executor.started.wait(), timeout=2)
+        writer.close()
+        await writer.wait_closed()
+        await asyncio.wait_for(executor.cancelled.wait(), timeout=2)
+    finally:
+        server.should_exit = True
+        try:
+            await asyncio.wait_for(server_task, timeout=3)
+        except TimeoutError:
+            server.force_exit = True
+            server_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await server_task
+        finally:
+            server_socket.close()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_live_query_concurrency_cancel_and_source_isolation() -> None:
     load_dotenv(ROOT_DIRECTORY / ".env")
     required = ["DEVELOPMENT_ISSUES_READER_PASSWORD", "MARKET_VOC_READER_PASSWORD"]
@@ -268,6 +395,33 @@ async def test_live_query_concurrency_cancel_and_source_isolation() -> None:
             dev_count_validated,
         )
         assert recovered["rows"] == [{"issue_count": 600}]
+
+        operator_query_id = str(uuid.uuid4())
+        slow_task = asyncio.create_task(
+            executor.execute(
+                limited_development,
+                slow_sql,
+                development_metadata.revision,
+                slow_validated,
+                query_id=operator_query_id,
+            )
+        )
+        await asyncio.sleep(0.05)
+        assert await executor.cancel(operator_query_id, frozenset({"market-voc"})) is False
+        assert await executor.cancel(
+            operator_query_id,
+            frozenset({"development-issues"}),
+        )
+        with pytest.raises(QueryTimeoutError):
+            await slow_task
+
+        recovered_after_operator_cancel = await executor.execute(
+            limited_development,
+            dev_count_sql,
+            development_metadata.revision,
+            dev_count_validated,
+        )
+        assert recovered_after_operator_cancel["rows"] == [{"issue_count": 600}]
     finally:
         if slow_task is not None:
             if not slow_task.done():
