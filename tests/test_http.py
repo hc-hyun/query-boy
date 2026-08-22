@@ -235,9 +235,15 @@ async def test_source_admin_requires_operator_and_hides_credential() -> None:
             headers={"authorization": f"Bearer {token}"},
             json={"manifest": {}, "credential": credential},
         )
+        resume = await session.post(
+            "/admin/sources/new-source/metadata/resume",
+            headers={"authorization": f"Bearer {token}"},
+        )
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "OPERATOR_REQUIRED"
     assert credential not in response.text
+    assert resume.status_code == 403
+    assert resume.json()["error"]["code"] == "OPERATOR_REQUIRED"
 
 
 @pytest.mark.asyncio

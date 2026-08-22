@@ -160,6 +160,7 @@ async def test_metadata_publish_rejects_superseded_control_generation() -> None:
                 "reader-secret",
             ),
             first_metadata,
+            expected_state_version=0 if current is None else current.state_version,
         )
 
         second_generation = await source_store.next_generation(validated.profile.source_id)
@@ -180,6 +181,7 @@ async def test_metadata_publish_rejects_superseded_control_generation() -> None:
                 "reader-secret",
             ),
             second_metadata,
+            expected_state_version=first.state_version,
         )
         stale_source = replace(
             validated.profile,

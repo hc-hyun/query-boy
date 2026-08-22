@@ -35,6 +35,7 @@ class StoredSource:
     encrypted_secret: EncryptedSecret
     metadata_revision: str
     enabled: bool
+    state_version: int = 1
 
 
 class PostgresSourceStore:
@@ -48,6 +49,7 @@ class PostgresSourceStore:
         async with pool.connection() as connection:
             cursor = await connection.execute(
                 "SELECT active.source_id, active.generation, active.enabled, "
+                "active.state_version, "
                 "revision.manifest, revision.secret_nonce, revision.secret_ciphertext, "
                 "revision.metadata_revision "
                 "FROM control.active_source_profiles AS active "
@@ -64,6 +66,7 @@ class PostgresSourceStore:
         async with pool.connection() as connection:
             cursor = await connection.execute(
                 "SELECT active.source_id, active.generation, active.enabled, "
+                "active.state_version, "
                 "revision.manifest, revision.secret_nonce, revision.secret_ciphertext, "
                 "revision.metadata_revision "
                 "FROM control.active_source_profiles AS active "
@@ -80,7 +83,8 @@ class PostgresSourceStore:
         pool = await self._get_pool()
         async with pool.connection() as connection:
             cursor = await connection.execute(
-                "SELECT source_id, generation, true AS enabled, manifest, secret_nonce, "
+                "SELECT source_id, generation, true AS enabled, 0 AS state_version, "
+                "manifest, secret_nonce, "
                 "secret_ciphertext, metadata_revision "
                 "FROM control.source_profile_revisions "
                 "WHERE source_id = %s AND generation = %s",
@@ -112,6 +116,8 @@ class PostgresSourceStore:
         manifest: dict[str, object],
         encrypted_secret: EncryptedSecret,
         metadata: PreparedMetadata,
+        *,
+        expected_state_version: int,
     ) -> StoredSource:
         if generation <= 0:
             raise SourceGenerationConflictError
@@ -119,8 +125,14 @@ class PostgresSourceStore:
         pool = await self._get_pool()
         async with pool.connection() as connection, connection.transaction():
             await _lock_source_transition(connection, source_id)
-            current_generation = await _lock_generation(connection, source_id)
-            if current_generation != expected_generation:
+            current_generation, current_state_version = await _lock_state(
+                connection,
+                source_id,
+            )
+            if (
+                current_generation != expected_generation
+                or current_state_version != expected_state_version
+            ):
                 raise SourceGenerationConflictError
             await connection.execute(
                 "INSERT INTO control.metadata_snapshots (source_id, revision, snapshot) "
@@ -163,15 +175,20 @@ class PostgresSourceStore:
             )
             if await cursor.fetchone() is None:
                 raise SourcePublishPinnedError
-            await connection.execute(
+            cursor = await connection.execute(
                 "INSERT INTO control.active_source_profiles "
-                "(source_id, generation, enabled, activated_at) "
-                "VALUES (%s, %s, true, clock_timestamp()) "
+                "(source_id, generation, enabled, state_version, activated_at) "
+                "VALUES (%s, %s, true, 1, clock_timestamp()) "
                 "ON CONFLICT (source_id) DO UPDATE "
                 "SET generation = EXCLUDED.generation, enabled = true, "
-                "activated_at = EXCLUDED.activated_at",
+                "state_version = control.active_source_profiles.state_version + 1, "
+                "activated_at = EXCLUDED.activated_at "
+                "RETURNING state_version",
                 (source_id, generation),
             )
+            state_row = await cursor.fetchone()
+            if state_row is None:
+                raise SourceGenerationConflictError
         return StoredSource(
             source_id,
             generation,
@@ -179,36 +196,56 @@ class PostgresSourceStore:
             encrypted_secret,
             metadata.revision,
             True,
+            int(state_row["state_version"]),
         )
 
-    async def deactivate(self, source_id: str, expected_generation: int) -> None:
+    async def deactivate(
+        self,
+        source_id: str,
+        expected_generation: int,
+        *,
+        expected_state_version: int,
+    ) -> int:
         pool = await self._get_pool()
         async with pool.connection() as connection, connection.transaction():
             await _lock_source_transition(connection, source_id)
             cursor = await connection.execute(
                 "UPDATE control.active_source_profiles "
-                "SET enabled = false, activated_at = clock_timestamp() "
-                "WHERE source_id = %s AND generation = %s AND enabled "
-                "RETURNING source_id",
-                (source_id, expected_generation),
+                "SET enabled = false, state_version = state_version + 1, "
+                "activated_at = clock_timestamp() "
+                "WHERE source_id = %s AND generation = %s "
+                "AND state_version = %s AND enabled "
+                "RETURNING state_version",
+                (source_id, expected_generation, expected_state_version),
             )
-            if await cursor.fetchone() is None:
+            row = await cursor.fetchone()
+            if row is None:
                 raise SourceGenerationConflictError
+        return int(row["state_version"])
 
     async def rollback(
         self,
         source_id: str,
         generation: int,
         expected_generation: int,
+        *,
+        expected_state_version: int,
     ) -> StoredSource:
         pool = await self._get_pool()
         async with pool.connection() as connection, connection.transaction():
             await _lock_source_transition(connection, source_id)
-            current_generation = await _lock_generation(connection, source_id)
-            if current_generation != expected_generation:
+            current_generation, current_state_version = await _lock_state(
+                connection,
+                source_id,
+            )
+            if (
+                current_generation != expected_generation
+                or current_state_version != expected_state_version
+            ):
                 raise SourceGenerationConflictError
             cursor = await connection.execute(
-                "SELECT source_id, generation, true AS enabled, manifest, secret_nonce, "
+                "SELECT source_id, generation, true AS enabled, 0 AS state_version, "
+                "manifest, secret_nonce, "
                 "secret_ciphertext, metadata_revision "
                 "FROM control.source_profile_revisions "
                 "WHERE source_id = %s AND generation = %s FOR SHARE",
@@ -218,19 +255,32 @@ class PostgresSourceStore:
             if row is None:
                 raise StoredSourceNotFoundError
             value = _decode(row)
-            await connection.execute(
+            cursor = await connection.execute(
                 "UPDATE control.active_source_profiles "
-                "SET generation = %s, enabled = true, activated_at = clock_timestamp() "
-                "WHERE source_id = %s",
-                (generation, source_id),
+                "SET generation = %s, enabled = true, state_version = state_version + 1, "
+                "activated_at = clock_timestamp() "
+                "WHERE source_id = %s AND state_version = %s "
+                "RETURNING state_version",
+                (generation, source_id, expected_state_version),
             )
+            state_row = await cursor.fetchone()
+            if state_row is None:
+                raise SourceGenerationConflictError
             await connection.execute(
                 "UPDATE control.active_metadata_revisions "
                 "SET revision = %s, pinned = true, activated_at = clock_timestamp() "
                 "WHERE source_id = %s",
                 (value.metadata_revision, source_id),
             )
-        return value
+        return StoredSource(
+            value.source_id,
+            value.generation,
+            value.manifest,
+            value.encrypted_secret,
+            value.metadata_revision,
+            value.enabled,
+            int(state_row["state_version"]),
+        )
 
     async def publish_verified_query(self, query: VerifiedQuery) -> None:
         document = {
@@ -318,14 +368,16 @@ class PostgresSourceStore:
         return self._pool
 
 
-async def _lock_generation(connection: Any, source_id: str) -> int:
+async def _lock_state(connection: Any, source_id: str) -> tuple[int, int]:
     cursor = await connection.execute(
-        "SELECT generation FROM control.active_source_profiles "
+        "SELECT generation, state_version FROM control.active_source_profiles "
         "WHERE source_id = %s FOR UPDATE",
         (source_id,),
     )
     row = await cursor.fetchone()
-    return 0 if row is None else int(row["generation"])
+    if row is None:
+        return 0, 0
+    return int(row["generation"]), int(row["state_version"])
 
 
 async def _lock_source_transition(connection: Any, source_id: str) -> None:
@@ -350,4 +402,5 @@ def _decode(row: dict[str, Any]) -> StoredSource:
         ),
         metadata_revision=str(row["metadata_revision"]),
         enabled=bool(row["enabled"]),
+        state_version=int(row["state_version"]),
     )

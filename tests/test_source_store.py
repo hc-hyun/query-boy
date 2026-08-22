@@ -13,7 +13,11 @@ from query_man.models import PreparedMetadata
 from query_man.registry import load_budget_profiles, validate_source_manifest
 from query_man.revision import create_metadata_revision
 from query_man.secrets import SourceSecretCipher
-from query_man.source_store import PostgresSourceStore
+from query_man.source_store import (
+    PostgresSourceStore,
+    SourceGenerationConflictError,
+    SourcePublishPinnedError,
+)
 from query_man.verified import ExpectedResult, VerifiedQuery, create_result_hash
 from tests.helpers import ROOT_DIRECTORY, minimal_development_snapshot
 
@@ -64,6 +68,7 @@ async def test_source_store_publishes_rotates_rolls_back_and_deactivates() -> No
             validated.document,
             first_secret,
             metadata,
+            expected_state_version=0 if current is None else current.state_version,
         )
         assert first.generation == first_generation
         assert cipher.decrypt(source.source_id, first.generation, first.encrypted_secret) == (
@@ -79,8 +84,10 @@ async def test_source_store_publishes_rotates_rolls_back_and_deactivates() -> No
             validated.document,
             rotated_secret,
             metadata,
+            expected_state_version=first.state_version,
         )
         assert rotated.generation == rotated_generation
+        assert rotated.state_version == first.state_version + 1
         assert cipher.decrypt(source.source_id, rotated.generation, rotated.encrypted_secret) == (
             "rotated-secret"
         )
@@ -110,15 +117,63 @@ async def test_source_store_publishes_rotates_rolls_back_and_deactivates() -> No
             source.source_id,
             first.generation,
             rotated.generation,
+            expected_state_version=rotated.state_version,
         )
         assert rolled_back.generation == first.generation
+        assert rolled_back.state_version == rotated.state_version + 1
         assert cipher.decrypt(source.source_id, rolled_back.generation, rolled_back.encrypted_secret) == (
             "first-reader-secret"
         )
-        await store.deactivate(source.source_id, first.generation)
+
+        resumed_generation = await store.next_generation(source.source_id)
+        resumed_secret = cipher.encrypt(
+            source.source_id,
+            resumed_generation,
+            "resumed-secret",
+        )
+        with pytest.raises(SourceGenerationConflictError):
+            await store.publish(
+                source.source_id,
+                rolled_back.generation,
+                resumed_generation,
+                validated.document,
+                resumed_secret,
+                metadata,
+                expected_state_version=first.state_version,
+            )
+        with pytest.raises(SourcePublishPinnedError):
+            await store.publish(
+                source.source_id,
+                rolled_back.generation,
+                resumed_generation,
+                validated.document,
+                resumed_secret,
+                metadata,
+                expected_state_version=rolled_back.state_version,
+            )
+
+        await metadata_store.unpin(source)
+        resumed = await store.publish(
+            source.source_id,
+            rolled_back.generation,
+            resumed_generation,
+            validated.document,
+            resumed_secret,
+            metadata,
+            expected_state_version=rolled_back.state_version,
+        )
+        assert resumed.state_version == rolled_back.state_version + 1
+
+        inactive_state_version = await store.deactivate(
+            source.source_id,
+            resumed.generation,
+            expected_state_version=resumed.state_version,
+        )
         inactive = await store.get_active(source.source_id)
         assert inactive is not None
         assert inactive.enabled is False
+        assert inactive.state_version == inactive_state_version
+        assert inactive.state_version == resumed.state_version + 1
     finally:
         await metadata_store.close()
         await store.close()

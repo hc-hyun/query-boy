@@ -73,7 +73,10 @@ CREATE TABLE IF NOT EXISTS control.active_source_profiles (
   source_id text PRIMARY KEY,
   generation bigint NOT NULL,
   enabled boolean NOT NULL DEFAULT true,
+  state_version bigint NOT NULL DEFAULT 1,
   activated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  CONSTRAINT active_source_profiles_state_version_valid
+    CHECK (state_version > 0),
   CONSTRAINT active_source_profile_revision_exists
     FOREIGN KEY (source_id, generation)
     REFERENCES control.source_profile_revisions (source_id, generation)
@@ -110,6 +113,24 @@ CREATE TABLE IF NOT EXISTS control.verified_query_contracts (
 
 ALTER TABLE control.active_metadata_revisions
   ADD COLUMN IF NOT EXISTS pinned boolean NOT NULL DEFAULT false;
+
+ALTER TABLE control.active_source_profiles
+  ADD COLUMN IF NOT EXISTS state_version bigint NOT NULL DEFAULT 1;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_constraint
+    WHERE conname = 'active_source_profiles_state_version_valid'
+      AND conrelid = 'control.active_source_profiles'::regclass
+  ) THEN
+    ALTER TABLE control.active_source_profiles
+      ADD CONSTRAINT active_source_profiles_state_version_valid
+      CHECK (state_version > 0);
+  END IF;
+END;
+$$;
 
 CREATE OR REPLACE FUNCTION control.reject_metadata_snapshot_mutation()
 RETURNS trigger

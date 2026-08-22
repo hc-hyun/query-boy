@@ -51,15 +51,25 @@ class SourceStore(Protocol):
         manifest: dict[str, object],
         encrypted_secret: EncryptedSecret,
         metadata: PreparedMetadata,
+        *,
+        expected_state_version: int,
     ) -> StoredSource: ...
 
-    async def deactivate(self, source_id: str, expected_generation: int) -> None: ...
+    async def deactivate(
+        self,
+        source_id: str,
+        expected_generation: int,
+        *,
+        expected_state_version: int,
+    ) -> int: ...
 
     async def rollback(
         self,
         source_id: str,
         generation: int,
         expected_generation: int,
+        *,
+        expected_state_version: int,
     ) -> StoredSource: ...
 
     async def close(self) -> None: ...
@@ -93,7 +103,7 @@ class SourceReloader:
         self._budgets = budgets
         self._verified_revisions = verified_revisions
         self._invalidators = invalidators
-        self._applied: dict[str, tuple[int, bool]] = {}
+        self._applied: dict[str, StoredSource] = {}
         self._lock = asyncio.Lock()
 
     def connection_identity(self, source_id: str) -> tuple[object, ...] | None:
@@ -116,7 +126,7 @@ class SourceReloader:
                 self._verified_revisions.get(source_id, frozenset()) | revisions
             )
         for record in records:
-            if self._applied.get(record.source_id) == (record.generation, record.enabled):
+            if self._applied.get(record.source_id) == record:
                 continue
             try:
                 await self.apply(record)
@@ -129,20 +139,29 @@ class SourceReloader:
 
     async def apply(self, record: StoredSource) -> SourceProfile | None:
         async with self._lock:
+            current = self._applied.get(record.source_id)
+            if current is not None:
+                if record.state_version < current.state_version:
+                    raise SourceGenerationConflictError
+                if record.state_version == current.state_version:
+                    if record != current:
+                        raise SourceGenerationConflictError
+                    return self._registry.get(record.source_id) if record.enabled else None
             if not record.enabled:
                 await self._invalidate(record.source_id)
                 self._registry.remove(record.source_id)
                 self._metadata.invalidate(record.source_id)
-                self._applied[record.source_id] = (record.generation, False)
+                self._applied[record.source_id] = record
                 return None
             profile = await self.validate(record)
             await self._invalidate(record.source_id)
             self._registry.upsert(profile)
             self._metadata.invalidate(record.source_id)
-            self._applied[record.source_id] = (record.generation, True)
+            self._applied[record.source_id] = record
             return profile
 
     async def validate(self, record: StoredSource) -> SourceProfile:
+        self._require_connection_identity(record)
         secret = self._cipher.decrypt(
             record.source_id,
             record.generation,
@@ -169,6 +188,15 @@ class SourceReloader:
         if not quality.publishable:
             raise RegistryConfigurationError("Stored source does not meet its quality level")
         return replace(validated.profile, control_generation=record.generation)
+
+    def _require_connection_identity(self, record: StoredSource) -> None:
+        current_identity = self.connection_identity(record.source_id)
+        if current_identity is not None and current_identity != _connection_identity(
+            record.manifest
+        ):
+            raise RegistryConfigurationError(
+                "A source_id cannot be rebound to a different connection identity"
+            )
 
     async def _invalidate(self, source_id: str) -> None:
         for invalidator in self._invalidators:
@@ -233,6 +261,7 @@ class SourceAdminService:
                 validated.document,
                 encrypted,
                 metadata,
+                expected_state_version=0 if current is None else current.state_version,
             )
             await self._reloader.apply(record)
         except SourceGenerationConflictError as error:
@@ -262,7 +291,7 @@ class SourceAdminService:
             current = await self._store.get_active(source_id)
         except Exception as error:
             raise SourceControlUnavailableError from error
-        if current is None:
+        if current is None or not current.enabled:
             raise SourceValidationError
         return await self.publish(source_id, current.manifest, credential)
 
@@ -271,7 +300,11 @@ class SourceAdminService:
             current = await self._store.get_active(source_id)
             if current is None:
                 raise StoredSourceNotFoundError
-            await self._store.deactivate(source_id, current.generation)
+            state_version = await self._store.deactivate(
+                source_id,
+                current.generation,
+                expected_state_version=current.state_version,
+            )
             inactive = StoredSource(
                 current.source_id,
                 current.generation,
@@ -279,6 +312,7 @@ class SourceAdminService:
                 current.encrypted_secret,
                 current.metadata_revision,
                 False,
+                state_version,
             )
             await self._reloader.apply(inactive)
         except SourceGenerationConflictError as error:
@@ -348,11 +382,18 @@ class SourceAdminService:
             if current is None:
                 raise StoredSourceNotFoundError
             candidate = await self._store.get_revision(source_id, generation)
+            if _connection_identity(current.manifest) != _connection_identity(
+                candidate.manifest
+            ):
+                raise RegistryConfigurationError(
+                    "A source_id cannot be rebound to a different connection identity"
+                )
             await self._reloader.validate(candidate)
             record = await self._store.rollback(
                 source_id,
                 generation,
                 current.generation,
+                expected_state_version=current.state_version,
             )
             await self._reloader.apply(record)
         except SourceGenerationConflictError as error:
@@ -367,6 +408,18 @@ class SourceAdminService:
             "generation": record.generation,
             "metadata_revision": record.metadata_revision,
         }
+
+    async def resume_automatic_publish(self, source_id: str) -> dict[str, object]:
+        try:
+            current = await self._store.get_active(source_id)
+            if current is None or not current.enabled:
+                raise StoredSourceNotFoundError
+            await self._metadata.resume_automatic_publish(source_id)
+        except StoredSourceNotFoundError as error:
+            raise SourceValidationError from error
+        except Exception as error:
+            raise SourceControlUnavailableError from error
+        return {"status": "resumed", "source_id": source_id}
 
     async def _stage(self, source: SourceProfile) -> PreparedMetadata:
         catalog = self._catalog_factory()

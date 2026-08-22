@@ -435,6 +435,16 @@ def build_app(
             raise SourceControlUnavailableError
         return await source_admin.rollback(source_id, generation)
 
+    @app.post("/admin/sources/{source_id}/metadata/resume")
+    async def resume_source_metadata_publish(
+        source_id: str,
+        request: Request,
+    ) -> dict[str, object]:
+        _require_operator(request)
+        if source_admin is None:
+            raise SourceControlUnavailableError
+        return await source_admin.resume_automatic_publish(source_id)
+
     @app.delete("/admin/sources/{source_id}")
     async def deactivate_source(source_id: str, request: Request) -> dict[str, object]:
         _require_operator(request)

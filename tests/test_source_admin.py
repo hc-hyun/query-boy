@@ -10,10 +10,20 @@ from query_man.errors import SourceValidationError
 from query_man.metadata import MetadataService
 from query_man.models import CatalogSnapshot, PreparedMetadata, SourceProfile
 from query_man.query import QueryService
-from query_man.registry import SourceRegistry, load_budget_profiles, validate_source_manifest
+from query_man.registry import (
+    RegistryConfigurationError,
+    SourceRegistry,
+    load_budget_profiles,
+    validate_source_manifest,
+)
 from query_man.secrets import EncryptedSecret, SourceSecretCipher
 from query_man.source_admin import SourceAdminService, SourceReloader
-from query_man.source_store import StoredSource, StoredSourceNotFoundError
+from query_man.source_store import (
+    SourceGenerationConflictError,
+    SourcePublishPinnedError,
+    StoredSource,
+    StoredSourceNotFoundError,
+)
 from query_man.sql_validation import ValidatedSql
 from query_man.verified import ExpectedResult, VerifiedQuery, create_result_hash
 from tests.helpers import ROOT_DIRECTORY, minimal_development_snapshot
@@ -22,21 +32,29 @@ from tests.helpers import ROOT_DIRECTORY, minimal_development_snapshot
 class MemoryMetadataStore:
     def __init__(self) -> None:
         self.values: dict[tuple[str, str], PreparedMetadata] = {}
+        self.active: dict[str, str] = {}
+        self.pinned: set[str] = set()
 
     async def get_revision(self, source: SourceProfile, revision: str) -> PreparedMetadata:
         return self.values[(source.source_id, revision)]
 
-    async def get_active(self, _source: SourceProfile) -> PreparedMetadata | None:
-        return None
+    async def get_active(self, source: SourceProfile) -> PreparedMetadata | None:
+        revision = self.active.get(source.source_id)
+        return None if revision is None else self.values[(source.source_id, revision)]
 
-    async def publish(self, _source: SourceProfile, value: PreparedMetadata) -> PreparedMetadata:
-        return value
+    async def publish(self, source: SourceProfile, value: PreparedMetadata) -> PreparedMetadata:
+        self.values[(source.source_id, value.revision)] = value
+        if source.source_id not in self.pinned:
+            self.active[source.source_id] = value.revision
+        return self.values[(source.source_id, self.active[source.source_id])]
 
     async def activate(self, source: SourceProfile, revision: str) -> PreparedMetadata:
+        self.active[source.source_id] = revision
+        self.pinned.add(source.source_id)
         return self.values[(source.source_id, revision)]
 
-    async def unpin(self, _source: SourceProfile) -> None:
-        pass
+    async def unpin(self, source: SourceProfile) -> None:
+        self.pinned.discard(source.source_id)
 
     async def close(self) -> None:
         pass
@@ -57,7 +75,7 @@ class MemorySourceStore:
 
     async def get_revision(self, source_id: str, generation: int) -> StoredSource:
         try:
-            return self.history[(source_id, generation)]
+            return replace(self.history[(source_id, generation)], state_version=0)
         except KeyError as error:
             raise StoredSourceNotFoundError from error
 
@@ -77,34 +95,79 @@ class MemorySourceStore:
         manifest: dict[str, object],
         encrypted_secret: EncryptedSecret,
         metadata: PreparedMetadata,
+        *,
+        expected_state_version: int,
     ) -> StoredSource:
-        record = StoredSource(
+        current = self.active.get(source_id)
+        current_generation = 0 if current is None else current.generation
+        current_state_version = 0 if current is None else current.state_version
+        if (
+            expected_generation != current_generation
+            or expected_state_version != current_state_version
+        ):
+            raise SourceGenerationConflictError
+        if source_id in self.metadata.pinned:
+            raise SourcePublishPinnedError
+        revision = StoredSource(
             source_id,
             generation,
             manifest,
             encrypted_secret,
             metadata.revision,
             True,
+            0,
         )
+        record = replace(revision, state_version=current_state_version + 1)
         self.metadata.values[(source_id, metadata.revision)] = metadata
-        self.history[(source_id, generation)] = record
+        self.metadata.active[source_id] = metadata.revision
+        self.history[(source_id, generation)] = revision
         self.active[source_id] = record
         return record
 
-    async def deactivate(self, source_id: str, expected_generation: int) -> None:
+    async def deactivate(
+        self,
+        source_id: str,
+        expected_generation: int,
+        *,
+        expected_state_version: int,
+    ) -> int:
         current = self.active[source_id]
-        assert current.generation == expected_generation
-        self.active[source_id] = replace(current, enabled=False)
+        if (
+            current.generation != expected_generation
+            or current.state_version != expected_state_version
+            or not current.enabled
+        ):
+            raise SourceGenerationConflictError
+        state_version = current.state_version + 1
+        self.active[source_id] = replace(
+            current,
+            enabled=False,
+            state_version=state_version,
+        )
+        return state_version
 
     async def rollback(
         self,
         source_id: str,
         generation: int,
         expected_generation: int,
+        *,
+        expected_state_version: int,
     ) -> StoredSource:
-        assert self.active[source_id].generation == expected_generation
-        record = self.history[(source_id, generation)]
+        current = self.active[source_id]
+        if (
+            current.generation != expected_generation
+            or current.state_version != expected_state_version
+        ):
+            raise SourceGenerationConflictError
+        record = replace(
+            self.history[(source_id, generation)],
+            enabled=True,
+            state_version=current.state_version + 1,
+        )
         self.active[source_id] = record
+        self.metadata.active[source_id] = record.metadata_revision
+        self.metadata.pinned.add(source_id)
         return record
 
     async def close(self) -> None:
@@ -205,6 +268,7 @@ def _services(
     MemorySourceStore,
     RecordingInvalidator,
     SourceSecretCipher,
+    SourceReloader,
 ]:
     registry = SourceRegistry([])
     metadata_store = MemoryMetadataStore()
@@ -234,12 +298,12 @@ def _services(
         verified_revisions,
         catalog_factory,  # type: ignore[arg-type]
     )
-    return admin, registry, source_store, invalidator, cipher
+    return admin, registry, source_store, invalidator, cipher, reloader
 
 
 @pytest.mark.asyncio
 async def test_publish_rotate_deactivate_and_rollback_apply_without_restart() -> None:
-    admin, registry, store, invalidator, _cipher = _services()
+    admin, registry, store, invalidator, _cipher, _reloader = _services()
 
     published = await admin.publish("third-source", _manifest(), "first-secret")
     assert published["generation"] == 1
@@ -260,13 +324,120 @@ async def test_publish_rotate_deactivate_and_rollback_apply_without_restart() ->
     assert registry.get("third-source").connection.password == "first-secret"  # type: ignore[union-attr]
     assert registry.get("third-source").control_generation == 1  # type: ignore[union-attr]
     assert store.active["third-source"].generation == 1
+    assert store.active["third-source"].state_version == 4
     assert invalidator.source_ids == ["third-source"] * 4
+
+
+@pytest.mark.asyncio
+async def test_credential_rotation_rejects_disabled_source_without_reactivation() -> None:
+    admin, registry, store, _invalidator, _cipher, _reloader = _services()
+    await admin.publish("third-source", _manifest(), "first-secret")
+    await admin.deactivate("third-source")
+    before = store.active["third-source"]
+
+    with pytest.raises(SourceValidationError):
+        await admin.rotate_credential("third-source", "rotated-secret")
+
+    assert store.active["third-source"] == before
+    assert store.active["third-source"].enabled is False
+    assert registry.get("third-source") is None
+
+
+@pytest.mark.asyncio
+async def test_rollback_pin_blocks_publish_until_operator_resumes() -> None:
+    admin, registry, store, _invalidator, _cipher, _reloader = _services()
+    await admin.publish("third-source", _manifest(), "first-secret")
+    await admin.publish("third-source", _manifest(), "second-secret")
+    await admin.rollback("third-source", 1)
+    pinned = store.active["third-source"]
+
+    with pytest.raises(SourceValidationError):
+        await admin.publish("third-source", _manifest(), "blocked-secret")
+
+    assert store.active["third-source"] == pinned
+    assert "third-source" in store.metadata.pinned
+
+    resumed = await admin.resume_automatic_publish("third-source")
+    published = await admin.publish("third-source", _manifest(), "resumed-secret")
+
+    assert resumed == {"status": "resumed", "source_id": "third-source"}
+    assert "third-source" not in store.metadata.pinned
+    assert published["generation"] == 3
+    assert store.active["third-source"].state_version == 4
+    assert registry.get("third-source").connection.password == "resumed-secret"  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+async def test_reloader_rejects_older_and_equal_conflicting_state() -> None:
+    admin, registry, store, invalidator, _cipher, reloader = _services()
+    await admin.publish("third-source", _manifest(), "first-secret")
+    stale = store.active["third-source"]
+    await admin.publish("third-source", _manifest(), "second-secret")
+    current = store.active["third-source"]
+
+    with pytest.raises(SourceGenerationConflictError):
+        await reloader.apply(stale)
+    with pytest.raises(SourceGenerationConflictError):
+        await reloader.apply(replace(stale, state_version=current.state_version))
+
+    assert registry.get("third-source").connection.password == "second-secret"  # type: ignore[union-attr]
+    assert invalidator.source_ids == ["third-source"] * 2
+
+
+@pytest.mark.asyncio
+async def test_rollback_rejects_revision_with_different_connection_identity() -> None:
+    admin, registry, store, _invalidator, _cipher, _reloader = _services()
+    await admin.publish("third-source", _manifest(), "first-secret")
+    await admin.publish("third-source", _manifest(), "second-secret")
+    before = store.active["third-source"]
+    candidate = store.history[("third-source", 1)]
+    connection = candidate.manifest["connection"]
+    assert isinstance(connection, dict)
+    rebound_manifest = {
+        **candidate.manifest,
+        "connection": {**connection, "host": "alternate-database.example"},
+    }
+    store.history[("third-source", 1)] = replace(
+        candidate,
+        manifest=rebound_manifest,
+    )
+
+    with pytest.raises(SourceValidationError):
+        await admin.rollback("third-source", 1)
+
+    assert store.active["third-source"] == before
+    assert registry.get("third-source").connection.password == "second-secret"  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+async def test_reloader_rejects_candidate_with_different_connection_identity() -> None:
+    admin, registry, store, invalidator, _cipher, reloader = _services()
+    await admin.publish("third-source", _manifest(), "first-secret")
+    current = store.active["third-source"]
+    connection = current.manifest["connection"]
+    assert isinstance(connection, dict)
+    rebound = replace(
+        current,
+        manifest={
+            **current.manifest,
+            "connection": {**connection, "host": "alternate-database.example"},
+        },
+        state_version=current.state_version + 1,
+    )
+
+    with pytest.raises(RegistryConfigurationError):
+        await reloader.apply(rebound)
+
+    assert registry.get("third-source").connection.password == "first-secret"  # type: ignore[union-attr]
+    assert invalidator.source_ids == ["third-source"]
 
 
 @pytest.mark.asyncio
 async def test_failed_staging_preserves_current_source() -> None:
     catalog_factory = SwitchingCatalogFactory()
-    admin, registry, store, _invalidator, _cipher = _services(catalog_factory)
+    admin, registry, store, _invalidator, _cipher, _reloader = _services(
+        catalog_factory
+    )
     await admin.publish("third-source", _manifest(), "first-secret")
     before = store.active["third-source"]
 
@@ -283,7 +454,7 @@ async def test_failed_staging_preserves_current_source() -> None:
 
 @pytest.mark.asyncio
 async def test_connection_identity_change_is_rejected_without_reusing_verification() -> None:
-    admin, registry, store, _invalidator, _cipher = _services()
+    admin, registry, store, _invalidator, _cipher, _reloader = _services()
     await admin.publish("third-source", _manifest(), "first-secret")
     before = store.active["third-source"]
     rebound = _manifest()
@@ -298,7 +469,7 @@ async def test_connection_identity_change_is_rejected_without_reusing_verificati
 
 @pytest.mark.asyncio
 async def test_first_control_publish_allows_matching_bootstrap_connection_identity() -> None:
-    admin, registry, store, _invalidator, _cipher = _services()
+    admin, registry, store, _invalidator, _cipher, _reloader = _services()
     manifest = _manifest()
     budgets = load_budget_profiles(ROOT_DIRECTORY / "config" / "budget-profiles.yaml")
     registry.upsert(validate_source_manifest(manifest, budgets, "bootstrap-secret").profile)
@@ -327,7 +498,7 @@ async def test_first_control_publish_rejects_bootstrap_connection_identity_chang
     field: str,
     value: object,
 ) -> None:
-    admin, registry, store, _invalidator, _cipher = _services()
+    admin, registry, store, _invalidator, _cipher, _reloader = _services()
     manifest = _manifest()
     budgets = load_budget_profiles(ROOT_DIRECTORY / "config" / "budget-profiles.yaml")
     registry.upsert(validate_source_manifest(manifest, budgets, "bootstrap-secret").profile)
@@ -345,7 +516,7 @@ async def test_first_control_publish_rejects_bootstrap_connection_identity_chang
 
 @pytest.mark.asyncio
 async def test_reloader_applies_external_generation() -> None:
-    admin, _registry, store, _invalidator, cipher = _services()
+    admin, _registry, store, _invalidator, cipher, _reloader = _services()
     await admin.publish("third-source", _manifest(), "first-secret")
     registry = SourceRegistry([])
     metadata = MetadataService(registry, StaticCatalog(), store=store.metadata)
@@ -366,7 +537,7 @@ async def test_reloader_applies_external_generation() -> None:
 
 @pytest.mark.asyncio
 async def test_reloader_refreshes_external_verified_revisions_for_l2_generation() -> None:
-    admin, _registry, store, _invalidator, cipher = _services()
+    admin, _registry, store, _invalidator, cipher, _reloader = _services()
     manifest = _manifest()
     await admin.publish("third-source", manifest, "first-secret")
     current = store.active["third-source"]
@@ -409,7 +580,7 @@ async def test_reloader_refreshes_external_verified_revisions_for_l2_generation(
 
 @pytest.mark.asyncio
 async def test_verified_query_contract_enables_l2_publish() -> None:
-    admin, _registry, store, _invalidator, _cipher = _services()
+    admin, _registry, store, _invalidator, _cipher, _reloader = _services()
     manifest = _manifest()
     await admin.publish("third-source", manifest, "first-secret")
     current = store.active["third-source"]
