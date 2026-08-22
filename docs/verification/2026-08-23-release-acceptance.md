@@ -25,9 +25,9 @@ authorization, SQL validation, executor와 MCP code path를 사용한다.
 실행했다.
 
 ```json
-{"elapsed_ms_max":578,"elapsed_ms_p50":400,"elapsed_ms_p95":554,
- "plan_total_cost_max":215.55,"queries":40,"queue_ms_max":509,
- "queue_ms_p95":481,"sources":["development-issues","market-voc"]}
+{"elapsed_ms_max":448,"elapsed_ms_p50":283,"elapsed_ms_p95":424,
+ "plan_total_cost_max":215.55,"queries":40,"queue_ms_max":380,
+ "queue_ms_p95":350,"sources":["development-issues","market-voc"]}
 ```
 
 별도 통합 시나리오는 한 source의 slot이 찬 동안 다른 source query가 완료되는지,
