@@ -10,7 +10,7 @@ from query_man.errors import SourceValidationError
 from query_man.metadata import MetadataService
 from query_man.models import CatalogSnapshot, PreparedMetadata, SourceProfile
 from query_man.query import QueryService
-from query_man.registry import SourceRegistry, load_budget_profiles
+from query_man.registry import SourceRegistry, load_budget_profiles, validate_source_manifest
 from query_man.secrets import EncryptedSecret, SourceSecretCipher
 from query_man.source_admin import SourceAdminService, SourceReloader
 from query_man.source_store import StoredSource, StoredSourceNotFoundError
@@ -291,6 +291,51 @@ async def test_connection_identity_change_is_rejected_without_reusing_verificati
 
     assert store.active["third-source"] == before
     assert registry.get("third-source").connection.password == "first-secret"  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+async def test_first_control_publish_allows_matching_bootstrap_connection_identity() -> None:
+    admin, registry, store, _invalidator, _cipher = _services()
+    manifest = _manifest()
+    budgets = load_budget_profiles(ROOT_DIRECTORY / "config" / "budget-profiles.yaml")
+    registry.upsert(validate_source_manifest(manifest, budgets, "bootstrap-secret").profile)
+
+    published = await admin.publish("third-source", manifest, "control-secret")
+
+    assert published["generation"] == 1
+    assert store.active["third-source"].generation == 1
+    assert registry.get("third-source").connection.password == "control-secret"  # type: ignore[union-attr]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("host", "alternate-database.example"),
+        ("port", 6543),
+        ("database", "alternate_database"),
+        ("user", "alternate_reader"),
+        ("ssl", True),
+    ],
+)
+@pytest.mark.asyncio
+async def test_first_control_publish_rejects_bootstrap_connection_identity_change(
+    field: str,
+    value: object,
+) -> None:
+    admin, registry, store, _invalidator, _cipher = _services()
+    manifest = _manifest()
+    budgets = load_budget_profiles(ROOT_DIRECTORY / "config" / "budget-profiles.yaml")
+    registry.upsert(validate_source_manifest(manifest, budgets, "bootstrap-secret").profile)
+    rebound = _manifest()
+    rebound["connection"][field] = value  # type: ignore[index]
+    if field == "port":
+        rebound["connection"].pop("port_env", None)  # type: ignore[union-attr]
+
+    with pytest.raises(SourceValidationError):
+        await admin.publish("third-source", rebound, "control-secret")
+
+    assert store.active == {}
+    assert registry.get("third-source").connection.password == "bootstrap-secret"  # type: ignore[union-attr]
 
 
 @pytest.mark.asyncio

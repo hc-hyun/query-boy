@@ -95,6 +95,12 @@ class SourceReloader:
         self._applied: dict[str, tuple[int, bool]] = {}
         self._lock = asyncio.Lock()
 
+    def connection_identity(self, source_id: str) -> tuple[object, ...] | None:
+        source = self._registry.get(source_id)
+        if source is None:
+            return None
+        return _profile_connection_identity(source)
+
     async def sync(self) -> None:
         try:
             records, stored_verified = await asyncio.gather(
@@ -200,8 +206,13 @@ class SourceAdminService:
             if validated.profile.source_id != source_id:
                 raise RegistryConfigurationError("Path source_id does not match manifest")
             current = await self._store.get_active(source_id)
-            if current is not None and _connection_identity(current.manifest) != _connection_identity(
-                validated.document
+            current_identity = (
+                _connection_identity(current.manifest)
+                if current is not None
+                else self._reloader.connection_identity(source_id)
+            )
+            if current_identity is not None and current_identity != _profile_connection_identity(
+                validated.profile
             ):
                 raise RegistryConfigurationError(
                     "A source_id cannot be rebound to a different connection identity"
@@ -376,3 +387,14 @@ def _connection_identity(manifest: Mapping[str, object]) -> tuple[object, ...]:
     if not isinstance(connection, dict):
         raise RegistryConfigurationError("Stored source connection must be an object")
     return tuple(connection.get(key) for key in ("host", "port", "database", "user", "ssl"))
+
+
+def _profile_connection_identity(source: SourceProfile) -> tuple[object, ...]:
+    connection = source.connection
+    return (
+        connection.host,
+        connection.port,
+        connection.database,
+        connection.user,
+        connection.ssl,
+    )
