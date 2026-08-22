@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hmac
 import logging
 from collections.abc import AsyncIterator, Coroutine
 from contextlib import asynccontextmanager, suppress
@@ -11,8 +10,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from query_man.access import AccessPolicy, CallerContext
 from query_man.catalog import PostgresCatalog
 from query_man.errors import AppError, QueryTimeoutError
+from query_man.gateway import GatewayService
 from query_man.metadata import MetadataService
 from query_man.models import CatalogProvider
 from query_man.query import PostgresQueryExecutor, QueryExecutor, QueryService
@@ -44,6 +45,7 @@ def build_app(
     registry: SourceRegistry | None = None,
     catalog: CatalogProvider | None = None,
     query_executor: QueryExecutor | None = None,
+    access_policy: AccessPolicy | None = None,
 ) -> FastAPI:
     registry = registry or SourceRegistry.load(runtime_config.source_directory, runtime_config.budget_file)
     catalog = catalog or PostgresCatalog()
@@ -56,6 +58,15 @@ def build_app(
     )
     query_executor = query_executor or PostgresQueryExecutor()
     query_service = QueryService(registry, metadata, query_executor)
+    source_ids = [source["source_id"] for source in registry.list()]
+    if access_policy is None:
+        if runtime_config.access_policy_file is not None:
+            access_policy = AccessPolicy.load(runtime_config.access_policy_file, source_ids)
+        elif runtime_config.api_token is not None:
+            access_policy = AccessPolicy.legacy(runtime_config.api_token, source_ids)
+        else:
+            access_policy = AccessPolicy.local(source_ids)
+    gateway = GatewayService(registry, metadata, query_service, access_policy)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -71,14 +82,20 @@ def build_app(
     app.state.metadata = metadata
     app.state.query_executor = query_executor
     app.state.query_service = query_service
+    app.state.access_policy = access_policy
+    app.state.gateway = gateway
 
     @app.middleware("http")
     async def authenticate(request: Request, call_next: object) -> JSONResponse:
-        token = runtime_config.api_token
-        if token and request.url.path != "/health":
-            authorization = request.headers.get("authorization", "")
-            received = authorization[7:] if authorization.startswith("Bearer ") else ""
-            if not hmac.compare_digest(received, token):
+        if request.url.path != "/health":
+            authorization = request.headers.get("authorization")
+            received = (
+                authorization[7:]
+                if authorization is not None and authorization.startswith("Bearer ")
+                else None
+            )
+            caller = access_policy.authenticate(received)
+            if caller is None:
                 return JSONResponse(
                     status_code=401,
                     headers={"WWW-Authenticate": "Bearer"},
@@ -89,6 +106,7 @@ def build_app(
                         }
                     },
                 )
+            request.state.caller = caller
         return await call_next(request)  # type: ignore[operator, no-any-return]
 
     @app.exception_handler(RequestValidationError)
@@ -139,16 +157,26 @@ def build_app(
         return {"status": "ok"}
 
     @app.get("/sources")
-    async def sources() -> dict[str, object]:
-        return {"sources": registry.list()}
+    async def sources(request: Request) -> dict[str, object]:
+        return gateway.list_sources(_caller(request))
 
     @app.post("/meta")
-    async def meta(payload: MetadataRequest) -> dict[str, object]:
-        return await metadata.get_context(payload.source_id, payload.question, payload.max_objects)
+    async def meta(payload: MetadataRequest, request: Request) -> dict[str, object]:
+        return await gateway.get_context(
+            _caller(request),
+            payload.source_id,
+            payload.question,
+            payload.max_objects,
+        )
 
     @app.post("/query")
     async def query(payload: QueryRequest, request: Request) -> dict[str, object]:
-        pending = query_service.query(payload.source_id, payload.sql, payload.metadata_revision)
+        pending = gateway.query(
+            _caller(request),
+            payload.source_id,
+            payload.sql,
+            payload.metadata_revision,
+        )
         return await _until_disconnect(request, pending)
 
     return app
@@ -173,3 +201,8 @@ async def _until_disconnect(
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
+
+
+def _caller(request: Request) -> CallerContext:
+    caller: CallerContext = request.state.caller
+    return caller

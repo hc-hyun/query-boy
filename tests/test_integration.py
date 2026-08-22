@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from contextlib import suppress
 from dataclasses import replace
 
 import pytest
@@ -178,6 +179,7 @@ async def test_live_query_concurrency_cancel_and_source_isolation() -> None:
     catalog = PostgresCatalog()
     metadata = MetadataService(registry, catalog, cache_ttl_ms=30_000)
     executor = PostgresQueryExecutor()
+    slow_task: asyncio.Task[dict[str, object]] | None = None
     try:
         development = registry.get("development-issues")
         market = registry.get("market-voc")
@@ -210,6 +212,20 @@ async def test_live_query_concurrency_cancel_and_source_isolation() -> None:
                 relation.qualified_name for relation in development_metadata.snapshot.relations
             ),
         )
+        dev_count_sql = "SELECT count(*) AS issue_count FROM ai.issue_overview"
+        dev_count_validated = validate_sql(
+            dev_count_sql,
+            allowed_relations=(
+                relation.qualified_name for relation in development_metadata.snapshot.relations
+            ),
+        )
+        warmed = await executor.execute(
+            limited_development,
+            dev_count_sql,
+            development_metadata.revision,
+            dev_count_validated,
+        )
+        assert warmed["rows"] == [{"issue_count": 600}]
         slow_task = asyncio.create_task(
             executor.execute(
                 limited_development,
@@ -220,13 +236,6 @@ async def test_live_query_concurrency_cancel_and_source_isolation() -> None:
         )
         await asyncio.sleep(0.05)
 
-        dev_count_sql = "SELECT count(*) AS issue_count FROM ai.issue_overview"
-        dev_count_validated = validate_sql(
-            dev_count_sql,
-            allowed_relations=(
-                relation.qualified_name for relation in development_metadata.snapshot.relations
-            ),
-        )
         with pytest.raises(QueryOverloadedError):
             await executor.execute(
                 limited_development,
@@ -260,5 +269,10 @@ async def test_live_query_concurrency_cancel_and_source_isolation() -> None:
         )
         assert recovered["rows"] == [{"issue_count": 600}]
     finally:
+        if slow_task is not None:
+            if not slow_task.done():
+                slow_task.cancel()
+            with suppress(asyncio.CancelledError, QueryOverloadedError, QueryTimeoutError):
+                await slow_task
         await executor.close()
         await catalog.close()

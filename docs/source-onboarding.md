@@ -38,6 +38,11 @@ trust boundary에서 review·publish한다. 낮은 권한의 self-service 입력
 6. Metadata API process를 재시작해 manifest를 다시 읽는다.
 7. `uv run ruff check .`, `uv run mypy src`, `uv run pytest`와 실제 golden question으로 relation 선택을 검증한다.
 
+Production caller에게 source를 공개할 때는 access-policy manifest의
+`allowed_sources`에도 source ID를 명시하고, token 값은 manifest가 참조하는 환경
+변수에만 저장한다. 예시는
+[`config/access-policies.example.yaml`](../config/access-policies.example.yaml)을 따른다.
+
 최소 manifest는 semantic overlay 없이도 동작한다.
 
 ```yaml

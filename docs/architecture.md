@@ -173,6 +173,8 @@ Schema drift로 overlay가 깨지면 신규 revision 발행을 중단하고 마�
   [ADR 0002](decisions/0002-guarded-query-contract.md)를 따른다.
 - Reader role, curated view와 PostgreSQL-resolved function/operator 정책은
   [ADR 0003](decisions/0003-reader-and-resolved-object-policy.md)를 따른다.
+- Caller identity, tenant와 source authorization은
+  [ADR 0004](decisions/0004-caller-source-authorization.md)를 따른다.
 
 ## Open Decisions
 

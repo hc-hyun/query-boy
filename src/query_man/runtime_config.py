@@ -18,6 +18,7 @@ class _Environment(BaseModel):
     api_token: str | None = Field(None, alias="QUERY_MAN_API_TOKEN", min_length=32, max_length=512)
     source_dir: str | None = Field(None, alias="QUERY_MAN_SOURCE_DIR")
     budget_file: str | None = Field(None, alias="QUERY_MAN_BUDGET_FILE")
+    access_policy_file: str | None = Field(None, alias="QUERY_MAN_ACCESS_POLICY_FILE")
     cache_ttl_ms: int = Field(30_000, alias="QUERY_MAN_METADATA_CACHE_TTL_MS", ge=0, le=3_600_000)
     max_stale_ms: int = Field(300_000, alias="QUERY_MAN_METADATA_MAX_STALE_MS", ge=0, le=86_400_000)
     retry_delay_ms: int = Field(5_000, alias="QUERY_MAN_METADATA_RETRY_DELAY_MS", ge=100, le=300_000)
@@ -39,6 +40,7 @@ class RuntimeConfig:
     api_token: str | None
     source_directory: Path
     budget_file: Path
+    access_policy_file: Path | None
     metadata_cache_ttl_ms: int
     metadata_max_stale_ms: int
     metadata_retry_delay_ms: int
@@ -55,8 +57,12 @@ def load_runtime_config(
         parsed = _Environment.model_validate(values)
     except ValidationError as error:
         raise ValueError(f"Invalid runtime configuration: {error}") from error
-    if not _is_loopback(parsed.host) and parsed.api_token is None:
-        raise ValueError("QUERY_MAN_API_TOKEN is required when QUERY_MAN_HOST is not loopback")
+    if parsed.api_token is not None and parsed.access_policy_file is not None:
+        raise ValueError("Configure QUERY_MAN_API_TOKEN or QUERY_MAN_ACCESS_POLICY_FILE, not both")
+    if not _is_loopback(parsed.host) and parsed.api_token is None and parsed.access_policy_file is None:
+        raise ValueError(
+            "QUERY_MAN_API_TOKEN or QUERY_MAN_ACCESS_POLICY_FILE is required when QUERY_MAN_HOST is not loopback"
+        )
     root = (root_directory or Path.cwd()).resolve()
     return RuntimeConfig(
         host=parsed.host,
@@ -65,6 +71,7 @@ def load_runtime_config(
         api_token=parsed.api_token,
         source_directory=Path(parsed.source_dir) if parsed.source_dir else root / "config" / "sources",
         budget_file=Path(parsed.budget_file) if parsed.budget_file else root / "config" / "budget-profiles.yaml",
+        access_policy_file=Path(parsed.access_policy_file) if parsed.access_policy_file else None,
         metadata_cache_ttl_ms=parsed.cache_ttl_ms,
         metadata_max_stale_ms=parsed.max_stale_ms,
         metadata_retry_delay_ms=parsed.retry_delay_ms,

@@ -58,7 +58,7 @@ Status: Active
 - [ ] `DEC-06` 초기 budget hard limit과 source별 override 허용 범위를 부하 테스트 근거로 확정한다.
 - [x] `DEC-07` Reader role, RLS, SECURITY DEFINER/INVOKER view와 함수 allowlist 정책을 확정한다.
 - [ ] `DEC-08` MCP transport, 인증 경계와 HTTP application service 재사용 방식을 확정한다.
-- [ ] `DEC-09` Caller identity, tenant, source authorization 정책 모델을 확정한다.
+- [x] `DEC-09` Caller identity, tenant, source authorization 정책 모델을 확정한다.
 
 ## 2. SQL Validation
 
@@ -81,7 +81,7 @@ Dependencies: `SQL-01`~`SQL-05`, `SQL-07`~`SQL-10`은 `DEC-01`~`DEC-03`을 따�
 Dependencies: `SQL-01`~`SQL-09`, `DEC-06`
 
 - [x] `EXEC-01` HTTP application service에 `query(source_id, sql, metadata_revision)` 계약을 구현한다.
-- [ ] `EXEC-02` Caller의 source 접근 권한을 확인한 뒤 source별 concurrency slot을 획득한다.
+- [x] `EXEC-02` Caller의 source 접근 권한을 확인한 뒤 source별 concurrency slot을 획득한다.
 - [x] `EXEC-03` `BEGIN READ ONLY` transaction과 transaction-local statement, lock, idle timeout을 강제한다.
 - [x] `EXEC-04` Source profile의 reader identity, database와 read-only session 상태를 실행 직전에 검증한다.
 - [x] `EXEC-05` 결과를 전부 메모리에 올리지 않고 stream하며 row와 UTF-8 byte 상한에서 중단한다.
@@ -142,9 +142,9 @@ Dependencies: `META-05`, `META-06`
 Dependencies: `DEC-09`, `ONB-01`
 
 - [ ] `AUTH-01` 인증된 caller identity를 HTTP와 MCP application context에 전달한다.
-- [ ] `AUTH-02` Caller/tenant별 허용 source 목록을 서버 정책으로 관리한다.
-- [ ] `AUTH-03` `/sources`, `/meta`, `query`가 동일한 source authorization 결과를 사용한다.
-- [ ] `AUTH-04` Tenant identity를 SQL text나 client-controlled session setting으로 주입하지 않는다.
+- [x] `AUTH-02` Caller/tenant별 허용 source 목록을 서버 정책으로 관리한다.
+- [x] `AUTH-03` `/sources`, `/meta`, `query`가 동일한 source authorization 결과를 사용한다.
+- [x] `AUTH-04` Tenant identity를 SQL text나 client-controlled session setting으로 주입하지 않는다.
 - [ ] `AUTH-05` RLS가 필요한 source의 trusted session context 설정과 reset을 검증한다.
 - [ ] `AUTH-06` Connection pool 재사용 시 tenant context가 누출되지 않는 통합 테스트를 추가한다.
 - [ ] `AUTH-07` 인증·인가 실패 응답과 audit event가 source 존재 여부나 credential을 노출하지 않게 한다.

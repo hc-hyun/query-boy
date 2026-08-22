@@ -1,0 +1,17 @@
+version: 1
+
+callers:
+  - caller_id: development-analyst
+    tenant_id: engineering
+    token_env: DEVELOPMENT_ANALYST_API_TOKEN
+    allowed_sources:
+      - development-issues
+    operator: false
+
+  - caller_id: quality-operator
+    tenant_id: quality
+    token_env: QUALITY_OPERATOR_API_TOKEN
+    allowed_sources:
+      - development-issues
+      - market-voc
+    operator: true

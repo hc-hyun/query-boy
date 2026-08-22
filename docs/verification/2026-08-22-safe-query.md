@@ -40,12 +40,12 @@ uv run pytest -m integration
 | Source isolation | Market query runs while development source slot is occupied | PASS |
 | Cancel/rollback | Active four-way cross join task cancelled, then same source queried again | Cancelled and connection reusable |
 | Disconnect | HTTP disconnect probe cancels the application task | PASS in unit test |
+| Source authorization | Caller allowlist filters `/sources` and denies `/meta`, `/query` before catalog/executor | PASS; denied and unknown source share 404 |
 
 ## Remaining Gaps
 
 - Initial production budget은 반복 부하 시험과 운영 workload 자료가 없어 아직 provisional이다
   (`DEC-06`).
-- Caller별 source authorization이 없어 `EXEC-02`는 미완료다.
 - Client disconnect는 application cancellation까지 검증했지만 실제 socket disconnect와
   운영자 query-id cancel 경로를 함께 검증해야 `EXEC-06`, `EXEC-11`을 완료할 수 있다.
 - RLS source는 아직 등록하지 않으며 trusted tenant context와 pool reset 검증이 필요하다.

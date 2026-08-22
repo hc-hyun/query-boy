@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import httpx
 import pytest
 
+from query_man.access import AccessPolicy
 from query_man.app import build_app
 from query_man.models import CatalogSnapshot, SourceProfile
 from query_man.query import QueryExecutor
@@ -71,6 +74,7 @@ def runtime_config(api_token: str | None = None) -> RuntimeConfig:
         api_token=api_token,
         source_directory=ROOT_DIRECTORY / "config" / "sources",
         budget_file=ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
+        access_policy_file=None,
         metadata_cache_ttl_ms=0,
         metadata_max_stale_ms=300_000,
         metadata_retry_delay_ms=5_000,
@@ -81,12 +85,14 @@ def client(
     catalog: object,
     api_token: str | None = None,
     query_executor: QueryExecutor | None = None,
+    access_policy: AccessPolicy | None = None,
 ) -> httpx.AsyncClient:
     app = build_app(
         runtime_config(api_token),
         registry=load_test_registry(),
         catalog=catalog,  # type: ignore[arg-type]
         query_executor=query_executor,
+        access_policy=access_policy,
     )
     return httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
@@ -206,3 +212,63 @@ async def test_query_rejects_stale_revision_without_echoing_sql() -> None:
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "METADATA_REVISION_MISMATCH"
     assert secret_literal not in response.text
+
+
+@pytest.mark.asyncio
+async def test_caller_policy_filters_and_hides_unauthorized_sources(tmp_path: Path) -> None:
+    policy_path = tmp_path / "access.yaml"
+    policy_path.write_text(
+        """
+version: 1
+callers:
+  - caller_id: development-analyst
+    tenant_id: engineering
+    token_env: DEVELOPMENT_ANALYST_TOKEN
+    allowed_sources:
+      - development-issues
+""".strip(),
+        encoding="utf-8",
+    )
+    token = "development-analyst-token-at-least-32-characters"
+    policy = AccessPolicy.load(
+        policy_path,
+        ["development-issues", "market-voc"],
+        {"DEVELOPMENT_ANALYST_TOKEN": token},
+    )
+    headers = {"authorization": f"Bearer {token}"}
+    executor = RecordingQueryExecutor()
+    async with client(
+        NeverCalledCatalog(),
+        query_executor=executor,
+        access_policy=policy,
+    ) as session:
+        listed = await session.get("/sources", headers=headers)
+        denied = await session.post(
+            "/meta",
+            headers=headers,
+            json={"source_id": "market-voc", "question": "VOC 수"},
+        )
+        unknown = await session.post(
+            "/meta",
+            headers=headers,
+            json={"source_id": "not-registered", "question": "anything"},
+        )
+        denied_query = await session.post(
+            "/query",
+            headers=headers,
+            json={
+                "source_id": "market-voc",
+                "sql": "SELECT 1",
+                "metadata_revision": f"sha256:{'0' * 64}",
+            },
+        )
+        unauthenticated = await session.get("/sources")
+
+    assert [source["source_id"] for source in listed.json()["sources"]] == [
+        "development-issues"
+    ]
+    assert denied.status_code == 404
+    assert denied.json() == unknown.json()
+    assert denied_query.json() == unknown.json()
+    assert executor.calls == []
+    assert unauthenticated.status_code == 401

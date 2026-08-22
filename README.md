@@ -89,8 +89,13 @@ grain, 한국어 alias, 승인된 join, 검증된 measure와 business predicate�
 semantic overlay로 보강합니다. `/meta`의 `answerability`가 `needs_clarification` 또는
 `unsupported`이면 SQL 생성을 진행하지 않아야 합니다.
 기본 loopback bind에서는 로컬 개발을 위해 인증을 생략할 수 있다. 외부 주소에 bind할
-때는 32자 이상의 `QUERY_MAN_API_TOKEN`이 필수이며 `/sources`, `/meta`, `/query`에
-`Authorization: Bearer ...` header를 보내야 합니다.
+때는 32자 이상의 `QUERY_MAN_API_TOKEN` 또는 `QUERY_MAN_ACCESS_POLICY_FILE`이 필수이며
+`/sources`, `/meta`, `/query`에 `Authorization: Bearer ...` header를 보내야 합니다.
+
+여러 caller/tenant가 서로 다른 source를 사용하면 `QUERY_MAN_API_TOKEN` 대신
+`QUERY_MAN_ACCESS_POLICY_FILE`을 설정합니다. Policy는 token 값이 아닌 환경 변수 이름과
+source allowlist만 저장하며 형식은
+[`config/access-policies.example.yaml`](config/access-policies.example.yaml)을 참고합니다.
 
 개발 검증은 다음 명령으로 실행합니다.
 
