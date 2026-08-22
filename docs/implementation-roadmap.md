@@ -57,7 +57,7 @@ Status: Active
 - [x] `DEC-05` Metadata revision 불일치 시 거부와 context 재조회 흐름을 확정한다.
 - [x] `DEC-06` 초기 budget hard limit과 source별 override 허용 범위를 부하 테스트 근거로 확정한다.
 - [x] `DEC-07` Reader role, RLS, SECURITY DEFINER/INVOKER view와 함수 allowlist 정책을 확정한다.
-- [ ] `DEC-08` MCP transport, 인증 경계와 HTTP application service 재사용 방식을 확정한다.
+- [x] `DEC-08` MCP transport, 인증 경계와 HTTP application service 재사용 방식을 확정한다.
 - [x] `DEC-09` Caller identity, tenant, source authorization 정책 모델을 확정한다.
 
 ## 2. SQL Validation
@@ -114,14 +114,14 @@ Metadata 응답은 구현되어 있지만 architecture의 전체 physical catalo
 
 Dependencies: `EXEC-01`~`EXEC-10`, `META-05`~`META-08`, `DEC-08`
 
-- [ ] `MCP-01` HTTP와 동일한 service를 호출하는 단일 MCP server를 구현한다.
-- [ ] `MCP-02` 고정 schema의 `list_sources`, `get_context`, `query` tool을 제공한다.
-- [ ] `MCP-03` MCP 요청에도 동일한 caller authorization, budget와 오류 reason code를 적용한다.
-- [ ] `MCP-04` `answerability`가 `needs_clarification` 또는 `unsupported`이면 query 단계로 진행하지 않는 workflow를 검증한다.
-- [ ] `MCP-05` Metadata revision mismatch 시 context를 다시 조회하고 SQL을 재생성하는 workflow를 검증한다.
-- [ ] `MCP-06` Grain, fanout, composition과 business predicate를 준수하는 공통 Text-to-SQL Skill을 작성한다.
-- [ ] `MCP-07` 두 MVP source의 전체 golden question을 MCP tool 호출부터 실제 결과까지 end-to-end 검증한다.
-- [ ] `MCP-08` Tool schema 호환성과 응답 크기 회귀 테스트를 추가한다.
+- [x] `MCP-01` HTTP와 동일한 service를 호출하는 단일 MCP server를 구현한다.
+- [x] `MCP-02` 고정 schema의 `list_sources`, `get_context`, `query` tool을 제공한다.
+- [x] `MCP-03` MCP 요청에도 동일한 caller authorization, budget와 오류 reason code를 적용한다.
+- [x] `MCP-04` `answerability`가 `needs_clarification` 또는 `unsupported`이면 query 단계로 진행하지 않는 workflow를 검증한다.
+- [x] `MCP-05` Metadata revision mismatch 시 context를 다시 조회하고 SQL을 재생성하는 workflow를 검증한다.
+- [x] `MCP-06` Grain, fanout, composition과 business predicate를 준수하는 공통 Text-to-SQL Skill을 작성한다.
+- [x] `MCP-07` 두 MVP source의 전체 golden question을 MCP tool 호출부터 실제 결과까지 end-to-end 검증한다.
+- [x] `MCP-08` Tool schema 호환성과 응답 크기 회귀 테스트를 추가한다.
 
 ## 6. No-Deploy Source Onboarding
 
@@ -141,7 +141,7 @@ Dependencies: `META-05`, `META-06`
 
 Dependencies: `DEC-09`, `ONB-01`
 
-- [ ] `AUTH-01` 인증된 caller identity를 HTTP와 MCP application context에 전달한다.
+- [x] `AUTH-01` 인증된 caller identity를 HTTP와 MCP application context에 전달한다.
 - [x] `AUTH-02` Caller/tenant별 허용 source 목록을 서버 정책으로 관리한다.
 - [x] `AUTH-03` `/sources`, `/meta`, `query`가 동일한 source authorization 결과를 사용한다.
 - [x] `AUTH-04` Tenant identity를 SQL text나 client-controlled session setting으로 주입하지 않는다.

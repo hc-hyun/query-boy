@@ -100,6 +100,11 @@ semantic overlay로 보강합니다. `/meta`의 `answerability`가 `needs_clarif
 source allowlist만 저장하며 형식은
 [`config/access-policies.example.yaml`](config/access-policies.example.yaml)을 참고합니다.
 
+같은 service와 bearer 인증 경계가 MCP의 stateless Streamable HTTP endpoint
+`http://127.0.0.1:3000/mcp`에도 적용됩니다. MCP는 `list_sources`, `get_context`, `query`
+세 tool만 제공하며 host나 credential을 입력받지 않습니다. 모델 workflow에는
+[`query-man-text-to-sql` Skill](skills/query-man-text-to-sql/SKILL.md)을 사용합니다.
+
 개발 검증은 다음 명령으로 실행합니다.
 
 ```bash

@@ -1,6 +1,6 @@
 # Query Man Architecture
 
-Status: Metadata and guarded query MVP implemented
+Status: Metadata, guarded query and MCP MVP implemented
 
 ## Goal
 
@@ -177,6 +177,8 @@ Schema drift로 overlay가 깨지면 신규 revision 발행을 중단하고 마�
   [ADR 0004](decisions/0004-caller-source-authorization.md)를 따른다.
 - 초기 hard limit, connection budget과 override 정책은
   [ADR 0005](decisions/0005-initial-query-budgets.md)를 따른다.
+- MCP transport, 인증 경계와 Text-to-SQL workflow는
+  [ADR 0006](decisions/0006-mcp-transport-and-workflow.md)을 따른다.
 
 ## Open Decisions
 
@@ -186,4 +188,3 @@ Schema drift로 overlay가 깨지면 신규 revision 발행을 중단하고 마�
 - RLS source의 trusted tenant session context
 - Schema revision 및 verified query 저장소
 - Wide view를 위한 column-scoped progressive disclosure
-- HTTP application contract를 재사용하는 MCP transport

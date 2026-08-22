@@ -127,6 +127,14 @@ async def test_bearer_token_is_required_when_configured() -> None:
 
 
 @pytest.mark.asyncio
+async def test_mcp_endpoint_uses_the_same_bearer_authentication() -> None:
+    token = "test-token-with-at-least-thirty-two-characters"
+    async with client(NeverCalledCatalog(), token) as session:
+        response = await session.post("/mcp", content=b"{}")
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_rejects_client_connection_fields() -> None:
     async with client(NeverCalledCatalog()) as session:
         response = await session.post(

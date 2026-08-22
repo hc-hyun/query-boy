@@ -5,13 +5,17 @@ import json
 import os
 import socket
 import uuid
+from collections.abc import Generator
 from contextlib import suppress
 from dataclasses import replace
 
 import httpx
+import httpx2
 import pytest
 import uvicorn
 from dotenv import load_dotenv
+from mcp.client import Client
+from mcp.client.streamable_http import streamable_http_client
 
 from query_man.app import build_app
 from query_man.catalog import PostgresCatalog
@@ -22,8 +26,19 @@ from query_man.query import PostgresQueryExecutor, QueryService
 from query_man.registry import SourceRegistry
 from query_man.runtime_config import RuntimeConfig
 from query_man.sql_validation import DEFAULT_ALLOWED_FUNCTIONS, ValidatedSql, validate_sql
-from query_man.verified import VerifiedQueryRegistry
+from query_man.verified import VerifiedQueryRegistry, create_result_hash
 from tests.helpers import ROOT_DIRECTORY, load_test_registry, minimal_development_snapshot
+
+
+class BearerAuth(httpx2.Auth):
+    def __init__(self, token: str) -> None:
+        self._token = token
+
+    def auth_flow(
+        self, request: httpx2.Request
+    ) -> Generator[httpx2.Request, httpx2.Response, None]:
+        request.headers["Authorization"] = f"Bearer {self._token}"
+        yield request
 
 
 class DisconnectCatalog:
@@ -342,6 +357,176 @@ async def test_socket_disconnect_cancels_http_query() -> None:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_streamable_http_mcp_runs_all_golden_queries() -> None:
+    load_dotenv(ROOT_DIRECTORY / ".env")
+    required = ["DEVELOPMENT_ISSUES_READER_PASSWORD", "MARKET_VOC_READER_PASSWORD"]
+    if any(not os.environ.get(name) for name in required):
+        pytest.skip("local reader credentials are not configured")
+
+    registry = SourceRegistry.load(
+        ROOT_DIRECTORY / "config" / "sources",
+        ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
+    )
+    verified = VerifiedQueryRegistry.load(
+        ROOT_DIRECTORY / "config" / "verified-queries.yaml",
+        {source["source_id"] for source in registry.list()},
+    )
+    runtime = RuntimeConfig(
+        host="127.0.0.1",
+        port=0,
+        log_level="critical",
+        api_token="mcp-integration-token-at-least-thirty-two-characters",
+        source_directory=ROOT_DIRECTORY / "config" / "sources",
+        budget_file=ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
+        access_policy_file=None,
+        metadata_cache_ttl_ms=30_000,
+        metadata_max_stale_ms=300_000,
+        metadata_retry_delay_ms=5_000,
+    )
+    app = build_app(runtime, registry=registry)
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server_socket.bind(("127.0.0.1", 0))
+    server_socket.listen(128)
+    server_socket.setblocking(False)
+    port = int(server_socket.getsockname()[1])
+    server = uvicorn.Server(
+        uvicorn.Config(
+            app,
+            log_level="critical",
+            lifespan="on",
+            timeout_graceful_shutdown=2,
+        )
+    )
+    server_task = asyncio.create_task(server.serve(sockets=[server_socket]))
+    try:
+        for _ in range(100):
+            if server.started:
+                break
+            await asyncio.sleep(0.01)
+        assert server.started
+
+        async with httpx.AsyncClient(
+            headers={
+                "Authorization": "Bearer mcp-integration-token-at-least-thirty-two-characters"
+            }
+        ) as probe:
+            authenticated = await probe.get(f"http://127.0.0.1:{port}/sources")
+            assert authenticated.status_code == 200, authenticated.text
+
+        async with (
+            httpx2.AsyncClient(
+                auth=BearerAuth("mcp-integration-token-at-least-thirty-two-characters")
+            ) as authenticated_http,
+            Client(
+                streamable_http_client(
+                    f"http://127.0.0.1:{port}/mcp",
+                    http_client=authenticated_http,
+                )
+            ) as client,
+        ):
+            tools = await client.list_tools()
+            assert [tool.name for tool in tools.tools] == [
+                "list_sources",
+                "get_context",
+                "query",
+            ]
+            for contract in verified.queries:
+                source = registry.get(contract.source_id)
+                assert source is not None
+                context = await client.call_tool(
+                    "get_context",
+                    {"source_id": contract.source_id, "question": contract.question},
+                )
+                context_body = context.structured_content
+                assert context_body is not None
+                assert len(json.dumps(context_body, default=str).encode()) <= (
+                    source.budget.max_metadata_response_bytes
+                )
+                assert context_body["metadata_revision"] == contract.metadata_revision
+                assert [relation["name"] for relation in context_body["relations"]] == list(  # type: ignore[index]
+                    contract.relations
+                )
+                result = await client.call_tool(
+                    "query",
+                    {
+                        "source_id": contract.source_id,
+                        "sql": contract.sql,
+                        "metadata_revision": contract.metadata_revision,
+                    },
+                )
+                result_body = result.structured_content
+                assert result_body is not None
+                assert result_body["result_bytes"] <= source.budget.max_result_bytes
+                assert result_body["row_count"] <= source.budget.max_result_rows
+                assert result_body["row_count"] == contract.expected.row_count
+                columns = tuple(result_body["columns"])  # type: ignore[arg-type]
+                assert create_result_hash(columns, result_body["rows"]) == (  # type: ignore[arg-type]
+                    contract.expected.result_hash
+                )
+
+            unsupported = await client.call_tool(
+                "get_context",
+                {"source_id": "market-voc", "question": "전체 사용자 수"},
+            )
+            assert unsupported.structured_content["answerability"]["status"] == (  # type: ignore[index]
+                "unsupported"
+            )
+            clarification = await client.call_tool(
+                "get_context",
+                {"source_id": "market-voc", "question": "모델별 불량률을 비교해줘"},
+            )
+            assert clarification.structured_content["answerability"]["status"] == (  # type: ignore[index]
+                "needs_clarification"
+            )
+
+            mismatch = await client.call_tool(
+                "query",
+                {
+                    "source_id": verified.queries[0].source_id,
+                    "sql": verified.queries[0].sql,
+                    "metadata_revision": f"sha256:{'0' * 64}",
+                },
+            )
+            assert mismatch.structured_content["error"]["code"] == (  # type: ignore[index]
+                "METADATA_REVISION_MISMATCH"
+            )
+            refreshed = await client.call_tool(
+                "get_context",
+                {
+                    "source_id": verified.queries[0].source_id,
+                    "question": verified.queries[0].question,
+                },
+            )
+            assert refreshed.structured_content["metadata_revision"] == (  # type: ignore[index]
+                verified.queries[0].metadata_revision
+            )
+            retried = await client.call_tool(
+                "query",
+                {
+                    "source_id": verified.queries[0].source_id,
+                    "sql": verified.queries[0].sql,
+                    "metadata_revision": refreshed.structured_content["metadata_revision"],  # type: ignore[index]
+                },
+            )
+            assert retried.structured_content["row_count"] == (  # type: ignore[index]
+                verified.queries[0].expected.row_count
+            )
+    finally:
+        server.should_exit = True
+        try:
+            await asyncio.wait_for(server_task, timeout=5)
+        except TimeoutError:
+            server.force_exit = True
+            server_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await server_task
+        finally:
+            server_socket.close()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_live_query_concurrency_cancel_and_source_isolation() -> None:
     load_dotenv(ROOT_DIRECTORY / ".env")
     required = ["DEVELOPMENT_ISSUES_READER_PASSWORD", "MARKET_VOC_READER_PASSWORD"]
@@ -376,6 +561,13 @@ async def test_live_query_concurrency_cancel_and_source_isolation() -> None:
                 max_plan_rows=10**15,
             ),
         )
+        warm_development = replace(
+            limited_development,
+            budget=replace(
+                limited_development.budget,
+                query_queue_timeout_ms=development.budget.query_queue_timeout_ms,
+            ),
+        )
         slow_sql = (
             "SELECT count(*) FROM ai.issue_overview AS a "
             "CROSS JOIN ai.issue_overview AS b "
@@ -396,7 +588,7 @@ async def test_live_query_concurrency_cancel_and_source_isolation() -> None:
             ),
         )
         warmed = await executor.execute(
-            limited_development,
+            warm_development,
             dev_count_sql,
             development_metadata.revision,
             dev_count_validated,

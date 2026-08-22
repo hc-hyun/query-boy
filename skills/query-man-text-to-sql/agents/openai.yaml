@@ -1,0 +1,4 @@
+interface:
+  display_name: "Query Man Text-to-SQL"
+  short_description: "Safely answer questions through Query Man MCP"
+  default_prompt: "Use Query Man MCP to answer this data question safely."

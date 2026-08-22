@@ -199,4 +199,4 @@ docker compose up -d
 - [x] source registry 구현
 - [x] question-scoped metadata retrieval
 - [x] SQL AST validation과 guarded query execution ([roadmap M1](implementation-roadmap.md#recommended-milestones))
-- [ ] MCP server와 공통 Text-to-SQL Skill ([roadmap M2](implementation-roadmap.md#recommended-milestones))
+- [x] MCP server와 공통 Text-to-SQL Skill ([roadmap M2](implementation-roadmap.md#recommended-milestones))

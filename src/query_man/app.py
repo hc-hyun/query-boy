@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import uuid
 from collections.abc import AsyncIterator, Coroutine
@@ -15,6 +16,7 @@ from query_man.access import AccessPolicy, CallerContext
 from query_man.catalog import PostgresCatalog
 from query_man.errors import AppError, QueryTimeoutError
 from query_man.gateway import GatewayService
+from query_man.mcp_server import create_mcp_server
 from query_man.metadata import MetadataService
 from query_man.models import CatalogProvider
 from query_man.query import PostgresQueryExecutor, QueryExecutor, QueryService
@@ -22,6 +24,10 @@ from query_man.registry import SourceRegistry
 from query_man.runtime_config import RuntimeConfig
 
 logger = logging.getLogger("query_man")
+_current_caller: contextvars.ContextVar[CallerContext | None] = contextvars.ContextVar(
+    "query_man_current_caller",
+    default=None,
+)
 
 
 class MetadataRequest(BaseModel):
@@ -68,14 +74,23 @@ def build_app(
         else:
             access_policy = AccessPolicy.local(source_ids)
     gateway = GatewayService(registry, metadata, query_service, access_policy)
+    mcp_server = create_mcp_server(gateway, _mcp_caller)
+    mcp_app = mcp_server.streamable_http_app(
+        streamable_http_path="/mcp",
+        json_response=True,
+        stateless_http=True,
+        max_request_body_size=1_048_576,
+        host=runtime_config.host,
+    )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-        yield
-        try:
-            await query_executor.close()
-        finally:
-            await catalog.close()
+        async with mcp_app.router.lifespan_context(mcp_app):
+            yield
+            try:
+                await query_executor.close()
+            finally:
+                await catalog.close()
 
     app = FastAPI(title="query-man", lifespan=lifespan)
     app.state.registry = registry
@@ -85,6 +100,7 @@ def build_app(
     app.state.query_service = query_service
     app.state.access_policy = access_policy
     app.state.gateway = gateway
+    app.state.mcp_server = mcp_server
 
     @app.middleware("http")
     async def authenticate(request: Request, call_next: object) -> JSONResponse:
@@ -108,6 +124,11 @@ def build_app(
                     },
                 )
             request.state.caller = caller
+            context_token = _current_caller.set(caller)
+            try:
+                return await call_next(request)  # type: ignore[operator, no-any-return]
+            finally:
+                _current_caller.reset(context_token)
         return await call_next(request)  # type: ignore[operator, no-any-return]
 
     @app.exception_handler(RequestValidationError)
@@ -184,6 +205,8 @@ def build_app(
     async def cancel_query(query_id: uuid.UUID, request: Request) -> dict[str, str]:
         return await gateway.cancel_query(_caller(request), str(query_id))
 
+    app.mount("/", mcp_app)
+
     return app
 
 
@@ -223,4 +246,11 @@ async def _wait_for_disconnect(request: Request) -> None:
 
 def _caller(request: Request) -> CallerContext:
     caller: CallerContext = request.state.caller
+    return caller
+
+
+def _mcp_caller() -> CallerContext:
+    caller = _current_caller.get()
+    if caller is None:
+        raise RuntimeError("MCP caller context is unavailable")
     return caller
