@@ -56,8 +56,22 @@ async def test_source_store_publishes_rotates_rolls_back_and_deactivates() -> No
     store = PostgresSourceStore(dsn)
     metadata_store = PostgresMetadataStore(dsn)
     try:
-        await metadata_store.unpin(source)
         current = await store.get_active(source.source_id)
+        if current is not None and not current.enabled:
+            current = await store.rollback(
+                source.source_id,
+                current.generation,
+                current.generation,
+                expected_state_version=current.state_version,
+            )
+        if current is not None:
+            await metadata_store.unpin(
+                replace(
+                    source,
+                    control_generation=current.generation,
+                    control_state_version=current.state_version,
+                )
+            )
         expected = 0 if current is None else current.generation
         first_generation = await store.next_generation(source.source_id)
         first_secret = cipher.encrypt(source.source_id, first_generation, "first-reader-secret")
@@ -152,7 +166,13 @@ async def test_source_store_publishes_rotates_rolls_back_and_deactivates() -> No
                 expected_state_version=rolled_back.state_version,
             )
 
-        await metadata_store.unpin(source)
+        await metadata_store.unpin(
+            replace(
+                source,
+                control_generation=rolled_back.generation,
+                control_state_version=rolled_back.state_version,
+            )
+        )
         resumed = await store.publish(
             source.source_id,
             rolled_back.generation,
