@@ -5,7 +5,9 @@ import pytest
 
 from query_man.app import build_app
 from query_man.models import CatalogSnapshot, SourceProfile
+from query_man.query import QueryExecutor
 from query_man.runtime_config import RuntimeConfig
+from query_man.sql_validation import ValidatedSql
 from tests.helpers import ROOT_DIRECTORY, load_test_registry, minimal_development_snapshot
 
 
@@ -30,6 +32,37 @@ class ReturningCatalog(NeverCalledCatalog):
         return self.snapshot
 
 
+class RecordingQueryExecutor:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    async def execute(
+        self,
+        source: SourceProfile,
+        _sql: str,
+        metadata_revision: str,
+        validated: ValidatedSql,
+    ) -> dict[str, object]:
+        self.calls.append((source.source_id, validated.fingerprint))
+        return {
+            "status": "ok",
+            "query_id": "test-query-id",
+            "metadata_revision": metadata_revision,
+            "fingerprint": validated.fingerprint,
+            "columns": ["issue_count"],
+            "rows": [{"issue_count": 600}],
+            "row_count": 1,
+            "result_bytes": 21,
+            "truncated": False,
+            "queue_ms": 0,
+            "elapsed_ms": 1,
+            "plan_summary": {"total_cost": 10.0, "max_rows": 1, "node_count": 2},
+        }
+
+    async def close(self) -> None:
+        pass
+
+
 def runtime_config(api_token: str | None = None) -> RuntimeConfig:
     return RuntimeConfig(
         host="127.0.0.1",
@@ -44,11 +77,16 @@ def runtime_config(api_token: str | None = None) -> RuntimeConfig:
     )
 
 
-def client(catalog: object, api_token: str | None = None) -> httpx.AsyncClient:
+def client(
+    catalog: object,
+    api_token: str | None = None,
+    query_executor: QueryExecutor | None = None,
+) -> httpx.AsyncClient:
     app = build_app(
         runtime_config(api_token),
         registry=load_test_registry(),
         catalog=catalog,  # type: ignore[arg-type]
+        query_executor=query_executor,
     )
     return httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
@@ -127,3 +165,44 @@ async def test_schema_drift_details_are_not_disclosed() -> None:
         "message": "Metadata is temporarily unavailable for the requested source.",
     }
     assert "issue_overview" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_executes_query_with_current_metadata_revision() -> None:
+    catalog = ReturningCatalog(minimal_development_snapshot())
+    executor = RecordingQueryExecutor()
+    async with client(catalog, query_executor=executor) as session:
+        context = await session.post(
+            "/meta",
+            json={"source_id": "development-issues", "question": "문제 수"},
+        )
+        response = await session.post(
+            "/query",
+            json={
+                "source_id": "development-issues",
+                "sql": "SELECT count(*) AS issue_count FROM ai.issue_overview",
+                "metadata_revision": context.json()["metadata_revision"],
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["rows"] == [{"issue_count": 600}]
+    assert executor.calls[0][0] == "development-issues"
+
+
+@pytest.mark.asyncio
+async def test_query_rejects_stale_revision_without_echoing_sql() -> None:
+    secret_literal = "private-customer-secret"
+    async with client(ReturningCatalog(minimal_development_snapshot())) as session:
+        response = await session.post(
+            "/query",
+            json={
+                "source_id": "development-issues",
+                "sql": f"SELECT '{secret_literal}' FROM ai.issue_overview",
+                "metadata_revision": f"sha256:{'0' * 64}",
+            },
+        )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "METADATA_REVISION_MISMATCH"
+    assert secret_literal not in response.text

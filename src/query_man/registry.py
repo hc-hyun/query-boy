@@ -45,6 +45,8 @@ class _StrictModel(BaseModel):
 class _Budget(_StrictModel):
     metadata_statement_timeout_ms: int = Field(ge=100, le=30_000)
     query_statement_timeout_ms: int = Field(ge=100, le=60_000)
+    query_transaction_timeout_ms: int = Field(ge=100, le=300_000)
+    query_queue_timeout_ms: int = Field(ge=1, le=60_000)
     lock_timeout_ms: int = Field(ge=1, le=10_000)
     max_pool_size: int = Field(ge=1, le=20)
     max_concurrent_queries: int = Field(ge=1, le=20)
@@ -54,6 +56,10 @@ class _Budget(_StrictModel):
     max_metadata_response_bytes: int = Field(ge=1_024, le=100 * 1_024 * 1_024)
     max_result_rows: int = Field(ge=1, le=100_000)
     max_result_bytes: int = Field(ge=1_024, le=100 * 1_024 * 1_024)
+    max_sql_bytes: int = Field(ge=1_024, le=10 * 1_024 * 1_024)
+    max_plan_total_cost: int = Field(ge=1, le=2_147_483_647)
+    max_plan_rows: int = Field(ge=1, le=2_147_483_647)
+    max_plan_nodes: int = Field(ge=1, le=100_000)
 
 
 class _BudgetFile(_StrictModel):

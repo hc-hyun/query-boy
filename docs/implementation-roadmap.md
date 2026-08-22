@@ -53,8 +53,8 @@ Status: Active
 - [x] `DEC-01` 지원할 PostgreSQL SQL 문법 범위와 AST parser 선정 기준을 decision record로 확정한다.
 - [x] `DEC-02` 허용·거부할 relation kind, operator, function, system object 정책을 명세한다.
 - [x] `DEC-03` Canonical SQL과 query fingerprint 규칙을 명세하고 literal 처리 원칙을 확정한다.
-- [ ] `DEC-04` `query` 요청·응답, reason code, truncation, plan summary와 error 계약을 확정한다.
-- [ ] `DEC-05` Metadata revision 불일치 시 거부와 context 재조회 흐름을 확정한다.
+- [x] `DEC-04` `query` 요청·응답, reason code, truncation, plan summary와 error 계약을 확정한다.
+- [x] `DEC-05` Metadata revision 불일치 시 거부와 context 재조회 흐름을 확정한다.
 - [ ] `DEC-06` 초기 budget hard limit과 source별 override 허용 범위를 부하 테스트 근거로 확정한다.
 - [ ] `DEC-07` Reader role, RLS, SECURITY DEFINER/INVOKER view와 함수 allowlist 정책을 확정한다.
 - [ ] `DEC-08` MCP transport, 인증 경계와 HTTP application service 재사용 방식을 확정한다.
@@ -70,7 +70,7 @@ Dependencies: `SQL-01`~`SQL-05`, `SQL-07`~`SQL-10`은 `DEC-01`~`DEC-03`을 따�
 - [x] `SQL-03` AST에서 참조 relation과 schema를 추출하고 현재 source의 published catalog allowlist와 대조한다.
 - [x] `SQL-04` 함수와 operator를 추출해 위험 함수와 비승인 확장을 거부한다.
 - [x] `SQL-05` system schema, temp object, cross-database 접근과 client 지정 search path를 거부한다.
-- [ ] `SQL-06` 요청의 `metadata_revision`이 실행 직전 published revision과 같은지 검증한다.
+- [x] `SQL-06` 요청의 `metadata_revision`이 실행 직전 published revision과 같은지 검증한다.
 - [x] `SQL-07` SQL을 canonicalize하고 민감 literal을 노출하지 않는 query fingerprint를 생성한다.
 - [x] `SQL-08` 모든 거부 경로를 안정적인 reason code로 반환하고 parser 내부 오류를 공개하지 않는다.
 - [x] `SQL-09` 허용·거부 corpus, 우회 문법, nested query, CTE와 Unicode identifier 회귀 테스트를 추가한다.
@@ -80,16 +80,16 @@ Dependencies: `SQL-01`~`SQL-05`, `SQL-07`~`SQL-10`은 `DEC-01`~`DEC-03`을 따�
 
 Dependencies: `SQL-01`~`SQL-09`, `DEC-06`
 
-- [ ] `EXEC-01` HTTP application service에 `query(source_id, sql, metadata_revision)` 계약을 구현한다.
+- [x] `EXEC-01` HTTP application service에 `query(source_id, sql, metadata_revision)` 계약을 구현한다.
 - [ ] `EXEC-02` Caller의 source 접근 권한을 확인한 뒤 source별 concurrency slot을 획득한다.
-- [ ] `EXEC-03` `BEGIN READ ONLY` transaction과 transaction-local statement, lock, idle timeout을 강제한다.
-- [ ] `EXEC-04` Source profile의 reader identity, database와 read-only session 상태를 실행 직전에 검증한다.
-- [ ] `EXEC-05` 결과를 전부 메모리에 올리지 않고 stream하며 row와 UTF-8 byte 상한에서 중단한다.
+- [x] `EXEC-03` `BEGIN READ ONLY` transaction과 transaction-local statement, lock, idle timeout을 강제한다.
+- [x] `EXEC-04` Source profile의 reader identity, database와 read-only session 상태를 실행 직전에 검증한다.
+- [x] `EXEC-05` 결과를 전부 메모리에 올리지 않고 stream하며 row와 UTF-8 byte 상한에서 중단한다.
 - [ ] `EXEC-06` Client disconnect, deadline과 운영자 요청 시 PostgreSQL query를 cancel하고 rollback한다.
-- [ ] `EXEC-07` Queue timeout과 pool 고갈을 안정적인 overload reason code로 반환한다.
-- [ ] `EXEC-08` Optional `EXPLAIN` admission을 구현하되 planner cost만으로 안전을 보장하지 않도록 한다.
-- [ ] `EXEC-09` `query_id`, fingerprint, elapsed time, row/byte 수, truncation과 plan summary를 반환한다.
-- [ ] `EXEC-10` DB 오류, timeout, cancel과 serialization failure를 비공개 오류 계약으로 매핑한다.
+- [x] `EXEC-07` Queue timeout과 pool 고갈을 안정적인 overload reason code로 반환한다.
+- [x] `EXEC-08` Optional `EXPLAIN` admission을 구현하되 planner cost만으로 안전을 보장하지 않도록 한다.
+- [x] `EXEC-09` `query_id`, fingerprint, elapsed time, row/byte 수, truncation과 plan summary를 반환한다.
+- [x] `EXEC-10` DB 오류, timeout, cancel과 serialization failure를 비공개 오류 계약으로 매핑한다.
 - [ ] `EXEC-11` 동시성, timeout, large result, disconnect, cancel과 rollback 통합 테스트를 추가한다.
 - [ ] `EXEC-12` Reader가 base schema, write statement와 비승인 함수를 실행할 수 없는지 end-to-end로 검증한다.
 - [ ] `EXEC-13` PostgreSQL이 해석한 function/operator OID, namespace와 volatility를 검증해 AST name allowlist를 보강한다.

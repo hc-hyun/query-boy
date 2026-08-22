@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import hmac
 import logging
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Coroutine
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -11,9 +12,10 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from query_man.catalog import PostgresCatalog
-from query_man.errors import AppError
+from query_man.errors import AppError, QueryTimeoutError
 from query_man.metadata import MetadataService
 from query_man.models import CatalogProvider
+from query_man.query import PostgresQueryExecutor, QueryExecutor, QueryService
 from query_man.registry import SourceRegistry
 from query_man.runtime_config import RuntimeConfig
 
@@ -28,11 +30,20 @@ class MetadataRequest(BaseModel):
     max_objects: int = Field(2, ge=1, le=4)
 
 
+class QueryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    source_id: str = Field(min_length=1, max_length=80)
+    sql: str = Field(min_length=1, max_length=100_000)
+    metadata_revision: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
+
+
 def build_app(
     runtime_config: RuntimeConfig,
     *,
     registry: SourceRegistry | None = None,
     catalog: CatalogProvider | None = None,
+    query_executor: QueryExecutor | None = None,
 ) -> FastAPI:
     registry = registry or SourceRegistry.load(runtime_config.source_directory, runtime_config.budget_file)
     catalog = catalog or PostgresCatalog()
@@ -43,16 +54,23 @@ def build_app(
         max_stale_ms=runtime_config.metadata_max_stale_ms,
         refresh_retry_ms=runtime_config.metadata_retry_delay_ms,
     )
+    query_executor = query_executor or PostgresQueryExecutor()
+    query_service = QueryService(registry, metadata, query_executor)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         yield
-        await catalog.close()
+        try:
+            await query_executor.close()
+        finally:
+            await catalog.close()
 
     app = FastAPI(title="query-man", lifespan=lifespan)
     app.state.registry = registry
     app.state.catalog = catalog
     app.state.metadata = metadata
+    app.state.query_executor = query_executor
+    app.state.query_service = query_service
 
     @app.middleware("http")
     async def authenticate(request: Request, call_next: object) -> JSONResponse:
@@ -128,4 +146,30 @@ def build_app(
     async def meta(payload: MetadataRequest) -> dict[str, object]:
         return await metadata.get_context(payload.source_id, payload.question, payload.max_objects)
 
+    @app.post("/query")
+    async def query(payload: QueryRequest, request: Request) -> dict[str, object]:
+        pending = query_service.query(payload.source_id, payload.sql, payload.metadata_revision)
+        return await _until_disconnect(request, pending)
+
     return app
+
+
+async def _until_disconnect(
+    request: Request,
+    pending: Coroutine[object, object, dict[str, object]],
+) -> dict[str, object]:
+    task: asyncio.Task[dict[str, object]] = asyncio.create_task(pending)
+    try:
+        while not task.done():
+            await asyncio.wait({task}, timeout=0.1)
+            if not task.done() and await request.is_disconnected() and not task.done():
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+                raise QueryTimeoutError
+        return task.result()
+    finally:
+        if not task.done():
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task

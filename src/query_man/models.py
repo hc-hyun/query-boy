@@ -14,6 +14,8 @@ class BudgetProfile:
     name: str
     metadata_statement_timeout_ms: int
     query_statement_timeout_ms: int
+    query_transaction_timeout_ms: int
+    query_queue_timeout_ms: int
     lock_timeout_ms: int
     max_pool_size: int
     max_concurrent_queries: int
@@ -23,6 +25,10 @@ class BudgetProfile:
     max_metadata_response_bytes: int
     max_result_rows: int
     max_result_bytes: int
+    max_sql_bytes: int
+    max_plan_total_cost: int
+    max_plan_rows: int
+    max_plan_nodes: int
 
 
 @dataclass(frozen=True)

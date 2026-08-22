@@ -1,6 +1,6 @@
 # Query Man Architecture
 
-Status: Metadata MVP implemented
+Status: Metadata and guarded query MVP implemented
 
 ## Goal
 
@@ -130,6 +130,7 @@ MCP를 붙이기 전 동일한 application contract를 HTTP로 먼저 검증한�
 ```text
 GET  /sources
 POST /meta { source_id, question, max_objects? }
+POST /query { source_id, sql, metadata_revision }
 ```
 
 `/meta`는 reader가 실제로 조회할 수 있는 allowed schema/relation kind만 catalog에서
@@ -168,13 +169,15 @@ Schema drift로 overlay가 깨지면 신규 revision 발행을 중단하고 마�
 
 - PostgreSQL AST parser와 canonical query fingerprint는
   [ADR 0001](decisions/0001-postgresql-ast-validation.md)을 따른다.
+- Guarded query 순서, revision, truncation과 오류 계약은
+  [ADR 0002](decisions/0002-guarded-query-contract.md)를 따른다.
 
 ## Open Decisions
 
 구현 순서와 완료 조건은 [implementation-roadmap.md](implementation-roadmap.md)의
 안정적인 TODO ID로 관리한다.
 
-- Budget profile의 초기 hard limit
+- 부하 테스트에 근거한 production budget hard limit
 - Reader role, RLS와 함수 allowlist 정책
 - Schema revision 및 verified query 저장소
 - Wide view를 위한 column-scoped progressive disclosure

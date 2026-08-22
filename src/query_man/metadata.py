@@ -33,14 +33,14 @@ from query_man.revision import create_metadata_revision
 
 
 @dataclass(frozen=True)
-class _PreparedMetadata:
+class PreparedMetadata:
     snapshot: CatalogSnapshot
     revision: str
 
 
 @dataclass
 class _CacheEntry:
-    value: _PreparedMetadata
+    value: PreparedMetadata
     loaded_at: int
     expires_at: int
     next_refresh_at: int
@@ -64,7 +64,7 @@ class MetadataService:
         self._refresh_retry_ms = refresh_retry_ms
         self._now = now or (lambda: int(time.time() * 1000))
         self._cache: dict[str, _CacheEntry] = {}
-        self._refreshes: dict[str, asyncio.Task[_PreparedMetadata]] = {}
+        self._refreshes: dict[str, asyncio.Task[PreparedMetadata]] = {}
 
     async def get_context(self, source_id: str, question: str, max_objects: int = 2) -> dict[str, object]:
         source = self._registry.get(source_id)
@@ -121,7 +121,14 @@ class MetadataService:
         else:
             self._cache.pop(source_id, None)
 
-    async def _get_prepared(self, source: SourceProfile) -> tuple[_PreparedMetadata, bool]:
+    async def get_published(self, source_id: str) -> PreparedMetadata:
+        source = self._registry.get(source_id)
+        if source is None:
+            raise SourceNotFoundError
+        prepared, _stale = await self._get_prepared(source)
+        return prepared
+
+    async def _get_prepared(self, source: SourceProfile) -> tuple[PreparedMetadata, bool]:
         cached = self._cache.get(source.source_id)
         now = self._now()
         if cached and cached.expires_at > now:
@@ -141,7 +148,7 @@ class MetadataService:
                 return cached.value, True
             raise MetadataUnavailableError from error
 
-    async def _refresh(self, source: SourceProfile) -> _PreparedMetadata:
+    async def _refresh(self, source: SourceProfile) -> PreparedMetadata:
         active = self._refreshes.get(source.source_id)
         if active is not None:
             return await active
@@ -152,12 +159,12 @@ class MetadataService:
         finally:
             self._refreshes.pop(source.source_id, None)
 
-    async def _load_and_validate(self, source: SourceProfile) -> _PreparedMetadata:
+    async def _load_and_validate(self, source: SourceProfile) -> PreparedMetadata:
         snapshot = await self._catalog.load(source)
         issues = _validate_snapshot(source, snapshot)
         if issues:
             raise MetadataUnavailableError({"contract_violations": issues})
-        value = _PreparedMetadata(snapshot, create_metadata_revision(source, snapshot))
+        value = PreparedMetadata(snapshot, create_metadata_revision(source, snapshot))
         loaded_at = self._now()
         self._cache[source.source_id] = _CacheEntry(
             value=value,

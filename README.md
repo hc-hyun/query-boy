@@ -41,7 +41,7 @@ docker compose down
 [docs/mvp.md](docs/mvp.md), 최종 목적 기반 구현 TODO는
 [docs/implementation-roadmap.md](docs/implementation-roadmap.md)를 참고합니다.
 
-## Metadata API
+## Metadata And Query API
 
 질문 범위형 metadata API는 Python 3.12와 `uv` 환경에서 실행합니다.
 
@@ -63,6 +63,25 @@ curl -s http://127.0.0.1:3000/meta \
   }'
 ```
 
+`/meta`가 반환한 `metadata_revision`으로 한 개의 읽기 전용 SQL을 실행할 수 있습니다.
+
+```bash
+curl -s http://127.0.0.1:3000/query \
+  -H 'content-type: application/json' \
+  -d '{
+    "source_id": "market-voc",
+    "sql": "SELECT count(*) AS voc_count FROM ai.voc_overview",
+    "metadata_revision": "sha256:<value returned by /meta>"
+  }'
+```
+
+Gateway는 현재 revision과 AST allowlist를 확인한 뒤 source별 동시 실행 수를 제한합니다.
+실행 시 read-only transaction, statement/transaction/lock timeout을 강제하고, 명백히 비싼
+`EXPLAIN` plan을 거부하며, 결과가 profile의 row 또는 UTF-8 byte 상한을 넘으면
+`truncated: true`로 종료합니다. Planner cost는 보조적인 admission 신호이고 실제 실행
+피해의 상한은 timeout, concurrency와 결과 제한이 담당합니다. 기본값은
+[`config/budget-profiles.yaml`](config/budget-profiles.yaml)에서 관리합니다.
+
 Client는 DSN, host, database 또는 role을 전달할 수 없습니다. `source_id`는
 [`config/sources`](config/sources)의 server-side manifest에서만 연결 정보로 해석됩니다.
 Column, type과 database comment는 reader 권한으로 `pg_catalog`에서 자동 수집하고,
@@ -70,7 +89,7 @@ grain, 한국어 alias, 승인된 join, 검증된 measure와 business predicate�
 semantic overlay로 보강합니다. `/meta`의 `answerability`가 `needs_clarification` 또는
 `unsupported`이면 SQL 생성을 진행하지 않아야 합니다.
 기본 loopback bind에서는 로컬 개발을 위해 인증을 생략할 수 있다. 외부 주소에 bind할
-때는 32자 이상의 `QUERY_MAN_API_TOKEN`이 필수이며 `/sources`와 `/meta`에
+때는 32자 이상의 `QUERY_MAN_API_TOKEN`이 필수이며 `/sources`, `/meta`, `/query`에
 `Authorization: Bearer ...` header를 보내야 합니다.
 
 개발 검증은 다음 명령으로 실행합니다.
