@@ -27,14 +27,38 @@ def create_metadata_revision(source: SourceProfile, catalog: CatalogSnapshot) ->
                 "comment": relation.comment,
                 "definition_hash": relation.definition_hash,
                 **({"security_invoker": True} if relation.security_invoker else {}),
-                **({"primary_key": relation.primary_key} if relation.primary_key else {}),
                 **(
-                    {"foreign_keys": [asdict(key) for key in relation.foreign_keys]}
+                    {"primary_key": _ordered_names(relation.primary_key)}
+                    if relation.primary_key
+                    else {}
+                ),
+                **(
+                    {
+                        "foreign_keys": [
+                            {
+                                "columns": _ordered_names(key.columns),
+                                "referenced_relation": key.referenced_relation,
+                                "referenced_columns": _ordered_names(
+                                    key.referenced_columns
+                                ),
+                            }
+                            for key in relation.foreign_keys
+                        ]
+                    }
                     if relation.foreign_keys
                     else {}
                 ),
                 **(
-                    {"indexes": [asdict(index) for index in relation.indexes]}
+                    {
+                        "indexes": [
+                            {
+                                "columns": _ordered_names(index.columns),
+                                "unique": index.unique,
+                                "primary": index.primary,
+                            }
+                            for index in relation.indexes
+                        ]
+                    }
                     if relation.indexes
                     else {}
                 ),
@@ -66,3 +90,7 @@ def _canonicalize(value: Any) -> Any:
     if isinstance(value, dict):
         return {key: _canonicalize(item) for key, item in sorted(value.items()) if item is not None}
     return value
+
+
+def _ordered_names(values: list[str]) -> list[dict[str, str]]:
+    return [{f"{position:04d}": value} for position, value in enumerate(values)]
