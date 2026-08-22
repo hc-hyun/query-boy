@@ -118,6 +118,7 @@ class PostgresSourceStore:
         snapshot = encode_snapshot(metadata.snapshot)
         pool = await self._get_pool()
         async with pool.connection() as connection, connection.transaction():
+            await _lock_source_transition(connection, source_id)
             current_generation = await _lock_generation(connection, source_id)
             if current_generation != expected_generation:
                 raise SourceGenerationConflictError
@@ -182,7 +183,8 @@ class PostgresSourceStore:
 
     async def deactivate(self, source_id: str, expected_generation: int) -> None:
         pool = await self._get_pool()
-        async with pool.connection() as connection:
+        async with pool.connection() as connection, connection.transaction():
+            await _lock_source_transition(connection, source_id)
             cursor = await connection.execute(
                 "UPDATE control.active_source_profiles "
                 "SET enabled = false, activated_at = clock_timestamp() "
@@ -201,6 +203,7 @@ class PostgresSourceStore:
     ) -> StoredSource:
         pool = await self._get_pool()
         async with pool.connection() as connection, connection.transaction():
+            await _lock_source_transition(connection, source_id)
             current_generation = await _lock_generation(connection, source_id)
             if current_generation != expected_generation:
                 raise SourceGenerationConflictError
@@ -323,6 +326,14 @@ async def _lock_generation(connection: Any, source_id: str) -> int:
     )
     row = await cursor.fetchone()
     return 0 if row is None else int(row["generation"])
+
+
+async def _lock_source_transition(connection: Any, source_id: str) -> None:
+    await connection.execute(
+        "SELECT pg_catalog.pg_advisory_xact_lock("
+        "pg_catalog.hashtextextended(%s, 0))",
+        (source_id,),
+    )
 
 
 def _decode(row: dict[str, Any]) -> StoredSource:

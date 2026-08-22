@@ -43,6 +43,10 @@ class StoredMetadataInvalidError(Exception):
     pass
 
 
+class StoredMetadataSupersededError(Exception):
+    pass
+
+
 class _StoredModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -124,6 +128,8 @@ class PostgresMetadataStore:
         document = encode_snapshot(value.snapshot)
         pool = await self._get_pool()
         async with pool.connection() as connection, connection.transaction():
+            await _lock_source_transition(connection, source.source_id)
+            await _require_current_source(connection, source)
             await connection.execute(
                 "INSERT INTO control.metadata_snapshots (source_id, revision, snapshot) "
                 "VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
@@ -163,6 +169,8 @@ class PostgresMetadataStore:
     async def activate(self, source: SourceProfile, revision: str) -> PreparedMetadata:
         pool = await self._get_pool()
         async with pool.connection() as connection, connection.transaction():
+            await _lock_source_transition(connection, source.source_id)
+            await _require_current_source(connection, source)
             cursor = await connection.execute(
                 "SELECT snapshot FROM control.metadata_snapshots "
                 "WHERE source_id = %s AND revision = %s FOR SHARE",
@@ -218,6 +226,32 @@ class PostgresMetadataStore:
                 await pool.open()
                 self._pool = pool
         return self._pool
+
+
+async def _lock_source_transition(connection: Any, source_id: str) -> None:
+    await connection.execute(
+        "SELECT pg_catalog.pg_advisory_xact_lock("
+        "pg_catalog.hashtextextended(%s, 0))",
+        (source_id,),
+    )
+
+
+async def _require_current_source(connection: Any, source: SourceProfile) -> None:
+    if source.control_generation is None:
+        cursor = await connection.execute(
+            "SELECT 1 FROM control.active_source_profiles WHERE source_id = %s",
+            (source.source_id,),
+        )
+        if await cursor.fetchone() is not None:
+            raise StoredMetadataSupersededError
+        return
+    cursor = await connection.execute(
+        "SELECT 1 FROM control.active_source_profiles "
+        "WHERE source_id = %s AND generation = %s AND enabled",
+        (source.source_id, source.control_generation),
+    )
+    if await cursor.fetchone() is None:
+        raise StoredMetadataSupersededError
 
 
 def encode_snapshot(snapshot: CatalogSnapshot) -> dict[str, object]:

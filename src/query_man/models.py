@@ -144,6 +144,7 @@ class SourceProfile:
     semantic_overlay: SemanticOverlay
     minimum_quality_level: QualityLevel = "L0"
     tenant_isolation: TenantIsolation = "none"
+    control_generation: int | None = None
 
 
 @dataclass

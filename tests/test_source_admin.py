@@ -245,10 +245,12 @@ async def test_publish_rotate_deactivate_and_rollback_apply_without_restart() ->
     assert published["generation"] == 1
     assert registry.get("third-source") is not None
     assert registry.get("third-source").connection.password == "first-secret"  # type: ignore[union-attr]
+    assert registry.get("third-source").control_generation == 1  # type: ignore[union-attr]
 
     rotated = await admin.rotate_credential("third-source", "rotated-secret")
     assert rotated["generation"] == 2
     assert registry.get("third-source").connection.password == "rotated-secret"  # type: ignore[union-attr]
+    assert registry.get("third-source").control_generation == 2  # type: ignore[union-attr]
 
     await admin.deactivate("third-source")
     assert registry.get("third-source") is None
@@ -256,6 +258,7 @@ async def test_publish_rotate_deactivate_and_rollback_apply_without_restart() ->
     rolled_back = await admin.rollback("third-source", 1)
     assert rolled_back["generation"] == 1
     assert registry.get("third-source").connection.password == "first-secret"  # type: ignore[union-attr]
+    assert registry.get("third-source").control_generation == 1  # type: ignore[union-attr]
     assert store.active["third-source"].generation == 1
     assert invalidator.source_ids == ["third-source"] * 4
 
@@ -299,12 +302,14 @@ async def test_first_control_publish_allows_matching_bootstrap_connection_identi
     manifest = _manifest()
     budgets = load_budget_profiles(ROOT_DIRECTORY / "config" / "budget-profiles.yaml")
     registry.upsert(validate_source_manifest(manifest, budgets, "bootstrap-secret").profile)
+    assert registry.get("third-source").control_generation is None  # type: ignore[union-attr]
 
     published = await admin.publish("third-source", manifest, "control-secret")
 
     assert published["generation"] == 1
     assert store.active["third-source"].generation == 1
     assert registry.get("third-source").connection.password == "control-secret"  # type: ignore[union-attr]
+    assert registry.get("third-source").control_generation == 1  # type: ignore[union-attr]
 
 
 @pytest.mark.parametrize(

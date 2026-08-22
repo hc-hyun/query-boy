@@ -299,6 +299,155 @@ async def test_rls_tenant_context_is_transaction_local_across_pool_reuse() -> No
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_cached_rls_reader_privilege_drift_fails_closed_over_http() -> None:
+    load_dotenv(ROOT_DIRECTORY / ".env")
+    required = [
+        "POSTGRES_USER",
+        "POSTGRES_PASSWORD",
+        "DEVELOPMENT_ISSUES_READER_PASSWORD",
+        "MARKET_VOC_READER_PASSWORD",
+    ]
+    if any(not os.environ.get(name) for name in required):
+        pytest.skip("local PostgreSQL administrator credentials are not configured")
+
+    base_registry = load_test_registry(os.environ)
+    development = base_registry.get("development-issues")
+    market = base_registry.get("market-voc")
+    assert development is not None
+    assert market is not None
+    source = replace(
+        development,
+        source_id="rls-reader-policy-fixture",
+        allowed_schemas=["tenant_ai"],
+        allowed_relation_kinds=["view"],
+        tenant_isolation="rls",
+        semantic_overlay=replace(
+            development.semantic_overlay,
+            default_relation=None,
+            relations=[],
+            joins=[],
+            business_terms=[],
+            question_rules=[],
+            composition_hints=[],
+        ),
+        budget=replace(
+            development.budget,
+            max_pool_size=1,
+            max_concurrent_queries=1,
+        ),
+    )
+    registry = SourceRegistry([development, market, source])
+    runtime = RuntimeConfig(
+        host="127.0.0.1",
+        port=0,
+        log_level="critical",
+        api_token=None,
+        source_directory=ROOT_DIRECTORY / "config" / "sources",
+        budget_file=ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
+        access_policy_file=None,
+        metadata_cache_ttl_ms=300_000,
+        metadata_max_stale_ms=300_000,
+        metadata_retry_delay_ms=5_000,
+    )
+    query_app = build_app(runtime, registry=registry)
+    metadata_app = build_app(
+        replace(runtime, metadata_cache_ttl_ms=0),
+        registry=registry,
+    )
+    admin = await AsyncConnection.connect(
+        make_conninfo(
+            host="127.0.0.1",
+            port=os.environ.get("POSTGRES_PORT", "5432"),
+            dbname="development_issues",
+            user=os.environ["POSTGRES_USER"],
+            password=os.environ["POSTGRES_PASSWORD"],
+            sslmode="disable",
+        )
+    )
+    safe_role_sql = (
+        "ALTER ROLE development_issues_reader "
+        "NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT "
+        "NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 3"
+    )
+    context_request = {
+        "source_id": source.source_id,
+        "question": "tenant records",
+    }
+    try:
+        await admin.execute(safe_role_sql)
+        await admin.commit()
+        async with (
+            _serve_test_app(query_app) as query_url,
+            _serve_test_app(metadata_app) as metadata_url,
+            httpx.AsyncClient(base_url=query_url) as query_client,
+            httpx.AsyncClient(base_url=metadata_url) as metadata_client,
+        ):
+            query_context = await query_client.post("/meta", json=context_request)
+            metadata_context = await metadata_client.post("/meta", json=context_request)
+            assert query_context.status_code == 200, query_context.text
+            assert metadata_context.status_code == 200, metadata_context.text
+            revision = query_context.json()["metadata_revision"]
+            assert metadata_context.json()["metadata_revision"] == revision
+
+            query_request = {
+                "source_id": source.source_id,
+                "sql": (
+                    "SELECT record_id, label "
+                    "FROM tenant_ai.record_overview ORDER BY label"
+                ),
+                "metadata_revision": revision,
+            }
+            warm = await query_client.post("/query", json=query_request)
+            assert warm.status_code == 200, warm.text
+            assert warm.json()["rows"] == []
+
+            for unsafe_role_sql in (
+                "ALTER ROLE development_issues_reader BYPASSRLS",
+                "ALTER ROLE development_issues_reader SUPERUSER",
+            ):
+                try:
+                    await admin.execute(unsafe_role_sql)
+                    await admin.commit()
+
+                    query_failure = await query_client.post("/query", json=query_request)
+                    assert query_failure.status_code == 503, query_failure.text
+                    assert query_failure.json() == {
+                        "error": {
+                            "code": "QUERY_UNAVAILABLE",
+                            "message": "The query could not be completed.",
+                        }
+                    }
+
+                    metadata_failure = await metadata_client.post(
+                        "/meta",
+                        json=context_request,
+                    )
+                    assert metadata_failure.status_code == 503, metadata_failure.text
+                    assert metadata_failure.json() == {
+                        "error": {
+                            "code": "METADATA_UNAVAILABLE",
+                            "message": (
+                                "Metadata is temporarily unavailable for the requested source."
+                            ),
+                        }
+                    }
+                finally:
+                    await admin.rollback()
+                    await admin.execute(safe_role_sql)
+                    await admin.commit()
+
+                recovered = await metadata_client.post("/meta", json=context_request)
+                assert recovered.status_code == 200, recovered.text
+                assert recovered.json()["metadata_revision"] == revision
+    finally:
+        await admin.rollback()
+        await admin.execute(safe_role_sql)
+        await admin.commit()
+        await admin.close()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_onboards_third_source_without_runtime_restart() -> None:
     load_dotenv(ROOT_DIRECTORY / ".env")
     required = ["POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB"]

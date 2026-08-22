@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 
 import pytest
@@ -14,6 +15,7 @@ from query_man.models import (
     SourceProfile,
 )
 from query_man.registry import SourceRegistry
+from query_man.revision import create_metadata_revision
 from tests.helpers import column, load_test_registry, minimal_development_snapshot
 
 
@@ -46,6 +48,30 @@ class SnapshotSequenceCatalog:
 
     async def load(self, _source: SourceProfile) -> CatalogSnapshot:
         return next(self.snapshots)
+
+    async def close(self) -> None:
+        pass
+
+
+class BarrierCatalog:
+    def __init__(
+        self,
+        first: CatalogSnapshot,
+        second: CatalogSnapshot,
+    ) -> None:
+        self._first = first
+        self._second = second
+        self.first_started = asyncio.Event()
+        self.release_first = asyncio.Event()
+        self.load_count = 0
+
+    async def load(self, _source: SourceProfile) -> CatalogSnapshot:
+        self.load_count += 1
+        if self.load_count == 1:
+            self.first_started.set()
+            await self.release_first.wait()
+            return self._first
+        return self._second
 
     async def close(self) -> None:
         pass
@@ -134,6 +160,69 @@ async def test_fails_closed_on_drift_even_with_cache() -> None:
     await service.get_context("development-issues", "최근 문제")
     with pytest.raises(MetadataUnavailableError):
         await service.get_context("development-issues", "최근 문제")
+
+
+@pytest.mark.asyncio
+async def test_invalidated_refresh_cannot_replace_new_profile_metadata() -> None:
+    registry = load_test_registry()
+    bootstrap = registry.get("development-issues")
+    assert bootstrap is not None
+    first_source = replace(bootstrap, control_generation=1)
+    second_source = replace(
+        first_source,
+        control_generation=2,
+        semantic_overlay=replace(first_source.semantic_overlay, business_terms=[]),
+    )
+    assert first_source != second_source
+    registry = SourceRegistry([first_source])
+    store = MemoryMetadataStore()
+    catalog = BarrierCatalog(
+        minimal_development_snapshot(),
+        minimal_development_snapshot(),
+    )
+    service = MetadataService(
+        registry,
+        catalog,
+        store=store,
+        verified_revisions={},
+    )
+
+    old_refresh = asyncio.create_task(service.get_published(first_source.source_id))
+    await catalog.first_started.wait()
+    registry.upsert(second_source)
+    service.invalidate(second_source.source_id)
+    current_refresh = asyncio.create_task(service.get_published(second_source.source_id))
+    await asyncio.sleep(0)
+    catalog.release_first.set()
+
+    with pytest.raises(MetadataUnavailableError):
+        await old_refresh
+    current = await current_refresh
+    assert catalog.load_count == 2
+    assert store.active[second_source.source_id] == current.revision
+    assert await service.get_published(second_source.source_id) == current
+
+
+@pytest.mark.asyncio
+async def test_cached_metadata_must_match_current_source_contract() -> None:
+    registry = load_test_registry()
+    first_source = registry.get("development-issues")
+    assert first_source is not None
+    service = MetadataService(
+        registry,
+        StaticCatalog(minimal_development_snapshot()),
+        verified_revisions={},
+    )
+    first = await service.get_published(first_source.source_id)
+    second_source = replace(
+        first_source,
+        semantic_overlay=replace(first_source.semantic_overlay, business_terms=[]),
+    )
+    assert create_metadata_revision(second_source, first.snapshot) != first.revision
+    registry.upsert(second_source)
+
+    with pytest.raises(MetadataUnavailableError):
+        await service.get_published(second_source.source_id)
 
 
 @pytest.mark.asyncio

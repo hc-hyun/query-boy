@@ -24,6 +24,10 @@ from query_man.errors import (
 from query_man.metadata import MetadataService
 from query_man.models import SourceProfile
 from query_man.operations import operations
+from query_man.reader_policy import (
+    ReaderSessionPolicyError,
+    require_reader_session_policy,
+)
 from query_man.registry import SourceRegistry
 from query_man.sql_validation import SqlValidationError, ValidatedSql, validate_sql
 
@@ -313,30 +317,18 @@ class PostgresQueryExecutor:
                     f"query-man:{query_id}",
                 ),
             )
-            identity_cursor = await connection.execute(
-                "SELECT pg_catalog.current_database() = %s AS database_matches, "
-                "session_user = %s AS user_matches, "
-                "pg_catalog.current_setting('transaction_read_only') = 'on' AS read_only, "
-                "pg_catalog.current_schemas(false) = ARRAY['pg_catalog']::name[] "
+            await require_reader_session_policy(connection, source)
+            query_policy_cursor = await connection.execute(
+                "SELECT pg_catalog.current_schemas(false) = ARRAY['pg_catalog']::name[] "
                 "AS trusted_search_path, "
-                "NOT pg_catalog.has_database_privilege(session_user, current_database(), 'TEMP') "
-                "AS no_temp_privilege, "
-                "NOT EXISTS (SELECT 1 FROM pg_catalog.unnest(%s::text[]) AS schema_name "
-                "WHERE pg_catalog.has_schema_privilege(session_user, schema_name, 'CREATE')) "
-                "AS no_allowed_schema_create_privilege, "
                 "pg_catalog.current_setting('row_security') = 'on' AS row_security_enabled, "
                 "pg_catalog.current_setting('query_man.tenant_id', true) = %s "
                 "AS trusted_tenant_context",
-                (
-                    source.connection.database,
-                    source.connection.user,
-                    source.allowed_schemas,
-                    trusted_tenant,
-                ),
+                (trusted_tenant,),
             )
-            identity = await identity_cursor.fetchone()
-            if not identity or not all(identity.values()):
-                raise RuntimeError("Source session identity or read-only policy mismatch")
+            query_policy = await query_policy_cursor.fetchone()
+            if not query_policy or not all(query_policy.values()):
+                raise ReaderSessionPolicyError("Source query session policy mismatch")
 
             await _validate_resolved_objects(connection, validated)
             plan_cursor = await connection.execute(f"EXPLAIN (FORMAT JSON) {sql}")

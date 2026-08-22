@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from typing import Protocol
 
 from query_man.errors import (
@@ -167,7 +168,7 @@ class SourceReloader:
         )
         if not quality.publishable:
             raise RegistryConfigurationError("Stored source does not meet its quality level")
-        return validated.profile
+        return replace(validated.profile, control_generation=record.generation)
 
     async def _invalidate(self, source_id: str) -> None:
         for invalidator in self._invalidators:
