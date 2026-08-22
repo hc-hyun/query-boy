@@ -74,6 +74,7 @@ class _StoredRelation(_StoredModel):
     columns: list[_StoredColumn] = Field(min_length=1, max_length=1_600)
     comment: str | None = Field(None, max_length=2_000)
     definition_hash: str | None = Field(None, pattern=r"^[a-f0-9]{32}$")
+    security_invoker: bool = False
     primary_key: list[str] = Field(default_factory=list, max_length=1_600)
     foreign_keys: list[_StoredForeignKey] = Field(default_factory=list, max_length=10_000)
     indexes: list[_StoredIndex] = Field(default_factory=list, max_length=10_000)
@@ -228,6 +229,7 @@ def encode_snapshot(snapshot: CatalogSnapshot) -> dict[str, object]:
                 "kind": relation.kind,
                 "comment": relation.comment,
                 "definition_hash": relation.definition_hash,
+                **({"security_invoker": True} if relation.security_invoker else {}),
                 **({"primary_key": relation.primary_key} if relation.primary_key else {}),
                 **(
                     {
@@ -301,6 +303,7 @@ def _decode(source: SourceProfile, revision: str, raw: object) -> PreparedMetada
                     comment=relation.comment,
                     estimated_rows=None,
                     definition_hash=relation.definition_hash,
+                    security_invoker=relation.security_invoker,
                     primary_key=relation.primary_key,
                     foreign_keys=[
                         CatalogForeignKey(

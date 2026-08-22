@@ -279,6 +279,10 @@ def _validate_snapshot(source: SourceProfile, snapshot: CatalogSnapshot) -> list
         return ["No selectable relations were discovered in the allowed schemas."]
     relations = {relation.qualified_name: relation for relation in snapshot.relations}
     for structure_relation in snapshot.relations:
+        if source.tenant_isolation == "rls" and not structure_relation.security_invoker:
+            issues.append(
+                f"RLS relation is not a security-invoker view: {structure_relation.qualified_name}"
+            )
         structure_columns = {column.name for column in structure_relation.columns}
         if any(column not in structure_columns for column in structure_relation.primary_key):
             issues.append(

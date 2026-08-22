@@ -28,6 +28,8 @@ CATALOG_QUERY = """
       CASE WHEN relation.relkind IN ('v', 'm')
         THEN pg_catalog.md5(pg_catalog.pg_get_viewdef(relation.oid, false))
         ELSE NULL END AS view_definition_hash,
+      coalesce(relation.reloptions @> ARRAY['security_invoker=true'], false)
+        AS security_invoker,
       relation.reltuples
     FROM pg_catalog.pg_class AS relation
     JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
@@ -42,6 +44,7 @@ CATALOG_QUERY = """
     relation.relation_kind,
     relation.relation_comment,
     relation.view_definition_hash,
+    relation.security_invoker,
     CASE WHEN relation.relation_kind IN ('r', 'p', 'm', 'f') AND relation.reltuples >= 0
       THEN relation.reltuples::double precision ELSE NULL END AS estimated_rows,
     attribute.attnum::integer AS ordinal,
@@ -247,11 +250,25 @@ class PostgresCatalog:
                 cursor = await connection.execute(
                     "SELECT pg_catalog.current_database() = %s AS database_matches, "
                     "session_user = %s AS user_matches, "
-                    "pg_catalog.current_setting('transaction_read_only') = 'on' AS read_only",
+                    "pg_catalog.current_setting('transaction_read_only') = 'on' AS read_only, "
+                    "role.rolsuper AS superuser, "
+                    "role.rolbypassrls AS bypasses_rls "
+                    "FROM pg_catalog.pg_roles AS role WHERE role.rolname = session_user",
                     (source.connection.database, source.connection.user),
                 )
                 identity = await cursor.fetchone()
-                if not identity or not all(identity.values()):
+                identity_matches = bool(
+                    identity
+                    and identity["database_matches"]
+                    and identity["user_matches"]
+                    and identity["read_only"]
+                )
+                unsafe_rls_role = bool(
+                    identity
+                    and source.tenant_isolation == "rls"
+                    and (identity["superuser"] or identity["bypasses_rls"])
+                )
+                if not identity_matches or unsafe_rls_role:
                     raise RuntimeError("Source session identity or read-only policy mismatch")
                 cursor = await connection.execute(
                     CATALOG_QUERY,
@@ -349,6 +366,7 @@ def _rows_to_relations(rows: list[dict[str, Any]]) -> list[CatalogRelation]:
                 kind=_CATALOG_KINDS[kind],  # type: ignore[arg-type]
                 comment=_sanitize_comment(row["relation_comment"]),
                 definition_hash=row["view_definition_hash"],
+                security_invoker=bool(row["security_invoker"]),
                 estimated_rows=None if estimated is None else max(0, round(float(estimated))),
                 columns=[],
             )

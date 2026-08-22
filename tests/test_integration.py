@@ -66,6 +66,7 @@ class DisconnectExecutor:
         _validated: ValidatedSql,
         *,
         query_id: str | None = None,
+        tenant_id: str | None = None,
     ) -> dict[str, object]:
         self.started.set()
         try:
@@ -169,6 +170,81 @@ async def test_live_verified_queries_match_revision_relations_and_results() -> N
     try:
         results = await verified.verify_all(metadata, service)
         assert len(results) == 9
+    finally:
+        await executor.close()
+        await catalog.close()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_rls_tenant_context_is_transaction_local_across_pool_reuse() -> None:
+    load_dotenv(ROOT_DIRECTORY / ".env")
+    if not os.environ.get("DEVELOPMENT_ISSUES_READER_PASSWORD"):
+        pytest.skip("local reader credentials are not configured")
+    registry = SourceRegistry.load(
+        ROOT_DIRECTORY / "config" / "sources",
+        ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
+    )
+    development = registry.get("development-issues")
+    assert development is not None
+    source = replace(
+        development,
+        source_id="rls-tenant-fixture",
+        allowed_schemas=["tenant_ai"],
+        allowed_relation_kinds=["view"],
+        tenant_isolation="rls",
+        budget=replace(
+            development.budget,
+            max_pool_size=1,
+            max_concurrent_queries=1,
+        ),
+    )
+    catalog = PostgresCatalog()
+    executor = PostgresQueryExecutor()
+    sql_text = "SELECT record_id, label FROM tenant_ai.record_overview ORDER BY label"
+    validated = validate_sql(
+        sql_text,
+        allowed_relations=["tenant_ai.record_overview"],
+    )
+    try:
+        snapshot = await catalog.load(source)
+        assert [relation.qualified_name for relation in snapshot.relations] == [
+            "tenant_ai.record_overview"
+        ]
+        assert snapshot.relations[0].security_invoker is True
+
+        with pytest.raises(QueryRejectedError) as missing:
+            await executor.execute(source, sql_text, "rls-test-revision", validated)
+        assert missing.value.details == {"reason_code": "TENANT_CONTEXT_REQUIRED"}
+
+        engineering = await executor.execute(
+            source,
+            sql_text,
+            "rls-test-revision",
+            validated,
+            tenant_id="engineering",
+        )
+        assert [row["label"] for row in engineering["rows"]] == [
+            "engineering-alpha",
+            "engineering-beta",
+        ]
+
+        without_context = await executor.execute(
+            replace(source, tenant_isolation="none"),
+            sql_text,
+            "rls-test-revision",
+            validated,
+        )
+        assert without_context["rows"] == []
+
+        quality = await executor.execute(
+            source,
+            sql_text,
+            "rls-test-revision",
+            validated,
+            tenant_id="quality",
+        )
+        assert [row["label"] for row in quality["rows"]] == ["quality-alpha"]
     finally:
         await executor.close()
         await catalog.close()

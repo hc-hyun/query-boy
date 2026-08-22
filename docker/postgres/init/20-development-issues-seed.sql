@@ -285,10 +285,18 @@ ON CONFLICT (issue_id, sequence_no) DO UPDATE SET
   body = EXCLUDED.body,
   created_at = EXCLUDED.created_at;
 
+INSERT INTO tenant_ai.private_records (tenant_id, label)
+VALUES
+  ('engineering', 'engineering-alpha'),
+  ('engineering', 'engineering-beta'),
+  ('quality', 'quality-alpha')
+ON CONFLICT (tenant_id, label) DO NOTHING;
+
 ANALYZE development.users;
 ANALYZE development.product_models;
 ANALYZE development.test_units;
 ANALYZE development.issues;
 ANALYZE development.issue_comments;
+ANALYZE tenant_ai.private_records;
 
 COMMIT;

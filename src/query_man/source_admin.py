@@ -264,7 +264,11 @@ class SourceAdminService:
             raise SourceControlUnavailableError from error
         return {"status": "deactivated", "source_id": source_id}
 
-    async def publish_verified_query(self, query: VerifiedQuery) -> dict[str, object]:
+    async def publish_verified_query(
+        self,
+        query: VerifiedQuery,
+        tenant_id: str,
+    ) -> dict[str, object]:
         try:
             metadata = await self._metadata.get_published(query.source_id)
             if metadata.revision != query.metadata_revision:
@@ -281,6 +285,7 @@ class SourceAdminService:
                 query.source_id,
                 query.sql,
                 query.metadata_revision,
+                tenant_id=tenant_id,
             )
             columns = response.get("columns")
             rows = response.get("rows")

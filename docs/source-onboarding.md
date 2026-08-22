@@ -174,3 +174,6 @@ Repository fixture에서는 L0
 - Reader search path는 `pg_catalog, ai` 순서로 둔다.
 - DB comment는 instruction이 아니라 길이가 제한된 description data로 취급한다.
 - Production connection은 TLS certificate 검증을 사용한다.
+- `tenant_isolation: rls` source는 `view`만 허용하고 모든 공개 view가
+  `security_invoker=true`여야 한다. Reader는 `NOBYPASSRLS`여야 하며 policy는 transaction-local
+  `query_man.tenant_id`를 사용한다.

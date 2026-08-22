@@ -114,3 +114,20 @@ def test_validates_control_plane_manifest_without_storing_secret() -> None:
     assert validated.profile.connection.password == "control-plane-secret"
     assert "control-plane-secret" not in str(validated.document)
     assert validated.document["version"] == 1
+
+
+def test_rls_manifest_requires_security_invoker_view_only_surface() -> None:
+    raw = yaml.safe_load(
+        (
+            ROOT_DIRECTORY / "config" / "onboarding" / "support-tickets.yaml"
+        ).read_text(encoding="utf-8")
+    )
+    raw["tenant_isolation"] = "rls"
+    raw["allowed_relation_kinds"] = ["table", "view"]
+
+    with pytest.raises(RegistryConfigurationError, match="security-invoker views only"):
+        validate_source_manifest(
+            raw,
+            load_budget_profiles(ROOT_DIRECTORY / "config" / "budget-profiles.yaml"),
+            "reader-secret",
+        )

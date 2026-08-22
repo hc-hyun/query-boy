@@ -90,6 +90,7 @@ class QueryExecutor(Protocol):
         validated: ValidatedSql,
         *,
         query_id: str | None = None,
+        tenant_id: str | None = None,
     ) -> dict[str, object]: ...
 
     async def cancel(self, query_id: str, allowed_sources: frozenset[str]) -> bool: ...
@@ -115,10 +116,13 @@ class QueryService:
         metadata_revision: str,
         *,
         query_id: str | None = None,
+        tenant_id: str | None = None,
     ) -> dict[str, object]:
         source = self._registry.get(source_id)
         if source is None:
             raise SourceNotFoundError
+        if source.tenant_isolation == "rls" and tenant_id is None:
+            raise QueryRejectedError("TENANT_CONTEXT_REQUIRED")
         published = await self._metadata.get_published(source_id)
         if metadata_revision != published.revision:
             raise MetadataRevisionMismatchError
@@ -136,6 +140,7 @@ class QueryService:
             published.revision,
             validated,
             query_id=query_id,
+            tenant_id=tenant_id,
         )
 
     async def cancel(self, query_id: str, allowed_sources: frozenset[str]) -> bool:
@@ -158,8 +163,11 @@ class PostgresQueryExecutor:
         validated: ValidatedSql,
         *,
         query_id: str | None = None,
+        tenant_id: str | None = None,
     ) -> dict[str, object]:
         query_id = query_id or str(uuid.uuid4())
+        if source.tenant_isolation == "rls" and tenant_id is None:
+            raise QueryRejectedError("TENANT_CONTEXT_REQUIRED")
         # ponytail: process-local limit; use a distributed limiter when replicas share a source quota.
         semaphore = self._semaphores.setdefault(
             source.source_id,
@@ -193,6 +201,7 @@ class PostgresQueryExecutor:
                                 validated,
                                 queue_ms,
                                 query_id,
+                                tenant_id,
                             )
                         finally:
                             async with self._active_lock:
@@ -242,22 +251,27 @@ class PostgresQueryExecutor:
         validated: ValidatedSql,
         queue_ms: int,
         query_id: str,
+        tenant_id: str | None,
     ) -> dict[str, object]:
         started_at = time.monotonic()
         try:
             await connection.execute("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            trusted_tenant = tenant_id if source.tenant_isolation == "rls" else ""
             await connection.execute(
                 "SELECT pg_catalog.set_config('statement_timeout', %s, true), "
                 "pg_catalog.set_config('transaction_timeout', %s, true), "
                 "pg_catalog.set_config('lock_timeout', %s, true), "
                 "pg_catalog.set_config('idle_in_transaction_session_timeout', %s, true), "
                 "pg_catalog.set_config('search_path', 'pg_catalog', true), "
+                "pg_catalog.set_config('row_security', 'on', true), "
+                "pg_catalog.set_config('query_man.tenant_id', %s, true), "
                 "pg_catalog.set_config('application_name', %s, true)",
                 (
                     f"{source.budget.query_statement_timeout_ms}ms",
                     f"{source.budget.query_transaction_timeout_ms}ms",
                     f"{source.budget.lock_timeout_ms}ms",
                     f"{source.budget.query_transaction_timeout_ms}ms",
+                    trusted_tenant,
                     f"query-man:{query_id}",
                 ),
             )
@@ -269,9 +283,18 @@ class PostgresQueryExecutor:
                 "AS trusted_search_path, "
                 "NOT pg_catalog.has_database_privilege(session_user, current_database(), 'TEMP') "
                 "AS no_temp_privilege, "
-                "NOT pg_catalog.has_schema_privilege(session_user, 'ai', 'CREATE') "
-                "AS no_ai_create_privilege",
-                (source.connection.database, source.connection.user),
+                "NOT EXISTS (SELECT 1 FROM pg_catalog.unnest(%s::text[]) AS schema_name "
+                "WHERE pg_catalog.has_schema_privilege(session_user, schema_name, 'CREATE')) "
+                "AS no_allowed_schema_create_privilege, "
+                "pg_catalog.current_setting('row_security') = 'on' AS row_security_enabled, "
+                "pg_catalog.current_setting('query_man.tenant_id', true) = %s "
+                "AS trusted_tenant_context",
+                (
+                    source.connection.database,
+                    source.connection.user,
+                    source.allowed_schemas,
+                    trusted_tenant,
+                ),
             )
             identity = await identity_cursor.fetchone()
             if not identity or not all(identity.values()):

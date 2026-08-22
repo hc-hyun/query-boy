@@ -45,4 +45,5 @@ overload가 선택될 가능성을 독립적으로 차단하지 못한다. Curat
   이름 allowlist와 database candidate 검증 양쪽에서 거부된다.
 - 신규 extension 함수는 이름만 profile에 추가할 수 없다. Trusted namespace, owner,
   volatility, privilege와 resource 특성을 별도 ADR로 승인해야 한다.
-- RLS onboarding은 caller/tenant authorization과 pool reset 검증이 선행되어야 한다.
+- RLS onboarding의 caller/tenant authorization과 pool reset은
+  [ADR 0014](0014-trusted-rls-tenant-context.md)에서 구현·검증한다.

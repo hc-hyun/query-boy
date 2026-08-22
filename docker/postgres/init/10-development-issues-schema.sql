@@ -326,4 +326,43 @@ GRANT SELECT ON
   ai.test_unit_overview
 TO development_issues_reader;
 
+CREATE SCHEMA IF NOT EXISTS tenant_ai;
+REVOKE ALL ON SCHEMA tenant_ai FROM PUBLIC;
+
+CREATE TABLE IF NOT EXISTS tenant_ai.private_records (
+  record_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  tenant_id text NOT NULL,
+  label text NOT NULL,
+  CONSTRAINT tenant_private_record_unique UNIQUE (tenant_id, label)
+);
+
+ALTER TABLE tenant_ai.private_records ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tenant_ai.private_records FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_private_records_reader ON tenant_ai.private_records;
+CREATE POLICY tenant_private_records_reader
+ON tenant_ai.private_records
+FOR SELECT
+TO development_issues_reader
+USING (tenant_id = pg_catalog.current_setting('query_man.tenant_id', true));
+DROP POLICY IF EXISTS tenant_private_records_admin ON tenant_ai.private_records;
+CREATE POLICY tenant_private_records_admin
+ON tenant_ai.private_records
+FOR ALL
+TO query_man_admin
+USING (true)
+WITH CHECK (true);
+
+CREATE OR REPLACE VIEW tenant_ai.record_overview
+WITH (security_barrier = true, security_invoker = true)
+AS
+SELECT record_id, label
+FROM tenant_ai.private_records;
+
+COMMENT ON VIEW tenant_ai.record_overview IS
+  'RLS fixture: one row per record visible to the trusted tenant context.';
+GRANT USAGE ON SCHEMA tenant_ai TO development_issues_reader;
+GRANT SELECT ON tenant_ai.private_records, tenant_ai.record_overview
+  TO development_issues_reader;
+REVOKE CREATE ON SCHEMA tenant_ai FROM development_issues_reader;
+
 COMMIT;

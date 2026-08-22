@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -10,6 +11,7 @@ from query_man.errors import MetadataRevisionMismatchError, QueryRejectedError, 
 from query_man.metadata import MetadataService
 from query_man.models import CatalogSnapshot, SourceProfile
 from query_man.query import PlanSummary, QueryService, _summarize_plan
+from query_man.registry import SourceRegistry
 from query_man.sql_validation import ValidatedSql
 from tests.helpers import load_test_registry, minimal_development_snapshot
 
@@ -34,6 +36,7 @@ class RecordingExecutor:
         validated: ValidatedSql,
         *,
         query_id: str | None = None,
+        tenant_id: str | None = None,
     ) -> dict[str, object]:
         self.calls.append((source, sql, metadata_revision, validated))
         return {
@@ -100,6 +103,27 @@ async def test_maps_ast_rejection_to_stable_query_error() -> None:
         await service.query("development-issues", "DELETE FROM ai.issue_overview", published.revision)
 
     assert caught.value.details == {"reason_code": "SQL_STATEMENT_NOT_ALLOWED"}
+    assert executor.calls == []
+
+
+@pytest.mark.asyncio
+async def test_rls_source_requires_server_supplied_tenant_context() -> None:
+    registry = load_test_registry()
+    source = registry.get("development-issues")
+    assert source is not None
+    registry = SourceRegistry([replace(source, tenant_isolation="rls")])
+    metadata = MetadataService(registry, StaticCatalog())
+    executor = RecordingExecutor()
+    service = QueryService(registry, metadata, executor)
+
+    with pytest.raises(QueryRejectedError) as captured:
+        await service.query(
+            source.source_id,
+            "SELECT count(*) FROM ai.issue_overview",
+            f"sha256:{'0' * 64}",
+        )
+
+    assert captured.value.details == {"reason_code": "TENANT_CONTEXT_REQUIRED"}
     assert executor.calls == []
 
 

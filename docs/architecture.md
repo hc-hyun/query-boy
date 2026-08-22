@@ -188,10 +188,10 @@ Schema drift로 overlay가 깨지면 신규 revision 발행을 중단하고 마�
   [ADR 0011](decisions/0011-metadata-quality-level-publish-gate.md)을 따른다.
 - No-deploy verified query publish는
   [ADR 0013](decisions/0013-control-plane-verified-query-publishing.md)을 따른다.
+- RLS tenant session context와 pool reset은
+  [ADR 0014](decisions/0014-trusted-rls-tenant-context.md)를 따른다.
 
 ## Open Decisions
 
-구현 순서와 완료 조건은 [implementation-roadmap.md](implementation-roadmap.md)의
+남은 구현 순서와 완료 조건은 [implementation-roadmap.md](implementation-roadmap.md)의
 안정적인 TODO ID로 관리한다.
-
-- RLS source의 trusted tenant session context

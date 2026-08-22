@@ -31,6 +31,7 @@ class StaticExecutor:
         validated: ValidatedSql,
         *,
         query_id: str | None = None,
+        tenant_id: str | None = None,
     ) -> dict[str, object]:
         return {
             "status": "ok",

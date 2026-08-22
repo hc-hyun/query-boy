@@ -5,6 +5,7 @@ from typing import Literal, Protocol
 
 RelationRole = Literal["event", "comment", "population", "dimension", "other"]
 QualityLevel = Literal["L0", "L1", "L2"]
+TenantIsolation = Literal["none", "rls"]
 AllowedRelationKind = Literal["table", "partitioned_table", "view", "materialized_view"]
 CatalogRelationKind = Literal["table", "partitioned_table", "view", "materialized_view", "foreign_table"]
 Nullability = bool | Literal["unknown"]
@@ -142,6 +143,7 @@ class SourceProfile:
     budget: BudgetProfile
     semantic_overlay: SemanticOverlay
     minimum_quality_level: QualityLevel = "L0"
+    tenant_isolation: TenantIsolation = "none"
 
 
 @dataclass
@@ -182,6 +184,7 @@ class CatalogRelation:
     primary_key: list[str] = field(default_factory=list)
     foreign_keys: list[CatalogForeignKey] = field(default_factory=list)
     indexes: list[CatalogIndex] = field(default_factory=list)
+    security_invoker: bool = False
 
 
 @dataclass

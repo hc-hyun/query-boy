@@ -145,9 +145,9 @@ Dependencies: `DEC-09`, `ONB-01`
 - [x] `AUTH-02` Caller/tenant별 허용 source 목록을 서버 정책으로 관리한다.
 - [x] `AUTH-03` `/sources`, `/meta`, `query`가 동일한 source authorization 결과를 사용한다.
 - [x] `AUTH-04` Tenant identity를 SQL text나 client-controlled session setting으로 주입하지 않는다.
-- [ ] `AUTH-05` RLS가 필요한 source의 trusted session context 설정과 reset을 검증한다.
-- [ ] `AUTH-06` Connection pool 재사용 시 tenant context가 누출되지 않는 통합 테스트를 추가한다.
-- [ ] `AUTH-07` 인증·인가 실패 응답과 audit event가 source 존재 여부나 credential을 노출하지 않게 한다.
+- [x] `AUTH-05` RLS가 필요한 source의 trusted session context 설정과 reset을 검증한다.
+- [x] `AUTH-06` Connection pool 재사용 시 tenant context가 누출되지 않는 통합 테스트를 추가한다.
+- [x] `AUTH-07` 인증·인가 실패 응답과 audit event가 source 존재 여부나 credential을 노출하지 않게 한다.
 
 ## 8. Observability And Operations
 

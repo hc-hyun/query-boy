@@ -35,6 +35,7 @@ from query_man.source_store import PostgresSourceStore
 from query_man.verified import ExpectedResult, VerifiedQuery, VerifiedQueryRegistry
 
 logger = logging.getLogger("query_man")
+audit_logger = logging.getLogger("query_man.audit")
 _current_caller: contextvars.ContextVar[CallerContext | None] = contextvars.ContextVar(
     "query_man_current_caller",
     default=None,
@@ -230,6 +231,10 @@ def build_app(
             )
             caller = access_policy.authenticate(received)
             if caller is None:
+                audit_logger.warning(
+                    "authentication_failed method=%s",
+                    request.method,
+                )
                 return JSONResponse(
                     status_code=401,
                     headers={"WWW-Authenticate": "Bearer"},
@@ -373,7 +378,8 @@ def build_app(
                     row_count=payload.expected.row_count,
                     result_hash=payload.expected.result_hash,
                 ),
-            )
+            ),
+            _caller(request).tenant_id,
         )
 
     @app.post("/admin/sources/{source_id}/rollback/{generation}")
@@ -446,7 +452,13 @@ def _mcp_caller() -> CallerContext:
 
 
 def _require_operator(request: Request) -> None:
-    if not _caller(request).operator:
+    caller = _caller(request)
+    if not caller.operator:
+        audit_logger.warning(
+            "authorization_denied caller_id=%s tenant_id=%s operation=source_admin",
+            caller.caller_id,
+            caller.tenant_id,
+        )
         raise OperatorRequiredError
 
 

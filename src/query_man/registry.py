@@ -25,6 +25,7 @@ from query_man.models import (
     ResolvedConnection,
     SemanticOverlay,
     SourceProfile,
+    TenantIsolation,
 )
 
 Identifier = Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_$]*$")]
@@ -237,6 +238,7 @@ class _SourceFile(_StrictModel):
     allowed_relation_kinds: list[str] = Field(default_factory=lambda: ["view"], min_length=1, max_length=4)
     budget_profile: Identifier
     minimum_quality_level: QualityLevel = "L0"
+    tenant_isolation: TenantIsolation = "none"
     semantic_overlay: _SemanticOverlay = Field(default_factory=_SemanticOverlay)
 
     @model_validator(mode="after")
@@ -246,6 +248,8 @@ class _SourceFile(_StrictModel):
         allowed = {"table", "partitioned_table", "view", "materialized_view"}
         if any(kind not in allowed for kind in self.allowed_relation_kinds):
             raise ValueError("invalid relation kind")
+        if self.tenant_isolation == "rls" and self.allowed_relation_kinds != ["view"]:
+            raise ValueError("RLS sources must expose security-invoker views only")
         return self
 
 
@@ -418,6 +422,7 @@ def _resolve_source(
         budget=budget,
         semantic_overlay=overlay,
         minimum_quality_level=parsed.minimum_quality_level,
+        tenant_isolation=parsed.tenant_isolation,
     )
 
 

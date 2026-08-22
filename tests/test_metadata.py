@@ -168,6 +168,26 @@ async def test_exposes_physical_keys_without_approving_a_semantic_join() -> None
 
 
 @pytest.mark.asyncio
+async def test_rls_source_rejects_non_security_invoker_relations() -> None:
+    registry = load_test_registry()
+    source = registry.get("development-issues")
+    assert source is not None
+    source = replace(source, tenant_isolation="rls")
+    service = MetadataService(
+        SourceRegistry([source]),
+        StaticCatalog(minimal_development_snapshot()),
+    )
+
+    with pytest.raises(MetadataUnavailableError) as captured:
+        await service.get_published(source.source_id)
+
+    assert any(
+        "security-invoker" in violation
+        for violation in captured.value.details["contract_violations"]
+    )
+
+
+@pytest.mark.asyncio
 async def test_scopes_wide_relation_columns_to_question_and_required_semantics() -> None:
     snapshot = minimal_development_snapshot()
     issue = next(

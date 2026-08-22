@@ -160,6 +160,7 @@ class StaticQueryExecutor:
         _validated: ValidatedSql,
         *,
         query_id: str | None = None,
+        tenant_id: str | None = None,
     ) -> dict[str, object]:
         rows = [{"status": "OPEN"}]
         return {
@@ -324,10 +325,10 @@ async def test_verified_query_contract_enables_l2_publish() -> None:
         expected=replace(query.expected, result_hash=f"sha256:{'0' * 64}"),
     )
     with pytest.raises(SourceValidationError):
-        await admin.publish_verified_query(mismatched)
+        await admin.publish_verified_query(mismatched, "engineering")
     assert store.verified == []
 
-    verified = await admin.publish_verified_query(query)
+    verified = await admin.publish_verified_query(query, "engineering")
     manifest["minimum_quality_level"] = "L2"
     promoted = await admin.publish("third-source", manifest, "first-secret")
 

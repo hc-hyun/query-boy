@@ -13,6 +13,11 @@ def create_metadata_revision(source: SourceProfile, catalog: CatalogSnapshot) ->
         "source_id": source.source_id,
         "allowed_schemas": source.allowed_schemas,
         "allowed_relation_kinds": source.allowed_relation_kinds,
+        **(
+            {"tenant_isolation": source.tenant_isolation}
+            if source.tenant_isolation != "none"
+            else {}
+        ),
         "semantic_overlay": asdict(source.semantic_overlay),
         "relations": [
             {
@@ -21,6 +26,7 @@ def create_metadata_revision(source: SourceProfile, catalog: CatalogSnapshot) ->
                 "kind": relation.kind,
                 "comment": relation.comment,
                 "definition_hash": relation.definition_hash,
+                **({"security_invoker": True} if relation.security_invoker else {}),
                 **({"primary_key": relation.primary_key} if relation.primary_key else {}),
                 **(
                     {"foreign_keys": [asdict(key) for key in relation.foreign_keys]}

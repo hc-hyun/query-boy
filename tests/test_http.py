@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import httpx
@@ -37,7 +38,7 @@ class ReturningCatalog(NeverCalledCatalog):
 
 class RecordingQueryExecutor:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, str]] = []
+        self.calls: list[tuple[str, str, str | None]] = []
 
     async def execute(
         self,
@@ -47,8 +48,9 @@ class RecordingQueryExecutor:
         validated: ValidatedSql,
         *,
         query_id: str | None = None,
+        tenant_id: str | None = None,
     ) -> dict[str, object]:
-        self.calls.append((source.source_id, validated.fingerprint))
+        self.calls.append((source.source_id, validated.fingerprint, tenant_id))
         return {
             "status": "ok",
             "query_id": query_id or "test-query-id",
@@ -116,14 +118,19 @@ async def test_lists_sources_without_connection_information() -> None:
 
 
 @pytest.mark.asyncio
-async def test_bearer_token_is_required_when_configured() -> None:
+async def test_bearer_token_is_required_when_configured(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     token = "test-token-with-at-least-thirty-two-characters"
+    caplog.set_level(logging.WARNING, logger="query_man.audit")
     async with client(NeverCalledCatalog(), token) as session:
         unauthorized = await session.get("/sources")
         authorized = await session.get("/sources", headers={"authorization": f"Bearer {token}"})
     assert unauthorized.status_code == 401
     assert unauthorized.json()["error"]["code"] == "UNAUTHORIZED"
     assert authorized.status_code == 200
+    assert "authentication_failed" in caplog.text
+    assert token not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -143,6 +150,22 @@ async def test_rejects_client_connection_fields() -> None:
                 "source_id": "development-issues",
                 "question": "최근 문제를 보여줘",
                 "host": "attacker.invalid",
+            },
+        )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_REQUEST"
+
+
+@pytest.mark.asyncio
+async def test_rejects_client_supplied_tenant_context() -> None:
+    async with client(NeverCalledCatalog()) as session:
+        response = await session.post(
+            "/query",
+            json={
+                "source_id": "development-issues",
+                "sql": "SELECT 1",
+                "metadata_revision": f"sha256:{'0' * 64}",
+                "tenant_id": "attacker-selected-tenant",
             },
         )
     assert response.status_code == 400
@@ -231,6 +254,7 @@ async def test_executes_query_with_current_metadata_revision() -> None:
     assert response.status_code == 200
     assert response.json()["rows"] == [{"issue_count": 600}]
     assert executor.calls[0][0] == "development-issues"
+    assert executor.calls[0][2] == "local-development"
 
 
 @pytest.mark.asyncio
@@ -252,7 +276,10 @@ async def test_query_rejects_stale_revision_without_echoing_sql() -> None:
 
 
 @pytest.mark.asyncio
-async def test_caller_policy_filters_and_hides_unauthorized_sources(tmp_path: Path) -> None:
+async def test_caller_policy_filters_and_hides_unauthorized_sources(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     policy_path = tmp_path / "access.yaml"
     policy_path.write_text(
         """
@@ -274,6 +301,7 @@ callers:
     )
     headers = {"authorization": f"Bearer {token}"}
     executor = RecordingQueryExecutor()
+    caplog.set_level(logging.WARNING, logger="query_man.audit")
     async with client(
         NeverCalledCatalog(),
         query_executor=executor,
@@ -309,6 +337,10 @@ callers:
     assert denied_query.json() == unknown.json()
     assert executor.calls == []
     assert unauthenticated.status_code == 401
+    assert "authorization_denied" in caplog.text
+    assert "market-voc" not in caplog.text
+    assert "not-registered" not in caplog.text
+    assert token not in caplog.text
 
 
 @pytest.mark.asyncio
