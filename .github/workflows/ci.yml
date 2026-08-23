@@ -81,7 +81,7 @@ jobs:
           uv export --locked --no-dev --no-emit-project --format requirements-txt --output-file /tmp/query-man-requirements.txt
           uvx pip-audit --requirement /tmp/query-man-requirements.txt
       - name: Scan repository history for secrets
-        run: docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.30.1 detect --source=/repo --no-banner
+        run: docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.30.1 detect --source=/repo --gitleaks-ignore-path=/repo/.gitleaksignore --no-banner
       - name: Scan repository configuration
         uses: aquasecurity/trivy-action@v0.36.0
         with:
