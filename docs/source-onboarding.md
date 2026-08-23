@@ -48,7 +48,8 @@ ownership, state, history, size와 cost를 조회하는 목표 계약은
 | Plaintext credential and master key | External secret system/runtime secret |
 | Curated view, reader role and grants | Source DB and DB-owner migration system |
 | Budget hard-limit template/resource-tier catalog and current bootstrap/access policy | Deployment configuration |
-| Ownership, audit, size/growth and cost projection | Control DB management plane; implementation pending |
+| Owner, environment and DB migration reference | Control DB immutable manifest generation |
+| Mutation audit, size/growth and cost projection | Control DB management plane; implementation pending |
 | Bootstrap and acceptance input | Repository YAML seed/fixture only |
 
 `config/sources/*.yaml`은 local/CI bootstrap seed이고 `config/onboarding/*.yaml`은 integration
@@ -98,7 +99,8 @@ blind retry하지 않고 Control DB state를 먼저 reconcile한다.
 3. Reader에 read-only, timeout, temp resource와 replica/pool capacity에 맞춘 connection
    limit을 설정한다.
 4. 기존 `budget_profile` 중 workload에 맞는 resource tier 하나를 선택한다.
-5. L0 manifest와 reader credential을 admin 전용 source management 경계에 전달한다.
+5. Owner, environment, DB migration reference와 resource tier를 명시한 L0 manifest 및 reader
+   credential을 admin 전용 source management 경계에 전달한다.
 6. 격리 staging에서 connection, reader identity, catalog, overlay, budget과 quality gate 결과를 확인한다.
 7. Canonical manifest, generation, active pointer와 metadata snapshot을 Control DB에 publish하고
    응답의 generation과 metadata revision을 변경 기록에 남긴다. Runtime 재시작은 필요 없다.
@@ -121,10 +123,14 @@ identity를 모두 요구한다. 이 cutover는 Control DB migration이나 depen
 쉽게 표현한 예이며 production repository file을 요구한다는 의미가 아니다.
 
 ```yaml
-version: 1
+version: 2
 source_id: example-source
 name: 예제 Source
 description: 예제 분석 데이터
+provenance:
+  owner: data-platform
+  environment: production
+  database_migration_ref: flyway:2026.08.23.1
 connection:
   host: 127.0.0.1
   host_env: QUERY_MAN_POSTGRES_HOST # Optional deployment-time override.
@@ -148,6 +154,9 @@ capability superset이다.
 
 | Operation | Endpoint | 안전 조건 |
 |---|---|---|
+| Inventory | `GET /admin/sources` | Exact filter와 bounded keyset page; 비활성 source도 기본 포함 |
+| Effective detail | `GET /admin/sources/{source_id}` | 현재 generation과 active metadata pointer를 구분한 secret-free projection |
+| Generation history | `GET /admin/sources/{source_id}/history` | 불변 generation을 내림차순으로 조회; lifecycle event audit은 별도 |
 | Stage + publish | `PUT /admin/sources/{source_id}` | Body의 `manifest`, `credential`을 분리하고 path ID 일치 검증 |
 | Credential rotation | `POST /admin/sources/{source_id}/credential` | Enabled/unpinned source에서 새 credential staging 후 generation 교체 |
 | Verified contract | `POST /admin/sources/{source_id}/verified-queries` | 현재 revision에서 guarded SQL 결과와 expected invariant 일치 |
@@ -155,10 +164,11 @@ capability superset이다.
 | Resume metadata publish | `POST /admin/sources/{source_id}/metadata/resume` | Rollback 점검 완료 후 metadata pin만 명시적으로 해제 |
 | Deactivate | `DELETE /admin/sources/{source_id}` | Active pointer만 disable하고 immutable history 유지 |
 
-현재는 sanitized admin inventory/detail/history와 authoritative mutation-result 조회 endpoint가
-없다. Public `/sources`는 모든 인증 query caller가 공유하는 active source 목록일 뿐 관리
-catalog가 아니다.
-해당 read model은 `CTRL-04`, idempotency/receipt/audit는 `CTRL-05`의 후속 구현이다.
+Public `/sources`는 모든 인증 query caller가 공유하는 active source 목록일 뿐 관리 catalog가
+아니다. Admin read API는 raw manifest 대신 명시적으로 허용한 필드만 반환하며 credential,
+secret locator, semantic 자유형 text, verified question/SQL과 metadata snapshot을 포함하지 않는다.
+현재 history는 generation 생성 이력만 제공한다. Idempotency, mutation receipt, actor/reason과
+deactivate/rollback event chronology는 `CTRL-05`의 후속 구현이다.
 
 현재 direct publish의 body credential은 trusted manual-admin 경계다. Plan-only onboarding
 Skill은 이 endpoint를 호출하거나 credential을 읽지 않는다. AI production executor가 실제
@@ -207,13 +217,19 @@ catalog 기반 best-effort, `L1`은 모든 공개 relation의 설명·grain과 �
 상태, `L2`는 현재 metadata revision과 일치하는 verified query 계약까지 통과한 상태다.
 요구 수준에 미달한 refresh나 rollback은 거부되며 기존 active revision은 유지된다.
 
+Manifest v2의 provenance에는 운영 팀 slug, source DB environment와 외부 DB migration/change
+reference를 모두 명시한다. Query Man은 migration reference가 가리키는 외부 artifact를 대신
+검증하지 않는다. Owner나 migration reference 변경은 새 immutable generation을 만들지만 query
+metadata revision은 바꾸지 않는다. 누락 값을 `unknown`으로 자동 채우거나 이전 manifest version을
+runtime에서 변환하지 않는다.
+
 Bootstrap manifest의 선택적 `host_env`와 `port_env`는 host/Compose처럼 deployment network가
 다를 때만 사용한다. 환경변수가 없으면 manifest의 host와 port를 사용한다. Control-plane
 publish는 publisher 환경에서 실제 host와 port를 한 번 resolve해 저장하므로 다른 replica가
 자신의 환경 변수로 published endpoint를 바꾸지 않는다. 같은 `source_id`의 host, port,
-database, user와 TLS 설정은 이후 generation에서도 고정한다. 다른 endpoint는 새 source ID로
-등록하고 현재 데이터에 대한 verified contract를 다시 검토한다. Credential 값만 바꾸는
-rotation은 metadata revision을 바꾸지 않는다.
+database, user, TLS 설정과 environment는 이후 generation에서도 고정한다. 다른 endpoint나
+environment는 새 source ID로 등록하고 현재 데이터에 대한 verified contract를 다시 검토한다.
+Credential 값만 바꾸는 rotation은 metadata revision을 바꾸지 않는다.
 
 Reader staging은 login/non-superuser, 생성·복제·상속·RLS 우회 금지, 유한한 양수 connection
 limit, default read-only, database TEMP 금지와 공개 schema CREATE 금지를 검사한다. 숨긴 base

@@ -6,6 +6,7 @@ from typing import Literal, Protocol
 RelationRole = Literal["event", "comment", "population", "dimension", "other"]
 QualityLevel = Literal["L0", "L1", "L2"]
 TenantIsolation = Literal["none", "rls"]
+SourceEnvironment = Literal["production", "staging", "development", "test"]
 AllowedRelationKind = Literal["table", "partitioned_table", "view", "materialized_view"]
 CatalogRelationKind = Literal["table", "partitioned_table", "view", "materialized_view", "foreign_table"]
 Nullability = bool | Literal["unknown"]
@@ -47,6 +48,13 @@ class ResolvedConnection:
     user: str
     password: str
     ssl: bool
+
+
+@dataclass(frozen=True)
+class SourceProvenance:
+    owner: str
+    environment: SourceEnvironment
+    database_migration_ref: str
 
 
 @dataclass(frozen=True)
@@ -147,6 +155,7 @@ class SourceProfile:
     allowed_relation_kinds: list[AllowedRelationKind]
     budget: BudgetProfile
     semantic_overlay: SemanticOverlay
+    provenance: SourceProvenance
     minimum_quality_level: QualityLevel = "L0"
     tenant_isolation: TenantIsolation = "none"
     control_generation: int | None = None

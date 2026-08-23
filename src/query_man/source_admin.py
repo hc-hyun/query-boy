@@ -8,6 +8,7 @@ from typing import Protocol
 
 from query_man.errors import (
     SourceControlUnavailableError,
+    SourceNotFoundError,
     SourceValidationError,
 )
 from query_man.errors import SourceGenerationConflictError as SourceGenerationConflictAppError
@@ -24,7 +25,10 @@ from query_man.registry import (
 )
 from query_man.secrets import EncryptedSecret, SecretDecryptionError, SourceSecretCipher
 from query_man.source_store import (
+    SourceCatalogPage,
+    SourceCatalogRecord,
     SourceGenerationConflictError,
+    SourceGenerationPage,
     SourcePublishPinnedError,
     StoredSource,
     StoredSourceNotFoundError,
@@ -41,6 +45,27 @@ class SourceStore(Protocol):
     async def get_active(self, source_id: str) -> StoredSource | None: ...
 
     async def get_revision(self, source_id: str, generation: int) -> StoredSource: ...
+
+    async def list_catalog(
+        self,
+        *,
+        after_source_id: str | None = None,
+        limit: int = 50,
+        enabled: bool | None = None,
+        owner: str | None = None,
+        environment: str | None = None,
+        budget_profile: str | None = None,
+    ) -> SourceCatalogPage: ...
+
+    async def get_catalog(self, source_id: str) -> SourceCatalogRecord | None: ...
+
+    async def list_generation_history(
+        self,
+        source_id: str,
+        *,
+        before_generation: int | None = None,
+        limit: int = 50,
+    ) -> SourceGenerationPage | None: ...
 
     async def next_generation(self, source_id: str) -> int: ...
 
@@ -257,6 +282,142 @@ class SourceAdminService:
         self._verified_revisions = verified_revisions
         self._catalog_factory = catalog_factory
 
+    async def list_sources(
+        self,
+        limit: int = 50,
+        after_source_id: str | None = None,
+        enabled: bool | None = None,
+        owner: str | None = None,
+        environment: str | None = None,
+        budget_profile: str | None = None,
+    ) -> dict[str, object]:
+        try:
+            page = await self._store.list_catalog(
+                after_source_id=after_source_id,
+                limit=limit,
+                enabled=enabled,
+                owner=owner,
+                environment=environment,
+                budget_profile=budget_profile,
+            )
+            return {
+                "sources": [_source_summary(record) for record in page.items],
+                "next_after_source_id": page.next_after_source_id,
+            }
+        except Exception as error:
+            raise SourceControlUnavailableError from error
+
+    async def get_source(self, source_id: str) -> dict[str, object]:
+        try:
+            record = await self._store.get_catalog(source_id)
+        except StoredSourceNotFoundError as error:
+            raise SourceNotFoundError from error
+        except Exception as error:
+            raise SourceControlUnavailableError from error
+        if record is None:
+            raise SourceNotFoundError
+        try:
+            return {
+                **_source_summary(record),
+                "database_migration_ref": record.database_migration_ref,
+                "generation_created_at": record.generation_created_at,
+                "metadata_activated_at": record.metadata_activated_at,
+                "connection": {
+                    "host": record.connection.host,
+                    "port": record.connection.port,
+                    "database": record.connection.database,
+                    "user": record.connection.user,
+                    "ssl": record.connection.ssl,
+                },
+                "allowed_schemas": list(record.allowed_schemas),
+                "allowed_relation_kinds": list(record.allowed_relation_kinds),
+                "tenant_isolation": record.tenant_isolation,
+                "semantic_summary": {
+                    "default_relation": record.semantic_default_relation,
+                    "relation_count": record.semantic_relation_count,
+                    "join_count": record.semantic_join_count,
+                    "business_term_count": record.semantic_business_term_count,
+                    "question_rule_count": record.semantic_question_rule_count,
+                    "composition_hint_count": record.semantic_composition_hint_count,
+                },
+                "effective_budget_limits": self._effective_budget_limits(
+                    record.budget_profile
+                ),
+            }
+        except SourceControlUnavailableError:
+            raise
+        except Exception as error:
+            raise SourceControlUnavailableError from error
+
+    async def source_history(
+        self,
+        source_id: str,
+        limit: int = 50,
+        before_generation: int | None = None,
+    ) -> dict[str, object]:
+        try:
+            page = await self._store.list_generation_history(
+                source_id,
+                before_generation=before_generation,
+                limit=limit,
+            )
+            if page is None:
+                raise SourceNotFoundError
+            current = page.current
+            return {
+                "source_id": source_id,
+                "current": {
+                    "generation": current.generation,
+                    "enabled": current.enabled,
+                    "state_version": current.state_version,
+                    "activated_at": current.activated_at,
+                    "active_metadata_revision": current.active_metadata_revision,
+                    "metadata_pinned": current.metadata_pinned,
+                    "metadata_activated_at": current.metadata_activated_at,
+                },
+                "generations": [
+                    _generation_summary(record) for record in page.items
+                ],
+                "next_before_generation": page.next_before_generation,
+            }
+        except SourceNotFoundError:
+            raise
+        except StoredSourceNotFoundError as error:
+            raise SourceNotFoundError from error
+        except Exception as error:
+            raise SourceControlUnavailableError from error
+
+    def _effective_budget_limits(self, profile_name: str) -> dict[str, object]:
+        budget = self._budgets.get(profile_name)
+        if budget is None:
+            raise SourceControlUnavailableError
+        return {
+            "name": budget.name,
+            "version": budget.version,
+            "metadata_statement_timeout_ms": budget.metadata_statement_timeout_ms,
+            "query_statement_timeout_ms": budget.query_statement_timeout_ms,
+            "query_transaction_timeout_ms": budget.query_transaction_timeout_ms,
+            "query_queue_timeout_ms": budget.query_queue_timeout_ms,
+            "lock_timeout_ms": budget.lock_timeout_ms,
+            "work_mem_kb": budget.work_mem_kb,
+            "temp_file_limit_kb": budget.temp_file_limit_kb,
+            "max_parallel_workers_per_gather": budget.max_parallel_workers_per_gather,
+            "jit_enabled": budget.jit_enabled,
+            "max_pool_size": budget.max_pool_size,
+            "max_concurrent_queries": budget.max_concurrent_queries,
+            "max_metadata_relations": budget.max_metadata_relations,
+            "max_metadata_columns": budget.max_metadata_columns,
+            "max_columns_per_relation": budget.max_columns_per_relation,
+            "max_context_columns_per_relation": budget.max_context_columns_per_relation,
+            "max_metadata_response_bytes": budget.max_metadata_response_bytes,
+            "max_result_rows": budget.max_result_rows,
+            "max_result_bytes": budget.max_result_bytes,
+            "max_sql_bytes": budget.max_sql_bytes,
+            "max_plan_total_cost": budget.max_plan_total_cost,
+            "max_plan_rows": budget.max_plan_rows,
+            "max_plan_nodes": budget.max_plan_nodes,
+        }
+
     async def publish(
         self,
         source_id: str,
@@ -472,18 +633,58 @@ class SourceAdminService:
 
 
 def _connection_identity(manifest: Mapping[str, object]) -> tuple[object, ...]:
+    provenance = manifest.get("provenance")
+    if not isinstance(provenance, dict):
+        raise RegistryConfigurationError("Stored source provenance must be an object")
     connection = manifest.get("connection")
     if not isinstance(connection, dict):
         raise RegistryConfigurationError("Stored source connection must be an object")
-    return tuple(connection.get(key) for key in ("host", "port", "database", "user", "ssl"))
+    return (
+        provenance.get("environment"),
+        *(connection.get(key) for key in ("host", "port", "database", "user", "ssl")),
+    )
 
 
 def _profile_connection_identity(source: SourceProfile) -> tuple[object, ...]:
     connection = source.connection
     return (
+        source.provenance.environment,
         connection.host,
         connection.port,
         connection.database,
         connection.user,
         connection.ssl,
     )
+
+
+def _source_summary(record: SourceCatalogRecord) -> dict[str, object]:
+    return {
+        "source_id": record.source_id,
+        "name": record.name,
+        "description": record.description,
+        "owner": record.owner,
+        "environment": record.environment,
+        "enabled": record.enabled,
+        "generation": record.generation,
+        "state_version": record.state_version,
+        "activated_at": record.activated_at,
+        "budget_profile": record.budget_profile,
+        "minimum_quality_level": record.minimum_quality_level,
+        "published_metadata_revision": record.published_metadata_revision,
+        "active_metadata_revision": record.active_metadata_revision,
+        "metadata_pinned": record.metadata_pinned,
+    }
+
+
+def _generation_summary(record: SourceCatalogRecord) -> dict[str, object]:
+    return {
+        "generation": record.generation,
+        "generation_created_at": record.generation_created_at,
+        "owner": record.owner,
+        "environment": record.environment,
+        "database_migration_ref": record.database_migration_ref,
+        "budget_profile": record.budget_profile,
+        "published_metadata_revision": record.published_metadata_revision,
+        "minimum_quality_level": record.minimum_quality_level,
+        "is_current": record.is_current,
+    }

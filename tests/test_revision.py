@@ -69,3 +69,29 @@ def test_revision_changes_with_execution_budget() -> None:
         stricter,
         snapshot,
     )
+
+
+def test_revision_ignores_source_provenance() -> None:
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+    snapshot = minimal_development_snapshot()
+    revision = create_metadata_revision(source, snapshot)
+    changed_owner = replace(
+        source,
+        provenance=replace(source.provenance, owner="another-owner"),
+    )
+    changed_migration = replace(
+        source,
+        provenance=replace(
+            source.provenance,
+            database_migration_ref="migrations/9999_replacement.sql",
+        ),
+    )
+    changed_environment = replace(
+        source,
+        provenance=replace(source.provenance, environment="production"),
+    )
+
+    assert create_metadata_revision(changed_owner, snapshot) == revision
+    assert create_metadata_revision(changed_migration, snapshot) == revision
+    assert create_metadata_revision(changed_environment, snapshot) == revision

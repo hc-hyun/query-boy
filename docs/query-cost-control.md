@@ -10,7 +10,7 @@ Query Man이 직접 통제하는 대상은 query가 소비할 수 있는 databas
 ## Enforced Layers
 
 `config/budget-profiles.yaml`의 budget schema `version: 2` profile을 모든 source에 같은 순서로
-적용한다. 이는 source manifest schema `version: 1`과 별도 계약이다. `budget_profile`은
+적용한다. 이는 source manifest schema `version: 2`와 별도 계약이다. `budget_profile`은
 유일한 resource tier이며 관리자가 source마다 기존 profile 하나를 선택한다. 같은 source의
 모든 query 사용자는 같은 profile 정의를 쓴다. 별도 `cost_tier`나 caller/user/organization
 override는 없다. 현재 `interactive` 값은

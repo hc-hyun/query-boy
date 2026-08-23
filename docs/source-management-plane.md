@@ -1,6 +1,6 @@
 # Source Management Plane
 
-Status: Accepted design; implementation pending
+Status: Active implementation
 
 Last updated: 2026-08-23
 
@@ -41,11 +41,11 @@ tier를 정한다. 이 문서는 현재 공백과 `CTRL-*` 구현 순서를 관�
 - 개발 Control DB를 변경하지 않는 function-scoped disposable integration-test Control DB
 - Version 2 shared-access policy와 explicit query/admin credential 분리
 - 모든 authenticated identity의 implicit active-source visibility와 source-resolved budget
+- Strict source manifest v2의 immutable owner/environment/DB migration provenance
+- Secret-free admin source inventory, effective detail와 generation history read API
 
 아직 구현할 공백:
 
-- Admin용 sanitized source list/detail/generation history
-- Owner, environment와 DB migration provenance
 - Idempotency, actor/reason/request hash, mutation receipt와 durable lifecycle audit
 - Replica별 desired/applied state와 freshness
 - Bounded record/storage/growth observation과 source/profile별 usage/cost projection
@@ -60,7 +60,7 @@ tier를 정한다. 이 문서는 현재 공백과 `CTRL-*` 구현 순서를 관�
 |---|---|---|
 | Production source definition, generation and lifecycle | Control DB | YAML write-back 없음 |
 | Metadata snapshot and hot-added verified contract | Control DB | Bootstrap/fixture contract만 유지 |
-| Owner, environment and DB migration provenance | Control DB | Schema와 문서만 versioned |
+| Owner, environment and DB migration provenance | Control DB immutable manifest generation | Repository YAML은 fixture contract만 versioned |
 | Curated view, reader role and grants | Source DB and DB-owner migration system | Migration reference만 기록 |
 | Encrypted reader credential | Control DB generation | Plaintext 출력·Git 저장 금지 |
 | Plaintext credential and master key | Runtime/external secret system | 값·provider path 저장 금지 |
@@ -111,7 +111,7 @@ receipt가 구현되기 전 timeout을 blind retry하지 않으며 Control DB st
 - Source ID, name, description, owner와 environment
 - Active/deactivated state, generation/state version, metadata revision/quality
 - Effective `budget_profile`과 관련 metadata revision
-- DB migration reference와 credential rotation time처럼 비밀이 아닌 provenance
+- DB migration reference와 generation creation time처럼 비밀이 아닌 provenance
 - Replica convergence, latest record/storage observation과 usage/cost availability
 - Actor, reason, request hash, expected/resulting state, outcome과 timestamp
 
@@ -173,18 +173,18 @@ Source-native RLS가 필요한 source는 ADR 0014의 trusted `tenant_id`를 계�
 사용자가 같은 source를 보고 같은 resource tier를 쓴다는 결정과 독립된 row-isolation 경계다.
 Control Plane이 user/organization별 RLS policy를 관리한다는 뜻은 아니다.
 
-## Planned Management Contract
+## Current And Planned Management Contract
 
 아래는 구현 목표다. 기존 direct mutation endpoint는 유지하고 공통 idempotency/audit 계약을
 덧붙인다.
 
-| Operation | Purpose |
+| Operation | Status and purpose |
 |---|---|
-| `GET /admin/sources` | Paginated sanitized inventory와 latest status/size/cost summary |
-| `GET /admin/sources/{source_id}` | Effective source definition, profile, provenance와 freshness |
-| `GET /admin/sources/{source_id}/history` | Immutable generation/lifecycle/mutation history |
-| Existing `PUT/POST/DELETE /admin/...` | Admin-only staged validation과 atomic mutation |
-| `GET /admin/mutations/{idempotency_key}` | Timeout 뒤 authoritative result/reconciliation 조회 |
+| `GET /admin/sources` | Implemented: exact filter와 source-ID keyset pagination을 쓰는 sanitized inventory |
+| `GET /admin/sources/{source_id}` | Implemented: effective source/resource tier와 published/active metadata revision을 구분한 detail |
+| `GET /admin/sources/{source_id}/history` | Implemented: generation-descending immutable manifest history; lifecycle event chronology는 아직 아님 |
+| Existing `PUT/POST/DELETE /admin/...` | Implemented: admin-only staged validation과 atomic mutation |
+| `GET /admin/mutations/{idempotency_key}` | Planned in `CTRL-05`: timeout 뒤 authoritative result/reconciliation 조회 |
 
 모든 mutation은 idempotency key, canonical request hash, actor, reason, expected generation/state와
 bounded outcome을 기록한다. 같은 key와 같은 hash는 기존 결과를 반환하고 다른 hash는
@@ -199,6 +199,12 @@ threat model/ADR 뒤에 설계한다.
 ## Storage Shape
 
 기존 immutable revision/pointer table을 재사용하고 필요한 책임만 추가한다.
+
+Owner, environment와 DB migration reference는 strict manifest v2의 `provenance` block에 포함해
+`source_profile_revisions.manifest`에 generation과 함께 저장한다. 별도 catalog table이나 중복
+column, 두 번째 Control schema migration은 만들지 않는다. 이 값만 변경한 publish도 새
+generation을 만들고 rollback은 당시 provenance를 그대로 복원한다. Query metadata revision은
+query contract에 영향을 주는 필드만 hash하므로 provenance 변경으로 달라지지 않는다.
 
 Runtime mode는 deployment configuration이고 existing source/metadata pointer와 verified contract가
 managed authority를 모두 표현한다. 따라서 mode, origin 또는 bootstrap import marker를 위한 table과
@@ -222,7 +228,7 @@ Canonical status는 [active development TODO](development-todo.md)의 `CTRL-*`�
 2. **Complete:** mutually exclusive source mode, Control DB precedence, zero-bootstrap과
    verified-contract admin import cutover
 3. **Complete:** shared query access와 explicit admin/query credential separation
-4. Minimal catalog와 admin list/detail/history
+4. **Complete:** immutable provenance, minimal catalog와 admin list/detail/history
 5. Existing mutations의 idempotency, receipt와 durable audit
 6. Replica convergence/drift observation
 7. Bounded record/storage/usage/cost observation
@@ -237,6 +243,8 @@ DB-native collector와 provider connector는 rollout의 선행 조건이 아니�
 [managed source startup audit](verification/2026-08-23-managed-source-startup.md)에 기록한다.
 세 번째 단계의 검증 계획과 실행 결과는
 [shared access audit](verification/2026-08-23-shared-access.md)에 기록한다.
+네 번째 단계의 strict manifest, redaction, pagination, revision 구분과 admin-only 증거는
+[source management catalog audit](verification/2026-08-23-source-management-catalog.md)에 기록한다.
 
 ## Release Acceptance
 

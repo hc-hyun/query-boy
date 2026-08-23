@@ -1,5 +1,7 @@
 # Source Control Store Verification — 2026-08-23
 
+Status: Historical baseline; manifest compatibility evidence superseded by `CTRL-04`
+
 ## Scope
 
 No-deploy onboarding의 manifest 호환 계층, encrypted secret과 immutable control-plane
@@ -9,7 +11,7 @@ source generation 저장 계약을 검증했다.
 
 | Scenario | Result |
 |---|---|
-| v0 `budget` manifest를 v1 `budget_profile`로 migration | PASS |
+| 당시 v0 `budget` manifest를 v1 `budget_profile`로 migration | PASS (removed by strict v2 cutover) |
 | 알 수 없는 미래 manifest version | Fail-closed |
 | Manifest와 저장 document에서 평문 secret 분리 | PASS |
 | AES-GCM ciphertext를 source ID와 generation에 binding | PASS |

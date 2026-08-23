@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
 import yaml
 
-from query_man.errors import SourceValidationError
+from query_man.errors import (
+    SourceControlUnavailableError,
+    SourceNotFoundError,
+    SourceValidationError,
+)
 from query_man.metadata import MetadataService
 from query_man.models import CatalogSnapshot, PreparedMetadata, SourceProfile
 from query_man.operations import operations
@@ -20,7 +25,11 @@ from query_man.registry import (
 from query_man.secrets import EncryptedSecret, SourceSecretCipher
 from query_man.source_admin import SourceAdminService, SourceReloader
 from query_man.source_store import (
+    SourceCatalogConnection,
+    SourceCatalogPage,
+    SourceCatalogRecord,
     SourceGenerationConflictError,
+    SourceGenerationPage,
     SourcePublishPinnedError,
     StoredSource,
     StoredSourceNotFoundError,
@@ -79,6 +88,127 @@ class MemorySourceStore:
             return replace(self.history[(source_id, generation)], state_version=0)
         except KeyError as error:
             raise StoredSourceNotFoundError from error
+
+    async def list_catalog(
+        self,
+        *,
+        after_source_id: str | None = None,
+        limit: int = 50,
+        enabled: bool | None = None,
+        owner: str | None = None,
+        environment: str | None = None,
+        budget_profile: str | None = None,
+    ) -> SourceCatalogPage:
+        records = [
+            self._catalog_record(record)
+            for source_id, record in sorted(self.active.items())
+            if (after_source_id is None or source_id > after_source_id)
+        ]
+        records = [
+            record
+            for record in records
+            if (enabled is None or record.enabled is enabled)
+            and (owner is None or record.owner == owner)
+            and (environment is None or record.environment == environment)
+            and (budget_profile is None or record.budget_profile == budget_profile)
+        ]
+        return SourceCatalogPage(
+            tuple(records[:limit]),
+            records[limit - 1].source_id if len(records) > limit else None,
+        )
+
+    async def get_catalog(self, source_id: str) -> SourceCatalogRecord | None:
+        record = self.active.get(source_id)
+        return None if record is None else self._catalog_record(record)
+
+    async def list_generation_history(
+        self,
+        source_id: str,
+        *,
+        before_generation: int | None = None,
+        limit: int = 50,
+    ) -> SourceGenerationPage | None:
+        records = [
+            self._catalog_record(record)
+            for (current_source_id, generation), record in sorted(
+                self.history.items(),
+                key=lambda item: item[0][1],
+                reverse=True,
+            )
+            if current_source_id == source_id
+            and (before_generation is None or generation < before_generation)
+        ]
+        if source_id not in self.active:
+            return None
+        return SourceGenerationPage(
+            current=self._catalog_record(self.active[source_id]),
+            items=tuple(records[:limit]),
+            next_before_generation=(
+                records[limit - 1].generation if len(records) > limit else None
+            ),
+        )
+
+    def _catalog_record(self, revision: StoredSource) -> SourceCatalogRecord:
+        active = self.active[revision.source_id]
+        manifest = revision.manifest
+        provenance = manifest["provenance"]
+        connection = manifest["connection"]
+        semantic = manifest.get("semantic_overlay", {})
+        assert isinstance(provenance, dict)
+        assert isinstance(connection, dict)
+        assert isinstance(semantic, dict)
+        allowed_schemas = manifest["allowed_schemas"]
+        allowed_relation_kinds = manifest["allowed_relation_kinds"]
+        assert isinstance(allowed_schemas, list)
+        assert isinstance(allowed_relation_kinds, list)
+        activated_at = datetime(2026, 8, 23, tzinfo=UTC) + timedelta(
+            seconds=active.state_version
+        )
+        return SourceCatalogRecord(
+            source_id=revision.source_id,
+            generation=revision.generation,
+            enabled=active.enabled,
+            state_version=active.state_version,
+            activated_at=activated_at,
+            generation_created_at=datetime(2026, 8, 23, tzinfo=UTC)
+            + timedelta(seconds=revision.generation),
+            name=str(manifest["name"]),
+            description=str(manifest["description"]),
+            owner=str(provenance["owner"]),
+            environment=str(provenance["environment"]),
+            database_migration_ref=str(provenance["database_migration_ref"]),
+            budget_profile=str(manifest["budget_profile"]),
+            minimum_quality_level=str(manifest.get("minimum_quality_level", "L0")),
+            tenant_isolation=str(manifest.get("tenant_isolation", "none")),
+            connection=SourceCatalogConnection(
+                host=str(connection["host"]),
+                port=int(connection["port"]),
+                database=str(connection["database"]),
+                user=str(connection["user"]),
+                ssl=bool(connection.get("ssl", False)),
+            ),
+            allowed_schemas=tuple(str(value) for value in allowed_schemas),
+            allowed_relation_kinds=tuple(
+                str(value) for value in allowed_relation_kinds
+            ),
+            semantic_default_relation=(
+                str(semantic["default_relation"])
+                if semantic.get("default_relation") is not None
+                else None
+            ),
+            semantic_relation_count=len(semantic.get("relations", [])),
+            semantic_join_count=len(semantic.get("joins", [])),
+            semantic_business_term_count=len(semantic.get("business_terms", [])),
+            semantic_question_rule_count=len(semantic.get("question_rules", [])),
+            semantic_composition_hint_count=len(
+                semantic.get("composition_hints", [])
+            ),
+            published_metadata_revision=revision.metadata_revision,
+            active_metadata_revision=self.metadata.active.get(revision.source_id),
+            metadata_pinned=revision.source_id in self.metadata.pinned,
+            metadata_activated_at=activated_at,
+            is_current=active.generation == revision.generation,
+        )
 
     async def next_generation(self, source_id: str) -> int:
         generations = [
@@ -615,6 +745,201 @@ async def test_connection_identity_change_is_rejected_without_reusing_verificati
 
     assert store.active["third-source"] == before
     assert registry.get("third-source").connection.password == "first-secret"  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+async def test_environment_change_is_rejected_for_the_same_source_identity() -> None:
+    admin, registry, store, _invalidator, _cipher, _reloader = _services()
+    await admin.publish("third-source", _manifest(), "first-secret")
+    before = store.active["third-source"]
+    rebound = _manifest()
+    provenance = rebound["provenance"]
+    assert isinstance(provenance, dict)
+    provenance["environment"] = "production"
+
+    with pytest.raises(SourceValidationError):
+        await admin.publish("third-source", rebound, "second-secret")
+
+    assert store.active["third-source"] == before
+    assert registry.get("third-source").provenance.environment == "development"  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+async def test_admin_read_models_are_paginated_and_secret_free() -> None:
+    admin, _registry, _store, _invalidator, _cipher, _reloader = _services()
+    first = await admin.publish("third-source", _manifest(), "first-secret")
+    republished = _manifest()
+    provenance = republished["provenance"]
+    assert isinstance(provenance, dict)
+    provenance["owner"] = "data-platform"
+    provenance["database_migration_ref"] = "migrations/development-issues/0042"
+
+    second = await admin.publish("third-source", republished, "second-secret")
+
+    assert second["generation"] == 2
+    assert second["metadata_revision"] == first["metadata_revision"]
+    listed = await admin.list_sources(
+        1,
+        owner="data-platform",
+        environment="development",
+        budget_profile="interactive",
+    )
+    assert listed["next_after_source_id"] is None
+    assert listed["sources"] == [
+        {
+            "source_id": "third-source",
+            "name": "개발 문제점",
+            "description": "개발 및 검증 과정에서 발견한 문제, 원인, 대책과 댓글",
+            "owner": "data-platform",
+            "environment": "development",
+            "enabled": True,
+            "generation": 2,
+            "state_version": 2,
+            "activated_at": datetime(2026, 8, 23, 0, 0, 2, tzinfo=UTC),
+            "budget_profile": "interactive",
+            "minimum_quality_level": "L0",
+            "published_metadata_revision": first["metadata_revision"],
+            "active_metadata_revision": first["metadata_revision"],
+            "metadata_pinned": False,
+        }
+    ]
+    assert await admin.list_sources(owner="another-owner") == {
+        "sources": [],
+        "next_after_source_id": None,
+    }
+
+    detail = await admin.get_source("third-source")
+    assert detail["database_migration_ref"] == "migrations/development-issues/0042"
+    assert detail["connection"] == {
+        "host": "127.0.0.1",
+        "port": 5432,
+        "database": "development_issues",
+        "user": "development_issues_reader",
+        "ssl": False,
+    }
+    assert detail["semantic_summary"] == {
+        "default_relation": "ai.issue_overview",
+        "relation_count": 3,
+        "join_count": 1,
+        "business_term_count": 3,
+        "question_rule_count": 1,
+        "composition_hint_count": 1,
+    }
+    limits = detail["effective_budget_limits"]
+    assert isinstance(limits, dict)
+    assert limits["name"] == "interactive"
+    assert limits["version"] == 2
+    assert limits["max_result_rows"] == 1_000
+    assert limits["max_concurrent_queries"] == 2
+
+    history = await admin.source_history("third-source", 1)
+    assert history["next_before_generation"] == 2
+    assert history["generations"] == [
+        {
+            "generation": 2,
+            "generation_created_at": datetime(2026, 8, 23, 0, 0, 2, tzinfo=UTC),
+            "owner": "data-platform",
+            "environment": "development",
+            "database_migration_ref": "migrations/development-issues/0042",
+            "budget_profile": "interactive",
+            "published_metadata_revision": first["metadata_revision"],
+            "minimum_quality_level": "L0",
+            "is_current": True,
+        }
+    ]
+    older = await admin.source_history("third-source", before_generation=2)
+    assert [item["generation"] for item in older["generations"]] == [1]  # type: ignore[index]
+    assert older["generations"][0]["is_current"] is False  # type: ignore[index]
+
+    rolled_back = await admin.rollback("third-source", 1)
+    restored = await admin.get_source("third-source")
+    restored_history = await admin.source_history("third-source")
+    assert rolled_back["generation"] == 1
+    assert restored["owner"] == "query-man"
+    assert (
+        restored["database_migration_ref"]
+        == "docker/postgres/init/10-development-issues-schema.sql"
+    )
+    assert restored["metadata_pinned"] is True
+    assert [
+        item["generation"] for item in restored_history["generations"]  # type: ignore[index]
+    ] == [2, 1]
+    assert [
+        item["is_current"] for item in restored_history["generations"]  # type: ignore[index]
+    ] == [False, True]
+    assert restored_history["current"]["generation"] == 1  # type: ignore[index]
+
+    rendered = repr((listed, detail, history, older, restored, restored_history))
+    assert "first-secret" not in rendered
+    assert "second-secret" not in rendered
+    assert "THIRD_SOURCE_READER_PASSWORD" not in rendered
+    assert "encrypted_secret" not in rendered
+    assert "manifest" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_source_history_uses_one_atomic_store_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    admin, _registry, store, _invalidator, _cipher, _reloader = _services()
+    await admin.publish("third-source", _manifest(), "first-secret")
+    await admin.publish("third-source", _manifest(), "second-secret")
+
+    async def reject_split_read(_source_id: str) -> SourceCatalogRecord | None:
+        raise AssertionError("source history must not read the current pointer separately")
+
+    monkeypatch.setattr(store, "get_catalog", reject_split_read)
+    history = await admin.source_history("third-source")
+    exhausted = await admin.source_history(
+        "third-source",
+        before_generation=1,
+    )
+
+    assert history["current"]["generation"] == 2  # type: ignore[index]
+    assert [
+        item["generation"]
+        for item in history["generations"]  # type: ignore[union-attr]
+        if item["is_current"]
+    ] == [2]
+    assert exhausted["current"]["generation"] == 2  # type: ignore[index]
+    assert exhausted["generations"] == []
+    assert exhausted["next_before_generation"] is None
+
+
+@pytest.mark.asyncio
+async def test_admin_read_service_maps_missing_and_unavailable_store(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    admin, _registry, store, _invalidator, _cipher, _reloader = _services()
+
+    with pytest.raises(SourceNotFoundError):
+        await admin.get_source("unknown-source")
+    with pytest.raises(SourceNotFoundError):
+        await admin.source_history("unknown-source")
+
+    async def fail_get(_source_id: str) -> SourceCatalogRecord | None:
+        raise RuntimeError("private control database detail")
+
+    async def fail_list(**_filters: object) -> SourceCatalogPage:
+        raise RuntimeError("private control database detail")
+
+    monkeypatch.setattr(store, "get_catalog", fail_get)
+    with pytest.raises(SourceControlUnavailableError):
+        await admin.get_source("unknown-source")
+
+    async def fail_history(
+        _source_id: str,
+        **_page: object,
+    ) -> SourceGenerationPage | None:
+        raise RuntimeError("private control database detail")
+
+    monkeypatch.setattr(store, "list_generation_history", fail_history)
+    with pytest.raises(SourceControlUnavailableError):
+        await admin.source_history("unknown-source")
+
+    monkeypatch.setattr(store, "list_catalog", fail_list)
+    with pytest.raises(SourceControlUnavailableError):
+        await admin.list_sources()
 
 
 @pytest.mark.asyncio

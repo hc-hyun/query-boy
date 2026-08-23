@@ -58,6 +58,12 @@ MANAGED_SOURCE_STARTUP_AUDIT = (
 SHARED_ACCESS_AUDIT = (
     ROOT_DIRECTORY / "docs" / "verification" / "2026-08-23-shared-access.md"
 )
+SOURCE_MANAGEMENT_CATALOG_AUDIT = (
+    ROOT_DIRECTORY
+    / "docs"
+    / "verification"
+    / "2026-08-23-source-management-catalog.md"
+)
 EXPECTED_ID_COUNTS = {
     "BASE": 10,
     "DEC": 9,
@@ -83,7 +89,7 @@ EXPECTED_ACTIVE_ID_COUNTS = {
 }
 EXPECTED_ACTIVE_COMPLETED_COUNTS = {
     "SOAK": 7,
-    "CTRL": 3,
+    "CTRL": 4,
     "SKILL": 0,
     "COST": 0,
     "TRACE": 0,
@@ -117,6 +123,9 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
     shared_access_adr = SHARED_ACCESS_ADR.read_text(encoding="utf-8")
     mcp_soak_audit = MCP_SOAK_AUDIT.read_text(encoding="utf-8")
     control_migration_audit = CONTROL_MIGRATION_AUDIT.read_text(encoding="utf-8")
+    source_management_catalog_audit = SOURCE_MANAGEMENT_CATALOG_AUDIT.read_text(
+        encoding="utf-8"
+    )
 
     assert "Status: Production ready" in roadmap
     assert "Status: Production ready" in architecture
@@ -125,11 +134,12 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
     assert "Status: Complete" in container_audit
     assert "Status: Complete" in mcp_server_audit
     assert "Status: Active" in development_todo
-    assert "Status: Accepted design; implementation pending" in source_management_plan
+    assert "Status: Active implementation" in source_management_plan
     assert "Status: Accepted" in central_source_adr
     assert "Status: Accepted" in shared_access_adr
     assert "Status: Complete" in mcp_soak_audit
     assert "Status: Complete" in control_migration_audit
+    assert "Status: Complete" in source_management_catalog_audit
     assert REFACTORING_AUDIT.name in roadmap
     assert REFACTORING_AUDIT.name in architecture
     assert CONTAINER_AUDIT.name in roadmap
@@ -153,6 +163,8 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
     assert SHARED_ACCESS_AUDIT.name in development_todo
     assert SHARED_ACCESS_AUDIT.name in source_management_plan
     assert SHARED_ACCESS_AUDIT.name in architecture
+    assert SOURCE_MANAGEMENT_CATALOG_AUDIT.name in development_todo
+    assert SOURCE_MANAGEMENT_CATALOG_AUDIT.name in source_management_plan
     for prefix, count in EXPECTED_ID_COUNTS.items():
         audit = {
             "DEP": container_audit,
@@ -173,6 +185,9 @@ def test_active_todo_has_prioritized_unique_checklists_and_completed_evidence() 
     control_migration_audit = CONTROL_MIGRATION_AUDIT.read_text(encoding="utf-8")
     managed_source_startup_audit = MANAGED_SOURCE_STARTUP_AUDIT.read_text(encoding="utf-8")
     shared_access_audit = SHARED_ACCESS_AUDIT.read_text(encoding="utf-8")
+    source_management_catalog_audit = SOURCE_MANAGEMENT_CATALOG_AUDIT.read_text(
+        encoding="utf-8"
+    )
     matches = re.findall(r"^- \[([ x])\] `([A-Z]+)-(\d{2})`", todo, re.MULTILINE)
     ids = [f"{prefix}-{number}" for _checked, prefix, number in matches]
 
@@ -198,6 +213,7 @@ def test_active_todo_has_prioritized_unique_checklists_and_completed_evidence() 
     assert "`CTRL-01`" in control_migration_audit
     assert "`CTRL-02`" in managed_source_startup_audit
     assert "`CTRL-03`" in shared_access_audit
+    assert "`CTRL-04`" in source_management_catalog_audit
 
 
 def test_initial_access_and_resource_tier_decision_stays_minimal() -> None:

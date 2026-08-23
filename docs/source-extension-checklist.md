@@ -23,13 +23,17 @@ Managed runtime은 source scope가 없는 version 2 access policy와 explicit qu
 - [ ] 기존 workload에 맞는 `budget_profile` 하나를 resource tier로 선택하고 실제 대표
   query의 plan cost, rows, node 수, 실행 시간과 결과 byte를 측정한다. 같은 source의 모든
   query 사용자가 이 profile을 공유한다.
-- [ ] Source-scoped secret 이름과 L0 manifest를 준비해 admin API에서 stage/publish하고
+- [ ] Source-scoped secret 이름과 strict v2 L0 manifest를 준비한다. 운영 팀 owner, source DB
+  environment와 실제 DB migration/change reference를 명시해 admin API에서 stage/publish하고
   generation과 metadata revision을 기록한다. 같은 `source_id`는 host, port, database,
-  user 또는 TLS mode가 다른 endpoint로 다시 묶지 않는다.
+  user, TLS mode 또는 environment가 다른 endpoint로 다시 묶지 않는다.
 - [ ] 활성화 시 모든 인증된 query 사용자가 source를 본다는 영향을 확인한다. 서로 다른 두
   query identity가 같은 source 목록을 보고, caller override 없이 같은 source-resolved budget
   정의가 적용되며, admin API는 모두 거부되는지 검증한다. Admin 기록에는 선택한
-  `budget_profile`과 metadata revision을 남긴다.
+  `budget_profile`과 published/active metadata revision을 남긴다.
+- [ ] Admin inventory/detail/history에서 owner/environment/migration reference, current generation,
+  resource tier와 metadata pointer가 의도와 일치하는지 확인한다. Credential, secret locator와
+  semantic/verified SQL 원문은 응답에 없어야 한다.
 - [ ] HTTP와 MCP 양쪽에서 `list_sources`, question-scoped context, exact revision query,
   ordered columns/rows와 canonical result hash를 smoke test한다.
 - [ ] Source health, reject/timeout/queue/truncation metric, owner, credential rotation과 rollback

@@ -1,7 +1,11 @@
-version: 1
+version: 2
 source_id: commerce-edges
 name: Commerce Edges
 description: quoted identifier, nullable value, rich type와 복합 grain 검증용 주문 데이터
+provenance:
+  owner: query-man
+  environment: development
+  database_migration_ref: docker/postgres/init/70-commerce-edges-schema.sql
 connection:
   host: 127.0.0.1
   host_env: QUERY_MAN_POSTGRES_HOST

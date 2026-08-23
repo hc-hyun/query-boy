@@ -62,7 +62,7 @@ Control DB와 하나의 admin management API에서 관리한다. 실제 DB, secr
   operator admin identity를 모두 요구하고 API-token/anonymous caller를 거부한다. Bootstrap
   local/API-token identity는 query-only다. 두 query identity의 visibility/budget parity와 모든
   admin endpoint/cancel 거부를 검증한다.
-- [ ] `CTRL-04` Source owner, environment와 DB migration provenance를 immutable lifecycle에
+- [x] `CTRL-04` Source owner, environment와 DB migration provenance를 immutable lifecycle에
   연결하고 admin-only source list/detail/generation history API에 pagination, filter와 bounded
   redaction을 적용한다. Effective `budget_profile`과 관련 metadata revision을 함께 보여주고
   query token을 거부한다.
@@ -91,10 +91,18 @@ restart/rollback/deactivate/verified-contract precedence 증거는
 [managed source startup audit](verification/2026-08-23-managed-source-startup.md)에 기록한다.
 `CTRL-03`의 policy v2 cutover, shared visibility/budget과 query/admin capability 분리 증거는
 [shared access audit](verification/2026-08-23-shared-access.md)에 기록한다. 최종 전체 gate가
-완료됐으며 audit status는 Complete다.
+완료됐으며 audit status는 Complete다. `CTRL-04`의 strict manifest v2, immutable provenance,
+secret-free pagination/filter, metadata revision 구분과 admin/query 경계 증거는
+[source management catalog audit](verification/2026-08-23-source-management-catalog.md)에 기록한다.
 
-현재 다음 작업은 `CTRL-04`다. 이 track에서는 다단계 RBAC, caller grant storage,
+현재 다음 작업은 `CTRL-05`다. 이 track에서는 다단계 RBAC, caller grant storage,
 user/organization별 tier·quota와 AI production executor를 구현하지 않는다.
+
+`ruff C90` 진단에서 `build_app`의 cyclomatic complexity가 기존 49에서 이번 admin GET 세 개를
+포함해 55로 증가했다. `CTRL-05`가 management endpoint를 더 추가할 때 source-admin route
+registration과 operator-first validation을 하나의 작은 module/helper로 분리한다. Lifespan,
+middleware나 범용 API framework까지 함께 재설계하지 않으며 behavior-preserving route test를 먼저
+고정한다.
 
 두 번째 numbered migration이 추가될 때는 N-1→N data-preserving upgrade, 실패 migration의
 transaction rollback, concurrent pending apply와 rolling application compatibility를 같은

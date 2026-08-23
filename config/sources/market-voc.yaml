@@ -1,8 +1,12 @@
-version: 1
+version: 2
 
 source_id: market-voc
 name: 시장 VOC
 description: 시장에서 접수된 불량, 제품 기기, 원인, 대응과 댓글
+provenance:
+  owner: query-man
+  environment: development
+  database_migration_ref: docker/postgres/init/30-market-voc-schema.sql
 connection:
   host: 127.0.0.1
   host_env: QUERY_MAN_POSTGRES_HOST

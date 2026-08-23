@@ -7,6 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 import yaml
 from dotenv import load_dotenv
@@ -169,6 +170,137 @@ async def test_managed_control_state_survives_restart_deactivate_and_rollback(
                 active.metadata_revision,
                 active.enabled,
             ) == (3, 3, semantic_revision, True)
+
+            admin_headers = {
+                "authorization": (
+                    "Bearer admin-token-value-with-at-least-32-characters"
+                )
+            }
+            query_tokens = (
+                "query-a-token-value-with-at-least-32-characters",
+                "query-b-token-value-with-at-least-32-characters",
+            )
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(
+                    app=first_app,
+                    raise_app_exceptions=False,
+                ),
+                base_url="http://test",
+            ) as session:
+                inventory = await session.get(
+                    "/admin/sources",
+                    headers=admin_headers,
+                    params={
+                        "owner": "query-man",
+                        "environment": "development",
+                        "budget_profile": "interactive",
+                    },
+                )
+                detail = await session.get(
+                    f"/admin/sources/{_SOURCE_ID}",
+                    headers=admin_headers,
+                )
+                first_history = await session.get(
+                    f"/admin/sources/{_SOURCE_ID}/history",
+                    headers=admin_headers,
+                    params={"limit": 2},
+                )
+                second_history = await session.get(
+                    f"/admin/sources/{_SOURCE_ID}/history",
+                    headers=admin_headers,
+                    params={"before_generation": 2},
+                )
+                unknown = await session.get(
+                    "/admin/sources/unknown-source",
+                    headers=admin_headers,
+                )
+                rejected = [
+                    await session.get(path, headers={"authorization": f"Bearer {token}"})
+                    for token in query_tokens
+                    for path in (
+                        "/admin/sources",
+                        f"/admin/sources/{_SOURCE_ID}",
+                        f"/admin/sources/{_SOURCE_ID}/history",
+                    )
+                ]
+
+            assert inventory.status_code == detail.status_code == 200
+            assert first_history.status_code == second_history.status_code == 200
+            inventory_document = inventory.json()
+            assert inventory_document["next_after_source_id"] is None
+            assert [
+                item["source_id"] for item in inventory_document["sources"]
+            ] == [_SOURCE_ID]
+            assert inventory_document["sources"][0] == {
+                "source_id": _SOURCE_ID,
+                "name": "Support Tickets",
+                "description": "고객 지원 ticket 운영 현황",
+                "owner": "query-man",
+                "environment": "development",
+                "enabled": True,
+                "generation": 3,
+                "state_version": 3,
+                "activated_at": inventory_document["sources"][0]["activated_at"],
+                "budget_profile": "interactive",
+                "minimum_quality_level": "L2",
+                "published_metadata_revision": semantic_revision,
+                "active_metadata_revision": semantic_revision,
+                "metadata_pinned": False,
+            }
+            detail_document = detail.json()
+            assert detail_document["database_migration_ref"] == (
+                "docker/postgres/init/50-support-tickets-schema.sql"
+            )
+            assert detail_document["connection"] == {
+                "host": profile.connection.host,
+                "port": profile.connection.port,
+                "database": profile.connection.database,
+                "user": profile.connection.user,
+                "ssl": profile.connection.ssl,
+            }
+            assert detail_document["effective_budget_limits"]["name"] == (
+                "interactive"
+            )
+            assert detail_document["effective_budget_limits"][
+                "max_concurrent_queries"
+            ] == 2
+            assert [
+                item["generation"]
+                for item in first_history.json()["generations"]
+            ] == [3, 2]
+            assert first_history.json()["next_before_generation"] == 2
+            assert [
+                item["generation"]
+                for item in second_history.json()["generations"]
+            ] == [1]
+            assert second_history.json()["next_before_generation"] is None
+            assert unknown.status_code == 404
+            assert unknown.json()["error"]["code"] == "SOURCE_NOT_FOUND"
+            assert all(response.status_code == 403 for response in rejected)
+            assert all(
+                response.json()["error"]["code"] == "OPERATOR_REQUIRED"
+                for response in rejected
+            )
+            rendered_management_responses = repr(
+                (
+                    inventory_document,
+                    detail_document,
+                    first_history.json(),
+                    second_history.json(),
+                )
+            )
+            for forbidden in (
+                credential,
+                "SUPPORT_TICKETS_READER_PASSWORD",
+                "password_env",
+                "host_env",
+                "port_env",
+                "secret_nonce",
+                "secret_ciphertext",
+                verified_document["question"],
+                verified_document["sql"],
+            ):
+                assert forbidden not in rendered_management_responses
 
         assert not missing_source_directory.exists()
         restored_app = build_app(runtime, access_policy=access_policy)

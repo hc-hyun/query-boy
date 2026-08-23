@@ -3,13 +3,19 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Mapping
-from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from query_man.models import (
     BudgetProfile,
@@ -24,14 +30,49 @@ from query_man.models import (
     RelationSemantic,
     ResolvedConnection,
     SemanticOverlay,
+    SourceEnvironment,
     SourceProfile,
+    SourceProvenance,
     TenantIsolation,
 )
 
-Identifier = Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_$]*$")]
-RelationName = Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_$]*\.[A-Za-z_][A-Za-z0-9_$]*$")]
+POSTGRES_IDENTIFIER_MAX_LENGTH = 63
+QUALIFIED_RELATION_MAX_LENGTH = POSTGRES_IDENTIFIER_MAX_LENGTH * 2 + 1
+IDENTIFIER_PATTERN = r"^[A-Za-z_][A-Za-z0-9_$]{0,62}$"
+RELATION_NAME_PATTERN = (
+    r"^[A-Za-z_][A-Za-z0-9_$]{0,62}\.[A-Za-z_][A-Za-z0-9_$]{0,62}$"
+)
+STABLE_SLUG_MAX_LENGTH = 80
+STABLE_SLUG_PATTERN = r"^[a-z0-9]+(?:-[a-z0-9]+)*$"
+
+Identifier = Annotated[
+    str,
+    Field(
+        pattern=IDENTIFIER_PATTERN,
+        max_length=POSTGRES_IDENTIFIER_MAX_LENGTH,
+    ),
+]
+RelationName = Annotated[
+    str,
+    Field(
+        pattern=RELATION_NAME_PATTERN,
+        max_length=QUALIFIED_RELATION_MAX_LENGTH,
+    ),
+]
+EnvironmentVariableName = Annotated[
+    str,
+    Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$", max_length=128),
+]
 ShortText = Annotated[str, Field(min_length=1, max_length=200)]
 Description = Annotated[str, Field(min_length=1, max_length=2000)]
+StableSlug = Annotated[
+    str,
+    Field(pattern=STABLE_SLUG_PATTERN, max_length=STABLE_SLUG_MAX_LENGTH),
+]
+DatabaseMigrationRef = Annotated[
+    str,
+    Field(min_length=1, max_length=255),
+]
 _FORBIDDEN_SCHEMA = re.compile(
     r"^(?:information_schema|pg_catalog|pg_toast|pg_temp(?:_\d+)?|pg_toast_temp_\d+)$",
     re.IGNORECASE,
@@ -79,7 +120,7 @@ class _Budget(_StrictModel):
 
 class _BudgetFile(_StrictModel):
     version: int
-    profiles: dict[str, _Budget]
+    profiles: dict[Identifier, _Budget]
 
     @model_validator(mode="after")
     def require_version_two(self) -> _BudgetFile:
@@ -90,13 +131,28 @@ class _BudgetFile(_StrictModel):
 
 class _Connection(_StrictModel):
     host: str = Field(min_length=1, max_length=253)
-    host_env: Identifier | None = None
+    host_env: EnvironmentVariableName | None = None
     port: int = Field(ge=1, le=65_535)
-    port_env: Identifier | None = None
+    port_env: EnvironmentVariableName | None = None
     database: Identifier
     user: Identifier
-    password_env: Identifier
+    password_env: EnvironmentVariableName
     ssl: bool = False
+
+
+class _Provenance(_StrictModel):
+    owner: StableSlug
+    environment: SourceEnvironment
+    database_migration_ref: DatabaseMigrationRef
+
+    @field_validator("database_migration_ref", mode="before")
+    @classmethod
+    def reject_ascii_control_characters(cls, value: object) -> object:
+        if isinstance(value, str) and any(
+            ord(character) < 32 or ord(character) == 127 for character in value
+        ):
+            raise ValueError("database_migration_ref cannot contain ASCII control characters")
+        return value
 
 
 class _Grain(_StrictModel):
@@ -235,9 +291,10 @@ class _SemanticOverlay(_StrictModel):
 
 class _SourceFile(_StrictModel):
     version: int
-    source_id: Annotated[str, Field(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$", max_length=80)]
+    source_id: StableSlug
     name: ShortText
     description: Description
+    provenance: _Provenance
     connection: _Connection
     allowed_schemas: list[Identifier] = Field(min_length=1, max_length=20)
     allowed_relation_kinds: list[str] = Field(default_factory=lambda: ["view"], min_length=1, max_length=4)
@@ -248,8 +305,8 @@ class _SourceFile(_StrictModel):
 
     @model_validator(mode="after")
     def valid_values(self) -> _SourceFile:
-        if self.version != 1:
-            raise ValueError("version must be 1")
+        if self.version != 2:
+            raise ValueError("version must be 2")
         allowed = {"table", "partitioned_table", "view", "materialized_view"}
         if any(kind not in allowed for kind in self.allowed_relation_kinds):
             raise ValueError("invalid relation kind")
@@ -332,8 +389,8 @@ def _parse_model[T: BaseModel](path: Path, model: type[T]) -> T:
 def _parse_source_file(path: Path) -> _SourceFile:
     try:
         with path.open(encoding="utf-8") as stream:
-            return _SourceFile.model_validate(migrate_source_manifest(yaml.safe_load(stream)))
-    except (OSError, yaml.YAMLError, ValidationError, ValueError) as error:
+            return _SourceFile.model_validate(yaml.safe_load(stream))
+    except (OSError, yaml.YAMLError, ValidationError) as error:
         raise RegistryConfigurationError(f"Invalid configuration in {path}: {error}") from error
 
 
@@ -357,9 +414,8 @@ def validate_source_manifest(
     origin: str = "control-plane source manifest",
 ) -> ValidatedSourceManifest:
     try:
-        migrated = migrate_source_manifest(raw)
-        parsed = _SourceFile.model_validate(migrated)
-    except (ValidationError, ValueError) as error:
+        parsed = _SourceFile.model_validate(raw)
+    except ValidationError as error:
         raise RegistryConfigurationError(f"Invalid configuration in {origin}: {error}") from error
     environment = dict(os.environ)
     environment[parsed.connection.password_env] = secret
@@ -381,20 +437,6 @@ def validate_source_manifest(
         profile,
         document,
     )
-
-
-def migrate_source_manifest(raw: object) -> dict[str, object]:
-    if not isinstance(raw, dict):
-        raise ValueError("source manifest must be an object")
-    document = deepcopy(raw)
-    version = document.get("version")
-    if version == 0:
-        if "budget" in document and "budget_profile" not in document:
-            document["budget_profile"] = document.pop("budget")
-        document["version"] = 1
-    elif version != 1:
-        raise ValueError("unsupported source manifest version")
-    return document
 
 
 def _resolve_source(
@@ -447,6 +489,11 @@ def _resolve_source(
         allowed_relation_kinds=list(dict.fromkeys(parsed.allowed_relation_kinds)),  # type: ignore[arg-type]
         budget=budget,
         semantic_overlay=overlay,
+        provenance=SourceProvenance(
+            owner=parsed.provenance.owner,
+            environment=parsed.provenance.environment,
+            database_migration_ref=parsed.provenance.database_migration_ref,
+        ),
         minimum_quality_level=parsed.minimum_quality_level,
         tenant_isolation=parsed.tenant_isolation,
     )

@@ -12,13 +12,18 @@ import pytest
 
 from query_man.access import AccessPolicy
 from query_man.app import build_app
-from query_man.errors import QueryInvalidError
+from query_man.errors import (
+    QueryInvalidError,
+    SourceControlUnavailableError,
+    SourceNotFoundError,
+)
 from query_man.mcp_server import MCP_PROTOCOL_VERSION
 from query_man.models import CatalogSnapshot, SourceProfile
 from query_man.operations import operations
 from query_man.query import QueryExecutor
 from query_man.registry import SourceRegistry
 from query_man.runtime_config import RuntimeConfig
+from query_man.source_store import POSTGRES_BIGINT_MAX
 from query_man.sql_validation import SQL_POLICY_REVISION, ValidatedSql
 from tests.helpers import ROOT_DIRECTORY, load_test_registry, minimal_development_snapshot
 
@@ -195,6 +200,60 @@ def client(
         transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
         base_url="http://test",
     )
+
+
+class RecordingSourceAdmin:
+    def __init__(self) -> None:
+        self.list_calls: list[tuple[object, ...]] = []
+        self.detail_calls: list[str] = []
+        self.history_calls: list[tuple[object, ...]] = []
+
+    async def list_sources(
+        self,
+        limit: int = 50,
+        after_source_id: str | None = None,
+        enabled: bool | None = None,
+        owner: str | None = None,
+        environment: str | None = None,
+        budget_profile: str | None = None,
+    ) -> dict[str, object]:
+        self.list_calls.append(
+            (
+                limit,
+                after_source_id,
+                enabled,
+                owner,
+                environment,
+                budget_profile,
+            )
+        )
+        return {"sources": [], "next_after_source_id": None}
+
+    async def get_source(self, source_id: str) -> dict[str, object]:
+        self.detail_calls.append(source_id)
+        if source_id == "unknown-source":
+            raise SourceNotFoundError
+        if source_id == "unavailable-source":
+            raise SourceControlUnavailableError from RuntimeError(
+                "private control database detail"
+            )
+        return {"source_id": source_id, "connection": {"ssl": True}}
+
+    async def source_history(
+        self,
+        source_id: str,
+        limit: int = 50,
+        before_generation: int | None = None,
+    ) -> dict[str, object]:
+        self.history_calls.append((source_id, limit, before_generation))
+        if source_id == "unknown-source":
+            raise SourceNotFoundError
+        return {
+            "source_id": source_id,
+            "current": {"generation": 2},
+            "generations": [],
+            "next_before_generation": None,
+        }
 
 
 @pytest.mark.asyncio
@@ -726,6 +785,11 @@ async def test_query_credentials_reject_every_admin_operation_and_cancel(
     requests: list[tuple[str, str, dict[str, object] | None]] = [
         ("GET", "/admin/health", None),
         ("GET", "/admin/metrics", None),
+        ("GET", "/admin/sources", None),
+        ("GET", "/admin/sources?limit=0", None),
+        ("GET", "/admin/sources/INVALID_SOURCE", None),
+        ("GET", "/admin/sources/unknown-source", None),
+        ("GET", "/admin/sources/unknown-source/history", None),
         (
             "PUT",
             "/admin/sources/new-source",
@@ -789,6 +853,126 @@ async def test_query_credentials_reject_every_admin_operation_and_cancel(
     assert cancelled.status_code == 200
     assert cancelled.json() == {"status": "cancel_requested", "query_id": query_id}
     assert executor.cancel_calls == [query_id]
+
+
+@pytest.mark.asyncio
+async def test_operator_admin_source_gets_validate_and_forward_queries(
+    tmp_path: Path,
+) -> None:
+    policy = _shared_access_policy(tmp_path)
+    app = build_app(
+        runtime_config(),
+        registry=load_test_registry(),
+        catalog=NeverCalledCatalog(),
+        access_policy=policy,
+    )
+    admin = RecordingSourceAdmin()
+    app.state.source_admin = admin
+    headers = {"authorization": f"Bearer {_ADMIN_TOKEN}"}
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://test",
+    ) as session:
+        listed = await session.get(
+            "/admin/sources",
+            headers=headers,
+            params={
+                "limit": "25",
+                "after_source_id": "first-source",
+                "enabled": "false",
+                "owner": "data-platform",
+                "environment": "production",
+                "budget_profile": "interactive",
+            },
+        )
+        detail = await session.get("/admin/sources/known-source", headers=headers)
+        history = await session.get(
+            "/admin/sources/known-source/history",
+            headers=headers,
+            params={"limit": "10", "before_generation": "7"},
+        )
+
+    assert listed.status_code == detail.status_code == history.status_code == 200
+    assert admin.list_calls == [
+        (
+            25,
+            "first-source",
+            False,
+            "data-platform",
+            "production",
+            "interactive",
+        )
+    ]
+    assert admin.detail_calls == ["known-source"]
+    assert admin.history_calls == [("known-source", 10, 7)]
+    assert history.json()["source_id"] == "known-source"
+
+
+@pytest.mark.asyncio
+async def test_operator_admin_source_gets_return_bounded_errors(
+    tmp_path: Path,
+) -> None:
+    policy = _shared_access_policy(tmp_path)
+    app = build_app(
+        runtime_config(),
+        registry=load_test_registry(),
+        catalog=NeverCalledCatalog(),
+        access_policy=policy,
+    )
+    admin = RecordingSourceAdmin()
+    app.state.source_admin = admin
+    headers = {"authorization": f"Bearer {_ADMIN_TOKEN}"}
+    invalid_paths = [
+        "/admin/sources?limit=0",
+        "/admin/sources?limit=101",
+        "/admin/sources?after_source_id=Invalid_Source",
+        "/admin/sources?owner=Invalid_Owner",
+        "/admin/sources?environment=preview",
+        "/admin/sources?budget_profile=invalid-profile",
+        f"/admin/sources?budget_profile={'a' * 64}",
+        "/admin/sources?unexpected=value",
+        "/admin/sources?limit=10&limit=20",
+        "/admin/sources/INVALID_SOURCE",
+        "/admin/sources/known-source?unexpected=value",
+        "/admin/sources/known-source/history?before_generation=0",
+        (
+            "/admin/sources/known-source/history?before_generation="
+            f"{POSTGRES_BIGINT_MAX + 1}"
+        ),
+    ]
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://test",
+    ) as session:
+        invalid = [
+            await session.get(path, headers=headers) for path in invalid_paths
+        ]
+        unknown_detail = await session.get(
+            "/admin/sources/unknown-source",
+            headers=headers,
+        )
+        unknown_history = await session.get(
+            "/admin/sources/unknown-source/history",
+            headers=headers,
+        )
+        unavailable = await session.get(
+            "/admin/sources/unavailable-source",
+            headers=headers,
+        )
+
+    assert all(response.status_code == 400 for response in invalid)
+    assert all(
+        response.json()["error"]["code"] == "INVALID_REQUEST"
+        for response in invalid
+    )
+    assert admin.list_calls == []
+    assert admin.history_calls == [("unknown-source", 50, None)]
+    assert unknown_detail.status_code == unknown_history.status_code == 404
+    assert unknown_detail.json()["error"]["code"] == "SOURCE_NOT_FOUND"
+    assert unknown_history.json() == unknown_detail.json()
+    assert unavailable.status_code == 503
+    assert unavailable.json()["error"]["code"] == "SOURCE_CONTROL_UNAVAILABLE"
+    assert "private control database detail" not in unavailable.text
 
 
 @pytest.mark.asyncio

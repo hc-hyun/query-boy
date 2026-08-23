@@ -14,7 +14,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import UNSUPPORTED_PROTOCOL_VERSION
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from query_man.access import AccessPolicy, CallerContext
@@ -33,14 +33,14 @@ from query_man.mcp_server import (
 )
 from query_man.metadata import MetadataService
 from query_man.metadata_store import PostgresMetadataStore
-from query_man.models import CatalogProvider
+from query_man.models import CatalogProvider, SourceEnvironment
 from query_man.operations import operations
 from query_man.query import PostgresQueryExecutor, QueryExecutor, QueryService
-from query_man.registry import SourceRegistry, load_budget_profiles
+from query_man.registry import Identifier, SourceRegistry, StableSlug, load_budget_profiles
 from query_man.runtime_config import RuntimeConfig
 from query_man.secrets import SourceSecretCipher
 from query_man.source_admin import SourceAdminService, SourcePoolInvalidator, SourceReloader
-from query_man.source_store import PostgresSourceStore
+from query_man.source_store import POSTGRES_BIGINT_MAX, PostgresSourceStore
 from query_man.verified import ExpectedResult, VerifiedQuery, VerifiedQueryRegistry
 
 logger = logging.getLogger("query_man")
@@ -182,6 +182,63 @@ class VerifiedQueryRequest(BaseModel):
     relations: list[str] = Field(min_length=1, max_length=100)
     sql: str = Field(min_length=1, max_length=100_000)
     expected: VerifiedExpectedRequest
+
+
+class SourceListQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    limit: int = Field(50, ge=1, le=100)
+    after_source_id: StableSlug | None = None
+    enabled: bool | None = None
+    owner: StableSlug | None = None
+    environment: SourceEnvironment | None = None
+    budget_profile: Identifier | None = None
+
+
+class SourceHistoryQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    limit: int = Field(50, ge=1, le=100)
+    before_generation: int | None = Field(None, ge=1, le=POSTGRES_BIGINT_MAX)
+
+
+class SourceDetailQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class SourcePathParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_id: StableSlug
+
+
+def _parse_query_parameters[QueryParameters: BaseModel](
+    request: Request,
+    model: type[QueryParameters],
+) -> QueryParameters:
+    values: dict[str, object] = {}
+    for key, value in request.query_params.multi_items():
+        previous = values.get(key)
+        values[key] = [previous, value] if previous is not None else value
+    try:
+        return model.model_validate(values)
+    except ValidationError as error:
+        issues = [
+            {**issue, "loc": ("query", *issue["loc"])}
+            for issue in error.errors()
+        ]
+        raise RequestValidationError(issues) from error
+
+
+def _parse_source_id(source_id: str) -> str:
+    try:
+        return SourcePathParameters.model_validate({"source_id": source_id}).source_id
+    except ValidationError as error:
+        issues = [
+            {**issue, "loc": ("path", *issue["loc"])}
+            for issue in error.errors()
+        ]
+        raise RequestValidationError(issues) from error
 
 
 def build_app(
@@ -480,6 +537,52 @@ def build_app(
     @app.get("/sources")
     async def sources(request: Request) -> dict[str, object]:
         return gateway.list_sources(_caller(request))
+
+    @app.get("/admin/sources")
+    async def list_admin_sources(request: Request) -> dict[str, object]:
+        _require_operator(request)
+        parameters = _parse_query_parameters(request, SourceListQuery)
+        admin = cast(SourceAdminService | None, request.app.state.source_admin)
+        if admin is None:
+            raise SourceControlUnavailableError
+        return await admin.list_sources(
+            limit=parameters.limit,
+            after_source_id=parameters.after_source_id,
+            enabled=parameters.enabled,
+            owner=parameters.owner,
+            environment=parameters.environment,
+            budget_profile=parameters.budget_profile,
+        )
+
+    @app.get("/admin/sources/{source_id}/history")
+    async def admin_source_history(
+        source_id: str,
+        request: Request,
+    ) -> dict[str, object]:
+        _require_operator(request)
+        source_id = _parse_source_id(source_id)
+        parameters = _parse_query_parameters(request, SourceHistoryQuery)
+        admin = cast(SourceAdminService | None, request.app.state.source_admin)
+        if admin is None:
+            raise SourceControlUnavailableError
+        return await admin.source_history(
+            source_id,
+            limit=parameters.limit,
+            before_generation=parameters.before_generation,
+        )
+
+    @app.get("/admin/sources/{source_id}")
+    async def get_admin_source(
+        source_id: str,
+        request: Request,
+    ) -> dict[str, object]:
+        _require_operator(request)
+        source_id = _parse_source_id(source_id)
+        _parse_query_parameters(request, SourceDetailQuery)
+        admin = cast(SourceAdminService | None, request.app.state.source_admin)
+        if admin is None:
+            raise SourceControlUnavailableError
+        return await admin.get_source(source_id)
 
     @app.post("/meta")
     async def meta(

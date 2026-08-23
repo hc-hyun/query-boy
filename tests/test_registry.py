@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 import shutil
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 import yaml
 
 from query_man.registry import (
+    POSTGRES_IDENTIFIER_MAX_LENGTH,
     RegistryConfigurationError,
     SourceRegistry,
     load_budget_profiles,
-    migrate_source_manifest,
     validate_source_manifest,
 )
 from tests.helpers import DUMMY_ENVIRONMENT, ROOT_DIRECTORY, load_test_registry
@@ -117,10 +118,14 @@ def test_duplicate_source_ids_are_rejected(tmp_path: Path) -> None:
 
 def test_system_schemas_are_rejected(tmp_path: Path) -> None:
     (tmp_path / "system-test.yaml").write_text(
-        """version: 1
+        """version: 2
 source_id: system-test
 name: System Test
 description: Must not expose system catalogs
+provenance:
+  owner: query-man
+  environment: test
+  database_migration_ref: tests/system-test.sql
 connection:
   host: 127.0.0.1
   port: 5432
@@ -142,32 +147,140 @@ budget_profile: interactive
         )
 
 
-def test_migrates_v0_budget_field_and_rejects_future_versions() -> None:
-    raw = {
-        "version": 0,
-        "source_id": "legacy-source",
-        "name": "Legacy Source",
-        "description": "Legacy source contract",
-        "connection": {
-            "host": "127.0.0.1",
-            "port": 5432,
-            "database": "legacy",
-            "user": "legacy_reader",
-            "password_env": "LEGACY_SOURCE_READER_PASSWORD",
-            "ssl": False,
-        },
-        "allowed_schemas": ["ai"],
-        "allowed_relation_kinds": ["view"],
-        "budget": "interactive",
-    }
+@pytest.mark.parametrize("version", [0, 1, 3])
+def test_rejects_non_v2_source_manifest(version: int) -> None:
+    source_path = ROOT_DIRECTORY / "config" / "sources" / "development-issues.yaml"
+    raw = yaml.safe_load(source_path.read_text(encoding="utf-8"))
+    raw["version"] = version
 
-    migrated = migrate_source_manifest(raw)
-    assert migrated["version"] == 1
-    assert migrated["budget_profile"] == "interactive"
-    assert "budget" not in migrated
-    assert raw["version"] == 0
-    with pytest.raises(ValueError, match="unsupported"):
-        migrate_source_manifest({"version": 2})
+    with pytest.raises(RegistryConfigurationError, match="version must be 2"):
+        validate_source_manifest(
+            raw,
+            load_budget_profiles(ROOT_DIRECTORY / "config" / "budget-profiles.yaml"),
+            "reader-secret",
+        )
+
+
+def test_accepts_postgresql_identifier_boundary_in_projected_fields() -> None:
+    source_path = ROOT_DIRECTORY / "config" / "sources" / "development-issues.yaml"
+    raw = yaml.safe_load(source_path.read_text(encoding="utf-8"))
+    identifier = "a" * POSTGRES_IDENTIFIER_MAX_LENGTH
+    raw["allowed_schemas"] = [identifier]
+    raw["budget_profile"] = identifier
+    raw["semantic_overlay"] = {}
+    connection = raw["connection"]
+    assert isinstance(connection, dict)
+    connection["database"] = identifier
+    connection["user"] = identifier
+    budgets = load_budget_profiles(
+        ROOT_DIRECTORY / "config" / "budget-profiles.yaml"
+    )
+    budget = replace(budgets["interactive"], name=identifier)
+
+    validated = validate_source_manifest(raw, {identifier: budget}, "reader-secret")
+
+    assert validated.profile.budget.name == identifier
+    assert validated.profile.allowed_schemas == [identifier]
+    assert validated.profile.connection.database == identifier
+    assert validated.profile.connection.user == identifier
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("allowed_schemas", ["a" * (POSTGRES_IDENTIFIER_MAX_LENGTH + 1)]),
+        ("budget_profile", "a" * (POSTGRES_IDENTIFIER_MAX_LENGTH + 1)),
+    ],
+)
+def test_rejects_projected_identifiers_above_postgresql_limit(
+    field: str,
+    value: object,
+) -> None:
+    source_path = ROOT_DIRECTORY / "config" / "sources" / "development-issues.yaml"
+    raw = yaml.safe_load(source_path.read_text(encoding="utf-8"))
+    raw[field] = value
+
+    with pytest.raises(RegistryConfigurationError, match=field):
+        validate_source_manifest(
+            raw,
+            load_budget_profiles(
+                ROOT_DIRECTORY / "config" / "budget-profiles.yaml"
+            ),
+            "reader-secret",
+        )
+
+
+@pytest.mark.parametrize(
+    "provenance",
+    [
+        {},
+        {
+            "owner": "Query-Man",
+            "environment": "development",
+            "database_migration_ref": "migrations/0001.sql",
+        },
+        {
+            "owner": "a" * 81,
+            "environment": "development",
+            "database_migration_ref": "migrations/0001.sql",
+        },
+        {
+            "owner": "query-man",
+            "environment": "qa",
+            "database_migration_ref": "migrations/0001.sql",
+        },
+        {
+            "owner": "query-man",
+            "environment": "development",
+            "database_migration_ref": "   ",
+        },
+        {
+            "owner": "query-man",
+            "environment": "development",
+            "database_migration_ref": "migrations/0001.sql\t",
+        },
+        {
+            "owner": "query-man",
+            "environment": "development",
+            "database_migration_ref": "migrations/\x7f0001.sql",
+        },
+        {
+            "owner": "query-man",
+            "environment": "development",
+            "database_migration_ref": "x" * 256,
+        },
+        {
+            "owner": "query-man",
+            "environment": "development",
+            "database_migration_ref": "migrations/0001.sql",
+            "secret": "must-not-be-accepted",
+        },
+    ],
+)
+def test_rejects_invalid_source_provenance(provenance: object) -> None:
+    source_path = ROOT_DIRECTORY / "config" / "sources" / "development-issues.yaml"
+    raw = yaml.safe_load(source_path.read_text(encoding="utf-8"))
+    raw["provenance"] = provenance
+
+    with pytest.raises(RegistryConfigurationError, match="provenance"):
+        validate_source_manifest(
+            raw,
+            load_budget_profiles(ROOT_DIRECTORY / "config" / "budget-profiles.yaml"),
+            "reader-secret",
+        )
+
+
+def test_requires_source_provenance() -> None:
+    source_path = ROOT_DIRECTORY / "config" / "sources" / "development-issues.yaml"
+    raw = yaml.safe_load(source_path.read_text(encoding="utf-8"))
+    raw.pop("provenance")
+
+    with pytest.raises(RegistryConfigurationError, match="provenance"):
+        validate_source_manifest(
+            raw,
+            load_budget_profiles(ROOT_DIRECTORY / "config" / "budget-profiles.yaml"),
+            "reader-secret",
+        )
 
 
 def test_validates_control_plane_manifest_without_storing_secret(
@@ -185,7 +298,14 @@ def test_validates_control_plane_manifest_without_storing_secret(
 
     assert validated.profile.connection.password == "control-plane-secret"
     assert "control-plane-secret" not in str(validated.document)
-    assert validated.document["version"] == 1
+    assert validated.document["version"] == 2
+    assert validated.document["provenance"] == raw["provenance"]
+    assert validated.profile.provenance.owner == "query-man"
+    assert validated.profile.provenance.environment == "development"
+    assert (
+        validated.profile.provenance.database_migration_ref
+        == "docker/postgres/init/10-development-issues-schema.sql"
+    )
     assert validated.profile.connection.host == "postgres"
     assert validated.document["connection"]["host"] == "postgres"  # type: ignore[index]
     assert validated.profile.connection.port == 55_432

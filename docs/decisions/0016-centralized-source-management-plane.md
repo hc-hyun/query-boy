@@ -110,6 +110,12 @@ managed registry는 비어 있고 readiness는 unavailable이며 bootstrap file�
 현재 immutable generation/pointer, metadata snapshot과 verified contract table이 이 authority를
 이미 표현하므로 mode/import를 위한 schema migration이나 marker를 추가하지 않는다.
 
+Minimal catalog도 기존 immutable manifest generation을 재사용한다. Strict manifest v2의
+`provenance` block에 owner, environment와 DB migration reference를 필수로 두고, admin read API는
+허용한 JSON path와 lifecycle/metadata pointer만 조회한다. Raw manifest, encrypted credential,
+metadata snapshot과 verified query를 읽거나 반환하지 않는다. 이 단계는 별도 catalog table,
+중복 column이나 Control schema migration을 추가하지 않는다.
+
 상세 rollout은 [source management plane](../source-management-plane.md), 실행 순서는
 [active development TODO](../development-todo.md)의 `CTRL-*`가 관리한다.
 
@@ -124,7 +130,7 @@ managed registry는 비어 있고 readiness는 unavailable이며 bootstrap file�
 - 관리자 한 종류와 기존 `budget_profile`만 사용하므로 초기 schema와 API가 작다.
 - Control DB availability, backup, audit integrity와 admin credential 분리는 production-critical
   boundary가 된다.
-- 암시적 admin compatibility path, mutation-only admin API, process-local metric과 shared fixture
-  history는 구현해야 할 gap이다.
+- Mutation receipt/audit, replica convergence, size/cost projection과 production 복구 검증은 남은
+  구현 gap이다.
 - Future per-user/org ACL, quota, tier override, multi-role approval, automated credential broker와
   chargeback은 실제 요구와 threat model이 생길 때 별도 결정으로 추가한다.

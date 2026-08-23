@@ -14,8 +14,9 @@ source나 metadata revision을 변경해서도 안 된다.
 
 관리자 source 계약은 manifest document와 reader secret을 별도 필드로 받는다. Manifest는
 filesystem과 같은 strict schema, source-scoped credential 이름, budget, overlay 검증을
-재사용한다. 현재 schema version은 1이며 version 0의 `budget` 필드는
-`budget_profile`로 명시적으로 migration한다. 알 수 없는 미래 version은 거부한다.
+재사용한다. 현재 schema version은 2이며 `provenance.owner`, `provenance.environment`,
+`provenance.database_migration_ref`를 관리자가 모두 명시한다. 개발 중 schema cutover이므로 이전
+version을 runtime에서 자동 변환하지 않고 fail-closed한다.
 
 Reader secret은 단일 256-bit runtime master key로 AES-256-GCM 암호화한다. Ciphertext는
 `source_id`와 generation을 associated data로 묶어 다른 source 또는 revision에서 재사용할
@@ -33,6 +34,13 @@ Optimistic `(generation, state_version)` check가 동시 관리자 update의 los
 deactivate→same-generation rollback ABA를 막는다. Runtime poller는 더 오래된 state와 같은
 version의 충돌 payload를 적용하지 않는다.
 
+Owner는 권한 principal이 아니라 운영 책임 팀의 bounded slug이고, environment는 source DB의
+`production|staging|development|test` 구분이다. DB migration reference는 source DB의 외부
+변경 기록을 가리키는 bounded reference이며 Query Man이 그 외부 artifact의 존재를 대신
+검증하지 않는다. 이 세 값은 manifest generation과 함께 immutable하게 저장되어 rollback 때도
+같이 복원된다. Owner 또는 migration reference만 바꾼 publish는 새 generation을 만들지만 query
+metadata revision은 바꾸지 않는다.
+
 Production managed mode의 canonical manifest generation, active/deactivated state와 history는
 처음부터 Control DB가 authority다. Runtime은 empty registry에서 lifecycle을 load하며 filesystem
 manifest를 열거나 fallback으로 사용하지 않는다. Publish가 filesystem manifest를 생성하거나
@@ -41,8 +49,9 @@ write-back하지 않는다. 전체 managed source catalog, zero-bootstrap과 일
 
 Publisher는 `port_env`를 실제 port로 resolve하고 저장 document에서는 환경 변수 참조를
 제거한다. `source_id`는 bootstrap profile 또는 최초 control-plane publish의 host, port,
-database, user와 TLS mode에 고정되며 후속 generation이 다른 endpoint로 바꾸려 하면 기존
-active generation을 유지하고 거부한다. Credential rotation만 이 identity 제약에서 제외된다.
+database, user, TLS mode와 environment에 고정되며 후속 generation이 다른 endpoint나
+environment로 바꾸려 하면 기존 active generation을 유지하고 거부한다. Credential rotation과
+owner/migration-reference 갱신은 이 identity 제약에서 제외된다.
 
 Staging catalog 연결은 session/database identity와 default read-only뿐 아니라 login role의
 superuser, database/role 생성, 상속, replication, RLS bypass, 유한한 양수 connection limit,
@@ -66,5 +75,6 @@ source generation publish도 허용하지 않는다.
 - Runtime poller와 관리자 HTTP endpoint는 이 저장 계약을 사용한다. 각 runtime은 새
   generation을 검증한 뒤 source별 catalog/query pool과 metadata cache를 교체한다.
 - 다른 endpoint로 전환하려면 별도 source ID와 새 verified contract를 사용해야 한다.
-- Owner/환경/provenance, actor/approval audit, management read API와 규모·비용 observation은
-  이 revision 저장 계약에 아직 없으며 ADR 0016의 후속 구현 범위다.
+- Owner/환경/DB migration provenance와 secret-free generation read API는 같은 immutable manifest를
+  재사용한다. Actor/reason/receipt audit, replica 상태와 규모·비용 observation은 ADR 0016의 후속
+  구현 범위다.

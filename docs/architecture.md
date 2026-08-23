@@ -136,6 +136,12 @@ effective `budget_profile`, replica convergence, size/growth와 usage/cost proje
 HTTP API로 제공한다. 실제 DB 객체, secret, raw metric과 provider bill은 각 authority에 남을 수
 있다. Control Plane은 같은 `source_id`와 provenance로 이를 모아 보여준다.
 
+현재 첫 management slice는 strict manifest v2의 owner/environment/DB migration reference를
+immutable generation에 저장하고 admin-only list/detail/generation-history API로 조회한다. API는
+raw manifest나 encrypted secret을 읽지 않는 explicit projection이며 published generation revision과
+현재 active metadata revision을 구분한다. Mutation event audit, replica/size/cost 상태는 이후
+`CTRL-*` 단계가 추가한다.
+
 초기 management 권한은 query user와 Query Man admin 두 종류다. 기존 boolean operator를 admin
 capability superset으로 재사용하고 역할 계층, caller grant와 별도 `cost_tier`를 만들지 않는다.
 Query credential은 admin endpoint와 cancel에서 거부된다. 상세 management API 구현 순서는
