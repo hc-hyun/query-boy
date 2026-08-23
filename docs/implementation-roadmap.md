@@ -314,6 +314,8 @@ workflow trace다. 완료된 두 replica soak 실행 증거는
 Centralized management의 첫 단계인 numbered Control DB migration과 disposable test-store
 격리는 [control schema migration audit](verification/2026-08-23-control-schema-migrations.md)에
 기록한다.
+Mutually exclusive source authority mode와 zero-bootstrap Control DB precedence는
+[managed source startup audit](verification/2026-08-23-managed-source-startup.md)에 기록한다.
 
 ## Recommended Milestones
 

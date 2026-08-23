@@ -52,7 +52,7 @@ Control DB와 하나의 admin management API에서 관리한다. 실제 DB, secr
 - [x] `CTRL-01` Control schema에 번호 기반 migration을 도입하고 production/development와
   disposable integration-test Control DB를 분리해 fixture generation이 운영 history에
   누적되지 않게 한다.
-- [ ] `CTRL-02` Control DB lifecycle과 verified contract가 restart/rollback/deactivate 뒤에도
+- [x] `CTRL-02` Control DB lifecycle과 verified contract가 restart/rollback/deactivate 뒤에도
   bootstrap seed/contract보다 우선하는 managed-mode startup을 구현한다. 일회성 import가 필요한
   contract를 Control DB로 이관한 뒤 filesystem contract를 무시하게 하고 zero-bootstrap
   production 및 precedence 회귀를 격리 Control DB에서 검증한다.
@@ -86,8 +86,11 @@ Control DB와 하나의 admin management API에서 관리한다. 실제 DB, secr
 
 `CTRL-01`의 migration checksum, fresh/reapply, 개발 history 비오염과 disposable DB 삭제 증거는
 [control schema migration audit](verification/2026-08-23-control-schema-migrations.md)에 기록한다.
+`CTRL-02`의 mutually exclusive runtime mode, zero-bootstrap, file non-read와 Control DB
+restart/rollback/deactivate/verified-contract precedence 증거는
+[managed source startup audit](verification/2026-08-23-managed-source-startup.md)에 기록한다.
 
-현재 다음 작업은 `CTRL-02`다. 이 track에서는 다단계 RBAC, caller grant storage,
+현재 다음 작업은 `CTRL-03`이다. 이 track에서는 다단계 RBAC, caller grant storage,
 user/organization별 tier·quota와 AI production executor를 구현하지 않는다.
 
 두 번째 numbered migration이 추가될 때는 N-1→N data-preserving upgrade, 실패 migration의

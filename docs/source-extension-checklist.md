@@ -5,6 +5,8 @@
 신규 PostgreSQL source를 추가할 때 애플리케이션 runtime 분기와 재배포를 늘리지 않고,
 보안·비용·MCP 결과 정합성을 유지하기 위한 운영 checklist다. Source별 차이는 curated
 view, versioned manifest, 기존 `budget_profile` resource tier와 verified query로 표현한다.
+Production onboarding은 `QUERY_MAN_SOURCE_MODE=managed`의 Control DB authority에서 수행한다.
+Repository source/verified file은 bootstrap/acceptance fixture이며 production publish 산출물이 아니다.
 
 ## 항상 필요한 작업
 

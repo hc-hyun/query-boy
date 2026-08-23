@@ -75,6 +75,47 @@ development authority fingerprint가 동일한지 확인한다. CI가 비정상 
 해당 ephemeral Compose volume을 폐기한다. 운영 DB나 사용자가 지정한 임의 DB를 test cleanup
 대상으로 삼지 않는다.
 
+## Source Authority Startup And Cutover
+
+Runtime은 process 전체의 source authority를 한 mode로 고정한다.
+
+| Mode | Valid configuration | Startup authority |
+|---|---|---|
+| `bootstrap` (default) | Control DSN/key 없음 | Repository source와 filesystem verified contract |
+| `managed` | Control DSN/key 모두 있음 | Control DB lifecycle와 verified contract만 사용 |
+
+Bootstrap에 Control 설정이 하나라도 있거나 managed에 둘 중 하나가 빠지면 configuration error로
+시작하지 않는다. Mode를 `auto`로 추론하거나 source별로 섞지 않는다. Managed startup은 source
+directory와 filesystem verified-query file을 열지 않지만 budget profile과 configured
+authentication/access policy는 계속 deployment configuration에서 읽는다.
+
+Managed lifespan은 empty registry/verified map에서 Control DB를 scan한 뒤 enabled generation을
+decrypt·validate하고 stored metadata/quality gate를 통과한 source만 적용한다. Disabled lifecycle은
+registry에서 제거하며 lifecycle이 없는 file source는 absent다. Cold-start scan 실패에는 보존할
+verified state가 없으므로 `/ready`가 `unavailable`이고 file로 fallback하지 않는다. 한 번 적용한
+process의 이후 poll이 실패하면 마지막 verified registry를 유지하고 reload component를
+`unavailable`로 표시한다. 사용 가능한 source가 있으면 aggregate readiness는 `degraded`다.
+
+### Existing Bootstrap Source Cutover
+
+1. Production과 분리된 migration/admin identity로 Control schema를 적용하고 runtime writer와
+   encryption key recovery를 확인한다.
+2. Query traffic을 받지 않는 managed instance를 직접 시작한다. Empty Control DB에서는
+   `/ready` 503이 정상이며 admin endpoint는 별도 운영 경로로 호출한다.
+3. 기존 admin API로 source를 L0/L1 staged publish한다. Reader credential은 external secret
+   boundary에서 관리자가 전달하고 응답 generation/metadata revision을 기록한다.
+4. 기존 reviewed contract를 verified-query admin endpoint로 실행·저장한다. 현재 revision과
+   invariant가 다르면 이관을 중단하고 재검토한다.
+5. 같은 semantic/budget revision에서 L2 generation을 publish하고 `/meta`, guarded query와
+   intended inactive state를 확인한다.
+6. 필요한 모든 source와 L2 contract가 Control DB에 있는지 확인한 뒤 serving replica를
+   `QUERY_MAN_SOURCE_MODE=managed`로 재시작한다. Source/verified file이 없어도 같은 inventory와
+   revision이 복원되고 deactivate/rollback이 유지되는지 확인한 뒤 traffic을 전환한다.
+
+이 절차는 startup import나 새 bulk endpoint가 아니다. Seed digest/import marker와 repository
+write-back을 만들지 않으며, authoritative mutation receipt가 구현되기 전 timeout 응답을 blind
+retry하지 않고 Control DB state부터 확인한다.
+
 ## Health And Metrics
 
 Public endpoint는 inventory를 노출하지 않는다.
@@ -86,8 +127,9 @@ Public endpoint는 inventory를 노출하지 않는다.
 | `GET /admin/health` | Operator | source별 `initializing`, `healthy`, `stale`, `unavailable` |
 | `GET /admin/metrics` | Operator | source/component health와 bounded counter/total snapshot |
 
-Startup은 등록 source별 published-metadata 제공 경로를 각 metadata statement timeout 안에서
-병렬 확인한다. TTL 안의 stored active snapshot은 source DB catalog query 없이 복원될 수
+Startup은 authority mode에서 등록된 source별 published-metadata 제공 경로를 각 metadata
+statement timeout 안에서 병렬 확인한다. Managed mode는 이 probe 전에 Control lifecycle scan을
+수행한다. TTL 안의 stored active snapshot은 source DB catalog query 없이 복원될 수
 있으므로 readiness는 query connection liveness 보장이 아니다. Source health는 마지막 metadata
 refresh/restore 결과이며 매 health 요청마다 database에 ping한 결과가 아니다.
 Control-plane scan도 별도 component health로 추적한다. Aggregate 의미와 HTTP status는 다음과
@@ -139,11 +181,13 @@ healthy지만 release smoke에서는 body가 `{"status":"ready"}`인지 별도�
 Application port는 container 내부 `3000`, host loopback의 `${QUERY_MAN_PORT:-3000}`이며
 PostgreSQL은 container network에서 `postgres:5432`다.
 
-Compose access policy는 `QUERY_MAN_CODEX_MCP_TOKEN` caller를 두 bootstrap source로만
+Compose는 `QUERY_MAN_SOURCE_MODE=bootstrap`이고 access policy는
+`QUERY_MAN_CODEX_MCP_TOKEN` caller를 두 bootstrap source로만
 제한하고 operator 권한을 주지 않는다. Token과 reader password는 `.env`에서 주입하지만
 image build context와 Git에는 포함하지 않는다. Application container에는 PostgreSQL
 administrator password를 전달하지 않는다. 기본 Compose는 control-plane DSN/key를 주입하지
-않으므로 source admin endpoint가 비활성인 local runtime이다.
+않으므로 source admin endpoint가 비활성인 local runtime이다. Managed source test나 production
+설정을 이 Compose default와 섞지 않는다.
 
 Container는 non-root, read-only filesystem과 `/tmp` tmpfs로 실행한다. 기본 Docker
 `stop_grace_period` 30초는 application drain 기본값 10초보다 길다.

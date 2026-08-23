@@ -26,6 +26,8 @@ Application은 container 내부 `0.0.0.0:3000`에 bind하고 host에는
 Compose 전용 access policy와 `QUERY_MAN_CODEX_MCP_TOKEN`을 필수로 사용한다. 이 caller는 두
 bootstrap source만 사용할 수 있고 operator 권한이 없다. Compose는 필요한 reader secret과
 runtime setting만 명시적으로 전달하며 PostgreSQL administrator credential은 전달하지 않는다.
+Source authority는 `QUERY_MAN_SOURCE_MODE=bootstrap`으로 고정하고 Control DSN/key를 전달하지
+않는다. Managed production topology를 이 local default와 섞지 않는다.
 MCP transport의 DNS rebinding 보호는 bind 주소와 관계없이 활성화하고 기본 Compose의 허용
 Host와 Origin은 loopback으로 제한한다.
 

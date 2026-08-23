@@ -23,7 +23,8 @@ docker compose exec postgres \
   psql -U query_man_admin -d query_man
 ```
 
-생성되는 database는 bootstrap source인 `development_issues`, `market_voc`와 no-deploy
+기본 Compose는 `QUERY_MAN_SOURCE_MODE=bootstrap`으로 repository source와 verified-query
+fixture를 읽습니다. 생성되는 database는 bootstrap source인 `development_issues`, `market_voc`와 no-deploy
 onboarding acceptance용 `support_tickets`, `commerce_edges`입니다. 각 source의 AI reader
 접속 정보는 `.env`에 있고, reader는 해당 database의 `ai` schema view만 조회할 수 있습니다.
 
@@ -48,7 +49,9 @@ docker compose down
 [completion audit](docs/verification/2026-08-23-completion-audit.md), 현재 최종 회귀와 운영 경계는
 [refactoring assurance](docs/verification/2026-08-23-refactoring-assurance.md), 컨테이너 실행 증거는
 [container runtime audit](docs/verification/2026-08-23-container-runtime.md), 두 replica soak 증거는
-[multi-replica soak audit](docs/verification/2026-08-23-mcp-multi-replica-soak.md)을 참고합니다.
+[multi-replica soak audit](docs/verification/2026-08-23-mcp-multi-replica-soak.md), managed authority
+전환 증거는
+[managed source startup audit](docs/verification/2026-08-23-managed-source-startup.md)을 참고합니다.
 
 ## Metadata And Query API
 
@@ -109,9 +112,14 @@ Operator caller는 audit log에 기록된 실행 중 `query_id`를
 `DELETE /queries/{query_id}`로 취소할 수 있으며, 자기 source allowlist 밖의 query는
 조회하거나 취소할 수 없습니다.
 
-Client는 DSN, host, database 또는 role을 전달할 수 없습니다. `source_id`는 bootstrap
-[`config/sources`](config/sources) 또는 검증된 Control DB source generation의 server-side
-registry에서만 연결 정보로 해석됩니다. Production hot-added source의 authority와 관리 목표는
+Client는 DSN, host, database 또는 role을 전달할 수 없습니다. Runtime은
+`QUERY_MAN_SOURCE_MODE=bootstrap|managed`로 source authority를 시작할 때 한 번만 선택합니다.
+기본값 `bootstrap`은 local/CI에서 [`config/sources`](config/sources)와 filesystem verified contract를
+읽고 Control DB 설정을 거부합니다. `managed`는 `QUERY_MAN_CONTROL_DSN`과
+`QUERY_MAN_SOURCE_ENCRYPTION_KEY`를 모두 요구하며 source/verified file을 열거나 합치지 않습니다.
+Budget profile과 access policy는 두 mode 모두 versioned deployment configuration에 남습니다.
+Mode 자동 선택, source별 혼합과 Control DB 장애 시 filesystem fallback은 없습니다.
+Production hot-added source의 authority와 관리 목표는
 [`docs/source-management-plane.md`](docs/source-management-plane.md)를 따릅니다.
 Column, type과 database comment는 reader 권한으로 `pg_catalog`에서 자동 수집하고,
 grain, 한국어 alias, 승인된 join, 검증된 measure와 business predicate만 manifest의
@@ -189,11 +197,15 @@ uv run pytest -m soak -s
 [`docs/verified-queries.md`](docs/verified-queries.md)의 계약에 따라
 `uv run query-man-verify`로 검증합니다.
 
-Production metadata revision을 재시작 후에도 유지하려면 database owner/관리자용 표준 libpq
-환경에서 `scripts/apply-control-schema.sh`를 실행하고, 별도로 생성한 최소 권한 LOGIN에
+Production managed runtime을 준비하려면 database owner/관리자용 표준 libpq 환경에서
+`scripts/apply-control-schema.sh`를 실행하고, 별도로 생성한 최소 권한 LOGIN에
 `query_man_control_writer` membership을 부여합니다. `scripts/apply-db.sh`는 네 fixture
 database·role·seed를 만드는 local/CI bootstrap이며 production migration이 아닙니다. Runtime은
-전용 LOGIN의 TLS DSN을 `QUERY_MAN_CONTROL_DSN`에 사용합니다. 자세한 설치·복구 순서는
+`QUERY_MAN_SOURCE_MODE=managed`, 전용 LOGIN의 TLS DSN과 source encryption key를 함께
+사용합니다. Bootstrap source를 이관할 때는 traffic 밖의 managed instance에서 기존 admin API로
+L0/L1 source, Control DB verified contract, L2 source 순서로 publish한 뒤 serving replica를
+managed mode로 시작합니다. Startup import, 별도 marker와 filesystem write-back은 없습니다.
+자세한 설치·이관·복구 순서는
 [source onboarding](docs/source-onboarding.md)과
 [disaster recovery](docs/disaster-recovery.md)를 따릅니다.
 Control schema는 filename/checksum을 기록하는 numbered migration이며 integration test는
@@ -208,8 +220,9 @@ accuracy, unsupported/clarification recall과 context byte 상한 중 하나라�
 source는 L2이며, metadata revision과 일치하는 verified contract가 없으면 `/meta`, MCP와
 query 경로가 새 revision을 활성화하지 않습니다.
 
-`QUERY_MAN_CONTROL_DSN`과 `QUERY_MAN_SOURCE_ENCRYPTION_KEY`를 함께 설정하면 operator 전용
-source admin API가 활성화됩니다. 신규 manifest는 격리 staging을 통과한 뒤 encrypted
+`QUERY_MAN_SOURCE_MODE=managed`에서 Control DSN과 encryption key를 함께 설정하면 operator 전용
+source admin API가 활성화됩니다. 두 값 중 하나만 있거나 bootstrap mode에 Control DB 설정이
+있으면 startup이 실패합니다. 신규 manifest는 격리 staging을 통과한 뒤 encrypted
 credential, immutable metadata와 함께 원자적으로 publish되며 runtime과 다른 replica가
 재시작 없이 반영합니다. 자세한 절차는
 [`docs/source-onboarding.md`](docs/source-onboarding.md)를 따릅니다.

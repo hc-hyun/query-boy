@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import subprocess
 import uuid
 from collections.abc import AsyncIterator
@@ -22,6 +23,7 @@ _AUTHORITY_TABLES = (
     "verified_query_contracts",
 )
 _TEST_DATABASE_PREFIX = "query_man_control_test_"
+_TEST_DATABASE_NAME = re.compile(rf"^{_TEST_DATABASE_PREFIX}[0-9a-f]{{32}}$")
 
 
 @dataclass(frozen=True)
@@ -52,27 +54,49 @@ def postgres_dsn(environment: dict[str, str], database: str) -> str:
 
 
 def apply_control_migrations(database: DisposableControlDatabase) -> None:
-    if not database.name.startswith(_TEST_DATABASE_PREFIX):
+    if _TEST_DATABASE_NAME.fullmatch(database.name) is None:
         raise ValueError("Refusing to migrate an unmanaged test database")
-    subprocess.run(
-        [
-            "docker",
-            "compose",
-            "exec",
-            "-T",
-            "--env",
-            f"PGDATABASE={database.name}",
-            "--env",
-            f"PGUSER={os.environ['POSTGRES_USER']}",
-            "postgres",
-            "bash",
-            "/docker-entrypoint-initdb.d/control-migrations/apply.sh",
-        ],
-        cwd=ROOT_DIRECTORY,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    migration_directory = ROOT_DIRECTORY / "docker" / "postgres" / "init" / "control-migrations"
+    container_directory = f"/tmp/query-man-control-migrations-{database.name}"
+    compose = ["docker", "compose"]
+    run_options = {
+        "cwd": ROOT_DIRECTORY,
+        "check": True,
+        "capture_output": True,
+        "text": True,
+    }
+    created = False
+    try:
+        subprocess.run(
+            [*compose, "exec", "-T", "postgres", "mkdir", "--mode=700", container_directory],
+            **run_options,
+        )
+        created = True
+        subprocess.run(
+            [*compose, "cp", f"{migration_directory}/.", f"postgres:{container_directory}"],
+            **run_options,
+        )
+        subprocess.run(
+            [
+                *compose,
+                "exec",
+                "-T",
+                "--env",
+                f"PGDATABASE={database.name}",
+                "--env",
+                f"PGUSER={os.environ['POSTGRES_USER']}",
+                "postgres",
+                "bash",
+                f"{container_directory}/apply.sh",
+            ],
+            **run_options,
+        )
+    finally:
+        if created:
+            subprocess.run(
+                [*compose, "exec", "-T", "postgres", "rm", "-r", "--", container_directory],
+                **run_options,
+            )
 
 
 async def authority_fingerprint(dsn: str) -> tuple[tuple[str, int, str], ...]:

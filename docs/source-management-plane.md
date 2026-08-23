@@ -42,7 +42,6 @@ tier를 정한다. 이 문서는 현재 공백과 `CTRL-*` 구현 순서를 관�
 
 아직 구현할 공백:
 
-- Filesystem seed를 import한 뒤 Control DB만 우선하는 zero-bootstrap managed startup
 - Query credential과 admin credential의 명시적 분리. 현재 single-token/local compatibility가
   암시적으로 admin이 될 수 있어 source management 환경에서 제거해야 한다.
 - 모든 query identity가 같은 active source를 보는 shared-access cutover와 parity test
@@ -73,9 +72,37 @@ tier를 정한다. 이 문서는 현재 공백과 `CTRL-*` 구현 순서를 관�
 | Raw metrics/provider bill | External system when configured | Bounded rollup/provenance만 연결 |
 | Unified sanitized projection | Admin management API | 실제 authority를 대체하지 않음 |
 
-Production managed mode는 source별 repository file을 요구하지 않는다. 파일 seed와 같은
-`source_id`의 Control DB lifecycle이 생기면 Control DB state와 contract가 우선하고
-deactivated source를 파일이 다시 활성화하지 못한다.
+Production managed mode는 source별 repository file을 요구하지 않는다. Managed runtime은 모든
+source와 verified contract를 Control DB에서만 읽으므로 lifecycle row가 없는 file source도
+absent다. Deactivate와 rollback을 포함한 Control DB state가 restart 뒤 그대로 복원되고 file은
+source를 다시 활성화하거나 L2 gate를 충족하지 못한다.
+
+## Runtime Authority And One-Time Import
+
+| `QUERY_MAN_SOURCE_MODE` | Source/verified authority | Control settings |
+|---|---|---|
+| `bootstrap` (default) | `config/sources` and filesystem verified contract | Control DSN/key 모두 금지 |
+| `managed` | Control DB lifecycle, metadata and verified contract only | Control DSN/key 모두 필수 |
+
+Mode는 process 전체에 적용하며 runtime 중 바뀌지 않는다. `auto`, per-source hybrid와 Control DB
+장애 시 file fallback은 없다. Budget profile catalog와 access policy는 두 mode에서 모두 deployment
+configuration으로 읽는다. Managed mode는 source directory와 filesystem verified contract가 없어도
+시작할 수 있다.
+
+기존 bootstrap source는 다음 명시적 cutover로 한 번만 이관한다.
+
+1. Control schema와 최소 권한 writer를 준비하고 serving traffic을 받지 않는 managed instance를
+   시작한다. Empty inventory 또는 cold Control scan 실패의 `/ready`는 `unavailable`이다.
+2. 기존 admin API로 source를 L0/L1 staged publish하고 반환된 generation과 metadata revision을
+   확인한다.
+3. Reviewed filesystem contract를 같은 revision의 verified-query admin endpoint로 실행·저장한다.
+4. `minimum_quality_level: L2` generation을 publish하고 metadata/query invariant를 확인한다.
+5. 필요한 source/contract coverage와 inactive state를 확인한 뒤 serving replica를 managed mode로
+   재시작한다. 이후 repository seed는 제거하거나 남겨도 runtime authority가 아니다.
+
+Reader plaintext credential은 admin이 external secret boundary에서 직접 전달한다. Startup importer,
+bulk import endpoint, seed digest/marker와 filesystem write-back은 만들지 않는다. 현재 mutation
+receipt가 구현되기 전 timeout을 blind retry하지 않으며 Control DB state를 먼저 reconcile한다.
 
 ## Admin View
 
@@ -172,6 +199,10 @@ threat model/ADR 뒤에 설계한다.
 
 기존 immutable revision/pointer table을 재사용하고 필요한 책임만 추가한다.
 
+Runtime mode는 deployment configuration이고 existing source/metadata pointer와 verified contract가
+managed authority를 모두 표현한다. 따라서 mode, origin 또는 bootstrap import marker를 위한 table과
+`CTRL-02` schema migration은 추가하지 않는다.
+
 - Migration ledger: version, immutable filename/checksum, applied time와 migration identity
 - Minimal catalog: owner, environment와 DB migration provenance
 - Mutation event/receipt: idempotency, actor, reason, request hash와 outcome
@@ -187,7 +218,8 @@ hour/day rollup만 저장하고 retention/cardinality 상한을 둔다.
 Canonical status는 [active development TODO](development-todo.md)의 `CTRL-*`가 관리한다.
 
 1. **Complete:** versioned migration과 disposable test-store isolation
-2. Control DB precedence, zero-bootstrap과 verified-contract seed import
+2. **Complete:** mutually exclusive source mode, Control DB precedence, zero-bootstrap과
+   verified-contract admin import cutover
 3. Shared query access와 explicit admin/query credential separation
 4. Minimal catalog와 admin list/detail/history
 5. Existing mutations의 idempotency, receipt와 durable audit
@@ -200,6 +232,8 @@ DB-native collector와 provider connector는 rollout의 선행 조건이 아니�
 `not_configured`로 표시하고 `COST-*`가 이후 aggregate를 추가한다.
 첫 단계의 실행 증거는
 [control schema migration audit](verification/2026-08-23-control-schema-migrations.md)에 있다.
+두 번째 단계의 검증 계획과 실행 결과는
+[managed source startup audit](verification/2026-08-23-managed-source-startup.md)에 기록한다.
 
 ## Release Acceptance
 

@@ -33,10 +33,10 @@ Optimistic `(generation, state_version)` check가 동시 관리자 update의 los
 deactivate→same-generation rollback ABA를 막는다. Runtime poller는 더 오래된 state와 같은
 version의 충돌 payload를 적용하지 않는다.
 
-최초 production control-plane publish 이후 canonical manifest generation, active/deactivated
-state와 history는 Control DB가 authority다. Publish가 filesystem manifest를 생성하거나
-write-back하지 않으며 filesystem seed가 restart 시 Control DB의 rollback/deactivate 상태를
-되돌려서는 안 된다. 전체 managed source catalog와 zero-bootstrap 전환은
+Production managed mode의 canonical manifest generation, active/deactivated state와 history는
+처음부터 Control DB가 authority다. Runtime은 empty registry에서 lifecycle을 load하며 filesystem
+manifest를 열거나 fallback으로 사용하지 않는다. Publish가 filesystem manifest를 생성하거나
+write-back하지 않는다. 전체 managed source catalog, zero-bootstrap과 일회성 cutover는
 [ADR 0016](0016-centralized-source-management-plane.md)이 확장한다.
 
 Publisher는 `port_env`를 실제 port로 resolve하고 저장 document에서는 환경 변수 참조를

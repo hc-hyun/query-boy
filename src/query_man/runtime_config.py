@@ -5,6 +5,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator
 
@@ -26,6 +27,10 @@ class _Environment(BaseModel):
     source_dir: str | None = Field(None, alias="QUERY_MAN_SOURCE_DIR")
     budget_file: str | None = Field(None, alias="QUERY_MAN_BUDGET_FILE")
     access_policy_file: str | None = Field(None, alias="QUERY_MAN_ACCESS_POLICY_FILE")
+    source_mode: Literal["bootstrap", "managed"] = Field(
+        "bootstrap",
+        alias="QUERY_MAN_SOURCE_MODE",
+    )
     cache_ttl_ms: int = Field(30_000, alias="QUERY_MAN_METADATA_CACHE_TTL_MS", ge=0, le=3_600_000)
     max_stale_ms: int = Field(300_000, alias="QUERY_MAN_METADATA_MAX_STALE_MS", ge=0, le=86_400_000)
     retry_delay_ms: int = Field(5_000, alias="QUERY_MAN_METADATA_RETRY_DELAY_MS", ge=100, le=300_000)
@@ -95,12 +100,29 @@ class RuntimeConfig:
     metadata_cache_ttl_ms: int
     metadata_max_stale_ms: int
     metadata_retry_delay_ms: int
+    source_mode: Literal["bootstrap", "managed"] = "bootstrap"
     control_dsn: str | None = None
     source_encryption_key: str | None = None
     source_reload_interval_ms: int = 5_000
     shutdown_grace_ms: int = 10_000
     mcp_allowed_hosts: tuple[str, ...] = _DEFAULT_MCP_ALLOWED_HOSTS
     mcp_allowed_origins: tuple[str, ...] = _DEFAULT_MCP_ALLOWED_ORIGINS
+
+    def __post_init__(self) -> None:
+        if self.source_mode == "bootstrap":
+            if self.control_dsn is not None or self.source_encryption_key is not None:
+                raise ValueError(
+                    "QUERY_MAN_CONTROL_DSN and QUERY_MAN_SOURCE_ENCRYPTION_KEY "
+                    "require QUERY_MAN_SOURCE_MODE=managed"
+                )
+            return
+        if self.source_mode != "managed":
+            raise ValueError("QUERY_MAN_SOURCE_MODE must be bootstrap or managed")
+        if self.control_dsn is None or self.source_encryption_key is None:
+            raise ValueError(
+                "QUERY_MAN_CONTROL_DSN and QUERY_MAN_SOURCE_ENCRYPTION_KEY are required "
+                "when QUERY_MAN_SOURCE_MODE=managed"
+            )
 
 
 def load_runtime_config(
@@ -116,8 +138,6 @@ def load_runtime_config(
         raise ValueError(f"Invalid runtime configuration: {error}") from error
     if parsed.api_token is not None and parsed.access_policy_file is not None:
         raise ValueError("Configure QUERY_MAN_API_TOKEN or QUERY_MAN_ACCESS_POLICY_FILE, not both")
-    if parsed.source_encryption_key is not None and parsed.control_dsn is None:
-        raise ValueError("QUERY_MAN_CONTROL_DSN is required for source control")
     if not _is_loopback(parsed.host) and parsed.api_token is None and parsed.access_policy_file is None:
         raise ValueError(
             "QUERY_MAN_API_TOKEN or QUERY_MAN_ACCESS_POLICY_FILE is required when QUERY_MAN_HOST is not loopback"
@@ -134,6 +154,7 @@ def load_runtime_config(
         metadata_cache_ttl_ms=parsed.cache_ttl_ms,
         metadata_max_stale_ms=parsed.max_stale_ms,
         metadata_retry_delay_ms=parsed.retry_delay_ms,
+        source_mode=parsed.source_mode,
         control_dsn=(parsed.control_dsn.get_secret_value() if parsed.control_dsn is not None else None),
         source_encryption_key=(
             parsed.source_encryption_key.get_secret_value()

@@ -106,16 +106,19 @@ Source profile에는 다음 운영 설정만 둔다.
 - 결과 row와 byte 제한
 - plan admission을 포함한 중앙 `budget_profile` resource tier
 
-현재 bootstrap registry는 `config/sources/*.yaml`을 먼저 읽는다. Credential 값은 manifest에
-저장하지 않고 환경 변수 이름만 참조한다. 이 파일은 local/CI seed이며 production hot-added
-source의 desired state나 Git backup이 아니다. Control-plane source revision과 암호화된
-credential 계약은 [ADR 0012](decisions/0012-control-plane-source-revisions.md)를 따른다.
+Runtime은 `QUERY_MAN_SOURCE_MODE=bootstrap|managed`로 process 전체 source authority를 시작할 때
+한 번 선택한다. 기본 bootstrap mode는 local/CI에서 `config/sources/*.yaml`과 filesystem verified
+contract를 읽고 Control DSN/key를 거부한다. Credential 값은 manifest에 저장하지 않고 환경 변수
+이름만 참조한다.
 
-Production managed source의 canonical generation, active/deactivated state와 history는 Control
-DB가 authority다. Source publish가 repository YAML이나 commit을 만들지 않으며 양방향 sync도
-하지 않는다. Managed production의 zero-bootstrap startup, 일회성 seed import와 같은 source에
-대한 Control DB 우선 규칙은 [ADR 0016](decisions/0016-centralized-source-management-plane.md)의
-후속 구현 범위다. 현재 구현의 dual-origin과 YAML 필수 startup은 운영 gap으로 남아 있다.
+Production managed mode는 Control DSN/key를 모두 요구하고 empty registry/verified map에서 Control
+DB lifecycle과 contract만 load한다. Source/verified file을 열거나 합치지 않으므로 lifecycle row가
+없는 file source는 absent이고 restart 뒤 rollback/deactivate가 유지된다. Budget profile과 access
+policy는 versioned deployment configuration에 남는다. Source publish가 repository YAML이나 commit을
+만들지 않으며 양방향 sync, startup import와 file fallback도 없다. 일회성 admin-API cutover와
+authority 규칙은 [ADR 0016](decisions/0016-centralized-source-management-plane.md)을 따른다.
+Control-plane source revision과 암호화된 credential 계약은
+[ADR 0012](decisions/0012-control-plane-source-revisions.md)를 따른다.
 
 초기 목표 운영에서는 모든 인증된 query principal이 같은 active source 목록을 본다. Source
 publish/deactivate가 visibility를 한 번에 바꾸므로 caller별 grant, import marker와 dynamic
@@ -277,6 +280,8 @@ Production acceptance까지의 구현 순서와 완료 증거는
 [completion audit](verification/2026-08-23-completion-audit.md)에서 baseline으로 관리한다.
 현재 코드의 refactoring assurance와 의도적인 운영 경계는
 [refactoring assurance audit](verification/2026-08-23-refactoring-assurance.md)에 기록한다.
+Managed source authority startup과 bootstrap cutover 증거는
+[managed source startup audit](verification/2026-08-23-managed-source-startup.md)에 기록한다.
 이후 범위 변경도 완료된 ID를 재사용하지 않고 새 decision과 roadmap ID로 추가한다.
 네 번째 source 확장 감사와 남은 경계는
 [source extension assurance](verification/2026-08-23-source-extension.md)에 기록한다.

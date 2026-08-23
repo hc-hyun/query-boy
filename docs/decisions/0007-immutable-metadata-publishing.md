@@ -53,8 +53,9 @@ Control-plane source의 metadata publish, rollback과 unpin은 active source의
 generation으로 rollback하는 ABA 전이가 있어도 이전 process의 publish가 active pointer를
 덮을 수 없다.
 
-`metadata_snapshots`의 UPDATE와 DELETE는 database trigger가 거부한다. Runtime은
-`QUERY_MAN_CONTROL_DSN`으로 별도 control-plane connection을 설정한다. Login은
+`metadata_snapshots`의 UPDATE와 DELETE는 database trigger가 거부한다. Managed runtime은
+`QUERY_MAN_SOURCE_MODE=managed`, `QUERY_MAN_CONTROL_DSN`과 source encryption key를 함께 설정한다.
+Bootstrap mode는 Control DB 설정을 거부한다. Login은
 `query_man_control_writer` group role의 최소 table 권한만 상속해야 한다. Control plane을
 설정한 runtime은 저장소 장애나 payload 검증 실패 시 local catalog만으로 우회 publish하지
 않는다. Production schema migration은 표준 libpq `PG*` 환경에서
@@ -74,6 +75,6 @@ generation으로 rollback하는 ABA 전이가 있어도 이전 process의 publis
 - Metadata store와 source store는 process당 각각 최대 2개, 합계 최대 4개의 control
   connection을 사용한다. Dedicated LOGIN의 유한 connection limit는 replica 수 × 4로 계산하며
   source reader의 별도 query/metadata connection budget과 섞지 않는다.
-- 현재 bootstrap manifest는 filesystem seed로 시작 시 읽고, dynamic source profile은 ADR
-  0012의 control plane과 bounded poll hot reload로 반영한다. Production managed authority와
-  zero-bootstrap 전환은 ADR 0016을 따른다.
+- Bootstrap mode는 filesystem source/verified fixture만 사용하고 managed mode는 empty registry에서
+  ADR 0012의 Control DB lifecycle과 bounded poll만 반영한다. Production authority, zero-bootstrap과
+  일회성 admin-API cutover는 ADR 0016을 따른다.

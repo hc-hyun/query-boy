@@ -501,6 +501,30 @@ async def test_dynamic_apply_and_deactivate_reconcile_source_inventory() -> None
 
 
 @pytest.mark.asyncio
+async def test_initial_reload_scan_failure_keeps_managed_registry_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operations.reset()
+    try:
+        _admin, registry, store, _invalidator, _cipher, reloader = _services()
+        operations.reconcile_sources(registry.source_ids())
+
+        async def fail_scan() -> list[StoredSource]:
+            raise RuntimeError("control database unavailable")
+
+        monkeypatch.setattr(store, "list_active", fail_scan)
+        await reloader.sync()
+
+        snapshot = operations.snapshot()
+        assert registry.source_ids() == frozenset()
+        assert snapshot["sources"] == {}
+        assert snapshot["components"] == {"source_reload": "unavailable"}
+        assert operations.public_status() == "unavailable"
+    finally:
+        operations.reset()
+
+
+@pytest.mark.asyncio
 async def test_reload_scan_failure_degrades_but_keeps_usable_inventory(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -662,7 +686,7 @@ async def test_reloader_applies_external_generation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_reloader_refreshes_external_verified_revisions_for_l2_generation() -> None:
+async def test_reloader_replaces_bootstrap_verified_revisions_for_controlled_source() -> None:
     admin, _registry, store, _invalidator, cipher, _reloader = _services()
     manifest = _manifest()
     await admin.publish("third-source", manifest, "first-secret")
@@ -687,7 +711,9 @@ async def test_reloader_refreshes_external_verified_revisions_for_l2_generation(
 
     external_registry = SourceRegistry([])
     metadata = MetadataService(external_registry, StaticCatalog(), store=store.metadata)
-    external_verified: dict[str, frozenset[str]] = {}
+    stale_revision = f"sha256:{'0' * 64}"
+    assert stale_revision != current.metadata_revision
+    external_verified = {"third-source": frozenset({stale_revision})}
     reloader = SourceReloader(
         external_registry,
         metadata,
@@ -701,7 +727,9 @@ async def test_reloader_refreshes_external_verified_revisions_for_l2_generation(
     await reloader.sync()
 
     assert external_registry.get("third-source") is not None
-    assert current.metadata_revision in external_verified["third-source"]
+    assert external_verified == {
+        "third-source": frozenset({current.metadata_revision})
+    }
 
 
 @pytest.mark.asyncio

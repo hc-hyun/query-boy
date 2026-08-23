@@ -21,15 +21,20 @@ chargeback을 미리 설계하지 않는다.
 
 ## Decision
 
-Production managed source의 authoritative state는 Control DB로 통일한다. 최초 publish 이후의
-canonical manifest generation, active/deactivated state, metadata revision과 verified contract는
-Control DB만 기준으로 삼고 repository YAML로 write-back하거나 양방향 동기화하지 않는다.
+Runtime은 `QUERY_MAN_SOURCE_MODE=bootstrap|managed`로 source authority를 process startup에
+한 번만 선택한다. 기본값은 local/CI용 `bootstrap`이며 production은 `managed`를 명시한다. 두
+mode를 source별로 섞거나 Control DB 설정 유무로 자동 선택하지 않는다.
 
-`config/sources/*.yaml`과 filesystem verified contract는 local/CI bootstrap 또는 일회성 seed다.
-`config/onboarding/*.yaml`은 deterministic fixture다. Managed production mode는 bootstrap 파일이
-없어도 시작할 수 있어야 하며, seed를 import한 뒤에는 같은 source의 Control DB 상태가
-재시작·rollback·deactivate에서도 우선한다. Import한 filesystem contract도 Control DB로
-이관하며 이후 runtime에서 합치지 않는다.
+- `bootstrap`은 local/CI 전용이다. `config/sources/*.yaml`과 filesystem verified contract만 읽고
+  Control DSN과 source encryption key를 모두 거부한다.
+- `managed`는 production authority다. Control DSN과 source encryption key를 모두 요구하고 빈
+  registry/verified map에서 Control DB lifecycle과 contract만 load한다. Source directory와
+  filesystem verified contract가 없거나 같은 `source_id`를 담아도 열거나 합치지 않는다.
+
+Managed source의 canonical manifest generation, active/deactivated state, metadata revision과
+verified contract는 Control DB만 기준으로 삼는다. Lifecycle row가 없는 source는 managed mode에서
+absent이며 file로 fallback하지 않는다. Repository YAML로 write-back하거나 양방향 동기화하지
+않는다. `config/onboarding/*.yaml`은 deterministic fixture다.
 
 Control Plane은 admin-only management surface 하나를 제공한다. 관리자 HTTP API와 그 위의 UI,
 CLI는 같은 `source_id`로 다음 정보를 조회한다.
@@ -91,10 +96,19 @@ onboarding Skill은 이 API를 호출하거나 credential을 읽지 않는다. A
 production mutation 권한을 주기로 결정할 때만 target-bound credential broker, plan-ID apply와
 별도 threat model을 선행한다.
 
+기존 bootstrap source의 일회성 이관은 startup importer가 아니라 traffic 밖의 managed instance와
+기존 admin API를 사용한다. Source를 L0/L1로 staged publish하고 현재 revision의 reviewed verified
+contract를 Control DB에 publish한 뒤 L2로 승격한다. Coverage 확인 뒤 serving replica를 managed
+mode로 재시작한다. Import marker, seed digest, bulk import endpoint와 filesystem write-back은
+만들지 않는다.
+
 Control DB migration은 versioned이며 production, development와 disposable integration-test
 store를 격리한다. Backup/restore, retention과 encryption-key recovery는 모든 authoritative
 table을 포함한다. Management-plane outage는 새 mutation을 거부하고 data plane은 기존
-availability contract에 따라 마지막 verified state를 유지할 수 있다.
+availability contract에 따라 마지막 verified state를 유지할 수 있다. Cold-start scan이 실패하면
+managed registry는 비어 있고 readiness는 unavailable이며 bootstrap file로 복구하지 않는다.
+현재 immutable generation/pointer, metadata snapshot과 verified contract table이 이 authority를
+이미 표현하므로 mode/import를 위한 schema migration이나 marker를 추가하지 않는다.
 
 상세 rollout은 [source management plane](../source-management-plane.md), 실행 순서는
 [active development TODO](../development-todo.md)의 `CTRL-*`가 관리한다.
@@ -110,7 +124,7 @@ availability contract에 따라 마지막 verified state를 유지할 수 있다
 - 관리자 한 종류와 기존 `budget_profile`만 사용하므로 초기 schema와 API가 작다.
 - Control DB availability, backup, audit integrity와 admin credential 분리는 production-critical
   boundary가 된다.
-- 현재 bootstrap-only startup, 암시적 admin compatibility path, mutation-only admin API,
-  process-local metric과 shared fixture history는 구현해야 할 gap이다.
+- 암시적 admin compatibility path, mutation-only admin API, process-local metric과 shared fixture
+  history는 구현해야 할 gap이다.
 - Future per-user/org ACL, quota, tier override, multi-role approval, automated credential broker와
   chargeback은 실제 요구와 threat model이 생길 때 별도 결정으로 추가한다.

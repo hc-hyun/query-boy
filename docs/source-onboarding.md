@@ -51,9 +51,45 @@ ownership, state, history, size와 cost를 조회하는 목표 계약은
 | Ownership, audit, size/growth and cost projection | Control DB management plane; implementation pending |
 | Bootstrap and acceptance input | Repository YAML seed/fixture only |
 
-`config/sources/*.yaml`은 현재 local/CI bootstrap seed이고 `config/onboarding/*.yaml`은 integration
-fixture다. Production managed mode의 desired-state backup이 아니다. Managed zero-bootstrap과
-Control DB 우선 startup은 `CTRL-*`가 구현하기 전까지 완료된 기능으로 간주하지 않는다.
+`config/sources/*.yaml`은 local/CI bootstrap seed이고 `config/onboarding/*.yaml`은 integration
+fixture다. Production managed mode의 desired-state backup이 아니다. Managed runtime은 source와
+verified file을 열지 않으며 Control DB lifecycle이 없는 file source를 등록된 source로 간주하지
+않는다.
+
+## Runtime Mode And Existing-Source Import
+
+`QUERY_MAN_SOURCE_MODE`는 process 전체에서 다음 두 값만 사용한다.
+
+| Mode | Required/forbidden settings | Purpose |
+|---|---|---|
+| `bootstrap` (default) | Control DSN/key 모두 금지 | Local/CI repository fixture |
+| `managed` | Control DSN/key 모두 필수 | Production Control DB authority와 hot-add |
+
+Managed mode에는 source별 file fallback이나 verified-contract merge가 없다. Budget profile과 access
+policy는 계속 deployment configuration에서 읽는다. Source/verified directory는 없어도 되지만
+budget file과 runtime secret은 있어야 한다.
+
+이미 bootstrap으로 사용하던 source를 production Control DB로 이관할 때는 다음 순서를 한 번만
+수행한다.
+
+1. Control schema, 전용 writer, encryption key와 admin authentication을 준비한다.
+2. Serving traffic 밖에서 managed runtime을 시작한다. 아직 active source가 없으면 `/ready` 503이
+   정상이며 admin endpoint는 별도 운영 경로로 호출한다.
+3. Existing manifest의 `minimum_quality_level`을 L0/L1로 두고 기존 `PUT /admin/sources/{source_id}`로
+   stage/publish한다. 응답의 generation과 metadata revision을 확인한다.
+4. File의 reviewed verified query를 현재 revision에 맞춰
+   `POST /admin/sources/{source_id}/verified-queries`로 실행·저장한다. Revision이나 result invariant가
+   다르면 자동 보정하지 않고 이관을 중단한다.
+5. Semantic/budget 내용은 유지하고 `minimum_quality_level: L2`로 publish한다. Quality minimum은
+   revision hash 재료가 아니므로 같은 revision contract를 사용할 수 있다.
+6. 필요한 source와 contract, intended active/deactivated state를 Control DB에서 확인하고 serving
+   replica를 `QUERY_MAN_SOURCE_MODE=managed`로 재시작한다. File을 제거하거나 같은 ID의 seed를
+   남겨도 inventory, rollback과 deactivate 결과가 바뀌지 않는지 확인한 뒤 traffic을 전환한다.
+
+이 절차는 기존 staged admin API만 사용한다. Startup importer, bulk import endpoint, source별
+mode/origin, seed digest/marker와 repository write-back은 없다. Plaintext credential은 관리자가
+external secret system에서 직접 가져와 trusted manual-admin request에만 전달한다. Timeout 뒤에는
+blind retry하지 않고 Control DB state를 먼저 reconcile한다.
 
 ## Steps
 
@@ -202,7 +238,7 @@ catalog가 사라졌다는 뜻이 아니라 question context에서 일부 column
 이는 SQL column authorization 경계가 아니므로 민감 column은 curated view 자체에서
 제거해야 한다.
 
-Production에서는 database owner 또는 `CREATEROLE`과 schema DDL 권한을 가진 관리자가 표준
+Production managed mode에서는 database owner 또는 `CREATEROLE`과 schema DDL 권한을 가진 관리자가 표준
 libpq `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSFILE`/managed-auth 환경을 설정하고
 다음을 실행한다. Password가 든 DSN을 command argument에 넣지 않는다.
 
@@ -218,7 +254,9 @@ file은 수정하지 않고 schema 변경마다 새 번호를 추가한다. 네 
 부여한다. LOGIN은 `INHERIT`, `NOSUPERUSER`, `NOCREATEDB`, `NOCREATEROLE`, `NOREPLICATION`,
 `NOBYPASSRLS`와 유한 connection limit를 사용한다. Metadata/source store pool이 각각 replica당
 최대 2개이므로 limit는 최소 `runtime replica 수 × 4`의 의도된 capacity와 운영 여유를
-명시적으로 산정한다. Runtime에는 이 LOGIN의 TLS DSN을 `QUERY_MAN_CONTROL_DSN`으로 설정한다.
+명시적으로 산정한다. Runtime에는 `QUERY_MAN_SOURCE_MODE=managed`, 이 LOGIN의 TLS DSN과 source
+encryption key를 함께 설정한다. DSN/key 중 하나만 설정하거나 bootstrap mode와 함께 설정하면
+startup이 실패한다.
 
 정상 refresh는 immutable snapshot과 active pointer를 원자적으로 publish한다. Rollback한
 source는 pin되므로 이후 refresh가 active revision을 덮지 않으며, 검증 후 automatic publish를

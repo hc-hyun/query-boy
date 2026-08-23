@@ -60,6 +60,7 @@ services:
       QUERY_MAN_PORT: "3000"
       QUERY_MAN_POSTGRES_HOST: postgres
       QUERY_MAN_SHUTDOWN_GRACE_MS: ${QUERY_MAN_SHUTDOWN_GRACE_MS:-10000}
+      QUERY_MAN_SOURCE_MODE: bootstrap
       TZ: ${TZ:-Asia/Seoul}
     ports:
       - "127.0.0.1:${QUERY_MAN_PORT:-3000}:3000"

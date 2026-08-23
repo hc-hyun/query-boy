@@ -193,20 +193,29 @@ def build_app(
     access_policy: AccessPolicy | None = None,
 ) -> FastAPI:
     operations.reset()
-    registry = registry or SourceRegistry.load(runtime_config.source_directory, runtime_config.budget_file)
+    if runtime_config.source_mode == "managed":
+        if registry is not None:
+            raise ValueError("Managed source mode does not accept a bootstrap registry")
+        registry = SourceRegistry([])
+    elif registry is None:
+        registry = SourceRegistry.load(runtime_config.source_directory, runtime_config.budget_file)
     operations.reconcile_sources(registry.source_ids())
     catalog = catalog or PostgresCatalog()
     source_ids = [source["source_id"] for source in registry.list()]
-    verified = VerifiedQueryRegistry.load(
-        runtime_config.source_directory.parent / "verified-queries.yaml",
-        set(source_ids),
+    verified_revisions = (
+        VerifiedQueryRegistry.load(
+            runtime_config.source_directory.parent / "verified-queries.yaml",
+            set(source_ids),
+        ).revision_map()
+        if runtime_config.source_mode == "bootstrap"
+        else {}
     )
-    verified_revisions = verified.revision_map()
-    metadata_store = (
-        PostgresMetadataStore(runtime_config.control_dsn)
-        if runtime_config.control_dsn is not None
-        else None
-    )
+    metadata_store: PostgresMetadataStore | None = None
+    if runtime_config.source_mode == "managed":
+        control_dsn = runtime_config.control_dsn
+        if control_dsn is None:
+            raise ValueError("Managed source mode requires a Control DB DSN")
+        metadata_store = PostgresMetadataStore(control_dsn)
     metadata = MetadataService(
         registry,
         catalog,
@@ -229,13 +238,13 @@ def build_app(
     source_store: PostgresSourceStore | None = None
     source_reloader: SourceReloader | None = None
     source_admin: SourceAdminService | None = None
-    if (
-        runtime_config.control_dsn is not None
-        and runtime_config.source_encryption_key is not None
-        and metadata_store is not None
-    ):
-        source_store = PostgresSourceStore(runtime_config.control_dsn)
-        cipher = SourceSecretCipher.from_base64(runtime_config.source_encryption_key)
+    if runtime_config.source_mode == "managed":
+        control_dsn = runtime_config.control_dsn
+        encryption_key = runtime_config.source_encryption_key
+        if control_dsn is None or encryption_key is None or metadata_store is None:
+            raise ValueError("Managed source mode configuration is incomplete")
+        source_store = PostgresSourceStore(control_dsn)
+        cipher = SourceSecretCipher.from_base64(encryption_key)
         invalidators = tuple(
             cast(SourcePoolInvalidator, candidate)
             for candidate in (catalog, query_executor)

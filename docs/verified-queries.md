@@ -1,9 +1,10 @@
 # Verified Query Contract
 
-Status: Active production contract
+Status: Active bootstrap/CI contract; managed production authority is Control DB
 
-[`config/verified-queries.yaml`](../config/verified-queries.yaml)은 MVP golden question의
-versioned executable contract다. 각 항목은 다음을 함께 고정한다.
+[`config/verified-queries.yaml`](../config/verified-queries.yaml)은 bootstrap/CI MVP golden question의
+versioned executable contract다. Managed production runtime은 이 file을 열지 않고
+`control.verified_query_contracts`만 L2 evidence로 사용한다. 각 항목은 다음을 함께 고정한다.
 
 - 안정적인 query ID와 source ID
 - 사용자 질문과 deterministic read-only SQL
@@ -28,6 +29,12 @@ uv run query-man-verify
 고정한다. 실제 Text-to-SQL 요청은 현재 시각을 사용하되, regression fixture 갱신은
 의도적인 revision과 expected hash review로만 수행한다.
 
-현재 파일은 Git이 immutable history와 rollback을 제공하는 bootstrap 저장소다.
-Runtime은 동일한 계약을 control plane의 revision-scoped verified query로 저장하며,
-no-deploy source의 L2 publish 전에 실제 guarded execution과 결과 invariant를 검증한다.
+이 명령은 bootstrap fixture 회귀용이며 managed production contract inventory를 검증하거나
+Control DB에 import하지 않는다.
+
+현재 file은 Git이 immutable history와 rollback을 제공하는 bootstrap/CI 저장소다. Managed
+runtime은 동일한 shape의 계약을 Control DB의 immutable revision-scoped row로 저장하며 no-deploy
+source의 L2 publish 전에 실제 guarded execution과 결과 invariant를 검증한다. File contract를
+기존 source와 함께 이관할 때는 traffic 밖의 managed runtime에서 source를 L0/L1로 publish하고
+verified-query admin endpoint로 exact revision contract를 저장한 뒤 L2로 승격한다. Startup
+auto-import, file/DB merge, seed marker와 Control DB contract의 filesystem write-back은 없다.

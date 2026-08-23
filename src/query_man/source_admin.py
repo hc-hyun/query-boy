@@ -124,10 +124,8 @@ class SourceReloader:
             operations.set_component_health("source_reload", "unavailable")
             logger.exception("source_reload_scan_failed")
             return
-        for source_id, revisions in stored_verified.items():
-            self._verified_revisions[source_id] = (
-                self._verified_revisions.get(source_id, frozenset()) | revisions
-            )
+        self._verified_revisions.clear()
+        self._verified_revisions.update(stored_verified)
         apply_failed = False
         for record in records:
             if self._applied.get(record.source_id) == record:

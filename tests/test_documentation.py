@@ -49,6 +49,12 @@ CONTROL_MIGRATION_AUDIT = (
     / "verification"
     / "2026-08-23-control-schema-migrations.md"
 )
+MANAGED_SOURCE_STARTUP_AUDIT = (
+    ROOT_DIRECTORY
+    / "docs"
+    / "verification"
+    / "2026-08-23-managed-source-startup.md"
+)
 EXPECTED_ID_COUNTS = {
     "BASE": 10,
     "DEC": 9,
@@ -74,7 +80,7 @@ EXPECTED_ACTIVE_ID_COUNTS = {
 }
 EXPECTED_ACTIVE_COMPLETED_COUNTS = {
     "SOAK": 7,
-    "CTRL": 1,
+    "CTRL": 2,
     "SKILL": 0,
     "COST": 0,
     "TRACE": 0,
@@ -139,6 +145,8 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
     assert MCP_SOAK_AUDIT.name in architecture
     assert CONTROL_MIGRATION_AUDIT.name in development_todo
     assert CONTROL_MIGRATION_AUDIT.name in source_management_plan
+    assert MANAGED_SOURCE_STARTUP_AUDIT.name in development_todo
+    assert MANAGED_SOURCE_STARTUP_AUDIT.name in source_management_plan
     for prefix, count in EXPECTED_ID_COUNTS.items():
         audit = {
             "DEP": container_audit,
@@ -157,6 +165,7 @@ def test_active_todo_has_prioritized_unique_checklists_and_completed_evidence() 
     todo = DEVELOPMENT_TODO.read_text(encoding="utf-8")
     soak_audit = MCP_SOAK_AUDIT.read_text(encoding="utf-8")
     control_migration_audit = CONTROL_MIGRATION_AUDIT.read_text(encoding="utf-8")
+    managed_source_startup_audit = MANAGED_SOURCE_STARTUP_AUDIT.read_text(encoding="utf-8")
     matches = re.findall(r"^- \[([ x])\] `([A-Z]+)-(\d{2})`", todo, re.MULTILINE)
     ids = [f"{prefix}-{number}" for _checked, prefix, number in matches]
 
@@ -180,6 +189,7 @@ def test_active_todo_has_prioritized_unique_checklists_and_completed_evidence() 
     for number in range(1, EXPECTED_ACTIVE_ID_COUNTS["SOAK"] + 1):
         assert f"`SOAK-{number:02}`" in soak_audit
     assert "`CTRL-01`" in control_migration_audit
+    assert "`CTRL-02`" in managed_source_startup_audit
 
 
 def test_initial_access_and_resource_tier_decision_stays_minimal() -> None:
