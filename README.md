@@ -107,8 +107,10 @@ Operator caller는 audit log에 기록된 실행 중 `query_id`를
 `DELETE /queries/{query_id}`로 취소할 수 있으며, 자기 source allowlist 밖의 query는
 조회하거나 취소할 수 없습니다.
 
-Client는 DSN, host, database 또는 role을 전달할 수 없습니다. `source_id`는
-[`config/sources`](config/sources)의 server-side manifest에서만 연결 정보로 해석됩니다.
+Client는 DSN, host, database 또는 role을 전달할 수 없습니다. `source_id`는 bootstrap
+[`config/sources`](config/sources) 또는 검증된 Control DB source generation의 server-side
+registry에서만 연결 정보로 해석됩니다. Production hot-added source의 authority와 관리 목표는
+[`docs/source-management-plane.md`](docs/source-management-plane.md)를 따릅니다.
 Column, type과 database comment는 reader 권한으로 `pg_catalog`에서 자동 수집하고,
 grain, 한국어 alias, 승인된 join, 검증된 measure와 business predicate만 manifest의
 semantic overlay로 보강합니다. `/meta`의 `answerability`가 `needs_clarification` 또는

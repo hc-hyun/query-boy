@@ -22,6 +22,9 @@ Snapshot에는 reader가 볼 수 있는 relation, column, type, comment와 view 
 저장한다. Source DSN, credential, runtime budget과 caller policy는 저장하지 않는다. 읽을
 때 현재 source manifest로 revision을 다시 계산하고 저장된 revision과 다르면 fail-closed
 한다. 따라서 과거 manifest의 권한 범위를 현재 runtime에 암묵적으로 복원하지 않는다.
+Row estimate, storage, growth와 usage는 metadata revision 재료가 아니며
+[ADR 0016](0016-centralized-source-management-plane.md)의 별도 operational observation으로
+관리한다. Observation 갱신은 source generation이나 metadata revision을 만들지 않는다.
 
 정상 refresh는 한 transaction에서 다음을 수행한다.
 
@@ -71,5 +74,6 @@ generation으로 rollback하는 ABA 전이가 있어도 이전 process의 publis
 - Metadata store와 source store는 process당 각각 최대 2개, 합계 최대 4개의 control
   connection을 사용한다. Dedicated LOGIN의 유한 connection limit는 replica 수 × 4로 계산하며
   source reader의 별도 query/metadata connection budget과 섞지 않는다.
-- Bootstrap manifest는 filesystem에서 시작 시 읽고, dynamic source profile은 ADR 0012의
-  control plane과 bounded poll hot reload로 반영한다.
+- 현재 bootstrap manifest는 filesystem seed로 시작 시 읽고, dynamic source profile은 ADR
+  0012의 control plane과 bounded poll hot reload로 반영한다. Production managed authority와
+  zero-bootstrap 전환은 ADR 0016을 따른다.

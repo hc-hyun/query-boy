@@ -33,6 +33,12 @@ Optimistic `(generation, state_version)` check가 동시 관리자 update의 los
 deactivate→same-generation rollback ABA를 막는다. Runtime poller는 더 오래된 state와 같은
 version의 충돌 payload를 적용하지 않는다.
 
+최초 production control-plane publish 이후 canonical manifest generation, active/deactivated
+state와 history는 Control DB가 authority다. Publish가 filesystem manifest를 생성하거나
+write-back하지 않으며 filesystem seed가 restart 시 Control DB의 rollback/deactivate 상태를
+되돌려서는 안 된다. 전체 managed source catalog와 zero-bootstrap 전환은
+[ADR 0016](0016-centralized-source-management-plane.md)이 확장한다.
+
 Publisher는 `port_env`를 실제 port로 resolve하고 저장 document에서는 환경 변수 참조를
 제거한다. `source_id`는 bootstrap profile 또는 최초 control-plane publish의 host, port,
 database, user와 TLS mode에 고정되며 후속 generation이 다른 endpoint로 바꾸려 하면 기존
@@ -60,3 +66,5 @@ source generation publish도 허용하지 않는다.
 - Runtime poller와 관리자 HTTP endpoint는 이 저장 계약을 사용한다. 각 runtime은 새
   generation을 검증한 뒤 source별 catalog/query pool과 metadata cache를 교체한다.
 - 다른 endpoint로 전환하려면 별도 source ID와 새 verified contract를 사용해야 한다.
+- Owner/환경/provenance, actor/approval audit, management read API와 규모·비용 observation은
+  이 revision 저장 계약에 아직 없으며 ADR 0016의 후속 구현 범위다.

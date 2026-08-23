@@ -23,10 +23,26 @@ Operator는 question, SQL, expected relations, columns, row count와 canonical r
 5. Contract를 immutable control-plane row로 저장한 뒤 runtime revision quality map에 추가한다.
 
 `control.verified_query_contracts`는 source, query ID와 metadata revision으로 식별하며 update와
-delete를 금지한다. Runtime은 startup과 source reload poll마다 filesystem contract와
-control-plane revision 집합을 합친 후 source generation을 검증한다. 따라서 한 replica가
-contract와 L2 generation을 publish하면 다른 replica도 재시작 없이 같은 quality gate를
-통과한다.
+delete를 금지한다. 현재 runtime은 startup과 source reload poll마다 filesystem contract와
+control-plane revision 집합을 합친다. 이 동작은 bootstrap-only source에는 유효하지만 같은
+source가 managed lifecycle로 import된 뒤에도 filesystem contract가 L2 gate를 충족할 수 있는
+전환 gap이다.
+
+[ADR 0016](0016-centralized-source-management-plane.md)은 managed source의 선택 규칙을 다음과
+같이 확장한다.
+
+- Control DB lifecycle record가 없는 bootstrap-only source만 filesystem contract를 사용한다.
+- Managed source는 Control DB contract만 사용한다. Restart, rollback과 deactivate 뒤에도
+  filesystem contract를 다시 합치지 않는다.
+- Bootstrap source를 import할 때 필요한 contract를 Control DB에 먼저 이관하고, 이후 같은
+  source의 filesystem contract는 runtime에서 무시한다.
+- Production hot-added source의 contract를 filesystem에 write-back하거나 병렬 desired state로
+  만들지 않는다.
+
+이 precedence/import와 회귀 검증은 `CTRL-02`가 구현한다. 완료 전에는 bootstrap source ID를
+production managed import 대상으로 재사용하지 않는다. 한 replica가 Control DB contract와 L2
+generation을 publish하면 다른 replica가 재시작 없이 같은 managed quality gate를 통과하는
+기존 no-deploy 특성은 유지한다.
 
 ## Consequences
 

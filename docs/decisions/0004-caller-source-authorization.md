@@ -36,6 +36,22 @@ MCP와 HTTP가 서로 다른 authorization을 적용할 위험이 있다. 반대
   source까지 신뢰할 수 있는 caller에만 명시적으로 부여한다. `operator: true` 자체는 일반
   source 접근 범위를 넓히지 않는다.
 
+[ADR 0016](0016-centralized-source-management-plane.md)의 managed production 전환은 인증과
+source grant authority를 분리한다. External authenticator 또는 versioned deployment identity
+configuration은 stable caller ID와 tenant ID를 인증하고, `CTRL-07` 이후 `allowed_sources`와
+`all_sources` grant의 authority는 Control DB다. 기존 access-policy manifest의 source 범위는
+일회성 import seed가 되며 import marker 이후 restart에서 다시 합치거나 Control DB grant를
+덮어쓰지 않는다. Grant는 versioned/audited mutation으로만 바뀌고 source publish와 별도 승인을
+요구한다. Effective visibility는 active source와 active grant의 교집합이며 source
+rollback/deactivate가 grant history를 수정하지 않는다.
+
+Import는 runtime replica startup이 아니라 명시적인 platform-admin migration 하나만 수행한다.
+Canonicalized complete seed digest를 고정하고 Control DB lock/transaction 안에서 모든 grant,
+actor/digest audit와 permanent consumed marker를 함께 commit한다. 실패하면 전부 rollback한다.
+동시 호출은 exact same digest의 recorded result만 idempotent하게 반환하고, 다른 digest나 marker
+이후의 재-import는 fail-closed한다. Replica는 import하지 않고 consumed marker가 있는 Control DB
+grant만 읽으며, managed grant mode가 marker 없이 시작되면 fail-closed한다.
+
 ## Consequences
 
 - Access policy의 source 오타, 중복 caller/token reference, source 범위의 누락·중복,
@@ -45,4 +61,7 @@ MCP와 HTTP가 서로 다른 authorization을 적용할 위험이 있다. 반대
 - `allowed_sources`로 제한된 caller에게 개별 source를 hot-grant하는 기능은 제공하지 않는다.
   해당 목록은 startup에 로드되므로 변경 시 service restart가 필요하다. 재시작 없이 등록한
   source는 미리 `all_sources: true`를 부여받은 caller만 접근할 수 있다. 제한된 caller의
-  동적 grant가 필요해질 때 access policy를 별도 control-plane revision으로 관리한다.
+  동적 grant, seed import/precedence와 effective visibility의 중앙 조회는 ADR 0016의
+  management-plane 후속 범위다.
+  단일 관리 surface가 구현돼도 명시적인 access-policy mutation 승인 없이 grant를 추론하지
+  않는다.

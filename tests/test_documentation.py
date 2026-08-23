@@ -24,6 +24,13 @@ MCP_SERVER_AUDIT = (
     ROOT_DIRECTORY / "docs" / "verification" / "2026-08-23-mcp-server-assurance.md"
 )
 DEVELOPMENT_TODO = ROOT_DIRECTORY / "docs" / "development-todo.md"
+SOURCE_MANAGEMENT_PLAN = ROOT_DIRECTORY / "docs" / "source-management-plane.md"
+CENTRAL_SOURCE_ADR = (
+    ROOT_DIRECTORY
+    / "docs"
+    / "decisions"
+    / "0016-centralized-source-management-plane.md"
+)
 MCP_SOAK_AUDIT = (
     ROOT_DIRECTORY
     / "docs"
@@ -46,7 +53,13 @@ EXPECTED_ID_COUNTS = {
     "DEP": 8,
     "MCPX": 8,
 }
-EXPECTED_ACTIVE_ID_COUNTS = {"SOAK": 7, "SKILL": 10, "COST": 5, "TRACE": 4}
+EXPECTED_ACTIVE_ID_COUNTS = {
+    "SOAK": 7,
+    "CTRL": 10,
+    "SKILL": 10,
+    "COST": 5,
+    "TRACE": 4,
+}
 
 
 def test_roadmap_has_one_completed_checkbox_for_every_expected_id() -> None:
@@ -71,6 +84,8 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
     container_audit = CONTAINER_AUDIT.read_text(encoding="utf-8")
     mcp_server_audit = MCP_SERVER_AUDIT.read_text(encoding="utf-8")
     development_todo = DEVELOPMENT_TODO.read_text(encoding="utf-8")
+    source_management_plan = SOURCE_MANAGEMENT_PLAN.read_text(encoding="utf-8")
+    central_source_adr = CENTRAL_SOURCE_ADR.read_text(encoding="utf-8")
     mcp_soak_audit = MCP_SOAK_AUDIT.read_text(encoding="utf-8")
 
     assert "Status: Production ready" in roadmap
@@ -80,6 +95,8 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
     assert "Status: Complete" in container_audit
     assert "Status: Complete" in mcp_server_audit
     assert "Status: Active" in development_todo
+    assert "Status: Accepted design; implementation pending" in source_management_plan
+    assert "Status: Accepted" in central_source_adr
     assert "Status: Complete" in mcp_soak_audit
     assert REFACTORING_AUDIT.name in roadmap
     assert REFACTORING_AUDIT.name in architecture
@@ -89,6 +106,10 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
     assert MCP_SERVER_AUDIT.name in architecture
     assert DEVELOPMENT_TODO.name in roadmap
     assert DEVELOPMENT_TODO.name in architecture
+    assert SOURCE_MANAGEMENT_PLAN.name in architecture
+    assert SOURCE_MANAGEMENT_PLAN.name in development_todo
+    assert CENTRAL_SOURCE_ADR.name in architecture
+    assert CENTRAL_SOURCE_ADR.name in development_todo
     assert MCP_SOAK_AUDIT.name in roadmap
     assert MCP_SOAK_AUDIT.name in architecture
     for prefix, count in EXPECTED_ID_COUNTS.items():
@@ -111,7 +132,7 @@ def test_active_todo_has_prioritized_unique_checklists_and_soak_evidence() -> No
     matches = re.findall(r"^- \[([ x])\] `([A-Z]+)-(\d{2})`", todo, re.MULTILINE)
     ids = [f"{prefix}-{number}" for _checked, prefix, number in matches]
 
-    assert len(ids) == sum(EXPECTED_ACTIVE_ID_COUNTS.values()) == 26
+    assert len(ids) == sum(EXPECTED_ACTIVE_ID_COUNTS.values()) == 36
     assert len(ids) == len(set(ids))
     for prefix, count in EXPECTED_ACTIVE_ID_COUNTS.items():
         prefix_matches = [

@@ -40,7 +40,62 @@ Status: Active
 실행 증거와 threshold는
 [multi-replica soak audit](verification/2026-08-23-mcp-multi-replica-soak.md)에 기록한다.
 
-## P1 — Source Onboarding Skill
+## P1 — Centralized Source Management Plane
+
+목표: Production managed source의 정의, 활성 상태, 이력, 소유권, 규모와 비용 projection을
+Control DB와 하나의 operator management API에서 관리한다. 실제 DB, secret과 raw metric은
+분산돼도 관리자는 한 surface에서 authority와 freshness를 확인한다. Authority와 artifact
+경계는 [ADR 0016](decisions/0016-centralized-source-management-plane.md), 상세 구현 계획은
+[source management plane](source-management-plane.md)을 따른다.
+
+- [ ] `CTRL-01` Control schema에 번호 기반 migration을 도입하고 production/development와
+  disposable integration-test Control DB를 분리해 fixture generation이 운영 history에
+  누적되지 않게 한다.
+- [ ] `CTRL-02` Control DB lifecycle과 verified contract가 restart/rollback/deactivate 뒤에도
+  bootstrap seed/contract보다 우선하는 managed-mode startup을 구현한다. 일회성 import가 필요한
+  contract를 Control DB로 이관한 뒤 filesystem contract를 무시하게 하고 zero-bootstrap
+  production 및 precedence 회귀를 격리 Control DB에서 검증한다.
+- [ ] `CTRL-03` Source owner, environment, classification, cost center, DB migration과 secret
+  provider의 opaque credential binding/version provenance를 immutable generation/lifecycle과
+  연결해 저장한다.
+- [ ] `CTRL-04` 외부 authenticator의 immutable issuer/subject와 분리된 management audience를
+  검증하고 query token을 거부한다. Role/source-scope binding은 Control DB가 소유하며, 빈 binding
+  table, 외부 one-time credential과 영구 unconsumed marker를 한 transaction/lock으로 확인해 최초
+  admin binding, audit와 consumed 전이를 원자적으로 수행한다. Replay/동시 bootstrap과 마지막 admin
+  삭제를 거부한다.
+  Viewer와 scoped operator용 source list/detail/generation history API에
+  pagination/filter/bounded redaction을 적용한다.
+- [ ] `CTRL-05` Source state를 바꾸지 않는 validation/change plan과 authoritative change-result를
+  구현한다. Server-owned allowlisted credential binding만 받아 exact provider version을 일시
+  resolve한다. Binding의 source ID, host/port/database/user/TLS, `query_reader` purpose와 version이
+  manifest와 일치할 때만 plan hash에 묶고 requester/reason/outcome의 append-only audit와
+  lifecycle history를 남긴다.
+- [ ] `CTRL-06` 기존 boolean mutation operator를 source operator, approver와 platform admin
+  역할로 교체하고 role-binding mutation, approval-bound/idempotent apply, 자기 승인 금지와
+  audited break-glass를 구현한다. External secret admin/DB owner만 binding을 생성·회전하며 apply는
+  승인 plan의 binding target/purpose/version을 모두 다시 검증하고 달라지면 fail-closed한다.
+- [ ] `CTRL-07` Query caller identity/tenant 인증은 기존 external/deployment authority에 남기고,
+  access-policy의 source 범위를 Control DB의 versioned `allowed_sources|all_sources` grant로 한 번
+  import한다. Explicit platform-admin migration만 canonical complete-seed digest를 받아 한 Control DB
+  lock/transaction에서 전체 grant, actor/digest audit와 permanent consumed marker를 원자적으로
+  commit한다. Replica startup import, partial grant, 다른 digest와 marker 이후 재-import를
+  fail-closed하고 exact digest result만 idempotent하게 조회한다. Effective visibility를 management
+  API에서 조회하되 source publish와 별도 승인한다.
+- [ ] `CTRL-08` Replica별 applied generation/state version/metadata revision/health heartbeat를
+  수집해 desired/applied drift와 freshness를 management API에서 조회한다.
+- [ ] `CTRL-09` Representative volume metric, estimated rows, table/index/storage bytes와 growth를
+  method/definition revision/time/freshness와 함께 bounded하게 수집하고 일반 view의 무제한
+  `COUNT(*)`를 금지한다.
+- [ ] `CTRL-10` Gateway usage rollup과 usage/cost projection의 bounded 입력 계약,
+  allocation-method version 및 `not_configured|pending|available|stale|unavailable` 상태,
+  last-attempt time과 bounded reason을 구현한다. Missing/failed 값을 0으로 표시하지 않는다.
+  DB-native/provider connector 없이도 완료할 수 있게 하고 cardinality/retention, 전체 authority
+  table의 backup/restore 및 multi-replica end-to-end acceptance를 완료한다.
+
+현재 다음 작업은 `CTRL-01`이다. `CTRL-04`부터 `CTRL-06`까지 완료되기 전에는 AI production
+executor를 활성화하거나 현재 direct publish API에 자동 retry를 추가하지 않는다.
+
+## P2 — Source Onboarding Skill
 
 목표: 기존 no-restart source onboarding 계약을 Codex가 반복 가능하게 orchestration하되,
 Skill을 security boundary로 사용하거나 조회용 MCP token을 operator로 승격하지 않는다. 상세
@@ -52,16 +107,16 @@ Skill을 security boundary로 사용하거나 조회용 MCP token을 operator로
 - [ ] `SKILL-02` DB owner, source operator, reader credential과 조회 caller의 권한 분리,
   secret 전달, mutation 승인과 stop condition을 threat review한다.
 - [ ] `SKILL-03` 신규 L0 evidence review/plan/handoff와 조건부 apply/verify 상태,
-  PostgreSQL 18·RLS·TLS 검증, artifact retention과 instruction-only 대 deterministic helper
-  결정을 승인한다.
-- [ ] `SKILL-04` Release mode를 확정한다. Executor면 non-mutating validation/state/plan과
-  idempotent reconciliation 계약을 구현하고, plan-only면 mutation 0건 경계와 handoff를
-  decision 및 test로 고정한다.
+  PostgreSQL 18·RLS·TLS 검증, Control DB artifact authority/retention과 instruction-only 대
+  deterministic helper 결정을 승인한다.
+- [ ] `SKILL-04` Release mode를 확정한다. Executor면 `CTRL-04`부터 `CTRL-06`의
+  non-publishing plan/state와 idempotent reconciliation 계약을 소비하고, plan-only면 mutation
+  0건 경계와 handoff를 decision 및 test로 고정한다.
 - [ ] `SKILL-05` 승인된 최소 구조로 repository Skill을 구현하고 기존 onboarding 문서를
   progressive disclosure reference로 연결한다.
-- [ ] `SKILL-06` 선택한 mode의 실행 경계를 구현한다. Executor면 helper-owned target/secret,
-  plan-ID-only apply, bounded output과 자동 retry 금지를 구현하고, plan-only면 admin/helper
-  호출 0건을 검증한다.
+- [ ] `SKILL-06` 선택한 mode의 실행 경계를 구현한다. Executor면 broker-owned
+  target/management-auth, server-owned reader credential binding, plan-ID-only apply, bounded output과
+  자동 retry 금지를 구현하고, plan-only면 admin/helper 호출 0건을 검증한다.
 - [ ] `SKILL-07` Positive/negative/adversarial trigger와 mutation approval을 realistic prompt 및
   독립 forward test로 검증한다.
 - [ ] `SKILL-08` `support-tickets` fixture에서 선택한 mode를 검증한다. Plan-only면 reviewed
@@ -73,10 +128,11 @@ Skill을 security boundary로 사용하거나 조회용 MCP token을 operator로
 - [ ] `SKILL-10` Skill validation, 전체 관련 회귀, 운영 문서와 재현 증거를 완료한 뒤 기본
   onboarding workflow 채택 여부를 기록한다.
 
-현재 다음 작업은 `SKILL-01`이다. `SKILL-01`부터 `SKILL-03`까지 승인되기 전에는 scaffold,
-helper 또는 production mutation을 구현하지 않는다.
+이 track의 다음 작업은 `SKILL-01`이다. `SKILL-01`부터 `SKILL-03`까지 승인되기 전에는
+scaffold/helper를 구현하지 않고, `CTRL-04`부터 `CTRL-06`까지 완료되기 전에는 production
+executor를 구현하지 않는다.
 
-## P2 — Database-Native Cost Attribution
+## P3 — Database-Native Cost Attribution
 
 목표: 이미 적용 중인 timeout, concurrency, result, memory/temp/JIT hard limit에 더해 완료된
 query의 실제 DB 자원 사용을 fingerprint 단위로 측정한다. 통화 단위 청구액은 provider billing
@@ -94,10 +150,11 @@ query의 실제 DB 자원 사용을 fingerprint 단위로 측정한다. 통화 �
 - [ ] `COST-05` 실제 fixture에서 저비용·CPU·I/O·temp 사용 query를 구분하는 acceptance와
   chargeback 불가 시의 운영 판단 절차를 문서화한다.
 
-이 track의 다음 작업은 `COST-01`이다. 더 높은 우선순위의 Skill design gate가 열린 동안에는
-collector schema나 통화 단위 비용을 추정해서 구현하지 않는다.
+이 track의 다음 작업은 `COST-01`이다. `CTRL-09`의 observation method/freshness와 `CTRL-10`의
+usage/cost projection 입력 계약 없이 collector schema나 통화 단위 비용을 추정해서 구현하지
+않는다.
 
-## P3 — End-to-End Workflow Trace
+## P4 — End-to-End Workflow Trace
 
 목표: 한 transport 요청에서 여러 tool call과 retry로 이어지는 사용자 workflow를 민감 입력
 없이 추적한다.
@@ -117,6 +174,8 @@ collector schema나 통화 단위 비용을 추정해서 구현하지 않는다.
   session은 backlog에 두지 않는다.
 - Source onboarding Skill이나 prompt를 reader privilege, authorization, SQL validation 또는
   query budget의 enforcement boundary로 사용하지 않는다.
+- Production source YAML을 Control DB와 병렬 desired state로 관리하거나 publish 결과를 Git에
+  자동 write-back하지 않는다. Repository source/onboarding YAML은 bootstrap/fixture만 담당한다.
 - 조회용 MCP에 source publish, credential rotation, rollback 또는 deactivate tool을 추가하지
   않는다. 필요성이 검증되면 별도 threat model과 API decision부터 작성한다.
 - 두 replica를 합친 distributed global query quota나 load balancer 선택은 현재 soak가

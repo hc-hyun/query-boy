@@ -4,9 +4,14 @@ Status: Production ready
 
 ## Goal
 
-여러 PostgreSQL 데이터베이스를 하나의 Text-to-SQL gateway와 하나의 MCP
-endpoint로 제공한다. 신규 데이터베이스 추가 과정에서 애플리케이션 코드 변경과
-배포가 발생하지 않는 것을 최종 성공 기준으로 삼는다.
+여러 PostgreSQL 데이터베이스를 하나의 Text-to-SQL gateway와 하나의 MCP endpoint로
+제공하고, 운영자는 하나의 management surface에서 source 정의, 상태, 이력, 규모와 비용
+신호를 관리한다. 신규 데이터베이스 추가 과정에서 애플리케이션 코드 변경과 배포가 발생하지
+않는 것을 최종 성공 기준으로 삼는다.
+
+이 문서의 `Production ready` 상태는 완료된 query/data-plane baseline을 뜻한다. 아래의 중앙
+management-plane 표기와 단일 운영 화면은 승인된 목표 설계이며 [active development
+TODO](development-todo.md)의 `CTRL-*`가 완료되기 전까지 현재 제공 기능이 아니다.
 
 완전한 무설정 자동화를 목표로 하지 않는다. 자동으로 알 수 없는 비즈니스 의미는
 희소한 선언형 metadata와 curated view로 제공한다.
@@ -30,19 +35,19 @@ Single MCP Server / HTTP API
   `-- query
         |
 Query Gateway + Source Registry <--- validated hot reload --- Control Plane
-  |-- Physical Catalog                                  |-- Source Generations
-  |-- Semantic Overlay                                  |-- Metadata Revisions
-  |-- Budget Profile                                    `-- Verified Contracts
-  `-- guarded connection
+  |-- Physical Catalog                                  |-- Source Catalog/Generations
+  |-- Semantic Overlay                                  |-- Active State/History
+  |-- Budget Profile                                    |-- Metadata/Verified Contracts
+  `-- guarded connection                                `-- Replica/Measurements/Audit (target)
         |
 PostgreSQL Reader / Analytics Replica
 ```
 
-Bootstrap은 `development_issues`와 `market_voc` 독립 source database를 사용한다. M6 release
-acceptance는 `support_tickets` database를 control plane으로 실행 중 등록한다. 이후 M7
-extension assurance는 quoted/rich-type `commerce_edges` database를 같은 runtime과 MCP
-경로로 검증한다. Bootstrap source의 구체적인 grain, seed와 검증 범위는
-[mvp.md](mvp.md)에 기록한다.
+Local/CI bootstrap은 `development_issues`와 `market_voc` 독립 source database를 사용한다.
+M6 release acceptance는 `support_tickets` database를 control plane으로 실행 중 등록한다. 이후
+M7 extension assurance는 quoted/rich-type `commerce_edges` database를 같은 runtime과 MCP
+경로로 검증한다. 이 네 database의 repository manifest와 seed는 production catalog가 아니라
+bootstrap/acceptance fixture다. 구체적인 grain, seed와 검증 범위는 [mvp.md](mvp.md)에 기록한다.
 
 Local Compose는 PostgreSQL과 단일 `query-man` application container를 실행한다. 이 한
 process가 HTTP와 `/mcp`를 함께 제공해 registry, metadata cache, authorization과 query
@@ -65,6 +70,10 @@ MCP contract와 병렬·포화·취소·비노출 경계의 실제 server 검증
 형식으로 생성해 revision snapshot으로 발행한다. Planner 통계의 row estimate는 fresh catalog
 응답에만 포함될 수 있는 best-effort hint이며 revision 재료나 persisted snapshot contract가
 아니다. Restart 복원 뒤 없을 수 있으므로 안전·정확성 판단에 사용하지 않는다.
+
+운영 규모 관측은 metadata revision과 별도 lifecycle을 사용한다. Row/storage/growth 값은 측정
+방법, definition revision, 시각과 freshness를 포함한 bounded observation으로 관리하고 source
+generation을 만들지 않는다. 일반 view에 무제한 `COUNT(*)`를 실행하지 않는다.
 
 ### Semantic Overlay
 
@@ -97,14 +106,36 @@ Source profile에는 다음 운영 설정만 둔다.
 - 결과 row와 byte 제한
 - plan admission 정책 profile
 
-Bootstrap registry는 `config/sources/*.yaml`을 읽는다. Credential 값은 manifest에
-저장하지 않고 환경 변수 이름만 참조한다. Control-plane source revision과 암호화된
-credential 계약은 [ADR 0012](decisions/0012-control-plane-source-revisions.md)를 따르며,
-runtime hot reload와 관리자 staging API가 bootstrap 이후 변경을 반영한다.
+현재 bootstrap registry는 `config/sources/*.yaml`을 먼저 읽는다. Credential 값은 manifest에
+저장하지 않고 환경 변수 이름만 참조한다. 이 파일은 local/CI seed이며 production hot-added
+source의 desired state나 Git backup이 아니다. Control-plane source revision과 암호화된
+credential 계약은 [ADR 0012](decisions/0012-control-plane-source-revisions.md)를 따른다.
+
+Production managed source의 canonical generation, active/deactivated state와 history는 Control
+DB가 authority다. Source publish가 repository YAML이나 commit을 만들지 않으며 양방향 sync도
+하지 않는다. Managed production의 zero-bootstrap startup, 일회성 seed import와 같은 source에
+대한 Control DB 우선 규칙은 [ADR 0016](decisions/0016-centralized-source-management-plane.md)의
+후속 구현 범위다. 현재 구현의 dual-origin과 YAML 필수 startup은 운영 gap으로 남아 있다.
 
 No-deploy source 등록과 caller별 접근 grant는 서로 다른 변경이다. 미래 source까지
 명시적으로 신뢰한 `all_sources` caller는 hot-added source를 즉시 사용할 수 있다. 제한
-caller의 개별 allowlist는 현재 startup 설정이므로 grant 변경에는 restart가 필요하다.
+caller의 개별 allowlist는 현재 startup 설정이므로 grant 변경에는 restart가 필요하다. 목표
+managed mode에서는 caller/tenant 인증 authority를 유지하되 source grant를 Control DB로 한 번
+import하고, 이후 versioned grant와 effective visibility를 중앙 관리한다. Startup seed는 import
+marker 뒤 다시 합치지 않는다. Import는 replica startup이 아니라 canonical seed digest에 묶인
+explicit platform-admin transaction 하나가 전체 grant/audit/marker를 원자적으로 적용한다.
+
+### Source Management Plane
+
+Public `/sources`는 query caller에게 허용된 active source만 반환하며 operator catalog가 아니다.
+목표 management surface는 비밀이 제거된 source inventory, generation/history, ownership,
+effective budget/access, replica convergence, size/growth와 usage/cost projection을 하나의 관리자
+HTTP API로 제공한다. 실제 DB 객체, secret, raw metric과 provider bill은 각 authority에 남을 수
+있다. Control Plane은 같은 `source_id`와 provenance로 이를 모아 보여준다.
+
+Management viewer, source operator, approver와 platform admin은 query caller와 분리한다. 현재
+boolean operator와 mutation-only admin endpoint는 이 목표를 아직 충족하지 않는다. 상세 설계와
+구현 순서는 [source management plane](source-management-plane.md)과 `CTRL-*`가 관리한다.
 
 ### Query Gateway
 
@@ -187,10 +218,13 @@ Schema drift로 overlay가 깨지면 신규 revision 발행을 중단하고 마�
 ## Success Criteria
 
 - 신규 PostgreSQL source 추가에 애플리케이션 코드 변경이 없다.
+- Production source 추가가 repository source file이나 application deploy를 만들지 않는다.
 - `source_id`에 따른 runtime 분기문이 추가되지 않는다.
 - 보안과 비용 정책은 Skill이나 prompt가 아니라 gateway가 강제한다.
 - 복잡한 DB만 필요한 만큼 semantic overlay 또는 curated view를 추가한다.
 - 실제 질문과 SQL로 source별 품질을 회귀 검증할 수 있다.
+- 운영자는 한 management surface에서 source의 owner, active/applied state, history, 규모와 비용
+  freshness를 조회할 수 있다. 이 항목은 `CTRL-*` 완료 전까지 목표 상태다.
 
 ## Decisions
 
@@ -222,6 +256,10 @@ Schema drift로 overlay가 깨지면 신규 revision 발행을 중단하고 마�
   [ADR 0013](decisions/0013-control-plane-verified-query-publishing.md)을 따른다.
 - RLS tenant session context와 pool reset은
   [ADR 0014](decisions/0014-trusted-rls-tenant-context.md)를 따른다.
+- Local/CI container topology와 secret/readiness 경계는
+  [ADR 0015](decisions/0015-containerized-local-runtime.md)를 따른다.
+- Production source authority와 단일 operator management surface는
+  [ADR 0016](decisions/0016-centralized-source-management-plane.md)을 따른다.
 
 ## Completion Tracking
 
