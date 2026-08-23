@@ -33,6 +33,28 @@ def test_non_loopback_with_access_policy_is_allowed() -> None:
     assert config.access_policy_file == Path("config/access-policies.yaml")
 
 
+def test_loads_mcp_transport_allowlists() -> None:
+    config = load_runtime_config(
+        {
+            "QUERY_MAN_MCP_ALLOWED_HOSTS": "query.example:443,query.example:*",
+            "QUERY_MAN_MCP_ALLOWED_ORIGINS": "https://query.example",
+        },
+        ROOT_DIRECTORY,
+    )
+
+    assert config.mcp_allowed_hosts == ("query.example:443", "query.example:*")
+    assert config.mcp_allowed_origins == ("https://query.example",)
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["127.0.0.1:*,,localhost:*", "127.0.0.1:*\nattacker.invalid"],
+)
+def test_rejects_invalid_mcp_transport_allowlist(value: str) -> None:
+    with pytest.raises(ValueError, match="invalid MCP transport allowlist"):
+        load_runtime_config({"QUERY_MAN_MCP_ALLOWED_HOSTS": value}, ROOT_DIRECTORY)
+
+
 def test_rejects_ambiguous_authentication_configuration() -> None:
     with pytest.raises(ValueError, match="not both"):
         load_runtime_config(

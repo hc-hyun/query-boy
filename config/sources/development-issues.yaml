@@ -5,6 +5,7 @@ name: 개발 문제점
 description: 개발 및 검증 과정에서 발견한 문제, 원인, 대책과 댓글
 connection:
   host: 127.0.0.1
+  host_env: QUERY_MAN_POSTGRES_HOST
   port: 5432
   port_env: POSTGRES_PORT
   database: development_issues

@@ -4,6 +4,7 @@ name: Support Tickets
 description: 고객 지원 ticket 운영 현황
 connection:
   host: 127.0.0.1
+  host_env: QUERY_MAN_POSTGRES_HOST
   port: 5432
   port_env: POSTGRES_PORT
   database: support_tickets

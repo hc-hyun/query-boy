@@ -90,6 +90,7 @@ class _BudgetFile(_StrictModel):
 
 class _Connection(_StrictModel):
     host: str = Field(min_length=1, max_length=253)
+    host_env: Identifier | None = None
     port: int = Field(ge=1, le=65_535)
     port_env: Identifier | None = None
     database: Identifier
@@ -372,7 +373,9 @@ def validate_source_manifest(
     connection = document["connection"]
     if not isinstance(connection, dict):
         raise RegistryConfigurationError("Control-plane connection must be an object")
+    connection["host"] = profile.connection.host
     connection["port"] = profile.connection.port
+    connection.pop("host_env", None)
     connection.pop("port_env", None)
     return ValidatedSourceManifest(
         profile,
@@ -409,6 +412,10 @@ def _resolve_source(
     password = environment.get(parsed.connection.password_env)
     if not password:
         raise RegistryConfigurationError(f"{path} requires environment variable {parsed.connection.password_env}")
+    raw_host = environment.get(parsed.connection.host_env) if parsed.connection.host_env is not None else None
+    host = parsed.connection.host if raw_host is None else raw_host.strip()
+    if not host or len(host) > 253:
+        raise RegistryConfigurationError(f"{path} resolved an invalid host")
     raw_port = environment.get(parsed.connection.port_env) if parsed.connection.port_env is not None else None
     try:
         port = parsed.connection.port if raw_port is None else int(raw_port)
@@ -429,7 +436,7 @@ def _resolve_source(
         name=parsed.name,
         description=parsed.description,
         connection=ResolvedConnection(
-            host=parsed.connection.host,
+            host=host,
             port=port,
             database=parsed.connection.database,
             user=parsed.connection.user,

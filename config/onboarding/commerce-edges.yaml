@@ -4,6 +4,7 @@ name: Commerce Edges
 description: quoted identifier, nullable value, rich type와 복합 grain 검증용 주문 데이터
 connection:
   host: 127.0.0.1
+  host_env: QUERY_MAN_POSTGRES_HOST
   port: 5432
   database: commerce_edges
   user: commerce_edges_reader

@@ -130,6 +130,36 @@ async def test_lists_sources_without_connection_information() -> None:
 
 
 @pytest.mark.asyncio
+async def test_mcp_transport_rejects_untrusted_host_and_origin() -> None:
+    app = build_app(
+        runtime_config(),
+        registry=load_test_registry(),
+        catalog=NeverCalledCatalog(),
+    )
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+            base_url="http://test",
+        ) as session:
+            untrusted_host = await session.post(
+                "/mcp",
+                headers={"host": "attacker.invalid"},
+                json={},
+            )
+            untrusted_origin = await session.post(
+                "/mcp",
+                headers={
+                    "host": "127.0.0.1:3000",
+                    "origin": "https://attacker.invalid",
+                },
+                json={},
+            )
+
+    assert untrusted_host.status_code == 421
+    assert untrusted_origin.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_public_readiness_hides_inventory_and_operator_metrics_are_detailed() -> None:
     async with client(ReturningCatalog(minimal_development_snapshot())) as session:
         initializing = await session.get("/ready")

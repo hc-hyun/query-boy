@@ -5,6 +5,7 @@ name: 시장 VOC
 description: 시장에서 접수된 불량, 제품 기기, 원인, 대응과 댓글
 connection:
   host: 127.0.0.1
+  host_env: QUERY_MAN_POSTGRES_HOST
   port: 5432
   port_env: POSTGRES_PORT
   database: market_voc

@@ -8,6 +8,13 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator
 
+_DEFAULT_MCP_ALLOWED_HOSTS = ("127.0.0.1:*", "localhost:*", "[::1]:*")
+_DEFAULT_MCP_ALLOWED_ORIGINS = (
+    "http://127.0.0.1:*",
+    "http://localhost:*",
+    "http://[::1]:*",
+)
+
 
 class _Environment(BaseModel):
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
@@ -46,6 +53,18 @@ class _Environment(BaseModel):
         ge=0,
         le=300_000,
     )
+    mcp_allowed_hosts: str = Field(
+        ",".join(_DEFAULT_MCP_ALLOWED_HOSTS),
+        alias="QUERY_MAN_MCP_ALLOWED_HOSTS",
+        min_length=1,
+        max_length=2_048,
+    )
+    mcp_allowed_origins: str = Field(
+        ",".join(_DEFAULT_MCP_ALLOWED_ORIGINS),
+        alias="QUERY_MAN_MCP_ALLOWED_ORIGINS",
+        min_length=1,
+        max_length=4_096,
+    )
 
     @field_validator("log_level")
     @classmethod
@@ -54,6 +73,14 @@ class _Environment(BaseModel):
         if value.lower() not in allowed:
             raise ValueError("invalid log level")
         return value.lower()
+
+    @field_validator("mcp_allowed_hosts", "mcp_allowed_origins")
+    @classmethod
+    def valid_mcp_transport_allowlist(cls, value: str) -> str:
+        entries = [entry.strip() for entry in value.split(",")]
+        if any(not entry or "\n" in entry or "\r" in entry for entry in entries):
+            raise ValueError("invalid MCP transport allowlist")
+        return value
 
 
 @dataclass(frozen=True)
@@ -72,6 +99,8 @@ class RuntimeConfig:
     source_encryption_key: str | None = None
     source_reload_interval_ms: int = 5_000
     shutdown_grace_ms: int = 10_000
+    mcp_allowed_hosts: tuple[str, ...] = _DEFAULT_MCP_ALLOWED_HOSTS
+    mcp_allowed_origins: tuple[str, ...] = _DEFAULT_MCP_ALLOWED_ORIGINS
 
 
 def load_runtime_config(
@@ -113,6 +142,8 @@ def load_runtime_config(
         ),
         source_reload_interval_ms=parsed.source_reload_interval_ms,
         shutdown_grace_ms=parsed.shutdown_grace_ms,
+        mcp_allowed_hosts=_split_allowlist(parsed.mcp_allowed_hosts),
+        mcp_allowed_origins=_split_allowlist(parsed.mcp_allowed_origins),
     )
 
 
@@ -123,3 +154,7 @@ def _is_loopback(host: str) -> bool:
         return ipaddress.ip_address(host).is_loopback
     except ValueError:
         return False
+
+
+def _split_allowlist(value: str) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(entry.strip() for entry in value.split(",")))

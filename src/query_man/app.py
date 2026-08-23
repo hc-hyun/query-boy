@@ -11,6 +11,7 @@ from typing import cast
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from query_man.access import AccessPolicy, CallerContext
@@ -175,6 +176,11 @@ def build_app(
         json_response=True,
         stateless_http=True,
         max_request_body_size=1_048_576,
+        transport_security=TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=list(runtime_config.mcp_allowed_hosts),
+            allowed_origins=list(runtime_config.mcp_allowed_origins),
+        ),
         host=runtime_config.host,
     )
 

@@ -17,6 +17,9 @@ REFACTORING_AUDIT = (
     / "verification"
     / "2026-08-23-refactoring-assurance.md"
 )
+CONTAINER_AUDIT = (
+    ROOT_DIRECTORY / "docs" / "verification" / "2026-08-23-container-runtime.md"
+)
 EXPECTED_ID_COUNTS = {
     "BASE": 10,
     "DEC": 9,
@@ -30,6 +33,7 @@ EXPECTED_ID_COUNTS = {
     "REL": 8,
     "EXT": 8,
     "REF": 15,
+    "DEP": 8,
 }
 
 
@@ -38,7 +42,7 @@ def test_roadmap_has_one_completed_checkbox_for_every_expected_id() -> None:
     matches = re.findall(r"^- \[([ x])\] `([A-Z]+)-(\d{2})`", text, re.MULTILINE)
     ids = [f"{prefix}-{number}" for _checked, prefix, number in matches]
 
-    assert len(ids) == sum(EXPECTED_ID_COUNTS.values()) == 115
+    assert len(ids) == sum(EXPECTED_ID_COUNTS.values()) == 123
     assert len(ids) == len(set(ids))
     assert all(checked == "x" for checked, _prefix, _number in matches)
     for prefix, count in EXPECTED_ID_COUNTS.items():
@@ -52,16 +56,23 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
     architecture = ARCHITECTURE.read_text(encoding="utf-8")
     baseline_audit = BASELINE_AUDIT.read_text(encoding="utf-8")
     refactoring_audit = REFACTORING_AUDIT.read_text(encoding="utf-8")
+    container_audit = CONTAINER_AUDIT.read_text(encoding="utf-8")
 
     assert "Status: Production ready" in roadmap
     assert "Status: Production ready" in architecture
     assert "Status: Complete" in baseline_audit
     assert "Status: Complete" in refactoring_audit
+    assert "Status: Complete" in container_audit
     assert REFACTORING_AUDIT.name in roadmap
     assert REFACTORING_AUDIT.name in architecture
+    assert CONTAINER_AUDIT.name in roadmap
+    assert CONTAINER_AUDIT.name in architecture
     for prefix, count in EXPECTED_ID_COUNTS.items():
-        audit = refactoring_audit if prefix == "REF" else baseline_audit
-        if prefix == "REF":
+        audit = {
+            "DEP": container_audit,
+            "REF": refactoring_audit,
+        }.get(prefix, baseline_audit)
+        if prefix in {"DEP", "REF"}:
             for number in range(1, count + 1):
                 assert f"`{prefix}-{number:02}`" in audit
         else:

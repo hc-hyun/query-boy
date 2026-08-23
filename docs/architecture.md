@@ -44,6 +44,15 @@ extension assurance는 quoted/rich-type `commerce_edges` database를 같은 runt
 경로로 검증한다. Bootstrap source의 구체적인 grain, seed와 검증 범위는
 [mvp.md](mvp.md)에 기록한다.
 
+Local Compose는 PostgreSQL과 단일 `query-man` application container를 실행한다. 이 한
+process가 HTTP와 `/mcp`를 함께 제공해 registry, metadata cache, authorization과 query
+admission을 공유한다. Container network의 PostgreSQL service name은 manifest의 선택적
+`host_env`로 resolve하되 control plane에는 resolved endpoint만 저장한다. Host publish는
+loopback으로 제한하고 container 내부 non-loopback bind에는 source-limited bearer policy를
+강제한다. Image, secret, readiness와 shutdown 경계는
+[ADR 0015](decisions/0015-containerized-local-runtime.md)를 따르며 실제 container acceptance는
+[container runtime audit](verification/2026-08-23-container-runtime.md)에 기록한다.
+
 ## Component Boundaries
 
 ### Physical Catalog

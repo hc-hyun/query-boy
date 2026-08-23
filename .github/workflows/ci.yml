@@ -18,7 +18,7 @@ jobs:
       - name: Start deterministic PostgreSQL fixtures
         run: |
           cp .env.example .env
-          docker compose up -d --wait
+          docker compose up -d --wait postgres
           ./scripts/apply-db.sh
       - name: Static and unit checks
         run: |
@@ -33,6 +33,31 @@ jobs:
       - name: Stop fixtures
         if: always()
         run: docker compose down -v
+
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      QUERY_MAN_CODEX_MCP_TOKEN: ci-only-not-a-secret-container-token-0001
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start containerized HTTP and MCP runtime
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
+          docker compose up -d --wait --wait-timeout 120 postgres
+          ./scripts/apply-db.sh
+          docker compose up -d --build --wait --wait-timeout 120 query-man
+      - name: Verify container and MCP boundary
+        run: ./scripts/verify-container.sh
+      - name: Show container logs on failure
+        if: failure()
+        run: docker compose logs --no-color --tail=200 query-man
+      - name: Stop containerized runtime
+        if: always()
+        run: docker compose down -v --remove-orphans
 
   security:
     runs-on: ubuntu-latest
@@ -66,4 +91,15 @@ jobs:
           severity: CRITICAL
           ignore-unfixed: true
           trivyignores: .trivyignore.yaml
+          exit-code: "1"
+      - name: Build Query Man application image
+        run: docker build --pull --tag query-man:ci .
+      - name: Scan Query Man application image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: image
+          image-ref: query-man:ci
+          scanners: vuln
+          severity: CRITICAL
+          ignore-unfixed: true
           exit-code: "1"

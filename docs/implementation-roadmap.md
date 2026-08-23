@@ -8,7 +8,8 @@ Status: Production ready
 따른다. 전체 항목의 구현·검증 연결은
 [completion audit](verification/2026-08-23-completion-audit.md)에 production baseline으로,
 [refactoring assurance](verification/2026-08-23-refactoring-assurance.md)에 현재 최종 회귀와
-의도적인 운영 경계로 기록한다.
+의도적인 운영 경계로, [container runtime audit](verification/2026-08-23-container-runtime.md)에
+Docker HTTP/MCP 실행 증거로 기록한다.
 
 ## Final Outcome
 
@@ -237,6 +238,31 @@ Dependencies: completed production baseline and extension assurance
 - [x] `REF-15` Ruff, mypy, unit/integration/load/evaluation/verified/security 회귀와 문서 링크
   검사를 통과한 최종 completion audit을 남긴다.
 
+## 12. Containerized HTTP And MCP Runtime
+
+Dependencies: production baseline and `ADR-0015`
+
+완료 표시에는 host 개발 경계를 유지하면서 실제 Compose network, image, 인증, HTTP와 MCP
+호출을 재현 가능하게 검증해야 한다. 실행 증거는
+[container runtime audit](verification/2026-08-23-container-runtime.md)에 기록한다.
+
+- [x] `DEP-01` 단일 `query-man` container가 HTTP API와 stateless Streamable HTTP `/mcp`
+  endpoint를 함께 제공하는 network·인증·secret 경계를 decision record로 확정한다.
+- [x] `DEP-02` Locked production dependency만 포함한 non-editable multi-stage image를
+  non-root direct `query-man` entrypoint와 read-only filesystem으로 실행한다.
+- [x] `DEP-03` 동일 source manifest가 host loopback과 Compose service DNS를 선택적
+  `host_env`로 resolve하고 control-plane 문서에는 resolved endpoint만 저장한다.
+- [x] `DEP-04` PostgreSQL TCP health dependency, loopback host publish, `/ready` healthcheck와
+  application drain보다 긴 container stop grace를 구성한다.
+- [x] `DEP-05` PostgreSQL administrator secret을 application에서 분리하고 source-limited
+  bearer caller 및 명시적 MCP Host/Origin allowlist를 강제한다.
+- [x] `DEP-06` Published port의 exact readiness와 무인증 401을 검증하고 공식 MCP client로
+  세 tool discovery, source authorization과 실제 guarded query를 통과한다.
+- [x] `DEP-07` 기존 host 기반 unit/integration job과 container smoke를 분리하고 Query Man
+  application image의 Critical vulnerability scan을 CI gate에 추가한다.
+- [x] `DEP-08` README, architecture, operations, MVP 실행 절차와 재사용 가능한 container
+  verification script를 정비하고 전체 회귀 증거를 남긴다.
+
 ## Recommended Milestones
 
 | Milestone | Scope | Exit |
@@ -249,6 +275,7 @@ Dependencies: completed production baseline and extension assurance
 | M6 Production Acceptance | `REL-*` | 최종 성공 기준과 공격·장애·부하 시나리오를 모두 통과한다. |
 | M7 Extension Assurance | `EXT-*` | 네 번째 source와 production-authenticated multi-replica MCP 회귀를 통과한다. |
 | M8 Refactoring Assurance | `REF-*` | 상태 경쟁, 권한 drift, 종료·비용 경계를 재검증하고 문서와 실제 보장을 일치시킨다. |
+| M9 Container Runtime | `DEP-*` | Compose의 단일 HTTP/MCP image가 격리·인증·health·실제 query acceptance를 통과한다. |
 
 위 milestone은 완료된 구현 순서를 보존한 기록이다. 새로운 기능은 기존 완료 ID를
 재사용하지 않고 별도 roadmap 항목과 검증 가능한 exit condition을 추가한다.

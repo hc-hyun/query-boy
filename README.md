@@ -2,33 +2,37 @@
 
 PostgreSQL 데이터 소스를 안전하게 조회하기 위한 Text-to-SQL gateway 프로젝트입니다.
 
-## Local PostgreSQL
+## Local Compose Runtime
 
-로컬 데이터베이스는 PostgreSQL 18.6 공식 Docker 이미지를 사용합니다.
+로컬 runtime은 PostgreSQL 18.6과 Query Man HTTP/MCP application을 Compose로 함께
+실행합니다.
 
 로컬 설정은 `.env`에 있으며 Git에서 제외됩니다. 공개 가능한 기본값은
-`.env.example`에서 관리합니다.
+`.env.example`에서 관리합니다. 최초 실행 전 reader password를 바꾸고
+`QUERY_MAN_CODEX_MCP_TOKEN`은 `openssl rand -hex 32`로 생성한 값으로 교체합니다.
 
 ```bash
-docker compose up -d
+test -f .env || cp .env.example .env
+docker compose up -d --wait postgres
+./scripts/apply-db.sh
+docker compose up -d --build --wait query-man
 docker compose ps
+curl -fsS http://127.0.0.1:${QUERY_MAN_PORT:-3000}/ready
+./scripts/verify-container.sh
 docker compose exec postgres \
   psql -U query_man_admin -d query_man
-```
-
-MVP source database와 결정적 seed를 현재 volume에 적용하려면 다음 명령을 사용합니다.
-
-```bash
-./scripts/apply-db.sh
 ```
 
 생성되는 database는 bootstrap source인 `development_issues`, `market_voc`와 no-deploy
 onboarding acceptance용 `support_tickets`, `commerce_edges`입니다. 각 source의 AI reader
 접속 정보는 `.env`에 있고, reader는 해당 database의 `ai` schema view만 조회할 수 있습니다.
 
-PostgreSQL은 `127.0.0.1:${POSTGRES_PORT:-5432}`에서만 접근할 수 있습니다.
+PostgreSQL은 `127.0.0.1:${POSTGRES_PORT:-5432}`, Query Man은
+`127.0.0.1:${QUERY_MAN_PORT:-3000}`에서만 접근할 수 있습니다.
 데이터는 Compose named volume인 `query-man_postgres_data`에 저장됩니다. PostgreSQL
 18부터 적용된 공식 image layout에 맞춰 `/var/lib/postgresql` 전체를 영속화합니다.
+Query Man container는 non-root, read-only filesystem으로 실행되며 PostgreSQL administrator
+password를 전달받지 않습니다. 로그는 `docker compose logs -f query-man`으로 확인합니다.
 
 ```bash
 docker compose down
@@ -41,23 +45,33 @@ docker compose down
 [docs/mvp.md](docs/mvp.md), 최종 목적 기반 구현 TODO는
 [docs/implementation-roadmap.md](docs/implementation-roadmap.md), 기존 production baseline 증거는
 [completion audit](docs/verification/2026-08-23-completion-audit.md), 현재 최종 회귀와 운영 경계는
-[refactoring assurance](docs/verification/2026-08-23-refactoring-assurance.md)를 참고합니다.
+[refactoring assurance](docs/verification/2026-08-23-refactoring-assurance.md), 컨테이너 실행 증거는
+[container runtime audit](docs/verification/2026-08-23-container-runtime.md)을 참고합니다.
 
 ## Metadata And Query API
 
-질문 범위형 metadata API는 Python 3.12와 `uv` 환경에서 실행합니다.
+Compose가 기본적으로 Query Man을 실행합니다. Application을 host의 Python 3.12와 `uv`로
+직접 개발할 때만 PostgreSQL service를 단독으로 시작합니다.
 
 ```bash
-uv sync
+docker compose stop query-man
+docker compose up -d --wait postgres
+uv sync --locked
 uv run query-man
 ```
 
-기본 주소는 `http://127.0.0.1:3000`입니다.
+기본 주소는 `http://127.0.0.1:3000`입니다. Compose runtime은 source 범위가 제한된 bearer
+caller를 사용합니다. 아래 예시에서는 Git에서 제외된 `.env`의 token 한 개만 현재 shell로
+가져옵니다.
 
 ```bash
-curl http://127.0.0.1:3000/sources
+export QUERY_MAN_CODEX_MCP_TOKEN="$(sed -n 's/^QUERY_MAN_CODEX_MCP_TOKEN=//p' .env)"
+
+curl http://127.0.0.1:3000/sources \
+  -H "Authorization: Bearer $QUERY_MAN_CODEX_MCP_TOKEN"
 
 curl -s http://127.0.0.1:3000/meta \
+  -H "Authorization: Bearer $QUERY_MAN_CODEX_MCP_TOKEN" \
   -H 'content-type: application/json' \
   -d '{
     "source_id": "market-voc",
@@ -69,6 +83,7 @@ curl -s http://127.0.0.1:3000/meta \
 
 ```bash
 curl -s http://127.0.0.1:3000/query \
+  -H "Authorization: Bearer $QUERY_MAN_CODEX_MCP_TOKEN" \
   -H 'content-type: application/json' \
   -d '{
     "source_id": "market-voc",
@@ -109,6 +124,8 @@ source allowlist만 저장하며 형식은
 `http://127.0.0.1:3000/mcp`에도 적용됩니다. MCP는 `list_sources`, `get_context`, `query`
 세 tool만 제공하며 host나 credential을 입력받지 않습니다. 모델 workflow에는
 [`query-man-text-to-sql` Skill](skills/query-man-text-to-sql/SKILL.md)을 사용합니다.
+Codex는 같은 `QUERY_MAN_CODEX_MCP_TOKEN`을 환경변수로 받은 새 session에서 연결해야 합니다.
+HTTP와 MCP container 경계는 `./scripts/verify-container.sh`로 함께 재검증할 수 있습니다.
 
 개발 검증은 다음 명령으로 실행합니다.
 

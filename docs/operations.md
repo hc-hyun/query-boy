@@ -2,13 +2,15 @@
 
 ## Logging Policy
 
-`query-man` process log는 one-line JSON이다. 공통 필드는 UTC `timestamp`, `level`, `logger`,
-`event`이며 query audit의 bounded identifier와 numeric outcome은 top-level JSON field로도
-기록한다. Exception은 class name만 `exception_type`으로 기록한다. Traceback, DB error detail,
-SQL text와 request body는 운영 log에 기록하지 않는다. Formatter는 방어적으로 bearer 값,
+`query_man`과 MCP application/audit logger는 one-line JSON을 기록한다. 공통 필드는 UTC
+`timestamp`, `level`, `logger`, `event`이며 query audit의 bounded identifier와 numeric
+outcome은 top-level JSON field로도 기록한다. Uvicorn lifecycle/access line은 Uvicorn의 text
+format이므로 container stdout은 line-oriented mixed format이다. Exception은 class name만
+`exception_type`으로 기록한다. Query Man formatter는 방어적으로 bearer 값,
 password/credential/token/secret assignment와 quoted SQL literal을 `[REDACTED]`로 바꾼다.
-Process는 stdout/stderr 이후의 durable 보관을 제공하지 않으므로 production collector가
-retention, access control과 replica identity를 추가해야 한다.
+SQL text와 request body는 application/audit log에 기록하지 않는다. Process는 stdout/stderr
+이후의 durable 보관을 제공하지 않으므로 production collector가 retention, access control과
+replica identity를 추가해야 한다.
 
 Audit event는 다음 bounded field만 사용한다.
 
@@ -75,6 +77,34 @@ label로 합산한다. Counter 차이로 rate를, `*_sum / *_count`로 구간 �
 현재 snapshot만으로 percentile을 복원할 수 없으므로 P95/P99는 audit event histogram 또는
 별도 metric instrumentation이 필요하다. Process restart 때 in-memory 값은 초기화된다.
 
+## Local Container Operations
+
+`docker compose up -d --wait postgres`, `./scripts/apply-db.sh`,
+`docker compose up -d --build --wait query-man` 순서로 database 변경을 먼저 적용한 뒤
+application을 시작한다. `/ready`가 `ready` 또는 `degraded`를 반환하면 container는
+healthy지만 release smoke에서는 body가 `{"status":"ready"}`인지 별도로 확인한다.
+Application port는 container 내부 `3000`, host loopback의 `${QUERY_MAN_PORT:-3000}`이며
+PostgreSQL은 container network에서 `postgres:5432`다.
+
+Compose access policy는 `QUERY_MAN_CODEX_MCP_TOKEN` caller를 두 bootstrap source로만
+제한하고 operator 권한을 주지 않는다. Token과 reader password는 `.env`에서 주입하지만
+image build context와 Git에는 포함하지 않는다. Application container에는 PostgreSQL
+administrator password를 전달하지 않는다. 기본 Compose는 control-plane DSN/key를 주입하지
+않으므로 source admin endpoint가 비활성인 local runtime이다.
+
+Container는 non-root, read-only filesystem과 `/tmp` tmpfs로 실행한다. 기본 Docker
+`stop_grace_period` 30초는 application drain 기본값 10초보다 길다.
+`QUERY_MAN_SHUTDOWN_GRACE_MS`를 30초에 가깝거나 그 이상으로 바꾸면 orchestrator grace도
+process 종료 overhead를 포함해 더 크게 조정한다. Runtime log는
+`docker compose logs -f query-man`으로 읽고 종료는 `docker compose down`을 사용한다.
+`./scripts/verify-container.sh`는 exact readiness, 무인증 401, non-root/read-only image 경계와
+공식 MCP client의 tool discovery 및 실제 guarded query를 한 번에 검증한다.
+
+MCP transport는 bind 주소와 관계없이 DNS rebinding 보호를 활성화한다. 기본 Compose는
+loopback Host/Origin만 허용한다. Reverse proxy나 외부 hostname으로 배포할 때는
+`QUERY_MAN_MCP_ALLOWED_HOSTS`와 `QUERY_MAN_MCP_ALLOWED_ORIGINS`를 실제 공개 Host와 HTTPS
+Origin의 comma-separated allowlist로 명시하며 wildcard 전체 허용을 사용하지 않는다.
+
 ## Alert Policy
 
 | Signal | Warning | Critical / action |
@@ -97,7 +127,8 @@ stale age, active pool gauge, row/byte distribution과 percentile은 현재 제�
 ## Security Update Policy
 
 CI는 locked Python dependency audit, Git history secret scan, repository filesystem/config scan과
-PostgreSQL fixture image의 수정 가능한 Critical vulnerability scan을 수행한다. Dependabot은
+PostgreSQL fixture 및 Query Man application image의 수정 가능한 Critical vulnerability scan을
+수행한다. Dependabot은
 Python, GitHub Actions와 Docker dependency를 매주 확인한다.
 
 보안 finding은 dependency/image 업데이트로 먼저 해소한다. 도달 불가능한 upstream image

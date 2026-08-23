@@ -17,8 +17,15 @@ from tests.helpers import DUMMY_ENVIRONMENT, ROOT_DIRECTORY, load_test_registry
 
 
 def test_loads_public_source_fields_only() -> None:
-    registry = load_test_registry({**DUMMY_ENVIRONMENT, "POSTGRES_PORT": "55432"})
+    registry = load_test_registry(
+        {
+            **DUMMY_ENVIRONMENT,
+            "POSTGRES_PORT": "55432",
+            "QUERY_MAN_POSTGRES_HOST": "postgres",
+        }
+    )
     assert len(registry) == 2
+    assert registry.get("development-issues").connection.host == "postgres"  # type: ignore[union-attr]
     assert registry.get("development-issues").connection.port == 55_432  # type: ignore[union-attr]
     assert [item["source_id"] for item in registry.list()] == [
         "development-issues",
@@ -89,6 +96,11 @@ def test_rejects_older_budget_schema_version(tmp_path: Path) -> None:
 def test_missing_secret_fails_closed() -> None:
     with pytest.raises(RegistryConfigurationError, match="DEVELOPMENT_ISSUES_READER_PASSWORD"):
         load_test_registry({"POSTGRES_PORT": "5432", "MARKET_VOC_READER_PASSWORD": "secret"})
+
+
+def test_blank_connection_host_environment_fails_closed() -> None:
+    with pytest.raises(RegistryConfigurationError, match="resolved an invalid host"):
+        load_test_registry({**DUMMY_ENVIRONMENT, "QUERY_MAN_POSTGRES_HOST": " "})
 
 
 def test_duplicate_source_ids_are_rejected(tmp_path: Path) -> None:
@@ -163,6 +175,7 @@ def test_validates_control_plane_manifest_without_storing_secret(
 ) -> None:
     source_path = ROOT_DIRECTORY / "config" / "sources" / "development-issues.yaml"
     raw = yaml.safe_load(source_path.read_text(encoding="utf-8"))
+    monkeypatch.setenv("QUERY_MAN_POSTGRES_HOST", "postgres")
     monkeypatch.setenv("POSTGRES_PORT", "55432")
     validated = validate_source_manifest(
         raw,
@@ -173,8 +186,11 @@ def test_validates_control_plane_manifest_without_storing_secret(
     assert validated.profile.connection.password == "control-plane-secret"
     assert "control-plane-secret" not in str(validated.document)
     assert validated.document["version"] == 1
+    assert validated.profile.connection.host == "postgres"
+    assert validated.document["connection"]["host"] == "postgres"  # type: ignore[index]
     assert validated.profile.connection.port == 55_432
     assert validated.document["connection"]["port"] == 55_432  # type: ignore[index]
+    assert "host_env" not in validated.document["connection"]  # type: ignore[operator]
     assert "port_env" not in validated.document["connection"]  # type: ignore[operator]
 
 

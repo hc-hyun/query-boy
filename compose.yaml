@@ -5,10 +5,16 @@ services:
     image: postgres:18.6-bookworm
     container_name: query-man-postgres
     restart: unless-stopped
-    env_file:
-      - .env
     environment:
+      COMMERCE_EDGES_READER_PASSWORD: ${COMMERCE_EDGES_READER_PASSWORD}
+      DEVELOPMENT_ISSUES_READER_PASSWORD: ${DEVELOPMENT_ISSUES_READER_PASSWORD}
+      MARKET_VOC_READER_PASSWORD: ${MARKET_VOC_READER_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_INITDB_ARGS: --data-checksums --encoding=UTF8 --auth-host=scram-sha-256
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_USER: ${POSTGRES_USER}
+      SUPPORT_TICKETS_READER_PASSWORD: ${SUPPORT_TICKETS_READER_PASSWORD}
+      TZ: ${TZ:-Asia/Seoul}
     command:
       - postgres
       - -c
@@ -21,12 +27,62 @@ services:
       - postgres_data:/var/lib/postgresql
       - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 3s
       retries: 12
       start_period: 10s
     shm_size: 256mb
+    stop_grace_period: 30s
+
+  query-man:
+    build:
+      context: .
+    image: query-man:local
+    restart: unless-stopped
+    init: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DEVELOPMENT_ISSUES_READER_PASSWORD: ${DEVELOPMENT_ISSUES_READER_PASSWORD}
+      MARKET_VOC_READER_PASSWORD: ${MARKET_VOC_READER_PASSWORD}
+      POSTGRES_PORT: "5432"
+      QUERY_MAN_ACCESS_POLICY_FILE: /app/config/access-policies.compose.yaml
+      QUERY_MAN_CODEX_MCP_TOKEN: ${QUERY_MAN_CODEX_MCP_TOKEN:?set QUERY_MAN_CODEX_MCP_TOKEN in .env}
+      QUERY_MAN_HOST: 0.0.0.0
+      QUERY_MAN_LOG_LEVEL: ${QUERY_MAN_LOG_LEVEL:-info}
+      QUERY_MAN_METADATA_CACHE_TTL_MS: ${QUERY_MAN_METADATA_CACHE_TTL_MS:-30000}
+      QUERY_MAN_METADATA_MAX_STALE_MS: ${QUERY_MAN_METADATA_MAX_STALE_MS:-300000}
+      QUERY_MAN_METADATA_RETRY_DELAY_MS: ${QUERY_MAN_METADATA_RETRY_DELAY_MS:-5000}
+      QUERY_MAN_MCP_ALLOWED_HOSTS: "127.0.0.1:*,localhost:*"
+      QUERY_MAN_MCP_ALLOWED_ORIGINS: "http://127.0.0.1:*,http://localhost:*"
+      QUERY_MAN_PORT: "3000"
+      QUERY_MAN_POSTGRES_HOST: postgres
+      QUERY_MAN_SHUTDOWN_GRACE_MS: ${QUERY_MAN_SHUTDOWN_GRACE_MS:-10000}
+      TZ: ${TZ:-Asia/Seoul}
+    ports:
+      - "127.0.0.1:${QUERY_MAN_PORT:-3000}:3000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:3000/ready', timeout=2)
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_signal: SIGTERM
     stop_grace_period: 30s
 
 volumes:

@@ -57,6 +57,7 @@ name: 예제 Source
 description: 예제 분석 데이터
 connection:
   host: 127.0.0.1
+  host_env: QUERY_MAN_POSTGRES_HOST # Optional deployment-time override.
   port: 5432
   database: example_database
   user: example_reader
@@ -123,11 +124,13 @@ catalog 기반 best-effort, `L1`은 모든 공개 relation의 설명·grain과 �
 상태, `L2`는 현재 metadata revision과 일치하는 verified query 계약까지 통과한 상태다.
 요구 수준에 미달한 refresh나 rollback은 거부되며 기존 active revision은 유지된다.
 
-Control-plane publish는 `port_env`가 있으면 publisher 환경에서 실제 port를 한 번 resolve해
-저장하므로 다른 replica가 자신의 환경 변수로 endpoint를 바꾸지 않는다. 같은 `source_id`의
-host, port, database, user와 TLS 설정은 이후 generation에서도 고정한다. 다른 endpoint는
-새 source ID로 등록하고 현재 데이터에 대한 verified contract를 다시 검토한다. Credential
-값만 바꾸는 rotation은 metadata revision을 바꾸지 않는다.
+Bootstrap manifest의 선택적 `host_env`와 `port_env`는 host/Compose처럼 deployment network가
+다를 때만 사용한다. 환경변수가 없으면 manifest의 host와 port를 사용한다. Control-plane
+publish는 publisher 환경에서 실제 host와 port를 한 번 resolve해 저장하므로 다른 replica가
+자신의 환경 변수로 published endpoint를 바꾸지 않는다. 같은 `source_id`의 host, port,
+database, user와 TLS 설정은 이후 generation에서도 고정한다. 다른 endpoint는 새 source ID로
+등록하고 현재 데이터에 대한 verified contract를 다시 검토한다. Credential 값만 바꾸는
+rotation은 metadata revision을 바꾸지 않는다.
 
 Reader staging은 login/non-superuser, 생성·복제·상속·RLS 우회 금지, 유한한 양수 connection
 limit, default read-only, database TEMP 금지와 공개 schema CREATE 금지를 검사한다. 숨긴 base

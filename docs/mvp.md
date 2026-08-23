@@ -188,8 +188,10 @@ Market VOC:
 ## Apply And Validate
 
 ```bash
-docker compose up -d
+docker compose up -d --wait postgres
 ./scripts/apply-db.sh
+docker compose up -d --build --wait query-man
+./scripts/verify-container.sh
 ```
 
 `apply-db.sh`는 두 bootstrap source와 `support_tickets`, `commerce_edges` onboarding
