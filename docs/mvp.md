@@ -107,8 +107,11 @@ query(source_id, sql, metadata_revision, sql_policy_revision)
   -> success: status, query_id, metadata_revision, sql_policy_revision,
               fingerprint, columns, rows,
               row_count, result_bytes, truncated, queue_ms, elapsed_ms, plan_summary
-  -> failure: error.code, error.message,
-              error.details?{reason_code, rejected_construct?}
+  -> query failure: error.code, error.message,
+                    error.details?{reason_code, rejected_construct?, action?, retryable?}
+  -> invalid arguments: error.code=INVALID_REQUEST, error.message,
+                        error.details{action, retryable, issues[{path, reason_code, message}],
+                                      truncated}
 ```
 
 MVP의 source registry는 다음 두 항목을 정적으로 등록하는 것으로 시작한다.

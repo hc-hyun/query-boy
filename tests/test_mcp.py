@@ -6,11 +6,13 @@ from typing import cast
 
 import pytest
 from mcp.client import Client
+from mcp.types import CallToolResult
+from pydantic import BaseModel, ValidationError
 
 from query_man.access import CallerContext
 from query_man.errors import QueryInvalidError
 from query_man.gateway import GatewayService
-from query_man.mcp_server import create_mcp_server
+from query_man.mcp_server import _invalid_tool_arguments_response, create_mcp_server
 from query_man.metadata import MetadataService
 from query_man.models import CatalogSnapshot, SourceProfile
 from query_man.operations import operations
@@ -96,6 +98,19 @@ class InvalidResultGateway(ExplodingGateway):
         return {"invalid": object()}
 
 
+class InvalidContextOutputGateway(ExplodingGateway):
+    detail = "sensitive-invalid-context-output"
+
+    async def get_context(
+        self,
+        _caller: CallerContext,
+        _source_id: str,
+        _question: str,
+        _max_objects: int,
+    ) -> dict[str, object]:
+        return {"metadata_revision": self.detail}
+
+
 class InvalidQueryGateway(ExplodingGateway):
     async def query(
         self,
@@ -106,6 +121,74 @@ class InvalidQueryGateway(ExplodingGateway):
         _sql_policy_revision: str,
     ) -> dict[str, object]:
         raise QueryInvalidError("QUERY_UNDEFINED_COLUMN")
+
+
+class _ManyRequiredArguments(BaseModel):
+    argument_0: str
+    argument_1: str
+    argument_2: str
+    argument_3: str
+    argument_4: str
+    argument_5: str
+    argument_6: str
+    argument_7: str
+    argument_8: str
+
+
+def _invalid_request(
+    action: str,
+    issues: list[dict[str, str]],
+    *,
+    truncated: bool = False,
+) -> dict[str, object]:
+    return {
+        "error": {
+            "code": "INVALID_REQUEST",
+            "message": "Follow details.action, correct every listed issue, and retry the tool once.",
+            "details": {
+                "action": action,
+                "retryable": True,
+                "issues": issues,
+                "truncated": truncated,
+            },
+        }
+    }
+
+
+def _argument_issue(path: str, reason_code: str, message: str) -> dict[str, str]:
+    return {"path": path, "reason_code": reason_code, "message": message}
+
+
+def _assert_public_validation_error(
+    result: CallToolResult,
+    expected: dict[str, object],
+    *sensitive_values: str,
+) -> None:
+    assert result.is_error is True
+    assert result.structured_content == expected
+    rendered = str(result.content)
+    assert len(rendered.encode()) < 2_048
+    assert "input_value" not in rendered
+    assert "errors.pydantic.dev" not in rendered
+    assert all(value not in rendered for value in sensitive_values)
+
+
+def test_mcp_validation_caps_public_issues_at_eight() -> None:
+    with pytest.raises(ValidationError) as captured:
+        _ManyRequiredArguments.model_validate({})
+
+    known_arguments = frozenset(_ManyRequiredArguments.model_fields)
+    response = _invalid_tool_arguments_response(
+        "synthetic_tool",
+        captured.value,
+        known_arguments,
+    )
+
+    error_body = cast(dict[str, object], response["error"])
+    details = cast(dict[str, object], error_body["details"])
+    issues = cast(list[dict[str, str]], details["issues"])
+    assert details["truncated"] is True
+    assert len(issues) == 8
 
 
 def mcp_fixture(
@@ -134,9 +217,15 @@ async def test_mcp_exposes_fixed_tools_and_shared_gateway_sources() -> None:
         ]
         descriptions = {tool.name: tool.description for tool in listed_tools.tools}
         assert descriptions["get_context"] == (
-            "Get question-scoped metadata and the revision required by query. "
+            "Get question-scoped metadata and both revisions required by query. "
+            "Pass the exact metadata_revision and sql_policy_revision from this response to query. "
             "The response includes allowed SQL functions, cast types, and unqualified cast forms. "
             "max_objects must be an integer from 1 through 4 and defaults to 2."
+        )
+        assert descriptions["query"] == (
+            "Execute one validated read-only SQL query under gateway hard limits. Pass the exact "
+            "metadata_revision and sql_policy_revision returned by the same get_context response. "
+            "On METADATA_REVISION_MISMATCH, fetch context again, regenerate SQL, and retry once."
         )
         assert all("host" not in tool.input_schema.get("properties", {}) for tool in listed_tools.tools)
         tools = {tool.name: tool for tool in listed_tools.tools}
@@ -233,9 +322,18 @@ async def test_mcp_exposes_fixed_tools_and_shared_gateway_sources() -> None:
                 },
             ),
         ]
-        assert all(result.is_error is True for result in rejected_extras)
-        assert all(result.structured_content is None for result in rejected_extras)
-        assert all("Extra inputs are not permitted" in str(result.content) for result in rejected_extras)
+        expected_extra = _invalid_request(
+            "CORRECT_ARGUMENTS",
+            [
+                _argument_issue(
+                    "arguments",
+                    "ARGUMENT_NOT_ALLOWED",
+                    "Remove arguments not listed in the tool input schema.",
+                )
+            ],
+        )
+        for rejected in rejected_extras:
+            _assert_public_validation_error(rejected, expected_extra)
 
 
 async def test_mcp_context_revision_and_query_contract() -> None:
@@ -340,8 +438,15 @@ async def test_mcp_query_invalid_reports_only_bounded_correction_reason() -> Non
     assert result.structured_content == {
         "error": {
             "code": "QUERY_INVALID",
-            "message": "The query must be corrected before it can run.",
-            "details": {"reason_code": "QUERY_UNDEFINED_COLUMN"},
+            "message": (
+                "The query references a column PostgreSQL cannot resolve. Use a returned column "
+                "sql_name or an alias declared in the query, then retry once."
+            ),
+            "details": {
+                "reason_code": "QUERY_UNDEFINED_COLUMN",
+                "action": "CORRECT_SQL",
+                "retryable": True,
+            },
         }
     }
     assert sensitive_sql not in str(result.content)
@@ -390,7 +495,25 @@ async def test_mcp_normalizes_strings_and_rejects_implicit_integer_coercion() ->
             {"source_id": "development-issues", "question": "   "},
         )
 
-    assert all(result.is_error is True for result in [*rejected, blank_question])
+    expected_type_error = _invalid_request(
+        "CORRECT_ARGUMENTS",
+        [_argument_issue("max_objects", "ARGUMENT_TYPE_INVALID", "Use an integer from 1 through 4.")],
+    )
+    for result in rejected:
+        _assert_public_validation_error(result, expected_type_error)
+    _assert_public_validation_error(
+        blank_question,
+        _invalid_request(
+            "CORRECT_ARGUMENTS",
+            [
+                _argument_issue(
+                    "question",
+                    "ARGUMENT_LENGTH_INVALID",
+                    "Use a value within the length declared by the tool input schema.",
+                )
+            ],
+        ),
+    )
 
 
 async def test_mcp_validation_does_not_echo_oversized_sensitive_input() -> None:
@@ -408,8 +531,115 @@ async def test_mcp_validation_does_not_echo_oversized_sensitive_input() -> None:
         )
 
     assert result.is_error is True
-    assert result.structured_content is None
-    assert marker not in str(result.content)
+    _assert_public_validation_error(
+        result,
+        _invalid_request(
+            "CORRECT_ARGUMENTS",
+            [
+                _argument_issue(
+                    "sql",
+                    "ARGUMENT_LENGTH_INVALID",
+                    "Use a value within the length declared by the tool input schema.",
+                )
+            ],
+        ),
+        marker,
+    )
+
+
+async def test_mcp_validation_returns_actionable_bounded_issues() -> None:
+    revision = f"sha256:{'0' * 64}"
+    sensitive_key = "sensitive_private_argument_name"
+    sensitive_value = "SENSITIVE_PRIVATE_ARGUMENT_VALUE"
+    revision_message = "Call get_context and pass both exact revision values it returns."
+    length_message = "Use a value within the length declared by the tool input schema."
+    cases = [
+        (
+            "query",
+            {
+                "source_id": "development-issues",
+                "sql": "SELECT 1",
+                "metadata_revision": revision,
+            },
+            "CALL_GET_CONTEXT",
+            [_argument_issue("sql_policy_revision", "ARGUMENT_REQUIRED", revision_message)],
+            False,
+            (),
+        ),
+        (
+            "get_context",
+            {
+                "source_id": "development-issues",
+                "question": "문제 수",
+                "max_objects": 5,
+            },
+            "CORRECT_ARGUMENTS",
+            [_argument_issue("max_objects", "ARGUMENT_OUT_OF_RANGE", "Use an integer from 1 through 4.")],
+            False,
+            (),
+        ),
+        (
+            "query",
+            {
+                "source_id": "development-issues",
+                "sql": "SELECT 1",
+                "metadata_revision": "not-a-revision",
+                "sql_policy_revision": revision,
+            },
+            "CALL_GET_CONTEXT",
+            [_argument_issue("metadata_revision", "ARGUMENT_FORMAT_INVALID", revision_message)],
+            False,
+            ("not-a-revision",),
+        ),
+        (
+            "list_sources",
+            {sensitive_key: sensitive_value},
+            "CORRECT_ARGUMENTS",
+            [
+                _argument_issue(
+                    "arguments",
+                    "ARGUMENT_NOT_ALLOWED",
+                    "Remove arguments not listed in the tool input schema.",
+                )
+            ],
+            False,
+            (sensitive_key, sensitive_value),
+        ),
+        (
+            "query",
+            {
+                "source_id": 123,
+                "sql": "   ",
+                "metadata_revision": "not-a-revision",
+                sensitive_key: sensitive_value,
+                f"{sensitive_key}_second": f"{sensitive_value}_second",
+            },
+            "CALL_GET_CONTEXT",
+            [
+                _argument_issue(
+                    "source_id",
+                    "ARGUMENT_TYPE_INVALID",
+                    "Use the value type declared by the tool input schema.",
+                ),
+                _argument_issue("sql", "ARGUMENT_LENGTH_INVALID", length_message),
+                _argument_issue("metadata_revision", "ARGUMENT_FORMAT_INVALID", revision_message),
+                _argument_issue("sql_policy_revision", "ARGUMENT_REQUIRED", revision_message),
+                _argument_issue(
+                    "arguments",
+                    "ARGUMENT_NOT_ALLOWED",
+                    "Remove arguments not listed in the tool input schema.",
+                ),
+            ],
+            True,
+            (sensitive_key, sensitive_value, "not-a-revision"),
+        ),
+    ]
+    server, _metadata = mcp_fixture()
+    async with Client(server) as client:  # type: ignore[arg-type]
+        for tool_name, arguments, action, issues, truncated, sensitive_values in cases:
+            result = await client.call_tool(tool_name, arguments)
+            expected = _invalid_request(action, issues, truncated=truncated)
+            _assert_public_validation_error(result, expected, *sensitive_values)
 
 
 async def test_mcp_debug_logs_correlate_calls_without_recording_inputs(
@@ -576,6 +806,53 @@ async def test_mcp_serialization_failure_records_one_error_completion(
             "message": "An internal error occurred.",
         }
     }
+    assert len(completed) == 1
+    assert completed[0].outcome == "error"
+    assert completed[0].error_code == "INTERNAL_ERROR"
+    metrics = {(metric["name"], metric["value"]) for metric in operations.snapshot()["metrics"]}
+    assert ("mcp_tool_completed", 1) in metrics
+    assert ("mcp_tool_failed", 1) in metrics
+    assert ("mcp_tool_duration_ms_count", 1) in metrics
+    operations.reset()
+
+
+async def test_mcp_output_validation_failure_is_hidden_and_recorded_as_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    operations.reset()
+    caller = CallerContext(
+        caller_id="test-analyst",
+        tenant_id="engineering",
+    )
+    server = create_mcp_server(
+        cast(GatewayService, InvalidContextOutputGateway()),
+        lambda: caller,
+    )
+    caplog.set_level(logging.DEBUG, logger="query_man.mcp")
+    async with Client(server) as client:
+        result = await client.call_tool(
+            "get_context",
+            {"source_id": "development-issues", "question": "문제 수"},
+        )
+
+    assert result.is_error is True
+    assert result.structured_content == {
+        "error": {
+            "code": "INTERNAL_ERROR",
+            "message": "An internal error occurred.",
+        }
+    }
+    rendered = str(result.content)
+    assert InvalidContextOutputGateway.detail not in rendered
+    assert "validation error" not in rendered.casefold()
+    assert "errors.pydantic.dev" not in rendered
+    assert len(rendered.encode()) < 512
+    assert InvalidContextOutputGateway.detail not in caplog.text
+    completed = [
+        record
+        for record in caplog.records
+        if record.name == "query_man.mcp" and record.getMessage() == "mcp_tool_completed"
+    ]
     assert len(completed) == 1
     assert completed[0].outcome == "error"
     assert completed[0].error_code == "INTERNAL_ERROR"

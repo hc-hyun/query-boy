@@ -7,12 +7,13 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
-from typing import Annotated
+from typing import Annotated, Any
 
 from mcp.server import MCPServer
 from mcp.server.mcpserver.context import Context
-from mcp.types import CallToolResult, TextContent
-from pydantic import BaseModel, ConfigDict, Field, RootModel, StringConstraints
+from mcp.server.mcpserver.exceptions import ToolError
+from mcp.types import CallToolResult, InputRequiredResult, TextContent
+from pydantic import BaseModel, ConfigDict, Field, RootModel, StringConstraints, ValidationError
 from starlette.requests import Request
 
 from query_man.access import CallerContext
@@ -22,6 +23,32 @@ from query_man.operations import operations
 
 logger = logging.getLogger("query_man.mcp")
 MCP_PROTOCOL_VERSION = "2026-07-28"
+_MAX_PUBLIC_ARGUMENT_ISSUES = 8
+
+_ARGUMENT_REASON_BY_VALIDATION_TYPE = {
+    "extra_forbidden": "ARGUMENT_NOT_ALLOWED",
+    "greater_than": "ARGUMENT_OUT_OF_RANGE",
+    "greater_than_equal": "ARGUMENT_OUT_OF_RANGE",
+    "int_parsing": "ARGUMENT_TYPE_INVALID",
+    "int_type": "ARGUMENT_TYPE_INVALID",
+    "less_than": "ARGUMENT_OUT_OF_RANGE",
+    "less_than_equal": "ARGUMENT_OUT_OF_RANGE",
+    "missing": "ARGUMENT_REQUIRED",
+    "string_pattern_mismatch": "ARGUMENT_FORMAT_INVALID",
+    "string_too_long": "ARGUMENT_LENGTH_INVALID",
+    "string_too_short": "ARGUMENT_LENGTH_INVALID",
+    "string_type": "ARGUMENT_TYPE_INVALID",
+}
+
+_ARGUMENT_MESSAGE_BY_REASON = {
+    "ARGUMENT_FORMAT_INVALID": "Use the format declared by the tool input schema.",
+    "ARGUMENT_INVALID": "Correct this argument to match the tool input schema.",
+    "ARGUMENT_LENGTH_INVALID": "Use a value within the length declared by the tool input schema.",
+    "ARGUMENT_NOT_ALLOWED": "Remove arguments not listed in the tool input schema.",
+    "ARGUMENT_OUT_OF_RANGE": "Use a value within the range declared by the tool input schema.",
+    "ARGUMENT_REQUIRED": "Provide this required argument.",
+    "ARGUMENT_TYPE_INVALID": "Use the value type declared by the tool input schema.",
+}
 
 
 class _MCPRequestDisconnected(Exception):
@@ -86,11 +113,47 @@ class _GetContextOutput(RootModel[GetContextSuccessOutput | _ToolErrorOutput]):
     pass
 
 
+class _QueryManMCPServer(MCPServer[dict[str, Any]]):
+    # ponytail: MCP SDK 2.x stringifies validation errors before the tool body; remove this
+    # override when it provides a public bounded validation-error hook.
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        context: Context[dict[str, Any], Any] | None = None,
+    ) -> CallToolResult | InputRequiredResult:
+        try:
+            return await super().call_tool(name, arguments, context)
+        except ToolError as error:
+            validation_error = error.__cause__
+            tool = self._tool_manager.get_tool(name)
+            if not isinstance(validation_error, ValidationError):
+                raise
+            if tool is not None and validation_error.title == tool.fn_metadata.arg_model.__name__:
+                known_arguments = frozenset(
+                    field.alias or field_name
+                    for field_name, field in tool.fn_metadata.arg_model.model_fields.items()
+                )
+                return _tool_result(
+                    _invalid_tool_arguments_response(
+                        name,
+                        validation_error,
+                        known_arguments,
+                    ),
+                    is_error=True,
+                )
+            logger.error(
+                "MCP tool output validation failed",
+                extra={"tool_name": name, "error_code": "INTERNAL_ERROR"},
+            )
+            return _tool_result(_internal_error_response(), is_error=True)
+
+
 def create_mcp_server(
     gateway: GatewayService,
     caller_provider: Callable[[], CallerContext],
 ) -> MCPServer:
-    server = MCPServer(
+    server = _QueryManMCPServer(
         "query-man",
         description="Safe PostgreSQL metadata and guarded query gateway",
         instructions=(
@@ -118,7 +181,8 @@ def create_mcp_server(
 
     @server.tool(
         description=(
-            "Get question-scoped metadata and the revision required by query. "
+            "Get question-scoped metadata and both revisions required by query. "
+            "Pass the exact metadata_revision and sql_policy_revision from this response to query. "
             "The response includes allowed SQL functions, cast types, and unqualified cast forms. "
             "max_objects must be an integer from 1 through 4 and defaults to 2."
         )
@@ -135,9 +199,16 @@ def create_mcp_server(
             lambda caller: gateway.get_context(caller, source_id, question, max_objects),
             context,
             source_id=source_id,
+            output_model=_GetContextOutput,
         )
 
-    @server.tool(description="Execute one validated read-only SQL query under gateway hard limits.")
+    @server.tool(
+        description=(
+            "Execute one validated read-only SQL query under gateway hard limits. Pass the exact "
+            "metadata_revision and sql_policy_revision returned by the same get_context response. "
+            "On METADATA_REVISION_MISMATCH, fetch context again, regenerate SQL, and retry once."
+        )
+    )
     async def query(
         source_id: SourceId,
         sql: Sql,
@@ -176,6 +247,7 @@ async def _safe_call(
     context: Context,
     *,
     source_id: str | None = None,
+    output_model: type[BaseModel] | None = None,
 ) -> CallToolResult:
     call_id = str(uuid.uuid4())
     started = time.monotonic()
@@ -185,6 +257,25 @@ async def _safe_call(
         caller = caller_provider()
         pending = call(caller)
         result = await pending if isinstance(pending, Awaitable) else pending
+        if output_model is not None:
+            try:
+                output_model.model_validate(result)
+            except ValidationError:
+                logger.error(
+                    "MCP tool output validation failed",
+                    extra={"tool_name": tool_name, "error_code": "INTERNAL_ERROR"},
+                )
+                _log_tool_completed(
+                    call_id,
+                    tool_name,
+                    context,
+                    started,
+                    caller,
+                    source_id,
+                    "error",
+                    error_code="INTERNAL_ERROR",
+                )
+                return _tool_result(_internal_error_response(), is_error=True)
         tool_result = _tool_result(result)
         _log_tool_completed(
             call_id,
@@ -272,6 +363,70 @@ def _request_cancelled_response() -> dict[str, object]:
         "error": {
             "code": "REQUEST_CANCELLED",
             "message": "The MCP request was cancelled.",
+        }
+    }
+
+
+def _invalid_tool_arguments_response(
+    tool_name: str,
+    error: ValidationError,
+    known_arguments: frozenset[str],
+) -> dict[str, object]:
+    raw_issues = error.errors(
+        include_url=False,
+        include_context=False,
+        include_input=False,
+    )
+    issues: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for issue in raw_issues:
+        location = issue.get("loc", ())
+        candidate = str(location[0]) if location else "arguments"
+        path = candidate if candidate in known_arguments else "arguments"
+        validation_type = str(issue.get("type", ""))
+        reason_code = _ARGUMENT_REASON_BY_VALIDATION_TYPE.get(
+            validation_type,
+            "ARGUMENT_INVALID",
+        )
+        key = (path, reason_code)
+        if key in seen:
+            continue
+        seen.add(key)
+        if tool_name == "query" and path in {"metadata_revision", "sql_policy_revision"}:
+            message = "Call get_context and pass both exact revision values it returns."
+        elif tool_name == "get_context" and path == "max_objects":
+            message = "Use an integer from 1 through 4."
+        else:
+            message = _ARGUMENT_MESSAGE_BY_REASON[reason_code]
+        issues.append(
+            {
+                "path": path,
+                "reason_code": reason_code,
+                "message": message,
+            }
+        )
+        if len(issues) == _MAX_PUBLIC_ARGUMENT_ISSUES:
+            break
+
+    action = (
+        "CALL_GET_CONTEXT"
+        if tool_name == "query"
+        and any(
+            issue["path"] in {"metadata_revision", "sql_policy_revision"}
+            for issue in issues
+        )
+        else "CORRECT_ARGUMENTS"
+    )
+    return {
+        "error": {
+            "code": "INVALID_REQUEST",
+            "message": "Follow details.action, correct every listed issue, and retry the tool once.",
+            "details": {
+                "action": action,
+                "retryable": True,
+                "issues": issues,
+                "truncated": len(raw_issues) > len(issues),
+            },
         }
     }
 

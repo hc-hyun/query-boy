@@ -7,6 +7,63 @@
 
 Reference: [Ponytail](https://github.com/DietrichGebert/ponytail)
 
+## Module-Scoped Development
+
+Query Man은 하나의 deployable process를 유지하는 modular monolith다. 논리 module의 owner,
+현재 평면 파일 mapping, 허용 dependency와 계약은 [`docs/modules/README.md`](docs/modules/README.md)를
+유일한 시작점으로 사용한다. 아직 물리 package가 분리되지 않았다는 사실을 숨기지 않는다.
+
+- 작업 시작 시 repository 전체를 선행 학습하지 않는다. 이 파일, module index, primary module의
+  `README.md`, 그 문서가 지정한 code/test와 관련 ADR을 먼저 읽는다.
+- “관련 실행 흐름과 trust boundary를 끝까지 읽는다”는 repository 전체가 아니라 변경이 영향을
+  주는 완전한 end-to-end slice를 뜻한다. Public producer/entry부터 변경 지점, 직접 consumer,
+  persistence/transaction/cleanup 경계, 실패 경로와 runnable test까지 확인한다.
+- 흐름이나 trust boundary가 다른 module로 넘어가면 그 module 문서와 직접 관련된 계약/code/test만
+  추가로 읽는다. 보안 경계는 module 경계에서 조사를 중단할 이유가 되지 않는다.
+- 다른 module의 implementation, table 또는 private symbol에 새로 의존하지 않고 owner가 공개한
+  contract를 소비한다. Production server 조립은 Runtime, 후보 source의 격리 staging 조립은
+  Control Plane, offline acceptance 조립은 Assurance CLI entrypoint만 수행한다.
+- 현재 shared transition file을 수정하면 module index에 표시된 모든 owner 문서를 읽고 symbol
+  단위로 변경한다. Shared file 정리와 업무 변경을 한 diff에 섞지 않는다.
+- Shared transition file과 공통 contract 문서는 single-writer로 다룬다. 병렬 agent가 동시에
+  편집하지 않고 coordinating agent가 owner와 변경 순서를 지정한다.
+- Agent 한 명은 기본적으로 primary module 하나를 맡는다. 계약이 고정된 서로 다른 module의
+  implementation은 병렬로 개발할 수 있다.
+- Module별 focused test는 빠른 feedback용이며 root 전체 gate를 대체하지 않는다. Provider contract를
+  사용하는 코드를 바꾸면 provider와 직접 consumer test를 함께 실행한다.
+
+## Inter-Module Contract Changes
+
+다른 module이 소비하는 다음 항목은 additive change를 포함해 module contract다.
+
+- Public Python type, Protocol, function, method와 lifecycle capability
+- HTTP/MCP request, response, error, authentication/authorization와 protocol version
+- Source manifest, budget, persisted/versioned configuration과 public source projection
+- Metadata/SQL policy revision, fingerprint, canonical encoding과 verified result hash
+- Authorization, validation, admission, transaction, cancel, rollback, reload와 shutdown 순서
+- Allowlist, reader/tenant policy, timeout, concurrency와 row/byte/resource limit의 의미
+- Control DB schema, constraint, role/grant, lock/CAS, transaction, generation과 pin/migration 의미
+
+Module contract는 사용자의 명시적 승인 없이 변경하지 않는다.
+
+- 계약 변경 필요성을 발견하면 의미상 code/schema/config/contract 문서 수정을 멈추고 현재 계약,
+  제안 계약과 이유, provider/consumer 영향, compatibility/migration/rollback, 보안·데이터 손실 영향,
+  문서·검증 계획을 사용자에게 제시한다. 읽기 전용 조사와 제안은 계속할 수 있다.
+- 사용자가 정확한 계약 변경 내용과 영향 범위를 승인한 뒤에만 진행한다. 원래 요청에 그 내용이
+  구체적으로 명시되어 있으면 그 범위는 승인된 것으로 본다. 일반적인 “구현”, “refactor”, “정리”
+  요청이나 coordinating/sub-agent의 동의는 승인이 아니다.
+- 판단이 불명확하면 계약 변경으로 취급한다. 외부 의미가 동일한 private refactor, 파일 이동과
+  오탈자 수정은 계약 변경이 아니다. 하나의 확정된 ADR/schema/test와 현재 동작에 맞추는 단순한
+  사실 문서 정정도 계약 변경이 아니지만, 둘 이상의 authority가 다른 의미를 주장해 선택이
+  필요하면 사용자에게 보고한다.
+- 승인된 계약 변경은 하나의 coordinating workstream에서 직렬화한다. 같은 계약을 사용하는 병렬
+  작업은 새 baseline이 확정될 때까지 그 경계를 동결한다.
+- 승인 뒤 owner와 모든 직접 consumer의 module 문서, 필요한 ADR/migration/onboarding 절차와
+  contract/integration test를 code와 같은 변경에서 갱신한다. 승인 범위를 넘으면 다시 승인받는다.
+- Accepted ADR, 실제 persisted/wire schema, runnable contract test와 module 문서가 충돌하면 임의로
+  선택하지 말고 불일치를 사용자에게 보고한다. `implementation pending`인 목표를 현재 계약으로
+  오해하지 않는다.
+
 ## Decision Ladder
 
 코드를 작성하기 전에 아래 순서로 확인하고, 요구사항을 충족하는 첫 단계에서 멈춘다.

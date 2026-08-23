@@ -78,15 +78,18 @@ Dependencies: `SQL-01`~`SQL-05`, `SQL-07`~`SQL-10`은 `DEC-01`~`DEC-03`을 따�
 - [x] `SQL-02` `SELECT`와 허용된 read-only `WITH` 외 DDL, DML, transaction, session statement를 거부한다.
 - [x] `SQL-03` AST에서 참조 relation과 schema를 추출하고 현재 source의 published catalog allowlist와 대조한다.
 - [x] `SQL-04` 함수와 operator를 추출하고 `BETWEEN` 같은 grammar construct를 effective
-  operator로 정규화하며 승인한 cast type과 분석 함수를 제한한다.
+  operator로 정규화하며 승인한 cast type과 window·ordered-set·문자열·JSON 함수를
+  제한한다.
 - [x] `SQL-05` system schema, temp object, cross-database 접근과 client 지정 search path를 거부한다.
 - [x] `SQL-06` 요청의 `metadata_revision`과 `sql_policy_revision`이 실행 직전 published
   metadata와 validator policy digest에 각각 같은지 검증한다.
 - [x] `SQL-07` SQL을 canonicalize하고 민감 literal을 노출하지 않는 query fingerprint를 생성한다.
-- [x] `SQL-08` 정책 거부와 수정 가능한 database 의미 오류를 안정적인 reason code와 bounded
-  detail로 반환하고 parser/database 내부 오류를 공개하지 않는다.
-- [x] `SQL-09` `DATE BETWEEN`, cast와 분석 함수를 포함한 허용·거부 corpus, 우회 문법,
-  nested query, CTE와 Unicode identifier 회귀 테스트를 추가한다.
+- [x] `SQL-08` 정책 거부는 안정적인 reason code와 bounded detail로, 수정 가능한 database
+  의미 오류는 reason별 correction message·action·retryable detail로 반환하고 parser/database
+  내부 오류를 공개하지 않는다.
+- [x] `SQL-09` `DATE BETWEEN`, cast와 승인한 분석·문자열·JSON 함수를 포함한
+  허용·거부 corpus, 우회 문법, nested query, CTE와 Unicode identifier 회귀 테스트를
+  추가한다.
 - [x] `SQL-10` Property/fuzz test로 parser failure가 실행으로 이어지지 않는 fail-closed 성질을 검증한다.
 
 ## 3. Guarded Query Execution
@@ -103,8 +106,9 @@ Dependencies: `SQL-01`~`SQL-09`, `DEC-06`
 - [x] `EXEC-07` Queue timeout과 pool 고갈을 안정적인 overload reason code로 반환한다.
 - [x] `EXEC-08` Optional `EXPLAIN` admission을 구현하되 planner cost만으로 안전을 보장하지 않도록 한다.
 - [x] `EXEC-09` `query_id`, fingerprint, elapsed time, row/byte 수, truncation과 plan summary를 반환한다.
-- [x] `EXEC-10` 수정 가능한 고정 SQLSTATE만 bounded `QUERY_INVALID`로 분리하고 나머지 DB 오류,
-  timeout, cancel과 serialization failure를 비공개 또는 전용 오류 계약으로 매핑한다.
+- [x] `EXEC-10` 수정 가능한 고정 SQLSTATE만 reason별 bounded correction이 있는
+  `QUERY_INVALID`로 분리하고 나머지 DB 오류, timeout, cancel과 serialization failure를
+  비공개 또는 전용 오류 계약으로 매핑한다.
 - [x] `EXEC-11` 동시성, timeout, invalid query, large result, disconnect, cancel과 rollback 통합
   테스트를 추가한다.
 - [x] `EXEC-12` Reader가 base schema, write statement와 비승인 함수를 실행할 수 없는지 end-to-end로 검증한다.
@@ -131,16 +135,19 @@ Physical catalog, immutable publish와 품질 gate를 하나의 revision 계약�
 Dependencies: `EXEC-01`~`EXEC-10`, `META-05`~`META-08`, `DEC-08`
 
 - [x] `MCP-01` HTTP와 동일한 service를 호출하는 단일 MCP server를 구현한다.
-- [x] `MCP-02` 고정 schema의 `list_sources`, `get_context`, `query` tool, bounded argument
-  description과 SQL capability를 제공한다.
-- [x] `MCP-03` MCP 요청에도 동일한 caller authorization, budget와 오류 reason code를 적용한다.
+- [x] `MCP-02` 고정 schema의 `list_sources`, `get_context`, `query` tool, 두 exact revision과 bounded
+  argument를 명시한 description 및 SQL capability를 제공한다.
+- [x] `MCP-03` MCP 요청에도 동일한 caller authorization, budget과 오류 reason code를 적용하고,
+  argument validation을 입력을 반사하지 않는 bounded action으로 반환한다.
 - [x] `MCP-04` `answerability`가 `needs_clarification` 또는 `unsupported`이면 query 단계로 진행하지 않는 workflow를 검증한다.
 - [x] `MCP-05` Metadata revision mismatch 시 context를 다시 조회하고 SQL을 재생성하는 workflow를 검증한다.
 - [x] `MCP-06` Grain, fanout, composition, business predicate와 SQL capability를 준수하고 bounded
-  invalid-query correction을 한 번만 수행하는 공통 Text-to-SQL Skill을 작성한다.
+  error action에 따른 argument·query correction을 한 번만 수행하는 공통 Text-to-SQL Skill을
+  작성한다.
 - [x] `MCP-07` 두 MVP source의 전체 golden question을 MCP tool 호출부터 실제 결과까지 end-to-end 검증한다.
-- [x] `MCP-08` Tool schema 호환성, 응답 크기와 `/mcp` request arrival부터 final ASGI body까지의
-  bounded lifecycle timing 회귀 테스트를 추가한다.
+- [x] `MCP-08` Tool schema·description·structured validation error 호환성, 응답 크기와
+  `/mcp` request arrival부터 final ASGI body까지의 bounded lifecycle timing 회귀 테스트를
+  추가한다.
 
 ## 6. No-Deploy Source Onboarding
 

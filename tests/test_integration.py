@@ -1795,6 +1795,36 @@ async def test_live_guarded_query_enforces_plan_and_result_limits() -> None:
             if index < len(analytics_rows) - 1:
                 assert row["next_issue_id"] == analytics_rows[index + 1]["issue_id"]
 
+        extended_analytics = await service.query(
+            "development-issues",
+            "WITH summary AS ("
+            "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY comment_count) "
+            "AS median_comments FROM ai.issue_overview"
+            "), samples AS ("
+            "SELECT issue_id, issue_no, status, severity, title, "
+            "dense_rank() OVER (ORDER BY severity) AS severity_rank "
+            "FROM ai.issue_overview ORDER BY issue_id LIMIT 3"
+            ") "
+            "SELECT regexp_replace(title, '[0-9]+', '#', 'g') AS normalized_title, "
+            "position('오류' IN title) AS error_position, "
+            "jsonb_build_object('no', issue_no, 'status', status) AS issue_json, "
+            "to_jsonb(issue_no) AS issue_no_json, severity_rank, median_comments "
+            "FROM samples CROSS JOIN summary ORDER BY issue_id",
+            published.revision,
+            SQL_POLICY_REVISION,
+        )
+        extended_rows = extended_analytics["rows"]
+        assert isinstance(extended_rows, list)
+        assert len(extended_rows) == 3
+        for row in extended_rows:
+            assert isinstance(row, dict)
+            assert isinstance(row["normalized_title"], str)
+            assert row["error_position"] >= 0
+            assert row["severity_rank"] >= 1
+            assert isinstance(row["issue_json"], dict)
+            assert row["issue_no_json"] == row["issue_json"]["no"]
+            assert isinstance(row["median_comments"], int | float)
+
         for invalid_sql, reason_code in [
             (
                 "SELECT missing_column FROM ai.issue_overview",
@@ -1806,6 +1836,26 @@ async def test_live_guarded_query_enforces_plan_and_result_limits() -> None:
                 "SELECT issue_id FROM ai.issue_overview LIMIT -1",
                 "QUERY_INVALID_LIMIT",
             ),
+            (
+                "SELECT regexp_replace(title, '[', '#', 'g') "
+                "FROM ai.issue_overview LIMIT 1",
+                "QUERY_INVALID_REGULAR_EXPRESSION",
+            ),
+            (
+                "SELECT percentile_cont(1.1) WITHIN GROUP (ORDER BY comment_count) "
+                "FROM ai.issue_overview",
+                "QUERY_NUMERIC_VALUE_OUT_OF_RANGE",
+            ),
+            (
+                "SELECT jsonb_build_object(NULL, issue_no) "
+                "FROM ai.issue_overview LIMIT 1",
+                "QUERY_INVALID_FUNCTION_ARGUMENT",
+            ),
+            (
+                "SELECT dense_rank(1) OVER () FROM ai.issue_overview LIMIT 1",
+                "QUERY_INVALID_FUNCTION_USAGE",
+            ),
+            ("SELECT to_jsonb()", "QUERY_FUNCTION_SIGNATURE_MISMATCH"),
         ]:
             with pytest.raises(QueryInvalidError) as invalid:
                 await service.query(
@@ -1814,7 +1864,12 @@ async def test_live_guarded_query_enforces_plan_and_result_limits() -> None:
                     published.revision,
                     SQL_POLICY_REVISION,
                 )
-            assert invalid.value.details == {"reason_code": reason_code}
+            assert invalid.value.details == {
+                "reason_code": reason_code,
+                "action": "CORRECT_SQL",
+                "retryable": True,
+            }
+            assert "retry once" in invalid.value.message
             assert invalid_sql not in str(invalid.value)
 
         exact_scalars = await service.query(

@@ -174,9 +174,21 @@ def test_rejects_untrusted_schema_qualified_date_and_text_casts(type_name: str) 
         ("lag(status) OVER (ORDER BY discovered_at)", "lag"),
         ("lead(status) OVER (ORDER BY discovered_at)", "lead"),
         ("extract(year FROM discovered_at)", "extract"),
+        ("regexp_replace(title, '[0-9]+', '#', 'g')", "regexp_replace"),
+        ("position('error' IN title)", "position"),
+        (
+            "percentile_cont(0.5) WITHIN GROUP (ORDER BY comment_count)",
+            "percentile_cont",
+        ),
+        ("dense_rank() OVER (ORDER BY severity)", "dense_rank"),
+        (
+            "jsonb_build_object('id', issue_id, 'status', status)",
+            "jsonb_build_object",
+        ),
+        ("to_jsonb(issue_id)", "to_jsonb"),
     ],
 )
-def test_accepts_common_analytic_functions_and_records_resolved_dependency(
+def test_accepts_common_query_functions_and_records_resolved_dependency(
     expression: str,
     function: str,
 ) -> None:
@@ -195,9 +207,21 @@ def test_accepts_common_analytic_functions_and_records_resolved_dependency(
         ("lag(status) OVER (ORDER BY discovered_at)", "lag"),
         ("lead(status) OVER (ORDER BY discovered_at)", "lead"),
         ("extract(year FROM discovered_at)", "extract"),
+        ("regexp_replace(title, '[0-9]+', '#', 'g')", "regexp_replace"),
+        ("position('error' IN title)", "position"),
+        (
+            "percentile_cont(0.5) WITHIN GROUP (ORDER BY comment_count)",
+            "percentile_cont",
+        ),
+        ("dense_rank() OVER (ORDER BY severity)", "dense_rank"),
+        (
+            "jsonb_build_object('id', issue_id, 'status', status)",
+            "jsonb_build_object",
+        ),
+        ("to_jsonb(issue_id)", "to_jsonb"),
     ],
 )
-def test_common_analytic_functions_honor_the_function_allowlist(
+def test_common_query_functions_honor_the_function_allowlist(
     expression: str,
     function: str,
 ) -> None:
@@ -211,24 +235,56 @@ def test_common_analytic_functions_honor_the_function_allowlist(
     assert captured.value.code == "SQL_FUNCTION_NOT_ALLOWED"
 
 
+@pytest.mark.parametrize("schema", ["ai", '"PG_CATALOG"'])
 @pytest.mark.parametrize(
-    "expression",
+    "expression_template",
     [
-        "ai.rank() OVER (ORDER BY issue_id)",
-        "ai.lag(status) OVER (ORDER BY discovered_at)",
-        "ai.lead(status) OVER (ORDER BY discovered_at)",
-        "ai.extract('year', discovered_at)",
-        '"PG_CATALOG".extract(\'year\', discovered_at)',
+        "{schema}.rank() OVER (ORDER BY issue_id)",
+        "{schema}.lag(status) OVER (ORDER BY discovered_at)",
+        "{schema}.lead(status) OVER (ORDER BY discovered_at)",
+        "{schema}.extract('year', discovered_at)",
+        "{schema}.regexp_replace(title, '[0-9]+', '#', 'g')",
+        "{schema}.position('error', title)",
+        "{schema}.percentile_cont(0.5) WITHIN GROUP (ORDER BY comment_count)",
+        "{schema}.dense_rank() OVER (ORDER BY severity)",
+        "{schema}.jsonb_build_object('id', issue_id, 'status', status)",
+        "{schema}.to_jsonb(issue_id)",
     ],
 )
-def test_rejects_untrusted_schema_qualified_analytic_functions(expression: str) -> None:
+def test_rejects_untrusted_schema_qualified_common_functions(
+    expression_template: str,
+    schema: str,
+) -> None:
     with pytest.raises(SqlValidationError) as captured:
         validate_sql(
-            f"SELECT {expression} FROM ai.issue_overview",
+            f"SELECT {expression_template.format(schema=schema)} FROM ai.issue_overview",
             allowed_relations=ALLOWED_RELATIONS,
         )
 
     assert captured.value.code == "SQL_FUNCTION_SCHEMA_NOT_ALLOWED"
+
+
+@pytest.mark.parametrize(
+    "function_call",
+    [
+        "regexp_replace('abc123', '[0-9]+', '#', 'g')",
+        "position('b' IN 'abc')",
+        "percentile_cont(0.5)",
+        "dense_rank()",
+        "jsonb_build_object('id', 1)",
+        "to_jsonb(1)",
+    ],
+)
+def test_rejects_approved_functions_as_table_functions(
+    function_call: str,
+) -> None:
+    with pytest.raises(SqlValidationError) as captured:
+        validate_sql(
+            f"SELECT * FROM {function_call}",
+            allowed_relations=ALLOWED_RELATIONS,
+        )
+
+    assert captured.value.code == "SQL_TABLE_FUNCTION_NOT_ALLOWED"
 
 
 def test_cte_visibility_follows_nested_query_scope() -> None:

@@ -47,10 +47,30 @@ host, DSN, credential, schema, relation, column, function, or session setting.
 If `query` returns `METADATA_REVISION_MISMATCH`, call `get_context` again, regenerate SQL only from
 the refreshed context, and retry once with both refreshed revisions. Stop after a second mismatch.
 
-For `QUERY_INVALID`, make at most one correction from its public `reason_code`: reselect exact
-returned column names for `QUERY_UNDEFINED_COLUMN`, use a compatible advertised cast for
-`QUERY_INVALID_CAST`, protect a generated divisor with `NULLIF(..., 0)` for
-`QUERY_DIVISION_BY_ZERO`, or remove a generated negative `LIMIT`/`OFFSET` for
-`QUERY_INVALID_LIMIT`. Retry only when the correction preserves the user's request; otherwise
-report the reason. For any other gateway error, report its public reason without weakening limits
-or bypassing policy.
+For `INVALID_REQUEST`, correct only the bounded `issues` against the tool schema and perform
+`details.action` before retrying. On `CALL_GET_CONTEXT`, fetch context and copy both exact revisions
+into `query`; on `CORRECT_ARGUMENTS`, use the corrected arguments directly. Do not retry unchanged
+arguments.
+
+For `QUERY_INVALID`, require `details.action=CORRECT_SQL` and make at most one correction from its
+public `reason_code`:
+
+- Reselect an exact returned column `sql_name`, or correct an alias that the generated SQL itself
+  declares, for `QUERY_UNDEFINED_COLUMN`. Never substitute a semantic display alias as SQL.
+- Use a compatible advertised cast, or exclude incompatible values, for `QUERY_INVALID_CAST`.
+- Protect a generated divisor with `NULLIF(..., 0)`, or exclude zero values, for
+  `QUERY_DIVISION_BY_ZERO`.
+- Remove or correct a generated negative `LIMIT`/`OFFSET` for `QUERY_INVALID_LIMIT`.
+- Correct the pattern or flags for `QUERY_INVALID_REGULAR_EXPRESSION`.
+- Use an in-range value, including a percentile fraction from 0 through 1, for
+  `QUERY_NUMERIC_VALUE_OUT_OF_RANGE`.
+- Correct the invalid value for `QUERY_INVALID_FUNCTION_ARGUMENT`; JSON object keys must be
+  non-null and key/value arguments must be paired.
+- Use `OVER` for the supported window form or `WITHIN GROUP` for the supported ordered-set form for
+  `QUERY_INVALID_FUNCTION_USAGE`.
+- Use a supported built-in function or operator signature and only advertised compatible casts for
+  `QUERY_FUNCTION_SIGNATURE_MISMATCH`.
+
+Retry only when the correction preserves the user's request; otherwise report the reason. Stop
+after one corrected retry even when `retryable` is true. For any other gateway error, report its
+public reason without weakening limits or bypassing policy.

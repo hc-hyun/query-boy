@@ -45,7 +45,9 @@ docker compose down
 전체 설계 기준은 [docs/architecture.md](docs/architecture.md), 현재 MVP 범위는
 [docs/mvp.md](docs/mvp.md), 완료된 구현 이력은
 [docs/implementation-roadmap.md](docs/implementation-roadmap.md), 현재 우선순위 TODO는
-[docs/development-todo.md](docs/development-todo.md), 기존 production baseline 증거는
+[docs/development-todo.md](docs/development-todo.md)를 참고합니다. Module 단위로 작업할 때는
+[module boundaries](docs/modules/README.md)에서 owner, 계약과 집중해서 읽을 범위를 먼저 확인합니다.
+기존 production baseline 증거는
 [completion audit](docs/verification/2026-08-23-completion-audit.md), 현재 최종 회귀와 운영 경계는
 [refactoring assurance](docs/verification/2026-08-23-refactoring-assurance.md), 컨테이너 실행 증거는
 [container runtime audit](docs/verification/2026-08-23-container-runtime.md), 두 replica soak 증거는
@@ -144,6 +146,10 @@ operator admin identity를 모두 요구합니다. 단일 API token과 anonymous
 세 tool만 제공하며 host나 credential을 입력받지 않습니다. 모델 workflow에는
 [`query-man-text-to-sql` Skill](skills/query-man-text-to-sql/SKILL.md)을 사용합니다.
 Codex는 같은 `QUERY_MAN_CODEX_MCP_TOKEN`을 환경변수로 받은 새 session에서 연결해야 합니다.
+새 session의 `/mcp`에서 `query`가 `metadata_revision`과 `sql_policy_revision`을 모두
+필수로 노출하는지 확인하고, `get_context`가 반환한 두 exact value를 같은 query에
+전달합니다. Structured error의 `retryable=true`는 `details.action`을 수행한 뒤 한 번만
+재시도해도 된다는 뜻이지 같은 요청의 blind retry를 뜻하지 않습니다.
 Codex CLI 0.149.0에서는 modern MCP가 아직 opt-in 기능이므로 client project의
 `.codex/config.toml`에 다음 설정이 필요합니다. `codex features list`에서
 `mcp_2026_07_28`이 `true`인지 확인합니다.

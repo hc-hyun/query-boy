@@ -280,9 +280,19 @@ async def test_exposes_deterministic_sql_capabilities_from_validation_policy() -
         "unqualified_cast_types": sorted(DEFAULT_ALLOWED_UNQUALIFIED_TYPES),
     }
     assert response["sql_policy_revision"] == SQL_POLICY_REVISION
-    assert {"date_part", "extract", "lag", "lead", "rank"} <= set(
-        capabilities["functions"]
-    )
+    assert {
+        "date_part",
+        "dense_rank",
+        "extract",
+        "jsonb_build_object",
+        "lag",
+        "lead",
+        "percentile_cont",
+        "position",
+        "rank",
+        "regexp_replace",
+        "to_jsonb",
+    } <= set(capabilities["functions"])
     assert len(json.dumps(response, ensure_ascii=False).encode()) <= (
         source.budget.max_metadata_response_bytes
     )

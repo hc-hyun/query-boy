@@ -22,9 +22,28 @@ Application은 POST media type과 Authorization header를 exact/단일 값으로
 이전·미지원 값 또는 중복 값이면 child SDK에 전달하기 전에 bounded protocol error로
 거부한다. 개발 단계에서는 이전 initialize handshake나 version별 compatibility branch를
 유지하지 않으며 version 변경을 명시적인 server/client 동시 upgrade로 취급한다.
-tool argument model은 coercion과 추가 field를 거부하며 validation error에 입력값을 반사하지
-않는다. Application 오류는 structured error payload를 유지하면서 MCP `isError=true`로
-표시한다.
+tool argument model은 coercion과 추가 field를 거부한다. Argument validation 오류는
+`INVALID_REQUEST`와 다음 bounded detail로 반환한다.
+
+```text
+{
+  action: CALL_GET_CONTEXT | CORRECT_ARGUMENTS,
+  retryable: true,
+  issues: [{path, reason_code, message}],
+  truncated: boolean
+}
+```
+
+Revision 누락·형식 오류는 `CALL_GET_CONTEXT`, 나머지 argument 오류는 `CORRECT_ARGUMENTS`로
+안내한다. Issue는 최대 8개이며 `path`는 알려진 tool field 또는 `arguments`만 사용한다.
+`reason_code`는 `ARGUMENT_REQUIRED`, `ARGUMENT_FORMAT_INVALID`, `ARGUMENT_LENGTH_INVALID`,
+`ARGUMENT_TYPE_INVALID`, `ARGUMENT_OUT_OF_RANGE`, `ARGUMENT_NOT_ALLOWED`, `ARGUMENT_INVALID`의
+고정 집합이다.
+Pydantic type·URL·input과 알 수 없는 추가 field 이름은 반사하지 않는다. `retryable=true`는
+`action`을 수행한 뒤 한 번만 재시도해도 된다는 뜻이며 blind retry를 허용하지 않는다.
+Tool output schema validation 실패는 세부를 숨긴 generic `INTERNAL_ERROR`로 만들고 실패
+audit/metric으로 기록한다. Application 오류는 structured error payload를 유지하면서 MCP
+`isError=true`로 표시한다.
 
 MCP child application은 FastAPI application 아래에 mount한다. Parent bearer middleware가
 인증한 `CallerContext`를 request-local `ContextVar`로 전달하고, MCP tool은 HTTP와 같은
@@ -44,8 +63,10 @@ query(source_id, sql, metadata_revision, sql_policy_revision)
 database, role 또는 credential field를 노출하지 않는다. Metadata와 result payload 크기는
 source budget으로 제한하며 MCP protocol serialization overhead는 그 payload budget에
 포함하지 않는다. `get_context`의 자연어 tool description도 `max_objects`가 정수 1~4이고
-기본값이 2임을 명시한다. 응답의 `sql_capabilities`는 validator의 단일 allowlist에서 직접
-생성한 정렬된 `functions`, `cast_types`, `unqualified_cast_types`를 포함한다. 전역 validator
+기본값이 2임을 명시한다. `get_context`와 `query`의 description은 context가 반환한
+exact `metadata_revision`과 `sql_policy_revision`을 같은 `query` 호출에 모두 전달하라고
+명시한다. 응답의 `sql_capabilities`는 validator의 단일 allowlist에서 직접 생성한
+정렬된 `functions`, `cast_types`, `unqualified_cast_types`를 포함한다. 전역 validator
 정책은 source metadata revision과 분리된 `sql_policy_revision`으로 digest하고 query 시 함께
 검사한다. Capability도 metadata response byte 상한과 MCP output schema에 포함한다.
 
@@ -65,8 +86,8 @@ workflow를 담당한다.
 - 같은 context의 exact `metadata_revision`과 `sql_policy_revision`을 함께 전달한다.
 - `METADATA_REVISION_MISMATCH`이면 context를 다시 받고 새 metadata로 SQL을 재생성해 한
   번만 재시도한다.
-- `QUERY_INVALID`이면 bounded reason으로 사용자 의미를 보존하는 수정이 명확할 때만 한 번
-  교정하고, 두 번째 실패에서는 중단한다.
+- `INVALID_REQUEST`와 `QUERY_INVALID`이면 bounded `action`과 reason을 따라 사용자 의미를
+  보존하는 수정이 명확할 때만 한 번 교정하고, 두 번째 실패에서는 중단한다.
 
 안전 정책은 Skill에 맡기지 않는다. Skill이 잘못된 SQL이나 stale revision을 보내도
 gateway와 PostgreSQL hard limit이 거부한다.
@@ -76,9 +97,15 @@ gateway와 PostgreSQL hard limit이 거부한다.
 - MCP와 HTTP가 하나의 source inventory, caller policy와 execution budget을 사용한다.
 - Stateless transport이므로 대화나 source 선택 상태는 client가 관리하고 매 query마다 두
   revision을 명시한다.
+- 기존 argument validation의 `structured_content is None`이나 SDK가 만든 validation
+  문자열을 파싱하던 client는 structured `INVALID_REQUEST.details`로 전환해야 한다.
+  이전 문자열 계약을 동시에 제공하는 compatibility shim은 두지 않는다.
 - SDK 2.0의 modern JSON response 경로는 ASGI disconnect를 감시하지 않으므로 Query Man의
   `query` tool이 request disconnect와 gateway 실행을 경쟁시켜 PostgreSQL cancel/rollback을
   전파한다.
+- Strict argument/output validation은 MCP SDK 2.0의 private tool metadata에 일부 의존한다.
+  `uv.lock`의 MCP/Pydantic version을 바꿀 때는 in-memory contract test와 실제 MCP server
+  gate를 함께 실행해야 한다.
 - 이전 handshake와 protocol version은 지원 대상이 아니므로 legacy cancellation이나
   stateful compatibility session도 제공하지 않는다. 지원 version의 POST disconnect와
   database timeout이 각각 조기 취소와 최종 실행 상한이다.

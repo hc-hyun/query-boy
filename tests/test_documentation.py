@@ -37,6 +37,29 @@ SHARED_ACCESS_ADR = (
     / "decisions"
     / "0017-shared-source-access-and-resource-tier.md"
 )
+MODULE_INDEX = ROOT_DIRECTORY / "docs" / "modules" / "README.md"
+MODULE_NAMES = (
+    "source-catalog",
+    "metadata",
+    "guarded-query",
+    "control-plane",
+    "delivery",
+    "runtime",
+    "assurance",
+)
+REQUIRED_MODULE_HEADINGS = (
+    "## 목적",
+    "## 소유 책임",
+    "## 소유하지 않는 책임",
+    "## 현재 코드 위치",
+    "## 제공 계약",
+    "## 소비 계약",
+    "## 불변조건",
+    "## 모듈 내부 변경",
+    "## 사용자 승인이 필요한 계약 변경",
+    "## 검증",
+    "## 집중해서 읽을 범위",
+)
 MCP_SOAK_AUDIT = (
     ROOT_DIRECTORY
     / "docs"
@@ -281,6 +304,34 @@ def test_runtime_has_no_fixture_source_specialization() -> None:
         assert not any(value in content for value in forbidden), path
 
 
+def test_module_boundary_docs_cover_owners_contracts_and_current_python_files() -> None:
+    index = MODULE_INDEX.read_text(encoding="utf-8")
+    agents = (ROOT_DIRECTORY / "AGENTS.md").read_text(encoding="utf-8")
+    readme = (ROOT_DIRECTORY / "README.md").read_text(encoding="utf-8")
+    architecture = ARCHITECTURE.read_text(encoding="utf-8")
+
+    assert "## 계약 변경 승인 절차" in index
+    assert "## 새 데이터베이스 추가 시 영향" in index
+    assert "docs/modules/README.md" in agents
+    assert "Module contract는 사용자의 명시적 승인 없이 변경하지 않는다." in agents
+    assert "docs/modules/README.md" in readme
+    assert "modules/README.md" in architecture
+
+    for module_name in MODULE_NAMES:
+        path = MODULE_INDEX.parent / module_name / "README.md"
+        content = path.read_text(encoding="utf-8")
+        assert f"({module_name}/README.md)" in index
+        assert "Status: Logical boundary; physical package split pending" in content
+        for heading in REQUIRED_MODULE_HEADINGS:
+            assert heading in content, f"{path.relative_to(ROOT_DIRECTORY)}: {heading}"
+
+    source_root = ROOT_DIRECTORY / "src" / "query_man"
+    for path in source_root.rglob("*.py"):
+        relative_path = path.relative_to(source_root)
+        mapped_path = path.name if relative_path.parent == Path(".") else relative_path.as_posix()
+        assert f"`{mapped_path}`" in index, f"Unmapped module owner: {relative_path}"
+
+
 def _markdown_heading_anchors(path: Path) -> set[str]:
     content = path.read_text(encoding="utf-8")
     anchors: set[str] = set()
@@ -295,7 +346,7 @@ def _markdown_heading_anchors(path: Path) -> set[str]:
 
 
 def test_local_markdown_links_resolve() -> None:
-    markdown_paths = [ROOT_DIRECTORY / "README.md"]
+    markdown_paths = [ROOT_DIRECTORY / "README.md", ROOT_DIRECTORY / "AGENTS.md"]
     markdown_paths.extend(sorted((ROOT_DIRECTORY / "docs").rglob("*.md")))
     missing: list[str] = []
 

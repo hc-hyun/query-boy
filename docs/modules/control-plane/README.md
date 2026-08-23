@@ -1,0 +1,257 @@
+# Control Plane Module
+
+Status: Logical boundary; physical package split pending
+
+## 목적
+
+Control Plane은 “어떤 source 정의와 metadata/verified revision이 현재 사용 중인가”를 영속적으로
+결정한다. 새 database 등록, credential 교체, 비활성화와 rollback을 검증된 상태 전이로 만들고,
+각 runtime replica가 그 desired state를 안전하게 적용하도록 한다.
+
+쉽게 말하면 Source Catalog가 source 정의의 형식을 소유하고 Control Plane은 그 정의의 이력과
+현재 선택값을 소유한다.
+
+## 소유 책임
+
+- Numbered Control DB migration, immutable checksum ledger, schema, constraint, trigger, role와 grant
+- Immutable source generation, encrypted credential과 active source pointer
+- Immutable metadata snapshot, active revision pointer, pin/unpin과 rollback transaction
+- Immutable verified query contract persistence
+- Source-scoped advisory transaction lock와 generation/state-version CAS
+- Publish/rotate/deactivate/rollback/resume/verified-publish application use case
+- Idempotency key, keyed canonical request hash, expected state와 terminal mutation receipt/audit
+- Secret-free source list/detail/generation history와 mutation lookup/history projection
+- Candidate source의 manifest, connection, catalog, quality와 verified result staging
+- Committed desired state를 runtime registry/cache/pool에 적용하는 `SourceReloader`
+- Control DB 장애, conflict와 validation failure를 비공개 application 오류로 변환하는 의미
+
+## 소유하지 않는 책임
+
+- Manifest/budget/semantic schema 자체의 정의
+- Metadata snapshot shape, revision digest와 context assembly
+- SQL validator, query result encoding과 executor safety policy
+- Caller authentication, admin capability와 HTTP/MCP request/response shape
+- Process startup/shutdown와 reload polling schedule
+- Source DB의 reader role, curated view 또는 business schema migration
+
+## 현재 코드 위치
+
+- [`source_admin.py`](../../../src/query_man/source_admin.py): `SourceAdminService`, `SourceReloader`와
+  persistence/invalidator ports
+- [`source_store.py`](../../../src/query_man/source_store.py): `PostgresSourceStore`와 state transition
+  transactions
+- [`metadata_store.py`](../../../src/query_man/metadata_store.py): `PostgresMetadataStore` implementation
+  및 Metadata가 소유하는 port/codec이 함께 있는 transition hot spot
+- [`secrets.py`](../../../src/query_man/secrets.py): generation-bound AES-GCM credential encryption
+- [`errors.py`](../../../src/query_man/errors.py): source validation/conflict/control-unavailable 의미;
+  public rendering은 Delivery 계약
+- [`05-control-plane.sh`](../../../docker/postgres/init/05-control-plane.sh): disposable container의
+  numbered migration entrypoint
+- [`control-migrations`](../../../docker/postgres/init/control-migrations): immutable numbered schema
+  migration, checksum ledger, apply lock와 least-privilege reconciliation
+- Focused tests: [`test_source_admin.py`](../../../tests/test_source_admin.py),
+  [`test_source_store.py`](../../../tests/test_source_store.py),
+  [`test_metadata_store.py`](../../../tests/test_metadata_store.py),
+  [`test_secrets.py`](../../../tests/test_secrets.py),
+  [`test_control_migrations.py`](../../../tests/test_control_migrations.py),
+  [`test_control_startup.py`](../../../tests/test_control_startup.py),
+  [`test_managed_mode.py`](../../../tests/test_managed_mode.py)
+
+`metadata_store.py`에서 Metadata는 `MetadataStore` capability와 snapshot codec/compatibility를,
+Control Plane은 PostgreSQL pool, SQL, lock과 transaction을 소유한다. 현재 shared file이라는 이유로
+다른 쪽 계약을 함께 바꾸지 않는다.
+
+`SourceAdminService._stage`는 candidate를 active runtime과 격리해 검증하려고 일시적인
+`SourceRegistry + MetadataService + CatalogProvider`를 조립한다. 이는 Control Plane에 한정된
+staging composition root이며 production HTTP/MCP wiring이나 Metadata 업무 규칙을 소유하지 않는다.
+
+Public admin route, operator-first request parsing, bounded JSON/header/query validation과 HTTP error
+rendering은 [Delivery](../delivery/README.md)가 소유한다. Control Plane은 이미 검증된
+`MutationContext`와 use-case input을 받고 persisted transition/result 의미를 소유한다.
+
+## 제공 계약
+
+### Source administration contract
+
+Public 관리 mutation은 authenticated actor에서 만든 `MutationContext`를 받고 현재
+generation/state version을 기준으로 검증한다. Resume은 expected metadata revision도 요구한다.
+각 operation은 다음 persisted transition을 시도한다.
+
+```text
+publish -> new immutable generation + metadata revision + active pointers
+rotate credential -> new immutable generation; same source connection identity
+deactivate -> active source disabled with next state version
+rollback -> historical generation + matching metadata revision activated and pinned
+resume metadata publish -> current pinned metadata revision unpinned
+publish verified query -> immutable revision-bound expected result
+```
+
+Operation result status는 `published`, `deactivated`, `rolled_back`, `resumed`, `verified`다. 성공
+public response는 이를 담은 authoritative terminal receipt이며 actor/reason, request hash,
+expected/resulting state, outcome과 HTTP 의미를 함께 제공한다. 결정적 rejection은 safe public error로
+반환하고 같은 terminal receipt를 lookup/history에서 확인할 수 있다. 동시 변경은 한쪽이 성공하고
+다른 쪽은 conflict로 끝난다. Control DB transaction 안의 validation/SQL failure가 partial persisted
+state를 남기면 안 된다. Commit 뒤 runtime apply 의미는 아래 acknowledgement 경계를 따른다.
+
+### Persistence contract
+
+- Source generation, metadata snapshot과 verified contract는 append-only/immutable이다.
+- Active pointer만 명시된 transaction과 CAS 아래 변경한다.
+- Numbered migration은 filename/checksum과 적용 이력을 immutable ledger에 남기고 advisory apply
+  lock 아래 순서대로 실행한다. 과거 migration을 수정하거나 번호를 건너뛰지 않는다.
+- Source publish는 snapshot 저장, generation 저장, metadata pointer와 source pointer를 하나의
+  transaction으로 갱신한다.
+- Rollback은 source pointer와 metadata pointer를 함께 바꾸고 metadata를 pin한다.
+- `source_store.py`와 `metadata_store.py`는 같은 source에 정확히
+  `pg_advisory_xact_lock(hashtextextended(source_id, 0))` key를 사용한다.
+- Metadata refresh publish는 active source의 `control_generation`, `control_state_version`과
+  `enabled`를 함께 확인해 이전 generation의 지연 refresh를 거부한다.
+- 성공 mutation receipt는 source pointer 또는 verified contract와 같은 transaction에 commit한다.
+  결정적인 validation/state rejection은 authority state를 바꾸지 않는 별도 transaction에 terminal
+  receipt로 남긴다.
+- FK, constraint와 trigger가 application validation을 보완하며 손상된 조합을 거부한다.
+
+### Management catalog contract
+
+Admin read surface는 source list/detail, immutable generation history, source mutation history와
+idempotency-key receipt lookup을 제공한다. Projection은 owner, environment, DB migration reference,
+effective budget, published/active metadata revision과 lifecycle state처럼 명시적으로 허용한 field만
+반환한다. Raw manifest, encrypted credential, metadata snapshot, verified question/SQL과 expected
+business value를 반환하지 않는다. Pagination/filter/order와 published-vs-active revision 의미는
+public Delivery contract와 persisted projection contract다.
+
+### Runtime projection contract
+
+Control DB commit은 desired-state 원자성을 보장하지만 모든 process의 in-memory 적용까지 하나의
+분산 transaction으로 만들지는 않는다. 각 replica의 `SourceReloader`가 polling으로 수렴한다.
+
+Replica 적용 순서는 다음과 같다.
+
+```text
+stored state 검증 -> old source pools invalidate -> registry projection 교체/제거
+-> metadata cache invalidate -> source probe/health 갱신
+```
+
+낮은 state version, 같은 version의 다른 payload, connection identity rebind와 검증 불가능한
+revision은 적용하지 않는다. Control DB가 일시적으로 unavailable이어도 이미 적용된 data plane은
+안전한 기존 state로 계속 동작하되 management operation은 실패한다.
+
+### Administration acknowledgement contract
+
+Public mutation은 caller가 고른 UUID idempotency key와 같은 semantic request에 대해 하나의 terminal
+receipt를 authority로 사용한다. Same key/same canonical request는 staging이나 state transition을
+반복하지 않고 기존 terminal outcome을 재현한다. Success는 기존 receipt를 반환하고 rejection은
+같은 safe error를 다시 반환하며 receipt lookup으로 상세 outcome을 확인한다. Same key/different
+request는 conflict다. Credential과 verified question/SQL을 포함한 canonical envelope는 keyed
+HMAC으로만 식별하고 raw input이나 일반 digest를 audit에 저장하지 않는다.
+
+Receipt table은 terminal-only이므로 lookup 404는 실패가 아니라 아직 staging/in-flight일 수 있다.
+Timeout 뒤에는 같은 key의 receipt, source detail과 mutation history를 bounded하게 확인하고 blind
+retry하지 않는다. Receipt가 없고 expected state가 그대로임을 재확인한 경우에만 같은 key와 같은
+semantic request를 한 번 재전송할 수 있다.
+
+Source pointer/contract와 성공 receipt가 commit된 뒤 같은 process의 `SourceReloader.apply`가 실패해도
+receipt는 authoritative desired-state 성공이다. Apply failure는 component health를 unavailable로
+표시하고 polling convergence에 맡기며 성공 receipt를 503으로 뒤집지 않는다. Receipt 성공과 모든
+replica의 in-memory 적용 완료를 같은 distributed transaction으로 해석하지 않는다.
+
+### Credential contract
+
+Credential은 plaintext로 Control DB에 저장하지 않는다. Current persisted format은 AES-256-GCM,
+32-byte key, 12-byte nonce와 다음 exact ASCII associated data를 사용한다.
+
+```text
+query-man/source/{source_id}/generation/{generation}
+```
+
+다른 source/generation으로 ciphertext를 옮겨 복호화할 수 없다. Algorithm, key/nonce size와 AAD
+bytes 변경은 기존 ciphertext migration 없이는 호환되지 않는다. Plaintext는 validation/runtime
+connection 구성의 필요한 범위를 넘어 log나 response에 남지 않는다.
+
+## 소비 계약
+
+- [Source Catalog](../source-catalog/README.md)의 strict manifest validator, budget와 projection writer
+- [Metadata](../metadata/README.md)의 candidate preparation, quality gate, store port와 snapshot codec
+- [Guarded Query](../guarded-query/README.md)의 validated execution for verified publish
+- [Assurance](../assurance/README.md)의 verified DTO, exact revision/relation와 result hash contract
+- [Runtime](../runtime/README.md)의 operational state reporting contract
+
+Runtime은 polling schedule과 production lifecycle을 호출하고 Delivery는 authenticated operator 및
+trusted tenant를 확인한 뒤 administration use case를 호출한다. 이 caller obligation은 Control
+Plane이 Delivery/Runtime private implementation에 의존한다는 뜻이 아니다.
+
+## 불변조건
+
+- 같은 `source_id`를 다른 host/port/database/user/TLS/environment identity로 재사용하지 않는다.
+- Persisted generation/snapshot/verified history를 update 또는 delete하지 않는다.
+- Source-scoped lock와 generation/state-version CAS 없이 active state를 변경하지 않는다.
+- Source publish/rollback의 source와 metadata pointer를 서로 다른 transaction으로 나누지 않는다.
+- Pin된 metadata를 암묵적으로 덮어쓰거나 rollback 뒤 자동 resume하지 않는다.
+- Success receipt와 authority mutation을 서로 다른 transaction으로 나누거나 terminal receipt를
+  update/delete하지 않는다.
+- Idempotency hash, receipt와 management projection에 credential, raw manifest, question/SQL 또는
+  expected business literal을 남기지 않는다.
+- Credential, SQL, question, expected literal과 내부 Control DB 오류를 일반 log/response에 노출하지 않는다.
+- Control writer는 최소 권한 role이며 application owner나 reader role을 재사용하지 않는다.
+- Runtime apply가 실패하면 desired state를 성공한 것처럼 process-local health에 표시하지 않는다.
+
+## 모듈 내부 변경
+
+다음은 state transition, schema와 외부 결과 의미를 보존할 때 독립적으로 변경할 수 있다.
+
+- 같은 transaction을 생성하는 store query/helper 정리
+- Lock/CAS 의미를 유지하는 connection/pool bookkeeping 개선
+- Ciphertext format과 associated data를 유지하는 crypto wrapper 내부 정리
+- 동일한 적용 순서와 오류를 만드는 reloader loop/helper 개선
+- 같은 bounded field/order를 만드는 management projection query 정리
+- Canonical request/receipt 의미를 보존하는 mutation orchestration 정리
+- Public result shape를 바꾸지 않는 administration orchestration 정리
+
+## 사용자 승인이 필요한 계약 변경
+
+- `control` schema, migration ledger/checksum, constraint, trigger, role/grant 또는 migration 순서 변경
+- Immutable history, FK, advisory lock, generation/state CAS와 transaction atomicity 변경
+- Publish/rotate/deactivate/rollback/pin/resume 상태 전이 또는 결과/error 의미 변경
+- Idempotency key, canonical request hash, actor/reason, expected/resulting state, terminal receipt,
+  replay/conflict와 timeout reconciliation 의미 변경
+- Management list/detail/history/receipt field, pagination/filter/order 또는 redaction 변경
+- Credential algorithm, key source, nonce/ciphertext format, associated data와 redaction 경계 변경
+- Source connection/environment identity 재지정 또는 기존 generation mutation 허용
+- Mutually exclusive bootstrap/managed authority, managed filesystem non-read/fallback와 replica
+  convergence 의미 변경
+- Pool/registry/metadata invalidation 및 health 적용 순서 변경
+- Verified query persistence key, exact revision/result contract 변경
+
+승인 요청에는 기존 persisted data migration, rolling replica compatibility, rollback과 복구 절차,
+Source Catalog/Metadata/Query/Delivery/Runtime/Assurance 영향을 포함한다.
+
+## 검증
+
+최소 focused gate:
+
+```text
+uv run pytest tests/test_source_admin.py tests/test_secrets.py tests/test_managed_mode.py
+```
+
+Persistence tests는 기본 pytest marker에서 제외되므로 다음을 별도로 실행한다.
+
+```text
+uv run pytest -m integration tests/test_source_store.py tests/test_metadata_store.py \
+  tests/test_control_migrations.py tests/test_control_startup.py
+```
+
+Schema, transaction, lock/CAS 또는 runtime projection 경계를 바꾸면 전체 integration gate와 관련
+control-plane 복구 절차를 실행한다. 완료 전 root `AGENTS.md`의 전체 gate도 실행한다.
+
+## 집중해서 읽을 범위
+
+Control Plane 작업은 기본적으로 다음만 읽는다.
+
+1. 이 문서와 [module index](../README.md)
+2. 변경 대상 admin/reloader/store/secret code, numbered migration과 focused tests
+3. Source validator, MetadataStore/codec, verified/query의 소비 계약
+4. Control source revision, verified publish와 centralized management ADR
+5. 변경되는 management catalog/mutation의 Delivery와 Runtime 계약
+
+Metadata relevance algorithm, MCP SDK 내부와 query cursor 구현은 계약을 바꾸지 않는 한 읽을
+필요가 없다.

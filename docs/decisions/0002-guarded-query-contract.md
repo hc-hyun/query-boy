@@ -102,6 +102,9 @@ AST가 승인하지 않은 operator construct를 식별할 수 있을 때 `QUERY
 PostgreSQL이 반환한 오류 중 사용자가 SQL만 수정해 해결할 수 있고 안전하게 분류 가능한
 SQLSTATE만 `QUERY_INVALID`로 반환한다. `details.reason_code`는 다음 고정 집합이며 database
 message, identifier, SQL snippet, literal과 위치는 반환하지 않는다.
+이 분류는 사용자 SQL을 parse analysis하는 `EXPLAIN`과 실제 cursor execute/fetch
+단계에서만 적용한다. Session setting, reader policy, resolved-object 검증, transaction
+commit과 같은 내부 단계의 같은 SQLSTATE는 수정 가능한 사용자 오류로 공개하지 않는다.
 
 | Reason | Internal SQLSTATE category |
 |---|---|
@@ -109,6 +112,17 @@ message, identifier, SQL snippet, literal과 위치는 반환하지 않는다.
 | `QUERY_INVALID_CAST` | `22P02`, `22007`, `22008`, `42846` |
 | `QUERY_DIVISION_BY_ZERO` | `22012` |
 | `QUERY_INVALID_LIMIT` | `2201W`, `2201X` |
+| `QUERY_INVALID_REGULAR_EXPRESSION` | `2201B` |
+| `QUERY_NUMERIC_VALUE_OUT_OF_RANGE` | `22003` |
+| `QUERY_INVALID_FUNCTION_ARGUMENT` | `22023` |
+| `QUERY_INVALID_FUNCTION_USAGE` | `42809` |
+| `QUERY_FUNCTION_SIGNATURE_MISMATCH` | `42883` |
+
+`QUERY_INVALID` detail은 `{reason_code, action: "CORRECT_SQL", retryable: true}`로 고정한다.
+Public message는 reason별로 SQL을 어떻게 교정할지 짧게 안내하는 server-authored
+message이며 PostgreSQL message를 재사용하지 않는다. `retryable=true`는 같은 SQL을
+반복하라는 뜻이 아니라 `action`을 수행하고 사용자 의미를 보존하는 교정이 명확할
+때만 한 번 재시도해도 된다는 뜻이다.
 
 Privilege, connection, server shutdown, 알 수 없는 SQLSTATE와 driver/serialization 오류는
 계속 details 없는 `QUERY_UNAVAILABLE`로 숨긴다. Timeout과 cancel은 기존 전용 분기를 먼저

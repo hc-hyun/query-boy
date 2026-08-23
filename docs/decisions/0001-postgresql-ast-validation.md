@@ -34,9 +34,10 @@ source에서 추출한 parser를 사용하는 `libpg_query`의 Python interface�
   `pg_catalog.<type>`으로 명시해야 한다. 실행 전에 reader의 TEMP 권한 부재와
   `search_path=pg_catalog`을 재검증하므로 두 unqualified type이 user-defined type으로
   해석되지 않는다.
-- `rank`, `lag`, `lead`, `extract`는 일반 분석 사용 사례로 승인하되 다른 함수와 동일하게
-  AST 이름 allowlist와 실행 시점의 `pg_proc` namespace·volatility·privilege 검증을 모두
-  통과해야 한다.
+- `rank`, `lag`, `lead`, `extract`에 더해 `dense_rank`, `percentile_cont`, `regexp_replace`,
+  `position`, `jsonb_build_object`, `to_jsonb`를 일반 분석·문자열·JSON 사용 사례로 승인한다.
+  이 함수들도 AST 이름 allowlist와 실행 시점의 `pg_proc` namespace·volatility·privilege
+  검증을 모두 통과해야 한다.
 - `SELECT INTO`, row locking, recursive CTE, table function, `TABLESAMPLE`, parameter와
   identity를 노출하는 SQL value function을 거부한다.
 - 알 수 없거나 아직 정책이 없는 문법은 fail-closed로 거부한다.

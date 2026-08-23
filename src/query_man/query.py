@@ -45,14 +45,19 @@ _RESULT_CURSOR_NAME = "query_man_result"
 _RESULT_FETCH_BATCH_ROWS = 16
 
 _QUERY_INVALID_REASON_BY_SQLSTATE = {
+    "22003": "QUERY_NUMERIC_VALUE_OUT_OF_RANGE",
     "22007": "QUERY_INVALID_CAST",  # invalid_datetime_format
     "22008": "QUERY_INVALID_CAST",  # datetime_field_overflow
     "22012": "QUERY_DIVISION_BY_ZERO",
+    "2201B": "QUERY_INVALID_REGULAR_EXPRESSION",
     "2201W": "QUERY_INVALID_LIMIT",
     "2201X": "QUERY_INVALID_LIMIT",  # invalid_row_count_in_result_offset_clause
+    "22023": "QUERY_INVALID_FUNCTION_ARGUMENT",
     "22P02": "QUERY_INVALID_CAST",  # invalid_text_representation
     "42703": "QUERY_UNDEFINED_COLUMN",
+    "42809": "QUERY_INVALID_FUNCTION_USAGE",
     "42846": "QUERY_INVALID_CAST",  # cannot_coerce
+    "42883": "QUERY_FUNCTION_SIGNATURE_MISMATCH",
 }
 
 _QUERY_SESSION_SETTINGS = (
@@ -366,13 +371,9 @@ class PostgresQueryExecutor:
             except QueryRejectedError:
                 operations.increment("query_rejected", source.source_id)
                 raise
-            except (QueryOverloadedError, QueryTimeoutError):
+            except (QueryInvalidError, QueryOverloadedError, QueryTimeoutError):
                 raise
             except errors.DatabaseError as error:
-                reason_code = _QUERY_INVALID_REASON_BY_SQLSTATE.get(error.sqlstate or "")
-                if reason_code is not None:
-                    operations.increment("query_invalid", source.source_id)
-                    raise QueryInvalidError(reason_code) from error
                 operations.increment("query_failed", source.source_id)
                 raise QueryUnavailableError from error
             except Exception as error:
@@ -497,8 +498,12 @@ class PostgresQueryExecutor:
             await require_reader_session_policy(connection, source, trusted_tenant)
 
             await _validate_resolved_objects(connection, validated)
-            plan_cursor = await connection.execute(f"EXPLAIN (FORMAT JSON) {sql}")
-            plan_row = await plan_cursor.fetchone()
+            try:
+                plan_cursor = await connection.execute(f"EXPLAIN (FORMAT JSON) {sql}")
+                plan_row = await plan_cursor.fetchone()
+            except errors.DatabaseError as error:
+                _raise_query_invalid_for_user_sql(error, source.source_id)
+                raise
             plan = _summarize_plan(_extract_plan(plan_row))
             try:
                 _admit_plan(source, plan)
@@ -576,6 +581,9 @@ class PostgresQueryExecutor:
                             break
                         rows.append(encoded_row)
                         result_bytes += separator_bytes + row_bytes
+            except errors.DatabaseError as error:
+                _raise_query_invalid_for_user_sql(error, source.source_id)
+                raise
             finally:
                 try:
                     await cursor.close()
@@ -685,6 +693,17 @@ def _non_negative_number(node: dict[str, Any], key: str) -> float:
     if not math.isfinite(number) or number < 0:
         raise RuntimeError("EXPLAIN returned an invalid numeric estimate")
     return number
+
+
+def _raise_query_invalid_for_user_sql(
+    error: errors.DatabaseError,
+    source_id: str,
+) -> None:
+    reason_code = _QUERY_INVALID_REASON_BY_SQLSTATE.get(error.sqlstate or "")
+    if reason_code is None:
+        return
+    operations.increment("query_invalid", source_id)
+    raise QueryInvalidError(reason_code) from error
 
 
 def _admit_plan(source: SourceProfile, plan: PlanSummary) -> None:

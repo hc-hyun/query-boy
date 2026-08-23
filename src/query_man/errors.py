@@ -10,14 +10,42 @@ _PUBLIC_REJECTED_CONSTRUCTS = frozenset(
     }
 )
 
-_PUBLIC_QUERY_INVALID_REASONS = frozenset(
-    {
-        "QUERY_DIVISION_BY_ZERO",
-        "QUERY_INVALID_CAST",
-        "QUERY_INVALID_LIMIT",
-        "QUERY_UNDEFINED_COLUMN",
-    }
-)
+_QUERY_INVALID_MESSAGES = {
+    "QUERY_DIVISION_BY_ZERO": (
+        "The query can divide by zero. Guard the denominator with NULLIF or exclude zero values, "
+        "then retry once."
+    ),
+    "QUERY_FUNCTION_SIGNATURE_MISMATCH": (
+        "A function or operator call has unsupported argument types or count. Use a supported "
+        "built-in signature and only advertised casts, then retry once."
+    ),
+    "QUERY_INVALID_CAST": (
+        "The query casts a value to an incompatible type. Use an advertised compatible cast or "
+        "filter invalid values, then retry once."
+    ),
+    "QUERY_INVALID_FUNCTION_ARGUMENT": (
+        "A function argument has an invalid value. Correct the argument while preserving the "
+        "requested calculation, then retry once."
+    ),
+    "QUERY_INVALID_FUNCTION_USAGE": (
+        "An aggregate or window function is used in an unsupported form. Use its supported call "
+        "form, then retry once."
+    ),
+    "QUERY_INVALID_LIMIT": (
+        "LIMIT and OFFSET must use non-negative values. Correct them and retry once."
+    ),
+    "QUERY_INVALID_REGULAR_EXPRESSION": (
+        "The regular expression is invalid. Correct its pattern or flags, then retry once."
+    ),
+    "QUERY_NUMERIC_VALUE_OUT_OF_RANGE": (
+        "A numeric value is outside its supported range. For percentile fractions use a value "
+        "from 0 through 1, then retry once."
+    ),
+    "QUERY_UNDEFINED_COLUMN": (
+        "The query references a column PostgreSQL cannot resolve. Use a returned column sql_name "
+        "or an alias declared in the query, then retry once."
+    ),
+}
 
 
 class AppError(Exception):
@@ -74,13 +102,18 @@ class QueryRejectedError(AppError):
 
 class QueryInvalidError(AppError):
     def __init__(self, reason_code: str) -> None:
-        if reason_code not in _PUBLIC_QUERY_INVALID_REASONS:
+        message = _QUERY_INVALID_MESSAGES.get(reason_code)
+        if message is None:
             raise ValueError("Query invalid reason is not public.")
         super().__init__(
             400,
             "QUERY_INVALID",
-            "The query must be corrected before it can run.",
-            {"reason_code": reason_code},
+            message,
+            {
+                "reason_code": reason_code,
+                "action": "CORRECT_SQL",
+                "retryable": True,
+            },
         )
 
 

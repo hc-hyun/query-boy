@@ -62,6 +62,21 @@ MCP contract와 병렬·포화·취소·비노출 경계의 실제 server 검증
 내구성과 resource 경계는
 [multi-replica soak audit](verification/2026-08-23-mcp-multi-replica-soak.md)에 기록한다.
 
+## Development Module Boundaries
+
+배포 형태는 하나의 process지만 개발 소유권은 Source Catalog, Metadata, Guarded Query,
+Control Plane, Delivery, Runtime과 Assurance의 논리 module로 나눈다. 이 경계는 microservice
+분리를 뜻하지 않으며, AI agent가 repository 전체를 선행 학습하지 않고 담당 module의 역할,
+직접 소비 계약, 실행 흐름과 테스트에 집중해 병렬 작업하기 위한 modular monolith 경계다.
+
+현재 `src/query_man`은 평면 구조이므로 owner는 package 경로가 아니라
+[module boundary index](modules/README.md)의 transition map으로 결정한다. 새 의존은 owner가 공개한
+계약으로만 연결한다. Runtime은 production implementation을, Assurance CLI는 offline 검증
+implementation을 조립하며 Control Plane은 candidate source 검증을 위한 격리 staging만 조립한다.
+Module contract 변경은
+[ADR 0018](decisions/0018-module-ownership-and-contract-governance.md)에 따라 구현 전에 사용자
+승인을 받는다. 물리 package 이동은 이 계약 baseline을 보존하는 별도 refactoring이다.
+
 ## Component Boundaries
 
 ### Physical Catalog
@@ -188,8 +203,11 @@ query(source_id, sql, metadata_revision, sql_policy_revision)
   -> success: status, query_id, metadata_revision, sql_policy_revision,
               fingerprint, columns, rows,
               row_count, result_bytes, truncated, queue_ms, elapsed_ms, plan_summary
-  -> failure: error.code, error.message,
-              error.details?{reason_code, rejected_construct?}
+  -> query failure: error.code, error.message,
+                    error.details?{reason_code, rejected_construct?, action?, retryable?}
+  -> invalid arguments: error.code=INVALID_REQUEST, error.message,
+                        error.details{action, retryable, issues[{path, reason_code, message}],
+                                      truncated}
 ```
 
 Source가 사용자 session에 고정되는 환경에서는 `list_sources`를 생략할 수 있다.
@@ -283,6 +301,8 @@ Schema drift로 overlay가 깨지면 신규 revision 발행을 중단하고 마�
   [ADR 0016](decisions/0016-centralized-source-management-plane.md)을 따른다.
 - Shared source access, admin 경계와 source별 공통 resource tier는
   [ADR 0017](decisions/0017-shared-source-access-and-resource-tier.md)을 따른다.
+- Module owner, 집중 읽기 범위와 inter-module contract 승인 절차는
+  [ADR 0018](decisions/0018-module-ownership-and-contract-governance.md)을 따른다.
 
 ## Completion Tracking
 

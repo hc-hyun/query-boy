@@ -1859,8 +1859,15 @@ async def test_query_invalid_returns_only_bounded_correction_reason() -> None:
     assert response.json() == {
         "error": {
             "code": "QUERY_INVALID",
-            "message": "The query must be corrected before it can run.",
-            "details": {"reason_code": "QUERY_UNDEFINED_COLUMN"},
+            "message": (
+                "The query references a column PostgreSQL cannot resolve. Use a returned column "
+                "sql_name or an alias declared in the query, then retry once."
+            ),
+            "details": {
+                "reason_code": "QUERY_UNDEFINED_COLUMN",
+                "action": "CORRECT_SQL",
+                "retryable": True,
+            },
         }
     }
     assert sensitive_literal not in response.text

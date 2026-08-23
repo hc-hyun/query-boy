@@ -31,7 +31,11 @@ overload가 선택될 가능성을 독립적으로 차단하지 못한다. Curat
   실행 가능한 경우에만 SQL planning을 진행한다.
 - `EXPLAIN`이 PostgreSQL의 실제 type/overload resolution을 수행한다. 고정된 search
   path와 안전한 전체 candidate 집합 때문에 선택된 OID도 같은 정책 안에 있다.
-- `rank`, `lag`, `lead`, `extract`처럼 승인한 분석 함수도 예외 없이 같은 candidate 검증을
+- 함수 승인은 이름 단위이므로 해당 이름의 visible `pg_catalog` overload 전체가 위
+  candidate 검증을 통과해야 한다. 따라서 `dense_rank`의 window·hypothetical ordered-set,
+  `percentile_cont`의 scalar·array 및 `float8`·`interval`, JSON 함수의 polymorphic form도 같은
+  경계에 포함되며 특정 문법만 승인한 것으로 간주하지 않는다.
+- 승인한 window·ordered-set aggregate·문자열·JSON 함수도 예외 없이 같은 검증을
   거친다. Window/aggregate 실행 비용은 statement·transaction timeout, `work_mem`, temp file과
   plan admission으로 제한한다.
 

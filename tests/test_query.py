@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 from psycopg import errors
 
+import query_man.query as query_module
 from query_man.app import _until_disconnect
 from query_man.errors import (
     MetadataRevisionMismatchError,
@@ -67,6 +68,105 @@ class RecordingExecutor:
 
     async def cancel(self, _query_id: str) -> bool:
         return False
+
+
+class _PlanCursor:
+    async def fetchone(self) -> dict[str, object]:
+        return {
+            "QUERY PLAN": [
+                {
+                    "Plan": {
+                        "Total Cost": 1.0,
+                        "Plan Rows": 1,
+                    }
+                }
+            ]
+        }
+
+
+class _ResultCursor:
+    description: tuple[object, ...] = ()
+
+    def __init__(self, phase: str, database_error: errors.DatabaseError) -> None:
+        self._phase = phase
+        self._database_error = database_error
+
+    async def execute(self, _sql: str) -> None:
+        if self._phase == "cursor_execute":
+            raise self._database_error
+
+    async def fetchmany(self, _size: int) -> list[object]:
+        if self._phase == "cursor_fetch":
+            raise self._database_error
+        return []
+
+    async def close(self) -> None:
+        pass
+
+
+class _PhaseConnection:
+    def __init__(self, phase: str, database_error: errors.DatabaseError) -> None:
+        self.phase = phase
+        self.database_error = database_error
+        self.rolled_back = False
+
+    async def execute(
+        self,
+        statement: str,
+        _parameters: object | None = None,
+    ) -> object:
+        if self.phase == "session" and "set_config('statement_timeout'" in statement:
+            raise self.database_error
+        if self.phase == "explain" and statement.startswith("EXPLAIN"):
+            raise self.database_error
+        if self.phase == "commit" and statement == "COMMIT":
+            raise self.database_error
+        if statement.startswith("EXPLAIN"):
+            return _PlanCursor()
+        return object()
+
+    def cursor(self, **_options: object) -> _ResultCursor:
+        return _ResultCursor(self.phase, self.database_error)
+
+    async def rollback(self) -> None:
+        self.rolled_back = True
+
+
+class _ConnectionContext:
+    def __init__(self, connection: _PhaseConnection) -> None:
+        self._connection = connection
+
+    async def __aenter__(self) -> _PhaseConnection:
+        return self._connection
+
+    async def __aexit__(self, *_args: object) -> None:
+        pass
+
+
+class _PhasePool:
+    def __init__(self, connection: _PhaseConnection) -> None:
+        self._connection = connection
+
+    def connection(self, *, timeout: float) -> _ConnectionContext:
+        assert timeout > 0
+        return _ConnectionContext(self._connection)
+
+
+def _stub_internal_query_checks(
+    monkeypatch: pytest.MonkeyPatch,
+    phase: str,
+    database_error: errors.DatabaseError,
+) -> None:
+    async def require_reader_policy(*_args: object) -> None:
+        if phase == "reader_policy":
+            raise database_error
+
+    async def validate_resolved_objects(*_args: object) -> None:
+        if phase == "resolved_object":
+            raise database_error
+
+    monkeypatch.setattr(query_module, "require_reader_session_policy", require_reader_policy)
+    monkeypatch.setattr(query_module, "_validate_resolved_objects", validate_resolved_objects)
 
 
 def query_service() -> tuple[QueryService, MetadataService, RecordingExecutor]:
@@ -221,6 +321,10 @@ def test_query_invalid_error_rejects_nonpublic_reason() -> None:
     [
         (errors.UndefinedColumn("private_column at character 42"), "QUERY_UNDEFINED_COLUMN"),
         (
+            errors.NumericValueOutOfRange("private numeric argument"),
+            "QUERY_NUMERIC_VALUE_OUT_OF_RANGE",
+        ),
+        (
             errors.InvalidTextRepresentation("invalid input syntax for private type"),
             "QUERY_INVALID_CAST",
         ),
@@ -229,6 +333,10 @@ def test_query_invalid_error_rejects_nonpublic_reason() -> None:
         (errors.CannotCoerce("private source and target types"), "QUERY_INVALID_CAST"),
         (errors.DivisionByZero("private expression at character 42"), "QUERY_DIVISION_BY_ZERO"),
         (
+            errors.InvalidRegularExpression("private regular expression"),
+            "QUERY_INVALID_REGULAR_EXPRESSION",
+        ),
+        (
             errors.InvalidRowCountInLimitClause("private negative limit"),
             "QUERY_INVALID_LIMIT",
         ),
@@ -236,36 +344,35 @@ def test_query_invalid_error_rejects_nonpublic_reason() -> None:
             errors.InvalidRowCountInResultOffsetClause("private negative offset"),
             "QUERY_INVALID_LIMIT",
         ),
+        (
+            errors.InvalidParameterValue("private function argument"),
+            "QUERY_INVALID_FUNCTION_ARGUMENT",
+        ),
+        (
+            errors.WrongObjectType("private aggregate usage"),
+            "QUERY_INVALID_FUNCTION_USAGE",
+        ),
+        (
+            errors.UndefinedFunction("private function signature"),
+            "QUERY_FUNCTION_SIGNATURE_MISMATCH",
+        ),
     ],
 )
 async def test_executor_maps_correctable_database_errors_to_bounded_query_invalid(
     database_error: errors.DatabaseError,
     reason_code: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = load_test_registry().get("development-issues")
     assert source is not None
     executor = PostgresQueryExecutor()
+    connection = _PhaseConnection("explain", database_error)
 
-    class ConnectionContext:
-        async def __aenter__(self) -> object:
-            return object()
+    async def get_pool(_source: SourceProfile) -> _PhasePool:
+        return _PhasePool(connection)
 
-        async def __aexit__(self, *_args: object) -> None:
-            pass
-
-    class FakePool:
-        def connection(self, *, timeout: float) -> ConnectionContext:
-            assert timeout > 0
-            return ConnectionContext()
-
-    async def get_pool(_source: SourceProfile) -> FakePool:
-        return FakePool()
-
-    async def execute_connection(*_args: object, **_kwargs: object) -> dict[str, object]:
-        raise database_error
-
+    _stub_internal_query_checks(monkeypatch, "explain", database_error)
     executor._get_pool = get_pool  # type: ignore[method-assign]
-    executor._execute_connection = execute_connection  # type: ignore[method-assign]
     operations.reset()
     try:
         with pytest.raises(QueryInvalidError) as caught:
@@ -278,13 +385,135 @@ async def test_executor_maps_correctable_database_errors_to_bounded_query_invali
 
         assert caught.value.status_code == 400
         assert caught.value.code == "QUERY_INVALID"
-        assert caught.value.message == "The query must be corrected before it can run."
-        assert caught.value.details == {"reason_code": reason_code}
+        assert caught.value.message == {
+            "QUERY_DIVISION_BY_ZERO": (
+                "The query can divide by zero. Guard the denominator with NULLIF or exclude "
+                "zero values, then retry once."
+            ),
+            "QUERY_FUNCTION_SIGNATURE_MISMATCH": (
+                "A function or operator call has unsupported argument types or count. Use a "
+                "supported built-in signature and only advertised casts, then retry once."
+            ),
+            "QUERY_INVALID_CAST": (
+                "The query casts a value to an incompatible type. Use an advertised compatible "
+                "cast or filter invalid values, then retry once."
+            ),
+            "QUERY_INVALID_FUNCTION_ARGUMENT": (
+                "A function argument has an invalid value. Correct the argument while preserving "
+                "the requested calculation, then retry once."
+            ),
+            "QUERY_INVALID_FUNCTION_USAGE": (
+                "An aggregate or window function is used in an unsupported form. Use its "
+                "supported call form, then retry once."
+            ),
+            "QUERY_INVALID_LIMIT": (
+                "LIMIT and OFFSET must use non-negative values. Correct them and retry once."
+            ),
+            "QUERY_INVALID_REGULAR_EXPRESSION": (
+                "The regular expression is invalid. Correct its pattern or flags, then retry once."
+            ),
+            "QUERY_NUMERIC_VALUE_OUT_OF_RANGE": (
+                "A numeric value is outside its supported range. For percentile fractions use a "
+                "value from 0 through 1, then retry once."
+            ),
+            "QUERY_UNDEFINED_COLUMN": (
+                "The query references a column PostgreSQL cannot resolve. Use a returned column "
+                "sql_name or an alias declared in the query, then retry once."
+            ),
+        }[reason_code]
+        assert caught.value.details == {
+            "reason_code": reason_code,
+            "action": "CORRECT_SQL",
+            "retryable": True,
+        }
         assert "private" not in str(caught.value)
         assert any(
             metric["name"] == "query_invalid"
             and metric.get("source_id") == source.source_id
             and metric["value"] == 1
+            for metric in operations.snapshot()["metrics"]
+        )
+        assert connection.rolled_back
+    finally:
+        await executor.close()
+        operations.reset()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["cursor_execute", "cursor_fetch"])
+async def test_executor_maps_result_cursor_database_errors_to_query_invalid(
+    phase: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+    database_error = errors.InvalidParameterValue("private function argument")
+    connection = _PhaseConnection(phase, database_error)
+    executor = PostgresQueryExecutor()
+
+    async def get_pool(_source: SourceProfile) -> _PhasePool:
+        return _PhasePool(connection)
+
+    _stub_internal_query_checks(monkeypatch, phase, database_error)
+    executor._get_pool = get_pool  # type: ignore[method-assign]
+    operations.reset()
+    try:
+        with pytest.raises(QueryInvalidError) as caught:
+            await executor.execute(
+                source,
+                "SELECT private_sql_literal",
+                "test-revision",
+                ValidatedSql("private-fingerprint", (), (), ()),
+            )
+
+        assert caught.value.details == {
+            "reason_code": "QUERY_INVALID_FUNCTION_ARGUMENT",
+            "action": "CORRECT_SQL",
+            "retryable": True,
+        }
+        assert connection.rolled_back
+    finally:
+        await executor.close()
+        operations.reset()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "phase",
+    ["session", "reader_policy", "resolved_object", "commit"],
+)
+async def test_executor_keeps_internal_invalid_parameter_errors_unavailable(
+    phase: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+    database_error = errors.InvalidParameterValue("private internal setting")
+    connection = _PhaseConnection(phase, database_error)
+    executor = PostgresQueryExecutor()
+
+    async def get_pool(_source: SourceProfile) -> _PhasePool:
+        return _PhasePool(connection)
+
+    _stub_internal_query_checks(monkeypatch, phase, database_error)
+    executor._get_pool = get_pool  # type: ignore[method-assign]
+    operations.reset()
+    try:
+        with pytest.raises(QueryUnavailableError) as caught:
+            await executor.execute(
+                source,
+                "SELECT private_sql_literal",
+                "test-revision",
+                ValidatedSql("private-fingerprint", (), (), ()),
+            )
+
+        assert caught.value.status_code == 503
+        assert caught.value.code == "QUERY_UNAVAILABLE"
+        assert caught.value.details is None
+        assert "private" not in str(caught.value)
+        assert connection.rolled_back
+        assert not any(
+            metric["name"] == "query_invalid"
             for metric in operations.snapshot()["metrics"]
         )
     finally:
@@ -303,31 +532,18 @@ async def test_executor_maps_correctable_database_errors_to_bounded_query_invali
 )
 async def test_executor_keeps_noncorrectable_database_errors_unavailable(
     database_error: errors.DatabaseError,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = load_test_registry().get("development-issues")
     assert source is not None
     executor = PostgresQueryExecutor()
+    connection = _PhaseConnection("explain", database_error)
 
-    class ConnectionContext:
-        async def __aenter__(self) -> object:
-            return object()
+    async def get_pool(_source: SourceProfile) -> _PhasePool:
+        return _PhasePool(connection)
 
-        async def __aexit__(self, *_args: object) -> None:
-            pass
-
-    class FakePool:
-        def connection(self, *, timeout: float) -> ConnectionContext:
-            assert timeout > 0
-            return ConnectionContext()
-
-    async def get_pool(_source: SourceProfile) -> FakePool:
-        return FakePool()
-
-    async def execute_connection(*_args: object, **_kwargs: object) -> dict[str, object]:
-        raise database_error
-
+    _stub_internal_query_checks(monkeypatch, "explain", database_error)
     executor._get_pool = get_pool  # type: ignore[method-assign]
-    executor._execute_connection = execute_connection  # type: ignore[method-assign]
     operations.reset()
     try:
         with pytest.raises(QueryUnavailableError) as caught:
@@ -342,6 +558,7 @@ async def test_executor_keeps_noncorrectable_database_errors_unavailable(
         assert caught.value.code == "QUERY_UNAVAILABLE"
         assert caught.value.details is None
         assert "private" not in str(caught.value)
+        assert connection.rolled_back
         assert not any(
             metric["name"] == "query_invalid"
             for metric in operations.snapshot()["metrics"]

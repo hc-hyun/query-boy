@@ -177,6 +177,30 @@ def _structured(result: CallToolResult) -> dict[str, Any]:
     return cast(dict[str, Any], result.structured_content)
 
 
+def _invalid_request(
+    action: str,
+    issues: list[dict[str, str]],
+    *,
+    truncated: bool = False,
+) -> dict[str, object]:
+    return {
+        "error": {
+            "code": "INVALID_REQUEST",
+            "message": "Follow details.action, correct every listed issue, and retry the tool once.",
+            "details": {
+                "action": action,
+                "retryable": True,
+                "issues": issues,
+                "truncated": truncated,
+            },
+        }
+    }
+
+
+def _argument_issue(path: str, reason_code: str, message: str) -> dict[str, str]:
+    return {"path": path, "reason_code": reason_code, "message": message}
+
+
 def _contract(verified: VerifiedQueryRegistry, query_id: str) -> VerifiedQuery:
     return next(query for query in verified.queries if query.query_id == query_id)
 
@@ -206,7 +230,25 @@ async def test_tools_and_revision_refresh_workflow(
             "get_context",
             "query",
         ]
-        assert all(tool.description for tool in tools.tools)
+        descriptions = {tool.name: tool.description for tool in tools.tools}
+        assert descriptions["get_context"] == (
+            "Get question-scoped metadata and both revisions required by query. "
+            "Pass the exact metadata_revision and sql_policy_revision from this response to query. "
+            "The response includes allowed SQL functions, cast types, and unqualified cast forms. "
+            "max_objects must be an integer from 1 through 4 and defaults to 2."
+        )
+        assert descriptions["query"] == (
+            "Execute one validated read-only SQL query under gateway hard limits. Pass the exact "
+            "metadata_revision and sql_policy_revision returned by the same get_context response. "
+            "On METADATA_REVISION_MISMATCH, fetch context again, regenerate SQL, and retry once."
+        )
+        query_tool = next(tool for tool in tools.tools if tool.name == "query")
+        assert query_tool.input_schema["required"] == [
+            "source_id",
+            "sql",
+            "metadata_revision",
+            "sql_policy_revision",
+        ]
         assert all(tool.input_schema["additionalProperties"] is False for tool in tools.tools)
         assert client.protocol_version == MCP_PROTOCOL_VERSION
 
@@ -568,32 +610,80 @@ async def test_tool_validation_does_not_disclose_input(
     mcp_server_settings: McpServerSettings,
 ) -> None:
     marker = "SENSITIVE_MCP_ARGUMENT_MARKER_DO_NOT_ECHO"
+    sensitive_key = "sensitive_private_argument_name"
+    sensitive_value = "SENSITIVE_PRIVATE_ARGUMENT_VALUE"
+    revision = f"sha256:{'0' * 64}"
+    cases = [
+        (
+            "query",
+            {
+                "source_id": "development-issues",
+                "sql": marker + ("x" * 100_000),
+                "metadata_revision": revision,
+                "sql_policy_revision": SQL_POLICY_REVISION,
+            },
+            "CORRECT_ARGUMENTS",
+            [
+                _argument_issue(
+                    "sql",
+                    "ARGUMENT_LENGTH_INVALID",
+                    "Use a value within the length declared by the tool input schema.",
+                )
+            ],
+            (marker,),
+        ),
+        (
+            "list_sources",
+            {sensitive_key: sensitive_value},
+            "CORRECT_ARGUMENTS",
+            [
+                _argument_issue(
+                    "arguments",
+                    "ARGUMENT_NOT_ALLOWED",
+                    "Remove arguments not listed in the tool input schema.",
+                )
+            ],
+            (sensitive_key, sensitive_value),
+        ),
+        (
+            "get_context",
+            {
+                "source_id": "development-issues",
+                "question": "문제 수",
+                "max_objects": 5,
+            },
+            "CORRECT_ARGUMENTS",
+            [_argument_issue("max_objects", "ARGUMENT_OUT_OF_RANGE", "Use an integer from 1 through 4.")],
+            (),
+        ),
+        (
+            "query",
+            {
+                "source_id": "development-issues",
+                "sql": "SELECT 1",
+                "metadata_revision": revision,
+            },
+            "CALL_GET_CONTEXT",
+            [
+                _argument_issue(
+                    "sql_policy_revision",
+                    "ARGUMENT_REQUIRED",
+                    "Call get_context and pass both exact revision values it returns.",
+                )
+            ],
+            (),
+        ),
+    ]
     async with _mcp_client(mcp_server_settings) as client:
-        rejected = [
-            await client.call_tool(
-                "query",
-                {
-                    "source_id": "development-issues",
-                    "sql": marker + ("x" * 100_000),
-                    "metadata_revision": f"sha256:{'0' * 64}",
-                    "sql_policy_revision": SQL_POLICY_REVISION,
-                },
-            ),
-            await client.call_tool("list_sources", {"host": marker}),
-            await client.call_tool(
-                "get_context",
-                {
-                    "source_id": "development-issues",
-                    "question": "문제 수",
-                    "max_objects": "2",
-                },
-            ),
-        ]
-
-    assert all(result.is_error is True for result in rejected)
-    assert all(result.structured_content is None for result in rejected)
-    assert all(marker not in str(result.content) for result in rejected)
-    assert all(len(str(result.content).encode()) < 8_192 for result in rejected)
+        for tool_name, arguments, action, issues, sensitive_values in cases:
+            result = await client.call_tool(tool_name, arguments)
+            assert result.is_error is True
+            assert result.structured_content == _invalid_request(action, issues)
+            rendered = str(result.content)
+            assert len(rendered.encode()) < 2_048
+            assert "input_value" not in rendered
+            assert "errors.pydantic.dev" not in rendered
+            assert all(value not in rendered for value in sensitive_values)
 
 
 async def test_query_policy_rejections_are_structured_and_bounded(
