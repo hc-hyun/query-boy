@@ -81,7 +81,8 @@ curl -s http://127.0.0.1:3000/meta \
   }'
 ```
 
-`/meta`가 반환한 `metadata_revision`으로 한 개의 읽기 전용 SQL을 실행할 수 있습니다.
+`/meta`가 반환한 `metadata_revision`과 `sql_policy_revision`으로 한 개의 읽기 전용 SQL을
+실행할 수 있습니다.
 
 ```bash
 curl -s http://127.0.0.1:3000/query \
@@ -90,7 +91,8 @@ curl -s http://127.0.0.1:3000/query \
   -d '{
     "source_id": "market-voc",
     "sql": "SELECT count(*) AS voc_count FROM ai.voc_overview",
-    "metadata_revision": "sha256:<value returned by /meta>"
+    "metadata_revision": "sha256:<metadata value returned by /meta>",
+    "sql_policy_revision": "sha256:<policy value returned by /meta>"
   }'
 ```
 

@@ -100,12 +100,14 @@ async def verify() -> None:
         assert context.structured_content is not None
         assert context.structured_content["quality_level"] == "L2"
         revision = context.structured_content["metadata_revision"]
+        policy_revision = context.structured_content["sql_policy_revision"]
         result = await client.call_tool(
             "query",
             {
                 "source_id": "development-issues",
                 "sql": "SELECT count(*) AS issue_count FROM ai.issue_overview",
                 "metadata_revision": revision,
+                "sql_policy_revision": policy_revision,
             },
         )
         assert result.structured_content is not None
