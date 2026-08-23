@@ -121,8 +121,9 @@ uv run query-man-evaluate
 uv run query-man-verify
 ```
 
-`uv run pytest`는 기본적으로 단위 테스트를 실행합니다. 실행 중인 로컬 PostgreSQL을
-사용하는 통합 테스트는 `uv run pytest -m integration`으로 별도 실행합니다. 신규 source 등록 절차는
+테스트와 공통 helper는 root의 `tests/` 한 곳에서 관리하고 unit/integration/load 구분은
+pytest marker로 표현합니다. `uv run pytest`는 기본적으로 단위 테스트를 실행합니다. 실행 중인
+로컬 PostgreSQL을 사용하는 통합 테스트는 `uv run pytest -m integration`으로 별도 실행합니다. 신규 source 등록 절차는
 [docs/source-onboarding.md](docs/source-onboarding.md)를 참고합니다.
 초기 budget의 bounded load 검증은 `uv run pytest -m load -s`로 실행합니다.
 전체 golden question의 revision, relation, SQL과 결과 invariant는

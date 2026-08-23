@@ -57,6 +57,8 @@ Reference: [Ponytail](https://github.com/DietrichGebert/ponytail)
 
 ## Tests
 
+- 테스트와 공통 helper는 repository root의 `tests/`에만 둔다. Unit/integration/load 구분은
+  별도 `test/` tree가 아니라 pytest marker와 파일명으로 표현한다.
 - Branch, loop, parser, cache, concurrency, 비용 또는 보안 경계를 변경하면 그 동작을 깨뜨렸을 때 실패하는 runnable test를 남긴다.
 - 기존 pytest helper와 integration fixture를 우선 재사용한다. 테스트용 framework나 abstraction을 새로 만들지 않는다.
 - 단순 전달 코드에는 과도한 단위 테스트를 만들지 않는다.
