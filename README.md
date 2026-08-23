@@ -56,8 +56,8 @@ docker compose down
 
 ## Metadata And Query API
 
-Compose가 기본적으로 Query Man을 실행합니다. Application을 host의 Python 3.12와 `uv`로
-직접 개발할 때만 PostgreSQL service를 단독으로 시작합니다.
+Compose는 Python 3.14 image로 Query Man을 실행합니다. Application을 최소 지원 version인
+host의 Python 3.12와 `uv`로 직접 개발할 때만 PostgreSQL service를 단독으로 시작합니다.
 
 ```bash
 docker compose stop query-man

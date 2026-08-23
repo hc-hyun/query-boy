@@ -45,7 +45,7 @@ checklist는 [active development TODO](development-todo.md)에서 별도로 관�
 
 - [x] `BASE-01` 서로 독립된 PostgreSQL source database 두 개와 결정적 seed를 제공한다.
 - [x] `BASE-02` Source별 최소 권한 reader와 `ai` curated view를 제공한다.
-- [x] `BASE-03` `uv` 기반 Python 3.12 애플리케이션과 고정된 lockfile을 제공한다.
+- [x] `BASE-03` 최소 Python 3.12 애플리케이션, Python 3.14 container와 고정된 lockfile을 제공한다.
 - [x] `BASE-04` YAML source registry와 budget profile을 검증하고 credential 값을 manifest와 응답에서 분리한다.
 - [x] `BASE-05` Reader 권한으로 relation, column, type, comment와 view definition hash를 수집한다.
 - [x] `BASE-06` Semantic overlay의 grain, alias, measure, business predicate, join과 composition을 검증한다.
