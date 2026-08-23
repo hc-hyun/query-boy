@@ -118,6 +118,10 @@ class RuntimeConfig:
             return
         if self.source_mode != "managed":
             raise ValueError("QUERY_MAN_SOURCE_MODE must be bootstrap or managed")
+        if self.api_token is not None:
+            raise ValueError(
+                "QUERY_MAN_API_TOKEN is not accepted when QUERY_MAN_SOURCE_MODE=managed"
+            )
         if self.control_dsn is None or self.source_encryption_key is None:
             raise ValueError(
                 "QUERY_MAN_CONTROL_DSN and QUERY_MAN_SOURCE_ENCRYPTION_KEY are required "
@@ -138,6 +142,13 @@ def load_runtime_config(
         raise ValueError(f"Invalid runtime configuration: {error}") from error
     if parsed.api_token is not None and parsed.access_policy_file is not None:
         raise ValueError("Configure QUERY_MAN_API_TOKEN or QUERY_MAN_ACCESS_POLICY_FILE, not both")
+    if parsed.source_mode == "managed" and (
+        parsed.api_token is not None or parsed.access_policy_file is None
+    ):
+        raise ValueError(
+            "QUERY_MAN_SOURCE_MODE=managed requires QUERY_MAN_ACCESS_POLICY_FILE "
+            "and does not accept QUERY_MAN_API_TOKEN"
+        )
     if not _is_loopback(parsed.host) and parsed.api_token is None and parsed.access_policy_file is None:
         raise ValueError(
             "QUERY_MAN_API_TOKEN or QUERY_MAN_ACCESS_POLICY_FILE is required when QUERY_MAN_HOST is not loopback"

@@ -62,8 +62,8 @@ verified file을 열지 않으며 Control DB lifecycle이 없는 file source를 
 
 | Mode | Required/forbidden settings | Purpose |
 |---|---|---|
-| `bootstrap` (default) | Control DSN/key 모두 금지 | Local/CI repository fixture |
-| `managed` | Control DSN/key 모두 필수 | Production Control DB authority와 hot-add |
+| `bootstrap` (default) | Control DSN/key 금지; anonymous/query-only token 또는 v2 policy | Local/CI repository fixture |
+| `managed` | Control DSN/key와 v2 access policy 필수; API token/anonymous 금지 | Production Control DB authority와 hot-add |
 
 Managed mode에는 source별 file fallback이나 verified-contract merge가 없다. Budget profile과 access
 policy는 계속 deployment configuration에서 읽는다. Source/verified directory는 없어도 되지만
@@ -72,7 +72,7 @@ budget file과 runtime secret은 있어야 한다.
 이미 bootstrap으로 사용하던 source를 production Control DB로 이관할 때는 다음 순서를 한 번만
 수행한다.
 
-1. Control schema, 전용 writer, encryption key와 admin authentication을 준비한다.
+1. Control schema, 전용 writer, encryption key와 version 2 query/admin access policy를 준비한다.
 2. Serving traffic 밖에서 managed runtime을 시작한다. 아직 active source가 없으면 `/ready` 503이
    정상이며 admin endpoint는 별도 운영 경로로 호출한다.
 3. Existing manifest의 `minimum_quality_level`을 L0/L1로 두고 기존 `PUT /admin/sources/{source_id}`로
@@ -106,15 +106,16 @@ blind retry하지 않고 Control DB state를 먼저 reconcile한다.
    override 없이 같은 source-resolved budget 정의가 적용되는지 확인하고, admin 기록에는
    선택한 `budget_profile`과 관련 metadata revision을 남긴다.
 
-[ADR 0017](decisions/0017-shared-source-access-and-resource-tier.md)의 목표 운영에서는 admin이
+[ADR 0017](decisions/0017-shared-source-access-and-resource-tier.md)에 따라 admin이
 source를 활성화하면 모든 인증된 query principal에게 동시에 공개된다. 별도 caller grant나
 재시작은 없다. 한 source의 모든 사용자는 manifest가 선택한 같은 `budget_profile` 정의를
 쓰며 query 사용자가 이를 바꾸지 못한다. Stable caller/tenant identity는 audit와 source-native
 RLS에만 남는다.
 
-현재 runtime은 아직 ADR 0004의 `allowed_sources|all_sources` policy를 지원한다. `CTRL-03`의
-shared-access cutover 전에는 [`config/access-policies.example.yaml`](../config/access-policies.example.yaml)
-규칙이 실제 동작이며, 서로 다른 scope를 자동으로 넓혀 목표 정책처럼 취급하지 않는다.
+Access-policy version 2에는 source scope가 없다. Caller는 `caller_id`, `tenant_id`, token 환경 변수와
+`operator`만 선언하며 version 1, `allowed_sources`와 `all_sources`가 남은 policy는 startup에서
+fail-closed한다. Managed mode는 최소 한 개의 non-admin query identity와 explicit operator admin
+identity를 모두 요구한다. 이 cutover는 Control DB migration이나 dependency를 추가하지 않는다.
 
 최소 manifest는 semantic overlay 없이도 동작한다. 아래 YAML은 API manifest document를 읽기
 쉽게 표현한 예이며 production repository file을 요구한다는 의미가 아니다.
@@ -140,8 +141,10 @@ budget_profile: interactive
 이 상태는 L0 best-effort 검색이다. 한국어 질문, grain과 비표준 join이 필요할 때만
 `semantic_overlay`를 추가한다.
 
-현재 mutation endpoint는 `operator` caller만 사용할 수 있다. 목표 상태에서는 이 capability를
-explicit Query Man admin만 갖고 일반 query credential과 anonymous local caller는 갖지 않는다.
+Mutation endpoint는 explicit Query Man admin의 `operator` capability만 사용할 수 있다. 일반 query
+credential은 모든 admin endpoint와 cancel에서 거부되며 managed mode는 anonymous local caller를
+허용하지 않는다. Operator는 별도 role hierarchy가 아니라 query 권한에 관리 권한을 추가하는
+capability superset이다.
 
 | Operation | Endpoint | 안전 조건 |
 |---|---|---|
@@ -153,7 +156,8 @@ explicit Query Man admin만 갖고 일반 query credential과 anonymous local ca
 | Deactivate | `DELETE /admin/sources/{source_id}` | Active pointer만 disable하고 immutable history 유지 |
 
 현재는 sanitized admin inventory/detail/history와 authoritative mutation-result 조회 endpoint가
-없다. Public `/sources`는 query caller에게 허용된 active source 목록일 뿐 관리 catalog가 아니다.
+없다. Public `/sources`는 모든 인증 query caller가 공유하는 active source 목록일 뿐 관리
+catalog가 아니다.
 해당 read model은 `CTRL-04`, idempotency/receipt/audit는 `CTRL-05`의 후속 구현이다.
 
 현재 direct publish의 body credential은 trusted manual-admin 경계다. Plan-only onboarding

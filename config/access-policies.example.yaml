@@ -1,17 +1,17 @@
-version: 1
+version: 2
 
 callers:
   - caller_id: development-analyst
     tenant_id: engineering
     token_env: DEVELOPMENT_ANALYST_API_TOKEN
-    allowed_sources:
-      - development-issues
     operator: false
 
-  - caller_id: quality-operator
+  - caller_id: quality-analyst
     tenant_id: quality
-    token_env: QUALITY_OPERATOR_API_TOKEN
-    # Explicitly trusts this caller with current and future control-plane sources.
-    # Use allowed_sources instead when the caller must remain source-limited.
-    all_sources: true
+    token_env: QUALITY_ANALYST_API_TOKEN
+    operator: false
+
+  - caller_id: query-man-admin
+    tenant_id: operations
+    token_env: QUERY_MAN_ADMIN_API_TOKEN
     operator: true

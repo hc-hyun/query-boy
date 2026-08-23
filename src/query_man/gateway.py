@@ -4,7 +4,7 @@ import asyncio
 import logging
 import uuid
 
-from query_man.access import AccessPolicy, CallerContext
+from query_man.access import CallerContext
 from query_man.errors import AppError, OperatorRequiredError, QueryNotFoundError, SourceNotFoundError
 from query_man.metadata import MetadataService
 from query_man.query import QueryService
@@ -19,21 +19,13 @@ class GatewayService:
         registry: SourceRegistry,
         metadata: MetadataService,
         queries: QueryService,
-        access: AccessPolicy,
     ) -> None:
         self._registry = registry
         self._metadata = metadata
         self._queries = queries
-        self._access = access
 
-    def list_sources(self, caller: CallerContext) -> dict[str, object]:
-        return {
-            "sources": [
-                source
-                for source in self._registry.list()
-                if caller.all_sources or source["source_id"] in caller.allowed_sources
-            ]
-        }
+    def list_sources(self, _caller: CallerContext) -> dict[str, object]:
+        return {"sources": self._registry.list()}
 
     async def get_context(
         self,
@@ -183,10 +175,7 @@ class GatewayService:
                 caller.tenant_id,
             )
             raise OperatorRequiredError
-        allowed_sources = (
-            self._registry.source_ids() if caller.all_sources else caller.allowed_sources
-        )
-        cancelled = await self._queries.cancel(query_id, allowed_sources)
+        cancelled = await self._queries.cancel(query_id)
         if not cancelled:
             raise QueryNotFoundError
         logger.info(
@@ -212,7 +201,6 @@ class GatewayService:
         try:
             if self._registry.get(source_id) is None:
                 raise SourceNotFoundError
-            self._access.require_source(caller, source_id)
         except SourceNotFoundError:
             logger.warning(
                 "authorization_denied caller_id=%s tenant_id=%s operation=%s",

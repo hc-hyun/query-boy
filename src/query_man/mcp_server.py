@@ -357,7 +357,10 @@ def _log_tool_completed(
 ) -> None:
     duration_ms = round((time.monotonic() - started) * 1_000)
     authorized_source = (
-        source_id if caller is not None and (caller.all_sources or source_id in caller.allowed_sources) else None
+        source_id
+        if caller is not None
+        and (outcome == "success" or error_code not in {None, "SOURCE_NOT_FOUND", "INTERNAL_ERROR"})
+        else None
     )
     extra: dict[str, object] = {
         "mcp_call_id": call_id,

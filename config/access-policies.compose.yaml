@@ -1,10 +1,7 @@
-version: 1
+version: 2
 
 callers:
   - caller_id: codex-local
     tenant_id: local-development
     token_env: QUERY_MAN_CODEX_MCP_TOKEN
-    allowed_sources:
-      - development-issues
-      - market-voc
     operator: false

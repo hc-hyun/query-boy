@@ -1,22 +1,28 @@
 from __future__ import annotations
 
 from pathlib import Path
+from textwrap import dedent, indent
 from typing import Literal
 
 import pytest
 
 import query_man.app as app_module
+from query_man.access import AccessPolicy, AccessPolicyConfigurationError
 from query_man.registry import SourceRegistry
 from query_man.runtime_config import RuntimeConfig
 from query_man.verified import VerifiedQueryRegistry
 from tests.helpers import ROOT_DIRECTORY, load_test_registry
 
 _SOURCE_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+_QUERY_TOKEN = "query-token-value-with-at-least-32-characters"
+_ADMIN_TOKEN = "admin-token-value-with-at-least-32-characters"
 
 
 def _runtime(
     source_mode: Literal["bootstrap", "managed"],
     source_directory: Path,
+    *,
+    access_policy_file: Path | None = None,
 ) -> RuntimeConfig:
     managed = source_mode == "managed"
     return RuntimeConfig(
@@ -26,7 +32,7 @@ def _runtime(
         api_token=None,
         source_directory=source_directory,
         budget_file=ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
-        access_policy_file=None,
+        access_policy_file=access_policy_file,
         metadata_cache_ttl_ms=0,
         metadata_max_stale_ms=300_000,
         metadata_retry_delay_ms=5_000,
@@ -40,6 +46,37 @@ def _unexpected_file_load(*_args: object, **_kwargs: object) -> None:
     raise AssertionError("managed mode must not load bootstrap files")
 
 
+def _policy(
+    tmp_path: Path,
+    callers: str,
+    environment: dict[str, str],
+) -> AccessPolicy:
+    return AccessPolicy.load(_write_policy(tmp_path, callers), environment)
+
+
+def _write_policy(tmp_path: Path, callers: str) -> Path:
+    path = tmp_path / "access.yaml"
+    body = indent(dedent(callers).strip(), "  ")
+    path.write_text(f"version: 2\ncallers:\n{body}\n", encoding="utf-8")
+    return path
+
+
+def _shared_policy(tmp_path: Path) -> AccessPolicy:
+    return _policy(
+        tmp_path,
+        """
+  - caller_id: analyst
+    tenant_id: engineering
+    token_env: QUERY_TOKEN
+  - caller_id: operator
+    tenant_id: operations
+    token_env: ADMIN_TOKEN
+    operator: true
+""",
+        {"QUERY_TOKEN": _QUERY_TOKEN, "ADMIN_TOKEN": _ADMIN_TOKEN},
+    )
+
+
 def test_managed_mode_starts_empty_without_loading_source_or_verified_files(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -47,7 +84,10 @@ def test_managed_mode_starts_empty_without_loading_source_or_verified_files(
     monkeypatch.setattr(SourceRegistry, "load", _unexpected_file_load)
     monkeypatch.setattr(VerifiedQueryRegistry, "load", _unexpected_file_load)
 
-    app = app_module.build_app(_runtime("managed", tmp_path / "missing" / "sources"))
+    app = app_module.build_app(
+        _runtime("managed", tmp_path / "missing" / "sources"),
+        access_policy=_shared_policy(tmp_path),
+    )
 
     assert app.state.registry.source_ids() == frozenset()
     assert app.state.source_admin is not None
@@ -59,7 +99,94 @@ def test_managed_mode_rejects_an_injected_registry(tmp_path: Path) -> None:
         app_module.build_app(
             _runtime("managed", tmp_path / "missing" / "sources"),
             registry=SourceRegistry([]),
+            access_policy=_shared_policy(tmp_path),
         )
+
+
+def test_managed_mode_rejects_anonymous_local_compatibility(tmp_path: Path) -> None:
+    with pytest.raises(
+        AccessPolicyConfigurationError,
+        match="authenticated query and admin identities",
+    ):
+        app_module.build_app(_runtime("managed", tmp_path / "missing" / "sources"))
+
+
+def test_managed_mode_rejects_legacy_query_only_policy(tmp_path: Path) -> None:
+    with pytest.raises(AccessPolicyConfigurationError, match="admin identity"):
+        app_module.build_app(
+            _runtime("managed", tmp_path / "missing" / "sources"),
+            access_policy=AccessPolicy.legacy(_QUERY_TOKEN),
+        )
+
+
+def test_managed_mode_rejects_policy_without_admin(tmp_path: Path) -> None:
+    query_only = _policy(
+        tmp_path,
+        """
+  - caller_id: analyst
+    tenant_id: engineering
+    token_env: QUERY_TOKEN
+""",
+        {"QUERY_TOKEN": _QUERY_TOKEN},
+    )
+
+    with pytest.raises(AccessPolicyConfigurationError, match="admin identity"):
+        app_module.build_app(
+            _runtime("managed", tmp_path / "missing" / "sources"),
+            access_policy=query_only,
+        )
+
+
+def test_managed_mode_rejects_policy_without_query_identity(tmp_path: Path) -> None:
+    admin_only = _policy(
+        tmp_path,
+        """
+  - caller_id: operator
+    tenant_id: operations
+    token_env: ADMIN_TOKEN
+    operator: true
+""",
+        {"ADMIN_TOKEN": _ADMIN_TOKEN},
+    )
+
+    with pytest.raises(AccessPolicyConfigurationError, match="non-admin query identity"):
+        app_module.build_app(
+            _runtime("managed", tmp_path / "missing" / "sources"),
+            access_policy=admin_only,
+        )
+
+
+def test_managed_mode_loads_shared_policy_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    policy_file = _write_policy(
+        tmp_path,
+        """
+  - caller_id: analyst
+    tenant_id: engineering
+    token_env: QUERY_TOKEN
+  - caller_id: operator
+    tenant_id: operations
+    token_env: ADMIN_TOKEN
+    operator: true
+""",
+    )
+    monkeypatch.setenv("QUERY_TOKEN", _QUERY_TOKEN)
+    monkeypatch.setenv("ADMIN_TOKEN", _ADMIN_TOKEN)
+
+    app = app_module.build_app(
+        _runtime(
+            "managed",
+            tmp_path / "missing" / "sources",
+            access_policy_file=policy_file,
+        )
+    )
+
+    query_caller = app.state.access_policy.authenticate(_QUERY_TOKEN)
+    admin_caller = app.state.access_policy.authenticate(_ADMIN_TOKEN)
+    assert query_caller is not None and query_caller.operator is False
+    assert admin_caller is not None and admin_caller.operator is True
 
 
 def test_bootstrap_mode_preserves_an_explicit_empty_registry(

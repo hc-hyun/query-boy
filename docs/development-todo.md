@@ -56,12 +56,12 @@ Control DB와 하나의 admin management API에서 관리한다. 실제 DB, secr
   bootstrap seed/contract보다 우선하는 managed-mode startup을 구현한다. 일회성 import가 필요한
   contract를 Control DB로 이관한 뒤 filesystem contract를 무시하게 하고 zero-bootstrap
   production 및 precedence 회귀를 격리 Control DB에서 검증한다.
-- [ ] `CTRL-03` Shared-access mode를 구현한다. 모든 production query identity는
-  `all_sources: true`와 non-admin으로 정규화하고 서로 다른 기존 source scope가 남으면
-  fail-closed한다. Admin identity만 source mutation과 cancel을 수행하게 하며 단일
-  `QUERY_MAN_API_TOKEN`과 anonymous local compatibility가 source management 환경에서 암시적
-  admin이 되지 않게 한다. 두 query identity의 source visibility parity, caller override 없이
-  같은 source-resolved budget 정의가 적용되는지와 모든 admin endpoint 거부를 검증한다.
+- [x] `CTRL-03` Version 2 access policy에서 caller별 source scope를 제거하고 version 1 및 legacy
+  scope field를 자동 권한 확대 없이 fail-closed한다. 모든 인증 identity는 active source 전체와
+  같은 source-resolved `budget_profile`을 공유한다. Managed mode는 explicit non-admin query와
+  operator admin identity를 모두 요구하고 API-token/anonymous caller를 거부한다. Bootstrap
+  local/API-token identity는 query-only다. 두 query identity의 visibility/budget parity와 모든
+  admin endpoint/cancel 거부를 검증한다.
 - [ ] `CTRL-04` Source owner, environment와 DB migration provenance를 immutable lifecycle에
   연결하고 admin-only source list/detail/generation history API에 pagination, filter와 bounded
   redaction을 적용한다. Effective `budget_profile`과 관련 metadata revision을 함께 보여주고
@@ -89,8 +89,11 @@ Control DB와 하나의 admin management API에서 관리한다. 실제 DB, secr
 `CTRL-02`의 mutually exclusive runtime mode, zero-bootstrap, file non-read와 Control DB
 restart/rollback/deactivate/verified-contract precedence 증거는
 [managed source startup audit](verification/2026-08-23-managed-source-startup.md)에 기록한다.
+`CTRL-03`의 policy v2 cutover, shared visibility/budget과 query/admin capability 분리 증거는
+[shared access audit](verification/2026-08-23-shared-access.md)에 기록한다. 최종 전체 gate가
+완료됐으며 audit status는 Complete다.
 
-현재 다음 작업은 `CTRL-03`이다. 이 track에서는 다단계 RBAC, caller grant storage,
+현재 다음 작업은 `CTRL-04`다. 이 track에서는 다단계 RBAC, caller grant storage,
 user/organization별 tier·quota와 AI production executor를 구현하지 않는다.
 
 두 번째 numbered migration이 추가될 때는 N-1→N data-preserving upgrade, 실패 migration의

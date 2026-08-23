@@ -80,6 +80,39 @@ class BearerAuth(httpx2.Auth):
         yield request
 
 
+_QUERY_A_TOKEN = "integration-query-a-token-with-at-least-32-characters"
+_QUERY_B_TOKEN = "integration-query-b-token-with-at-least-32-characters"
+_ADMIN_TOKEN = "integration-admin-token-with-at-least-32-characters"
+
+
+def _shared_access_policy(path: Path) -> AccessPolicy:
+    path.write_text(
+        """
+version: 2
+callers:
+  - caller_id: query-a
+    tenant_id: engineering
+    token_env: QUERY_A_TOKEN
+  - caller_id: query-b
+    tenant_id: quality
+    token_env: QUERY_B_TOKEN
+  - caller_id: admin
+    tenant_id: operations
+    token_env: ADMIN_TOKEN
+    operator: true
+""".strip(),
+        encoding="utf-8",
+    )
+    return AccessPolicy.load(
+        path,
+        {
+            "QUERY_A_TOKEN": _QUERY_A_TOKEN,
+            "QUERY_B_TOKEN": _QUERY_B_TOKEN,
+            "ADMIN_TOKEN": _ADMIN_TOKEN,
+        },
+    )
+
+
 @asynccontextmanager
 async def _serve_test_app(app: FastAPI) -> AsyncIterator[str]:
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -149,7 +182,7 @@ class DisconnectExecutor:
             self.cancelled.set()
         return {"query_id": query_id or "unreachable"}
 
-    async def cancel(self, _query_id: str, _allowed_sources: frozenset[str]) -> bool:
+    async def cancel(self, _query_id: str) -> bool:
         return False
 
     async def close(self) -> None:
@@ -662,6 +695,7 @@ async def test_catalog_and_query_enforce_versioned_session_budget(
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_onboards_third_source_without_runtime_restart(
+    tmp_path: Path,
     disposable_control_dsn: str,
 ) -> None:
     load_dotenv(ROOT_DIRECTORY / ".env")
@@ -711,7 +745,8 @@ async def test_onboards_third_source_without_runtime_restart(
         "SUPPORT_TICKETS_READER_PASSWORD",
         "support-tickets-local-secret",
     )
-    app = build_app(runtime)
+    access_policy = _shared_access_policy(tmp_path / "support-access.yaml")
+    app = build_app(runtime, access_policy=access_policy)
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server_socket.bind(("127.0.0.1", 0))
@@ -734,10 +769,17 @@ async def test_onboards_third_source_without_runtime_restart(
             await asyncio.sleep(0.01)
         assert server.started
 
-        async with httpx.AsyncClient(
-            base_url=f"http://127.0.0.1:{port}",
-        ) as session:
-            published = await session.put(
+        async with (
+            httpx.AsyncClient(
+                base_url=f"http://127.0.0.1:{port}",
+                headers={"Authorization": f"Bearer {_ADMIN_TOKEN}"},
+            ) as admin_session,
+            httpx.AsyncClient(
+                base_url=f"http://127.0.0.1:{port}",
+                headers={"Authorization": f"Bearer {_QUERY_A_TOKEN}"},
+            ) as query_session,
+        ):
+            published = await admin_session.put(
                 "/admin/sources/support-tickets",
                 json={"manifest": manifest, "credential": credential},
             )
@@ -747,11 +789,11 @@ async def test_onboards_third_source_without_runtime_restart(
             assert publish_body["quality_level"] == "L0"
             assert credential not in published.text
 
-            listed = await session.get("/sources")
+            listed = await query_session.get("/sources")
             assert "support-tickets" in {
                 source["source_id"] for source in listed.json()["sources"]
             }
-            context = await session.post(
+            context = await query_session.post(
                 "/meta",
                 json={
                     "source_id": "support-tickets",
@@ -765,13 +807,13 @@ async def test_onboards_third_source_without_runtime_restart(
             ]
 
             l2_manifest["minimum_quality_level"] = "L1"
-            semantic_published = await session.put(
+            semantic_published = await admin_session.put(
                 "/admin/sources/support-tickets",
                 json={"manifest": l2_manifest, "credential": credential},
             )
             assert semantic_published.status_code == 200
             assert semantic_published.json()["quality_level"] in {"L1", "L2"}
-            semantic_context = await session.post(
+            semantic_context = await query_session.post(
                 "/meta",
                 json={
                     "source_id": "support-tickets",
@@ -783,7 +825,7 @@ async def test_onboards_third_source_without_runtime_restart(
             verified_contract["metadata_revision"] = semantic_context.json()[
                 "metadata_revision"
             ]
-            verified = await session.post(
+            verified = await admin_session.post(
                 "/admin/sources/support-tickets/verified-queries",
                 json=verified_contract,
             )
@@ -791,13 +833,13 @@ async def test_onboards_third_source_without_runtime_restart(
             assert verified.json()["status"] == "verified"
 
             l2_manifest["minimum_quality_level"] = "L2"
-            l2_published = await session.put(
+            l2_published = await admin_session.put(
                 "/admin/sources/support-tickets",
                 json={"manifest": l2_manifest, "credential": credential},
             )
             assert l2_published.status_code == 200
             assert l2_published.json()["quality_level"] == "L2"
-            context = await session.post(
+            context = await query_session.post(
                 "/meta",
                 json={
                     "source_id": "support-tickets",
@@ -806,7 +848,7 @@ async def test_onboards_third_source_without_runtime_restart(
             )
             assert context.status_code == 200
             assert context.json()["quality_level"] == "L2"
-            queried = await session.post(
+            queried = await query_session.post(
                 "/query",
                 json={
                     "source_id": "support-tickets",
@@ -822,7 +864,10 @@ async def test_onboards_third_source_without_runtime_restart(
             assert queried.json()["row_count"] == 3
 
             async with (
-                httpx2.AsyncClient(trust_env=False) as mcp_http,
+                httpx2.AsyncClient(
+                    auth=BearerAuth(_QUERY_B_TOKEN),
+                    trust_env=False,
+                ) as mcp_http,
                 Client(
                     streamable_http_client(
                         f"http://127.0.0.1:{port}/mcp",
@@ -872,14 +917,14 @@ async def test_onboards_third_source_without_runtime_restart(
                     )
                 )
                 await admin_connection.commit()
-                rotated = await session.post(
+                rotated = await admin_session.post(
                     "/admin/sources/support-tickets/credential",
                     json={"credential": rotated_credential},
                 )
                 assert rotated.status_code == 200
                 assert rotated.json()["generation"] > publish_body["generation"]
                 assert rotated_credential not in rotated.text
-                after_rotation = await session.post(
+                after_rotation = await query_session.post(
                     "/query",
                     json={
                         "source_id": "support-tickets",
@@ -898,16 +943,16 @@ async def test_onboards_third_source_without_runtime_restart(
                     )
                 )
                 await admin_connection.commit()
-                restored = await session.post(
+                restored = await admin_session.post(
                     "/admin/sources/support-tickets/credential",
                     json={"credential": credential},
                 )
                 assert restored.status_code == 200
                 await admin_connection.close()
 
-            deactivated = await session.delete("/admin/sources/support-tickets")
+            deactivated = await admin_session.delete("/admin/sources/support-tickets")
             assert deactivated.status_code == 200
-            listed_after = await session.get("/sources")
+            listed_after = await query_session.get("/sources")
             assert "support-tickets" not in {
                 source["source_id"] for source in listed_after.json()["sources"]
             }
@@ -946,34 +991,7 @@ async def test_onboards_commerce_edges_across_authenticated_mcp_replicas(
         "ascii"
     )
     assert len(base64.urlsafe_b64decode(encryption_key)) == 32
-    operator_token = "commerce-operator-token-with-at-least-32-characters"
-    restricted_token = "commerce-restricted-token-with-at-least-32-characters"
-    policy_file = tmp_path / "commerce-access.yaml"
-    policy_file.write_text(
-        """
-version: 1
-callers:
-  - caller_id: commerce-operator
-    tenant_id: operations
-    token_env: COMMERCE_OPERATOR_TOKEN
-    all_sources: true
-    operator: true
-  - caller_id: development-reader
-    tenant_id: engineering
-    token_env: COMMERCE_RESTRICTED_TOKEN
-    allowed_sources: [development-issues]
-    operator: false
-""".strip(),
-        encoding="utf-8",
-    )
-    access_policy = AccessPolicy.load(
-        policy_file,
-        {"development-issues", "market-voc"},
-        {
-            "COMMERCE_OPERATOR_TOKEN": operator_token,
-            "COMMERCE_RESTRICTED_TOKEN": restricted_token,
-        },
-    )
+    access_policy = _shared_access_policy(tmp_path / "commerce-access.yaml")
     runtime = RuntimeConfig(
         host="127.0.0.1",
         port=0,
@@ -1074,36 +1092,42 @@ callers:
             _serve_test_app(replica_a) as replica_a_url,
             _serve_test_app(replica_b) as replica_b_url,
         ):
-            async with httpx.AsyncClient(
-                base_url=replica_a_url,
-                headers={"Authorization": f"Bearer {operator_token}"},
-            ) as admin_session:
+            async with (
+                httpx.AsyncClient(
+                    base_url=replica_a_url,
+                    headers={"Authorization": f"Bearer {_ADMIN_TOKEN}"},
+                ) as admin_session,
+                httpx.AsyncClient(
+                    base_url=replica_a_url,
+                    headers={"Authorization": f"Bearer {_QUERY_A_TOKEN}"},
+                ) as query_session,
+            ):
                 async with (
                     httpx2.AsyncClient(
-                        auth=BearerAuth(operator_token),
+                        auth=BearerAuth(_QUERY_A_TOKEN),
                         trust_env=False,
-                    ) as operator_http,
+                    ) as query_a_http,
                     Client(
                         streamable_http_client(
                             f"{replica_b_url}/mcp",
-                            http_client=operator_http,
+                            http_client=query_a_http,
                         ),
                         mode=MCP_PROTOCOL_VERSION,
-                    ) as operator_mcp,
+                    ) as query_a_mcp,
                     httpx2.AsyncClient(
-                        auth=BearerAuth(restricted_token),
+                        auth=BearerAuth(_QUERY_B_TOKEN),
                         trust_env=False,
-                    ) as restricted_http,
+                    ) as query_b_http,
                     Client(
                         streamable_http_client(
                             f"{replica_b_url}/mcp",
-                            http_client=restricted_http,
+                            http_client=query_b_http,
                         ),
                         mode=MCP_PROTOCOL_VERSION,
-                    ) as restricted_mcp,
+                    ) as query_b_mcp,
                 ):
                     try:
-                        initial_sources = await admin_session.get("/sources")
+                        initial_sources = await query_session.get("/sources")
                         assert initial_sources.status_code == 200
                         if "commerce-edges" in {
                             source["source_id"]
@@ -1114,7 +1138,7 @@ callers:
                             )
                             assert initial_deactivate.status_code == 200
                             for _ in range(100):
-                                listed = await operator_mcp.call_tool("list_sources", {})
+                                listed = await query_a_mcp.call_tool("list_sources", {})
                                 listed_body = listed.structured_content
                                 if isinstance(listed_body, dict) and "commerce-edges" not in {
                                     source["source_id"] for source in listed_body["sources"]
@@ -1159,11 +1183,11 @@ callers:
 
                         l0_context_body: dict[str, object] | None = None
                         for _ in range(100):
-                            l0_context = await operator_mcp.call_tool(
+                            l0_context = await query_a_mcp.call_tool(
                                 "get_context",
                                 {
                                     "source_id": "commerce-edges",
-                                    "question": "commerce order",
+                                    "question": verified_contract["question"],
                                 },
                             )
                             candidate = l0_context.structured_content
@@ -1183,28 +1207,29 @@ callers:
                         )
                         assert l0_context_body["quality_level"] == "L0"
 
-                        restricted_sources = await restricted_mcp.call_tool(
-                            "list_sources", {}
-                        )
-                        restricted_sources_body = restricted_sources.structured_content
-                        assert isinstance(restricted_sources_body, dict)
-                        assert "commerce-edges" not in {
+                        query_a_sources = await query_a_mcp.call_tool("list_sources", {})
+                        query_b_sources = await query_b_mcp.call_tool("list_sources", {})
+                        query_a_sources_body = query_a_sources.structured_content
+                        query_b_sources_body = query_b_sources.structured_content
+                        assert isinstance(query_a_sources_body, dict)
+                        assert isinstance(query_b_sources_body, dict)
+                        assert query_b_sources_body == query_a_sources_body
+                        assert "commerce-edges" in {
                             source["source_id"]
-                            for source in restricted_sources_body["sources"]
+                            for source in query_b_sources_body["sources"]
                         }
-                        restricted_context = await restricted_mcp.call_tool(
+                        query_b_context = await query_b_mcp.call_tool(
                             "get_context",
                             {
                                 "source_id": "commerce-edges",
                                 "question": verified_contract["question"],
                             },
                         )
-                        assert restricted_context.structured_content == {
-                            "error": {
-                                "code": "SOURCE_NOT_FOUND",
-                                "message": "The requested source was not found.",
-                            }
-                        }
+                        assert isinstance(query_b_context.structured_content, dict)
+                        assert query_b_context.structured_content == l0_context_body
+                        assert replica_a.state.registry.get(
+                            "commerce-edges"
+                        ).budget == replica_b.state.registry.get("commerce-edges").budget
 
                         semantic_manifest["minimum_quality_level"] = "L1"
                         semantic_published = await admin_session.put(
@@ -1221,7 +1246,7 @@ callers:
 
                         semantic_context_body: dict[str, object] | None = None
                         for _ in range(100):
-                            semantic_context = await operator_mcp.call_tool(
+                            semantic_context = await query_a_mcp.call_tool(
                                 "get_context",
                                 {
                                     "source_id": "commerce-edges",
@@ -1245,7 +1270,7 @@ callers:
                             "replica B did not apply the semantic source generation"
                         )
 
-                        stale_query = await operator_mcp.call_tool(
+                        stale_query = await query_a_mcp.call_tool(
                             "query",
                             {
                                 "source_id": "commerce-edges",
@@ -1286,7 +1311,7 @@ callers:
 
                         final_context_body: dict[str, object] | None = None
                         for _ in range(100):
-                            final_context = await operator_mcp.call_tool(
+                            final_context = await query_a_mcp.call_tool(
                                 "get_context",
                                 {
                                     "source_id": "commerce-edges",
@@ -1312,6 +1337,14 @@ callers:
                         )
                         assert final_context_body["metadata_revision"] == semantic_revision
                         assert final_context_body["quality_level"] == "L2"
+                        query_b_final_context = await query_b_mcp.call_tool(
+                            "get_context",
+                            {
+                                "source_id": "commerce-edges",
+                                "question": verified_contract["question"],
+                            },
+                        )
+                        assert query_b_final_context.structured_content == final_context_body
                         relations = {
                             relation["name"]: relation
                             for relation in final_context_body["relations"]  # type: ignore[union-attr]
@@ -1376,19 +1409,15 @@ callers:
                             }
                         ]
 
-                        result = await operator_mcp.call_tool(
-                            "query",
-                            {
-                                "source_id": "commerce-edges",
-                                "sql": verified_contract["sql"],
-                                "metadata_revision": final_context_body[
-                                    "metadata_revision"
-                                ],
-                                "sql_policy_revision": final_context_body[
-                                    "sql_policy_revision"
-                                ],
-                            },
-                        )
+                        query_payload = {
+                            "source_id": "commerce-edges",
+                            "sql": verified_contract["sql"],
+                            "metadata_revision": final_context_body["metadata_revision"],
+                            "sql_policy_revision": final_context_body[
+                                "sql_policy_revision"
+                            ],
+                        }
+                        result = await query_a_mcp.call_tool("query", query_payload)
                         result_body = result.structured_content
                         assert isinstance(result_body, dict)
                         assert result_body["columns"] == verified_contract["expected"][
@@ -1412,16 +1441,25 @@ callers:
                             result_body["rows"],
                         ) == verified_contract["expected"]["result_hash"]
 
-                        http_result = await admin_session.post(
+                        query_b_result = await query_b_mcp.call_tool(
+                            "query", query_payload
+                        )
+                        query_b_result_body = query_b_result.structured_content
+                        assert isinstance(query_b_result_body, dict)
+                        for key in [
+                            "metadata_revision",
+                            "fingerprint",
+                            "columns",
+                            "rows",
+                            "row_count",
+                            "result_bytes",
+                            "truncated",
+                        ]:
+                            assert query_b_result_body[key] == result_body[key]
+
+                        http_result = await query_session.post(
                             "/query",
-                            json={
-                                "source_id": "commerce-edges",
-                                "sql": verified_contract["sql"],
-                                "metadata_revision": semantic_revision,
-                                "sql_policy_revision": final_context_body[
-                                    "sql_policy_revision"
-                                ],
-                            },
+                            json=query_payload,
                         )
                         assert http_result.status_code == 200, http_result.text
                         http_result_body = http_result.json()
@@ -1436,7 +1474,7 @@ callers:
                         ]:
                             assert http_result_body[key] == result_body[key]
 
-                        duplicate = await operator_mcp.call_tool(
+                        duplicate = await query_a_mcp.call_tool(
                             "query",
                             {
                                 "source_id": "commerce-edges",
@@ -1464,25 +1502,39 @@ callers:
                         assert deactivated.status_code == 200, deactivated.text
                         source_active = False
                         for _ in range(100):
-                            listed = await operator_mcp.call_tool("list_sources", {})
-                            missing = await operator_mcp.call_tool(
+                            listed_a = await query_a_mcp.call_tool("list_sources", {})
+                            listed_b = await query_b_mcp.call_tool("list_sources", {})
+                            missing_a = await query_a_mcp.call_tool(
                                 "get_context",
                                 {
                                     "source_id": "commerce-edges",
                                     "question": verified_contract["question"],
                                 },
                             )
-                            listed_body = listed.structured_content
-                            missing_body = missing.structured_content
+                            missing_b = await query_b_mcp.call_tool(
+                                "get_context",
+                                {
+                                    "source_id": "commerce-edges",
+                                    "question": verified_contract["question"],
+                                },
+                            )
+                            listed_a_body = listed_a.structured_content
+                            listed_b_body = listed_b.structured_content
+                            missing_a_body = missing_a.structured_content
+                            missing_b_body = missing_b.structured_content
                             if (
-                                isinstance(listed_body, dict)
+                                isinstance(listed_a_body, dict)
+                                and isinstance(listed_b_body, dict)
+                                and listed_a_body == listed_b_body
                                 and "commerce-edges"
                                 not in {
                                     source["source_id"]
-                                    for source in listed_body["sources"]
+                                    for source in listed_a_body["sources"]
                                 }
-                                and isinstance(missing_body, dict)
-                                and missing_body.get("error", {}).get("code")
+                                and isinstance(missing_a_body, dict)
+                                and isinstance(missing_b_body, dict)
+                                and missing_a_body == missing_b_body
+                                and missing_a_body.get("error", {}).get("code")
                                 == "SOURCE_NOT_FOUND"
                             ):
                                 break
@@ -2214,11 +2266,7 @@ async def test_live_query_concurrency_cancel_and_source_isolation() -> None:
             assert await activity.fetchone() == (f"query-man:{operator_query_id}",)
         finally:
             await observer.close()
-        assert await executor.cancel(operator_query_id, frozenset({"market-voc"})) is False
-        assert await executor.cancel(
-            operator_query_id,
-            frozenset({"development-issues"}),
-        )
+        assert await executor.cancel(operator_query_id)
         with pytest.raises(QueryTimeoutError):
             await slow_task
 

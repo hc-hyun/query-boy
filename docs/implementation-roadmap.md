@@ -13,6 +13,8 @@ Docker HTTP/MCP 실행 증거로,
 [MCP server assurance](verification/2026-08-23-mcp-server-assurance.md)에 실제 server의
 대량·병렬·코너케이스·사용성 검증으로 기록한다. 완료 baseline 이후의 우선순위와 열린
 checklist는 [active development TODO](development-todo.md)에서 별도로 관리한다.
+완료 이력의 caller별 source-scope 문구는 당시 acceptance를 보존하며, 현재 version 2 shared-access
+계약은 [shared access audit](verification/2026-08-23-shared-access.md)이 우선한다.
 
 ## Final Outcome
 
@@ -316,6 +318,8 @@ Centralized management의 첫 단계인 numbered Control DB migration과 disposa
 기록한다.
 Mutually exclusive source authority mode와 zero-bootstrap Control DB precedence는
 [managed source startup audit](verification/2026-08-23-managed-source-startup.md)에 기록한다.
+Access-policy version 2 fail-closed cutover, shared source visibility와 explicit admin capability는
+[shared access audit](verification/2026-08-23-shared-access.md)에 기록한다.
 
 ## Recommended Milestones
 

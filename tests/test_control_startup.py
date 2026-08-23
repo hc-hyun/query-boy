@@ -11,6 +11,7 @@ import pytest
 import yaml
 from dotenv import load_dotenv
 
+from query_man.access import AccessPolicy
 from query_man.app import build_app
 from query_man.runtime_config import RuntimeConfig
 from query_man.source_store import PostgresSourceStore
@@ -19,6 +20,35 @@ from tests.helpers import ROOT_DIRECTORY
 
 _SOURCE_ID = "support-tickets"
 _QUESTION = "지원 queue별 ticket 수를 보여줘"
+
+
+def _shared_access_policy(tmp_path: Path) -> AccessPolicy:
+    policy_path = tmp_path / "shared-access.yaml"
+    policy_path.write_text(
+        """
+version: 2
+callers:
+  - caller_id: query-a
+    tenant_id: engineering
+    token_env: QUERY_A_TOKEN
+  - caller_id: query-b
+    tenant_id: quality
+    token_env: QUERY_B_TOKEN
+  - caller_id: admin
+    tenant_id: operations
+    token_env: ADMIN_TOKEN
+    operator: true
+""".strip(),
+        encoding="utf-8",
+    )
+    return AccessPolicy.load(
+        policy_path,
+        {
+            "QUERY_A_TOKEN": "query-a-token-value-with-at-least-32-characters",
+            "QUERY_B_TOKEN": "query-b-token-value-with-at-least-32-characters",
+            "ADMIN_TOKEN": "admin-token-value-with-at-least-32-characters",
+        },
+    )
 
 
 def _managed_runtime(
@@ -63,6 +93,7 @@ async def test_managed_control_state_survives_restart_deactivate_and_rollback(
         disposable_control_dsn,
         encryption_key,
     )
+    access_policy = _shared_access_policy(tmp_path)
     l0_manifest: dict[str, Any] = yaml.safe_load(
         (ROOT_DIRECTORY / "config" / "onboarding" / "support-tickets.yaml").read_text(encoding="utf-8")
     )
@@ -78,7 +109,7 @@ async def test_managed_control_state_survives_restart_deactivate_and_rollback(
     )
     control_store = PostgresSourceStore(disposable_control_dsn)
     try:
-        first_app = build_app(runtime)
+        first_app = build_app(runtime, access_policy=access_policy)
         async with first_app.router.lifespan_context(first_app):
             admin = first_app.state.source_admin
             assert admin is not None
@@ -140,7 +171,7 @@ async def test_managed_control_state_survives_restart_deactivate_and_rollback(
             ) == (3, 3, semantic_revision, True)
 
         assert not missing_source_directory.exists()
-        restored_app = build_app(runtime)
+        restored_app = build_app(runtime, access_policy=access_policy)
         async with restored_app.router.lifespan_context(restored_app):
             profile = restored_app.state.registry.get(_SOURCE_ID)
             assert profile is not None
@@ -182,7 +213,7 @@ async def test_managed_control_state_survives_restart_deactivate_and_rollback(
             encoding="utf-8",
         )
         invalid_runtime = replace(runtime, source_directory=invalid_source_directory)
-        deactivated_app = build_app(invalid_runtime)
+        deactivated_app = build_app(invalid_runtime, access_policy=access_policy)
         async with deactivated_app.router.lifespan_context(deactivated_app):
             assert deactivated_app.state.registry.get(_SOURCE_ID) is None
             inactive = await control_store.get_active(_SOURCE_ID)
@@ -216,7 +247,7 @@ async def test_managed_control_state_survives_restart_deactivate_and_rollback(
 
         assert invalid_source.read_text(encoding="utf-8").endswith("unexpected: ignored\n")
         assert invalid_verified.read_text(encoding="utf-8").endswith("unexpected: ignored\n")
-        zero_bootstrap_app = build_app(runtime)
+        zero_bootstrap_app = build_app(runtime, access_policy=access_policy)
         async with zero_bootstrap_app.router.lifespan_context(zero_bootstrap_app):
             profile = zero_bootstrap_app.state.registry.get(_SOURCE_ID)
             assert profile is not None

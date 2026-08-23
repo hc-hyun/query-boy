@@ -9,6 +9,8 @@ Status: Complete
 `REF-01`~`REF-15`를 닫는다. 이전
 [completion audit](2026-08-23-completion-audit.md)과 다른 날짜별 verification 문서는 실행
 당시의 역사적 증거이며, 현재 코드의 최종 회귀 수치와 보장 범위는 이 문서가 우선한다.
+이 문서 이후 변경된 access-policy version 2와 shared visibility에 한해서는
+[shared access audit](2026-08-23-shared-access.md)이 우선한다.
 
 감사는 checkbox를 근거로 삼지 않았다. 코드 경로와 PostgreSQL transaction/role 계약을
 대조하고, 발견한 모순을 재현 테스트로 고정한 뒤 unit, 실제 PostgreSQL integration, load,

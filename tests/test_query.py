@@ -65,7 +65,7 @@ class RecordingExecutor:
     async def close(self) -> None:
         pass
 
-    async def cancel(self, _query_id: str, _allowed_sources: frozenset[str]) -> bool:
+    async def cancel(self, _query_id: str) -> bool:
         return False
 
 
@@ -420,7 +420,7 @@ async def test_executor_distinguishes_operator_cancel_from_statement_timeout() -
             )
         )
         await started.wait()
-        assert await executor.cancel(query_id, frozenset({source.source_id}))
+        assert await executor.cancel(query_id)
         with pytest.raises(QueryTimeoutError):
             await pending
 

@@ -7,7 +7,7 @@ from typing import cast
 import pytest
 from mcp.client import Client
 
-from query_man.access import AccessPolicy, CallerContext
+from query_man.access import CallerContext
 from query_man.errors import QueryInvalidError
 from query_man.gateway import GatewayService
 from query_man.mcp_server import create_mcp_server
@@ -58,7 +58,7 @@ class StaticExecutor:
             "plan_summary": {"total_cost": 1.0, "max_rows": 1, "node_count": 1},
         }
 
-    async def cancel(self, _query_id: str, _allowed_sources: frozenset[str]) -> bool:
+    async def cancel(self, _query_id: str) -> bool:
         return False
 
     async def close(self) -> None:
@@ -115,17 +115,15 @@ def mcp_fixture(
     metadata = MetadataService(registry, StaticCatalog())
     executor = StaticExecutor()
     queries = QueryService(registry, metadata, executor)
-    policy = AccessPolicy.local(["development-issues"])
-    gateway = GatewayService(registry, metadata, queries, policy)
+    gateway = GatewayService(registry, metadata, queries)
     caller = caller or CallerContext(
         caller_id="test-analyst",
         tenant_id="engineering",
-        allowed_sources=frozenset({"development-issues"}),
     )
     return create_mcp_server(gateway, lambda: caller), metadata
 
 
-async def test_mcp_exposes_fixed_tools_and_reuses_gateway_policy() -> None:
+async def test_mcp_exposes_fixed_tools_and_shared_gateway_sources() -> None:
     server, _metadata = mcp_fixture()
     async with Client(server) as client:  # type: ignore[arg-type]
         listed_tools = await client.list_tools()
@@ -209,20 +207,10 @@ async def test_mcp_exposes_fixed_tools_and_reuses_gateway_policy() -> None:
         sources = await client.call_tool("list_sources")
         assert len(json.dumps(sources.structured_content).encode()) < 1_024
         assert [source["source_id"] for source in sources.structured_content["sources"]] == [  # type: ignore[index]
-            "development-issues"
+            "development-issues",
+            "market-voc",
         ]
         assert "password" not in str(sources.structured_content)
-        denied = await client.call_tool(
-            "get_context",
-            {"source_id": "market-voc", "question": "VOC 수"},
-        )
-        assert denied.structured_content == {
-            "error": {
-                "code": "SOURCE_NOT_FOUND",
-                "message": "The requested source was not found.",
-            }
-        }
-        assert denied.is_error is True
 
         rejected_extras = [
             await client.call_tool("list_sources", {"host": "attacker.invalid"}),
@@ -334,7 +322,6 @@ async def test_mcp_query_invalid_reports_only_bounded_correction_reason() -> Non
     caller = CallerContext(
         caller_id="test-analyst",
         tenant_id="engineering",
-        allowed_sources=frozenset({"development-issues"}),
     )
     server = create_mcp_server(InvalidQueryGateway(), lambda: caller)  # type: ignore[arg-type]
 
@@ -435,8 +422,6 @@ async def test_mcp_debug_logs_correlate_calls_without_recording_inputs(
         CallerContext(
             caller_id="test-analyst",
             tenant_id="engineering",
-            allowed_sources=frozenset(),
-            all_sources=True,
         )
     )
     caplog.set_level(logging.DEBUG, logger="query_man.mcp")
@@ -490,8 +475,7 @@ async def test_mcp_unknown_source_is_not_logged_or_used_as_metric_label(
         CallerContext(
             caller_id="test-operator",
             tenant_id="engineering",
-            allowed_sources=frozenset(),
-            all_sources=True,
+            operator=True,
         )
     )
     caplog.set_level(logging.DEBUG)
@@ -526,7 +510,6 @@ async def test_mcp_sanitizes_unexpected_tool_errors(
     caller = CallerContext(
         caller_id="test-analyst",
         tenant_id="engineering",
-        allowed_sources=frozenset({"development-issues"}),
     )
     server = create_mcp_server(
         cast(GatewayService, ExplodingGateway()),
@@ -571,7 +554,6 @@ async def test_mcp_serialization_failure_records_one_error_completion(
     caller = CallerContext(
         caller_id="test-analyst",
         tenant_id="engineering",
-        allowed_sources=frozenset({"development-issues"}),
     )
     server = create_mcp_server(
         cast(GatewayService, InvalidResultGateway()),

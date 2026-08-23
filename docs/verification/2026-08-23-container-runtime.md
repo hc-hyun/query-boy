@@ -2,6 +2,10 @@
 
 Status: Complete
 
+> 이 감사의 source-limited Compose policy 문구는 당시 실행 증거다. 현재 Compose policy
+> version 2의 query-only/shared visibility 계약은
+> [shared access audit](2026-08-23-shared-access.md)이 우선한다.
+
 ## Scope And Verdict
 
 이 감사는 [roadmap](../implementation-roadmap.md)의 `DEP-01`~`DEP-08`을 닫는다. Query Man의
@@ -18,7 +22,7 @@ loopback port에서 인증, readiness와 실제 MCP query까지 검증했다.
 | `DEP-02` | `Dockerfile`은 locked non-dev dependency를 multi-stage로 non-editable 설치하고 UID 10001의 direct `query-man` entrypoint만 실행한다. Compose는 read-only root filesystem, `/tmp` tmpfs, capability drop과 no-new-privileges를 적용한다. | PASS |
 | `DEP-03` | Source manifest의 optional `host_env`는 host에서 `127.0.0.1`, Compose에서 `postgres`로 resolve된다. Registry와 control-plane validation 회귀가 빈 override 거부 및 resolved host canonicalization을 확인한다. | PASS |
 | `DEP-04` | PostgreSQL TCP health 완료 뒤 application을 시작하고 host port는 loopback에만 publish한다. `/ready` healthcheck와 30초 stop grace가 application 기본 drain 10초를 감싼다. | PASS |
-| `DEP-05` | Compose가 PostgreSQL administrator secret과 application reader secret을 분리한다. Source-limited caller token, 명시적 MCP Host/Origin allowlist와 악성 header 회귀가 fail-closed 경계를 확인한다. | PASS |
+| `DEP-05` | Compose가 PostgreSQL administrator secret과 application reader secret을 분리한다. 당시 source-limited caller token, 명시적 MCP Host/Origin allowlist와 악성 header 회귀가 fail-closed 경계를 확인했다. | PASS |
 | `DEP-06` | `scripts/verify-container.sh`가 exact `ready`, 무인증 401, 세 MCP tool, 두 authorized source, L2 context와 `issue_count=600` guarded query를 실제 container에서 확인한다. | PASS |
 | `DEP-07` | CI의 host 회귀는 PostgreSQL만 기동하고 별도 container job이 전체 stack을 검증한다. Security job은 application image를 새로 build해 수정 가능한 Critical vulnerability를 gate한다. | PASS |
 | `DEP-08` | README, architecture, MVP와 operations 문서가 동일한 시작·검증·종료 절차와 외부 proxy allowlist 경계를 설명하며 documentation 회귀가 링크와 123개 roadmap ID를 검사한다. | PASS |
@@ -81,7 +85,8 @@ uv run query-man-verify
   허용하지만 release smoke는 exact `ready`를 별도로 요구한다.
 - Reverse proxy 배포는 실제 public Host와 HTTPS Origin을
   `QUERY_MAN_MCP_ALLOWED_HOSTS`/`QUERY_MAN_MCP_ALLOWED_ORIGINS`에 명시해야 한다.
-- Compose의 caller는 두 bootstrap source만 허용하며 operator 및 source-admin 권한이 없다.
+- 현재 Compose의 version 2 caller는 모든 active bootstrap source를 보지만 operator 및
+  source-admin 권한이 없는 query-only identity다.
 - Container stdout은 JSON application/audit event와 Uvicorn text lifecycle/access line이 섞인
   line-oriented stream이다. Collector는 두 형식을 구분해 수집해야 한다.
 

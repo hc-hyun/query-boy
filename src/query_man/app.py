@@ -229,12 +229,14 @@ def build_app(
     query_service = QueryService(registry, metadata, query_executor)
     if access_policy is None:
         if runtime_config.access_policy_file is not None:
-            access_policy = AccessPolicy.load(runtime_config.access_policy_file, source_ids)
+            access_policy = AccessPolicy.load(runtime_config.access_policy_file)
         elif runtime_config.api_token is not None:
-            access_policy = AccessPolicy.legacy(runtime_config.api_token, source_ids)
+            access_policy = AccessPolicy.legacy(runtime_config.api_token)
         else:
-            access_policy = AccessPolicy.local(source_ids)
-    gateway = GatewayService(registry, metadata, query_service, access_policy)
+            access_policy = AccessPolicy.local()
+    if runtime_config.source_mode == "managed":
+        access_policy.require_shared_access()
+    gateway = GatewayService(registry, metadata, query_service)
     source_store: PostgresSourceStore | None = None
     source_reloader: SourceReloader | None = None
     source_admin: SourceAdminService | None = None

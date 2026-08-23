@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -88,6 +89,7 @@ def test_loads_managed_source_mode_without_exposing_control_dsn() -> None:
             "QUERY_MAN_SOURCE_MODE": "managed",
             "QUERY_MAN_CONTROL_DSN": dsn,
             "QUERY_MAN_SOURCE_ENCRYPTION_KEY": _SOURCE_KEY,
+            "QUERY_MAN_ACCESS_POLICY_FILE": "config/access-policies.yaml",
         },
         ROOT_DIRECTORY,
     )
@@ -102,6 +104,7 @@ def test_loads_managed_source_mode_without_exposing_control_dsn() -> None:
                 "QUERY_MAN_SOURCE_MODE": "managed",
                 "QUERY_MAN_CONTROL_DSN": secret * 100,
                 "QUERY_MAN_SOURCE_ENCRYPTION_KEY": _SOURCE_KEY,
+                "QUERY_MAN_ACCESS_POLICY_FILE": "config/access-policies.yaml",
             },
             ROOT_DIRECTORY,
         )
@@ -113,14 +116,19 @@ def test_loads_managed_source_mode_without_exposing_control_dsn() -> None:
     [
         {"QUERY_MAN_CONTROL_DSN": "host=control.invalid"},
         {"QUERY_MAN_SOURCE_ENCRYPTION_KEY": _SOURCE_KEY},
-        {"QUERY_MAN_SOURCE_MODE": "managed"},
+        {
+            "QUERY_MAN_SOURCE_MODE": "managed",
+            "QUERY_MAN_ACCESS_POLICY_FILE": "config/access-policies.yaml",
+        },
         {
             "QUERY_MAN_SOURCE_MODE": "managed",
             "QUERY_MAN_CONTROL_DSN": "host=control.invalid",
+            "QUERY_MAN_ACCESS_POLICY_FILE": "config/access-policies.yaml",
         },
         {
             "QUERY_MAN_SOURCE_MODE": "managed",
             "QUERY_MAN_SOURCE_ENCRYPTION_KEY": _SOURCE_KEY,
+            "QUERY_MAN_ACCESS_POLICY_FILE": "config/access-policies.yaml",
         },
     ],
 )
@@ -132,3 +140,46 @@ def test_rejects_incomplete_source_mode_configuration(environment: dict[str, str
 def test_rejects_unknown_source_mode() -> None:
     with pytest.raises(ValueError, match="QUERY_MAN_SOURCE_MODE"):
         load_runtime_config({"QUERY_MAN_SOURCE_MODE": "hybrid"}, ROOT_DIRECTORY)
+
+
+def test_managed_source_mode_requires_access_policy() -> None:
+    with pytest.raises(ValueError, match="requires QUERY_MAN_ACCESS_POLICY_FILE"):
+        load_runtime_config(
+            {
+                "QUERY_MAN_SOURCE_MODE": "managed",
+                "QUERY_MAN_CONTROL_DSN": "host=control.invalid",
+                "QUERY_MAN_SOURCE_ENCRYPTION_KEY": _SOURCE_KEY,
+            },
+            ROOT_DIRECTORY,
+        )
+
+
+def test_managed_source_mode_rejects_legacy_api_token() -> None:
+    with pytest.raises(ValueError, match="does not accept QUERY_MAN_API_TOKEN"):
+        load_runtime_config(
+            {
+                "QUERY_MAN_SOURCE_MODE": "managed",
+                "QUERY_MAN_CONTROL_DSN": "host=control.invalid",
+                "QUERY_MAN_SOURCE_ENCRYPTION_KEY": _SOURCE_KEY,
+                "QUERY_MAN_API_TOKEN": "legacy-token-value-with-at-least-32-characters",
+            },
+            ROOT_DIRECTORY,
+        )
+
+
+def test_managed_runtime_config_rejects_direct_api_token_construction() -> None:
+    managed = load_runtime_config(
+        {
+            "QUERY_MAN_SOURCE_MODE": "managed",
+            "QUERY_MAN_CONTROL_DSN": "host=control.invalid",
+            "QUERY_MAN_SOURCE_ENCRYPTION_KEY": _SOURCE_KEY,
+            "QUERY_MAN_ACCESS_POLICY_FILE": "config/access-policies.yaml",
+        },
+        ROOT_DIRECTORY,
+    )
+
+    with pytest.raises(ValueError, match="not accepted"):
+        replace(
+            managed,
+            api_token="legacy-token-value-with-at-least-32-characters",
+        )

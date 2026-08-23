@@ -7,6 +7,8 @@
 view, versioned manifest, 기존 `budget_profile` resource tier와 verified query로 표현한다.
 Production onboarding은 `QUERY_MAN_SOURCE_MODE=managed`의 Control DB authority에서 수행한다.
 Repository source/verified file은 bootstrap/acceptance fixture이며 production publish 산출물이 아니다.
+Managed runtime은 source scope가 없는 version 2 access policy와 explicit query/admin identity를
+요구한다. Version 1과 legacy scope field는 자동 확대 없이 startup에서 거부한다.
 
 ## 항상 필요한 작업
 
@@ -27,8 +29,7 @@ Repository source/verified file은 bootstrap/acceptance fixture이며 production
 - [ ] 활성화 시 모든 인증된 query 사용자가 source를 본다는 영향을 확인한다. 서로 다른 두
   query identity가 같은 source 목록을 보고, caller override 없이 같은 source-resolved budget
   정의가 적용되며, admin API는 모두 거부되는지 검증한다. Admin 기록에는 선택한
-  `budget_profile`과 metadata revision을 남긴다. `CTRL-03` 전에는 현재 access-policy scope가
-  실제 동작이다.
+  `budget_profile`과 metadata revision을 남긴다.
 - [ ] HTTP와 MCP 양쪽에서 `list_sources`, question-scoped context, exact revision query,
   ordered columns/rows와 canonical result hash를 smoke test한다.
 - [ ] Source health, reject/timeout/queue/truncation metric, owner, credential rotation과 rollback

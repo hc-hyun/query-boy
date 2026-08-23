@@ -39,12 +39,11 @@ tier를 정한다. 이 문서는 현재 공백과 `CTRL-*` 구현 순서를 관�
 - `operator`로 보호된 mutation/cancel endpoint
 - Checksum을 기록하는 numbered Control DB migration과 반복 가능한 role/ACL reconciliation
 - 개발 Control DB를 변경하지 않는 function-scoped disposable integration-test Control DB
+- Version 2 shared-access policy와 explicit query/admin credential 분리
+- 모든 authenticated identity의 implicit active-source visibility와 source-resolved budget
 
 아직 구현할 공백:
 
-- Query credential과 admin credential의 명시적 분리. 현재 single-token/local compatibility가
-  암시적으로 admin이 될 수 있어 source management 환경에서 제거해야 한다.
-- 모든 query identity가 같은 active source를 보는 shared-access cutover와 parity test
 - Admin용 sanitized source list/detail/generation history
 - Owner, environment와 DB migration provenance
 - Idempotency, actor/reason/request hash, mutation receipt와 durable lifecycle audit
@@ -65,7 +64,7 @@ tier를 정한다. 이 문서는 현재 공백과 `CTRL-*` 구현 순서를 관�
 | Curated view, reader role and grants | Source DB and DB-owner migration system | Migration reference만 기록 |
 | Encrypted reader credential | Control DB generation | Plaintext 출력·Git 저장 금지 |
 | Plaintext credential and master key | Runtime/external secret system | 값·provider path 저장 금지 |
-| Query/admin authentication | External authenticator or deployment configuration | Secret 값 저장 금지 |
+| Query/admin authentication | Version 2 deployment access policy | Secret 값 저장 금지 |
 | Shared source access policy | ADR 0017/platform configuration | Control DB caller-grant table 없음 |
 | Budget profile catalog | `config/budget-profiles.yaml` and release | Source는 승인된 이름만 참조 |
 | Mutation audit and authoritative receipt | Control DB | Sanitized export는 사본 |
@@ -86,8 +85,9 @@ source를 다시 활성화하거나 L2 gate를 충족하지 못한다.
 
 Mode는 process 전체에 적용하며 runtime 중 바뀌지 않는다. `auto`, per-source hybrid와 Control DB
 장애 시 file fallback은 없다. Budget profile catalog와 access policy는 두 mode에서 모두 deployment
-configuration으로 읽는다. Managed mode는 source directory와 filesystem verified contract가 없어도
-시작할 수 있다.
+configuration으로 읽는다. Managed mode는 version 2 policy file의 non-admin query identity와
+explicit operator admin identity를 모두 요구하고 API-token/anonymous caller를 거부한다. Source
+directory와 filesystem verified contract가 없어도 시작할 수 있다.
 
 기존 bootstrap source는 다음 명시적 cutover로 한 번만 이관한다.
 
@@ -163,10 +163,11 @@ reason을 함께 제공한다. Missing/failed 값은 0으로 표시하지 않는
 | DB owner | Curated view/reader/migration과 credential 준비 | Query Man production mutation |
 | Platform developer | Schema/API/validator와 budget profile release | Production source를 임의로 적용 |
 
-현재 `operator` boolean은 admin capability로 재사용할 수 있다. 새 role enum, role-binding table,
-source scope와 bootstrap marker는 만들지 않는다. 대신 source management가 켜진 환경은 explicit
-admin identity가 있어야 하며 generic query token과 anonymous local identity는 non-admin이어야
-한다.
+`operator` boolean을 admin capability superset으로 재사용한다. Query credential은 모든 admin
+endpoint와 cancel에서 거부한다. Version 2 policy에는 source scope가 없고 모든 인증 identity가
+같은 active source를 본다. Managed mode는 explicit query/admin identity를 요구하며 generic API
+token과 anonymous local identity를 거부한다. 새 role enum, role-binding table, source scope와
+bootstrap marker는 만들지 않는다.
 
 Source-native RLS가 필요한 source는 ADR 0014의 trusted `tenant_id`를 계속 사용한다. 이는 모든
 사용자가 같은 source를 보고 같은 resource tier를 쓴다는 결정과 독립된 row-isolation 경계다.
@@ -220,7 +221,7 @@ Canonical status는 [active development TODO](development-todo.md)의 `CTRL-*`�
 1. **Complete:** versioned migration과 disposable test-store isolation
 2. **Complete:** mutually exclusive source mode, Control DB precedence, zero-bootstrap과
    verified-contract admin import cutover
-3. Shared query access와 explicit admin/query credential separation
+3. **Complete:** shared query access와 explicit admin/query credential separation
 4. Minimal catalog와 admin list/detail/history
 5. Existing mutations의 idempotency, receipt와 durable audit
 6. Replica convergence/drift observation
@@ -234,6 +235,8 @@ DB-native collector와 provider connector는 rollout의 선행 조건이 아니�
 [control schema migration audit](verification/2026-08-23-control-schema-migrations.md)에 있다.
 두 번째 단계의 검증 계획과 실행 결과는
 [managed source startup audit](verification/2026-08-23-managed-source-startup.md)에 기록한다.
+세 번째 단계의 검증 계획과 실행 결과는
+[shared access audit](verification/2026-08-23-shared-access.md)에 기록한다.
 
 ## Release Acceptance
 

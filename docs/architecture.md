@@ -53,7 +53,7 @@ Local Compose는 PostgreSQL과 단일 `query-man` application container를 실�
 process가 HTTP와 `/mcp`를 함께 제공해 registry, metadata cache, authorization과 query
 admission을 공유한다. Container network의 PostgreSQL service name은 manifest의 선택적
 `host_env`로 resolve하되 control plane에는 resolved endpoint만 저장한다. Host publish는
-loopback으로 제한하고 container 내부 non-loopback bind에는 source-limited bearer policy를
+loopback으로 제한하고 container 내부 non-loopback bind에는 query-only bearer policy를
 강제한다. Image, secret, readiness와 shutdown 경계는
 [ADR 0015](decisions/0015-containerized-local-runtime.md)를 따르며 실제 container acceptance는
 [container runtime audit](verification/2026-08-23-container-runtime.md)에 기록한다. 전체
@@ -120,11 +120,13 @@ authority 규칙은 [ADR 0016](decisions/0016-centralized-source-management-plan
 Control-plane source revision과 암호화된 credential 계약은
 [ADR 0012](decisions/0012-control-plane-source-revisions.md)를 따른다.
 
-초기 목표 운영에서는 모든 인증된 query principal이 같은 active source 목록을 본다. Source
+초기 운영에서는 모든 인증된 query principal이 같은 active source 목록을 본다. Source
 publish/deactivate가 visibility를 한 번에 바꾸므로 caller별 grant, import marker와 dynamic
 allowlist를 만들지 않는다. Source마다 관리자가 기존 `budget_profile` 하나를 선택하고 모든
-사용자는 같은 profile 정의를 공유한다. 현재 `allowed_sources|all_sources` baseline에서의
-명시적 전환과 admin/query credential 분리는 `CTRL-03`에서 fail-closed하게 구현한다.
+사용자는 같은 profile 정의를 공유한다. Version 2 access policy에는 source scope가 없으며
+version 1과 legacy scope field는 자동 확대 없이 startup에서 거부한다. Managed mode는 explicit
+query/admin identity가 있는 policy file을 요구하고 single-token/anonymous caller를 금지한다.
+Bootstrap local/API-token identity는 query-only다.
 
 ### Source Management Plane
 
@@ -135,9 +137,9 @@ HTTP API로 제공한다. 실제 DB 객체, secret, raw metric과 provider bill�
 있다. Control Plane은 같은 `source_id`와 provenance로 이를 모아 보여준다.
 
 초기 management 권한은 query user와 Query Man admin 두 종류다. 기존 boolean operator를 admin
-capability로 재사용하고 역할 계층, caller grant와 별도 `cost_tier`를 만들지 않는다. 현재
-암시적 admin compatibility와 mutation-only admin endpoint는 목표 상태가 아니며 상세 구현
-순서는 [source management plane](source-management-plane.md)과 `CTRL-*`가 관리한다.
+capability superset으로 재사용하고 역할 계층, caller grant와 별도 `cost_tier`를 만들지 않는다.
+Query credential은 admin endpoint와 cancel에서 거부된다. 상세 management API 구현 순서는
+[source management plane](source-management-plane.md)과 `CTRL-*`가 관리한다.
 
 ### Query Gateway
 
@@ -234,7 +236,7 @@ Schema drift로 overlay가 깨지면 신규 revision 발행을 중단하고 마�
 - 운영자는 한 management surface에서 source의 owner, active/applied state, history, 규모와 비용
   freshness를 조회할 수 있다. 이 항목은 `CTRL-*` 완료 전까지 목표 상태다.
 - 모든 query 사용자는 같은 active source 목록과 source별 `budget_profile` 정의를 사용하며
-  query credential은 admin endpoint를 호출할 수 없다. 이 항목은 `CTRL-03` 완료 전까지 목표다.
+  query credential은 admin endpoint를 호출할 수 없다.
 
 ## Decisions
 
@@ -282,6 +284,8 @@ Production acceptance까지의 구현 순서와 완료 증거는
 [refactoring assurance audit](verification/2026-08-23-refactoring-assurance.md)에 기록한다.
 Managed source authority startup과 bootstrap cutover 증거는
 [managed source startup audit](verification/2026-08-23-managed-source-startup.md)에 기록한다.
+Version 2 shared visibility와 query/admin capability 증거는
+[shared access audit](verification/2026-08-23-shared-access.md)에 기록한다.
 이후 범위 변경도 완료된 ID를 재사용하지 않고 새 decision과 roadmap ID로 추가한다.
 네 번째 source 확장 감사와 남은 경계는
 [source extension assurance](verification/2026-08-23-source-extension.md)에 기록한다.

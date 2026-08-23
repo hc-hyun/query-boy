@@ -24,7 +24,8 @@ Control-plane publish는 resolved host와 port만 저장해 replica별 환경이
 Application은 container 내부 `0.0.0.0:3000`에 bind하고 host에는
 `127.0.0.1:${QUERY_MAN_PORT:-3000}`으로만 publish한다. Non-loopback bind 안전 규칙에 따라
 Compose 전용 access policy와 `QUERY_MAN_CODEX_MCP_TOKEN`을 필수로 사용한다. 이 caller는 두
-bootstrap source만 사용할 수 있고 operator 권한이 없다. Compose는 필요한 reader secret과
+active bootstrap source를 모두 볼 수 있지만 operator 권한이 없는 query-only identity다.
+Compose는 필요한 reader secret과
 runtime setting만 명시적으로 전달하며 PostgreSQL administrator credential은 전달하지 않는다.
 Source authority는 `QUERY_MAN_SOURCE_MODE=bootstrap`으로 고정하고 Control DSN/key를 전달하지
 않는다. Managed production topology를 이 local default와 섞지 않는다.

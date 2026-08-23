@@ -57,9 +57,10 @@ record/IaC로 복구한다.
    확인한다.
 4. Migration ledger를 포함한 모든 control table row count, FK, immutable trigger와 실제
    immutable UPDATE 거부를 확인한다.
-5. `QUERY_MAN_SOURCE_MODE=managed`, 원래 `QUERY_MAN_SOURCE_ENCRYPTION_KEY`와 새 control-writer
-   DSN을 runtime에 함께 주입한다. Bootstrap mode나 DSN/key 일부만으로 복구하지 않는다.
-6. Source/verified file에 의존하지 않는 상태로 runtime을 traffic 없이 시작해 operator health의
+5. `QUERY_MAN_SOURCE_MODE=managed`, 원래 `QUERY_MAN_SOURCE_ENCRYPTION_KEY`, 새 control-writer
+   DSN과 version 2 query/admin access policy를 runtime에 함께 주입한다. Bootstrap mode,
+   API-token/anonymous auth나 DSN/key 일부만으로 복구하지 않는다.
+6. Source/verified file에 의존하지 않는 상태로 runtime을 traffic 없이 시작해 admin health의
    active source/component 상태를 확인한다. Cold Control scan 실패 시 file fallback 없이
    readiness가 unavailable이어야 한다.
 7. 모든 active source의 `/meta`에서 revision/quality를 확인하고 guarded query와 verified

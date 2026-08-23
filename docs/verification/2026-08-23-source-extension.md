@@ -1,5 +1,9 @@
 # Source Extension Assurance — 2026-08-23
 
+> 이 문서의 caller별 source-scope 결과는 당시 구현의 역사적 증거다. 현재 access-policy
+> version 2와 shared visibility 계약은
+> [shared access audit](2026-08-23-shared-access.md)이 우선한다.
+
 ## 결론
 
 네 번째 독립 database `commerce_edges`를 추가해도 source별 runtime Python 분기, 새 endpoint,

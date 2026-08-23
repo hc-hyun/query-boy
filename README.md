@@ -51,7 +51,8 @@ docker compose down
 [container runtime audit](docs/verification/2026-08-23-container-runtime.md), 두 replica soak 증거는
 [multi-replica soak audit](docs/verification/2026-08-23-mcp-multi-replica-soak.md), managed authority
 전환 증거는
-[managed source startup audit](docs/verification/2026-08-23-managed-source-startup.md)을 참고합니다.
+[managed source startup audit](docs/verification/2026-08-23-managed-source-startup.md), shared query/admin
+경계는 [shared access audit](docs/verification/2026-08-23-shared-access.md)을 참고합니다.
 
 ## Metadata And Query API
 
@@ -108,9 +109,9 @@ transaction-local profile 값으로 고정하며, 결과가 row 또는 UTF-8 byt
 [`config/budget-profiles.yaml`](config/budget-profiles.yaml)에서 관리합니다.
 측정 신호, live query 조사와 budget 변경 순서는
 [`docs/query-cost-control.md`](docs/query-cost-control.md)를 따릅니다.
-Operator caller는 audit log에 기록된 실행 중 `query_id`를
-`DELETE /queries/{query_id}`로 취소할 수 있으며, 자기 source allowlist 밖의 query는
-조회하거나 취소할 수 없습니다.
+Admin capability가 있는 caller는 audit log에 기록된 실행 중 `query_id`를
+`DELETE /queries/{query_id}`로 취소할 수 있습니다. 모든 인증 caller의 source visibility는
+같지만 query-only caller는 cancel과 admin endpoint를 사용할 수 없습니다.
 
 Client는 DSN, host, database 또는 role을 전달할 수 없습니다. Runtime은
 `QUERY_MAN_SOURCE_MODE=bootstrap|managed`로 source authority를 시작할 때 한 번만 선택합니다.
@@ -125,13 +126,17 @@ Column, type과 database comment는 reader 권한으로 `pg_catalog`에서 자�
 grain, 한국어 alias, 승인된 join, 검증된 measure와 business predicate만 manifest의
 semantic overlay로 보강합니다. `/meta`의 `answerability`가 `needs_clarification` 또는
 `unsupported`이면 SQL 생성을 진행하지 않아야 합니다.
-기본 loopback bind에서는 로컬 개발을 위해 인증을 생략할 수 있다. 외부 주소에 bind할
-때는 32자 이상의 `QUERY_MAN_API_TOKEN` 또는 `QUERY_MAN_ACCESS_POLICY_FILE`이 필수이며
-`/sources`, `/meta`, `/query`에 `Authorization: Bearer ...` header를 보내야 합니다.
+Bootstrap loopback에서는 로컬 개발용 anonymous query identity를 사용할 수 있고, 외부 bootstrap은
+32자 이상의 query-only `QUERY_MAN_API_TOKEN` 또는 version 2
+`QUERY_MAN_ACCESS_POLICY_FILE`을 요구합니다. 모든 인증 identity는 모든 active source를 보며
+source별 grant를 두지 않습니다. Policy는 caller/tenant ID, token 환경 변수 이름과
+`operator` admin capability만 저장합니다. `allowed_sources`, `all_sources`와 version 1 policy는
+권한을 자동 확대하지 않고 startup에서 거부합니다.
 
-여러 caller/tenant가 서로 다른 source를 사용하면 `QUERY_MAN_API_TOKEN` 대신
-`QUERY_MAN_ACCESS_POLICY_FILE`을 설정합니다. Policy는 token 값이 아닌 환경 변수 이름과
-source allowlist만 저장하며 형식은
+Production `managed` mode는 policy file에 최소 한 개의 non-admin query identity와 explicit
+operator admin identity를 모두 요구합니다. 단일 API token과 anonymous local caller는 managed에서
+금지됩니다. `operator`는 query 권한에 admin API와 cancel 권한을 추가하는 boolean capability이며
+별도 viewer/approver 역할 계층은 없습니다. 형식은
 [`config/access-policies.example.yaml`](config/access-policies.example.yaml)을 참고합니다.
 
 같은 service와 bearer 인증 경계가 MCP의 stateless Streamable HTTP endpoint
@@ -201,8 +206,9 @@ Production managed runtime을 준비하려면 database owner/관리자용 표준
 `scripts/apply-control-schema.sh`를 실행하고, 별도로 생성한 최소 권한 LOGIN에
 `query_man_control_writer` membership을 부여합니다. `scripts/apply-db.sh`는 네 fixture
 database·role·seed를 만드는 local/CI bootstrap이며 production migration이 아닙니다. Runtime은
-`QUERY_MAN_SOURCE_MODE=managed`, 전용 LOGIN의 TLS DSN과 source encryption key를 함께
-사용합니다. Bootstrap source를 이관할 때는 traffic 밖의 managed instance에서 기존 admin API로
+`QUERY_MAN_SOURCE_MODE=managed`, 전용 LOGIN의 TLS DSN, source encryption key와 version 2
+access-policy file을 함께 사용합니다. Bootstrap source를 이관할 때는 traffic 밖의 managed
+instance에서 기존 admin API로
 L0/L1 source, Control DB verified contract, L2 source 순서로 publish한 뒤 serving replica를
 managed mode로 시작합니다. Startup import, 별도 marker와 filesystem write-back은 없습니다.
 자세한 설치·이관·복구 순서는
@@ -220,9 +226,10 @@ accuracy, unsupported/clarification recall과 context byte 상한 중 하나라�
 source는 L2이며, metadata revision과 일치하는 verified contract가 없으면 `/meta`, MCP와
 query 경로가 새 revision을 활성화하지 않습니다.
 
-`QUERY_MAN_SOURCE_MODE=managed`에서 Control DSN과 encryption key를 함께 설정하면 operator 전용
-source admin API가 활성화됩니다. 두 값 중 하나만 있거나 bootstrap mode에 Control DB 설정이
-있으면 startup이 실패합니다. 신규 manifest는 격리 staging을 통과한 뒤 encrypted
+`QUERY_MAN_SOURCE_MODE=managed`에서 Control DSN, encryption key와 version 2 access-policy file을
+함께 설정하면 explicit operator admin 전용 source API가 활성화됩니다. Query/admin identity가
+중 하나라도 없거나 단일 API token을 사용하거나 Control 설정이 불완전하면 startup이 실패합니다.
+신규 manifest는 격리 staging을 통과한 뒤 encrypted
 credential, immutable metadata와 함께 원자적으로 publish되며 runtime과 다른 replica가
 재시작 없이 반영합니다. 자세한 절차는
 [`docs/source-onboarding.md`](docs/source-onboarding.md)를 따릅니다.

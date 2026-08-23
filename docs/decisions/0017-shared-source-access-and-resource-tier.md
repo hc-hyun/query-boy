@@ -35,20 +35,23 @@ Query Man에는 이미 source가 중앙의 `budget_profile` 하나를 선택하�
 - 통화 단위 비용과 `budget_profile`을 혼동하지 않는다. Profile은 실행 피해의 hard limit이며,
   provider billing이 없는 경우 비용 화면은 source/profile별 자원 사용량과 추세만 보여준다.
 
-## Transition
+## Access Policy Cutover
 
-현재 구현은 ADR 0004의 `allowed_sources|all_sources`와 `operator`를 지원한다. `CTRL-03`에서
-명시적으로 shared-access mode로 전환한다.
+`CTRL-03`은 access-policy manifest를 version 2로 올리고 caller별 source scope를 제거한다.
 
-- 모든 production query identity는 `all_sources: true`, non-admin으로 검증한다.
-- Admin identity만 admin capability를 가진다.
-- 서로 다른 source scope를 가진 기존 policy가 남아 있으면 조용히 권한을 넓히지 않고 전환을
-  fail-closed한다.
-- 단일 `QUERY_MAN_API_TOKEN` 또는 인증 없는 local caller가 암시적으로 admin이 되는 호환 경로는
-  source management가 활성화된 환경에서 허용하지 않는다.
+- Version 2 caller는 `caller_id`, `tenant_id`, `token_env`와 `operator`만 선언한다. 모든 인증
+  identity의 active source access는 implicit하며 `allowed_sources`와 `all_sources`를 받지 않는다.
+- Version 1 또는 legacy scope field가 남은 policy는 자동 변환하거나 권한을 확대하지 않고
+  startup에서 fail-closed한다. Runtime write-back이나 migration helper는 없다.
+- Managed mode는 version 2 policy file, 최소 한 개의 non-admin query identity와 한 개의 explicit
+  operator admin identity를 요구한다. 단일 `QUERY_MAN_API_TOKEN`과 anonymous caller는 거부한다.
+- Bootstrap의 anonymous local identity와 단일 API token은 query-only다. Explicit admin이 필요한
+  bootstrap 운영은 version 2 policy를 사용한다.
+- `operator`는 admin API와 query cancel을 추가하는 boolean capability superset이다. 별도 role
+  enum이나 exclusive admin/query route hierarchy를 만들지 않는다.
 
-전환이 완료되기 전에는 ADR 0004의 현재 authorization 동작이 runtime 사실이며, 이 ADR의
-shared-access 항목은 목표 동작이다.
+이는 deployment configuration의 fail-closed cutover이며 Control DB schema migration이나 새
+dependency를 추가하지 않는다.
 
 ## Consequences
 
@@ -62,5 +65,4 @@ shared-access 항목은 목표 동작이다.
   freshness를 한곳에서 보여주되 caller별 권한표나 chargeback ledger를 관리하지 않는다.
 
 이 결정은 ADR 0004의 미래 dynamic source-grant 계획과 ADR 0016의 다단계 관리 RBAC 및
-caller-grant 관리 목표를 대체한다. 현재 구현된 authorization과 RLS 안전 경계는 전환 작업이
-완료될 때까지 유지한다.
+caller-grant 관리 목표를 대체한다. Caller/tenant audit와 RLS 안전 경계는 그대로 유지한다.

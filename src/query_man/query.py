@@ -136,7 +136,7 @@ class QueryExecutor(Protocol):
         tenant_id: str | None = None,
     ) -> dict[str, object]: ...
 
-    async def cancel(self, query_id: str, allowed_sources: frozenset[str]) -> bool: ...
+    async def cancel(self, query_id: str) -> bool: ...
 
     async def close(self) -> None: ...
 
@@ -197,8 +197,8 @@ class QueryService:
         result["sql_policy_revision"] = SQL_POLICY_REVISION
         return result
 
-    async def cancel(self, query_id: str, allowed_sources: frozenset[str]) -> bool:
-        return await self._executor.cancel(query_id, allowed_sources)
+    async def cancel(self, query_id: str) -> bool:
+        return await self._executor.cancel(query_id)
 
 
 class PostgresQueryExecutor:
@@ -381,10 +381,10 @@ class PostgresQueryExecutor:
         finally:
             semaphore.release()
 
-    async def cancel(self, query_id: str, allowed_sources: frozenset[str]) -> bool:
+    async def cancel(self, query_id: str) -> bool:
         async with self._active_lock:
             active = self._active.get(query_id)
-            if active is None or active.source_id not in allowed_sources:
+            if active is None:
                 return False
             active.cancel_reason = "operator"
             await active.connection.cancel_safe(timeout=1)

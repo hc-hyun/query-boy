@@ -1,54 +1,55 @@
 # ADR 0004: Caller And Source Authorization
 
-Status: Accepted; future grant model superseded by ADR 0017
+Status: Accepted; source-scope model superseded by ADR 0017
 
 Date: 2026-08-22
 
 ## Context
 
-하나의 bearer token이 모든 source를 볼 수 있으면 caller와 tenant를 구분할 수 없고,
-MCP와 HTTP가 서로 다른 authorization을 적용할 위험이 있다. 반대로 client가 tenant나
-허용 source를 요청 값으로 지정하게 하면 trust boundary가 무너진다.
+Bearer token 하나만으로 caller와 tenant를 구분하지 못하면 audit와 RLS trust boundary가
+무너지고, MCP와 HTTP가 서로 다른 authorization을 적용할 위험이 있다. Client가 tenant,
+admin capability나 resource tier를 요청 값으로 지정하게 해도 같은 문제가 생긴다.
+
+초기 구현은 caller별 `allowed_sources|all_sources`를 제공했지만, 초기 production 운영은 모든
+query identity가 같은 active source 목록과 source-resolved budget을 쓰기로 결정했다. 차등
+source scope를 유지하면 사용하지 않는 grant 모델과 hot-add synchronization만 남는다.
 
 ## Decision
 
-- 인증 결과는 server-side
-  `CallerContext(caller_id, tenant_id, allowed_sources, operator, all_sources)`다.
-- Production에서는 versioned access-policy manifest가 caller ID, tenant ID, token 환경
-  변수 이름과 source 범위를 연결한다. Source 범위는 명시적인 `allowed_sources` 또는 현재와
-  미래의 control-plane source를 모두 허용하는 `all_sources: true` 중 정확히 하나여야 한다.
+- 인증 결과는 server-side `CallerContext(caller_id, tenant_id, operator)`다. 모든 인증 identity는
+  모든 active source를 보고 `operator`만 admin API와 query cancel capability를 추가한다.
+- Version 2 access-policy manifest는 caller ID, tenant ID, token 환경 변수 이름과 `operator`
+  boolean만 연결한다. `allowed_sources`, `all_sources`, role enum과 caller-grant table은 없다.
+  Version 1이나 scope field가 남은 policy는 조용히 권한을 넓히지 않고 startup에서 거부한다.
   Token 값은 manifest, response, log에 저장하지 않고 시작 시 환경 변수에서 읽어 SHA-256
   digest만 보관한다.
 - `/sources`, `/meta`, `/query`는 `GatewayService`를 유일한 application boundary로
   사용한다. HTTP와 MCP adapter는 인증된 context만 이 service에 전달한다.
-- 허용되지 않은 source와 존재하지 않는 source는 동일한 `404 SOURCE_NOT_FOUND`를
-  반환한다. Source authorization은 metadata load, SQL validation, concurrency slot보다
-  먼저 수행한다.
+- 존재하지 않는 source는 metadata load, SQL validation과 concurrency slot 전에 동일한
+  `404 SOURCE_NOT_FOUND`를 반환한다.
 - Tenant ID는 SQL text, `search_path` 또는 client-controlled session setting에 넣지
   않는다. RLS source는 ADR 0014의 server-derived transaction-local trusted session context를
   사용한다.
-- Loopback에서 인증 설정이 없을 때만 모든 등록 source를 볼 수 있는
-  `local-development` caller를 암시적으로 사용한다.
-- 기존 단일 `QUERY_MAN_API_TOKEN`은 migration 호환성을 위해 모든 등록 source를 가진
-  하나의 caller로 유지한다. 다중 caller는 `QUERY_MAN_ACCESS_POLICY_FILE`을 사용하며 두
-  설정을 동시에 사용할 수 없다.
-- `all_sources: true`는 신규 control-plane source에도 즉시 적용되는 넓은 권한이므로 미래
-  source까지 신뢰할 수 있는 caller에만 명시적으로 부여한다. `operator: true` 자체는 일반
-  source 접근 범위를 넓히지 않는다.
+- Bootstrap loopback에서 인증 설정이 없을 때만 query-only `local-development` caller를
+  사용한다. Bootstrap의 단일 `QUERY_MAN_API_TOKEN`도 query-only shortcut이며 admin capability를
+  주지 않는다.
+- Managed mode는 version 2 `QUERY_MAN_ACCESS_POLICY_FILE`을 요구하고 단일 API token과 anonymous
+  caller를 거부한다. Policy에는 최소 한 개의 non-admin query identity와 한 개의 explicit
+  operator admin identity가 있어야 한다.
+- Operator는 별도 exclusive role이 아니라 capability superset이다. Query credential은 모든
+  admin endpoint와 cancel에서 거부되고 operator credential은 같은 query path도 사용할 수 있다.
 
-초기 production 운영 모델은 이후
-[ADR 0017](0017-shared-source-access-and-resource-tier.md)에서 단순화했다. 모든 인증된 query
-principal이 같은 active source 목록을 보고 source별 `budget_profile`을 공유하므로 Control DB
-caller-grant table, seed import와 dynamic grant는 구현하지 않는다. 이 문서의
-`allowed_sources|all_sources`는 현재 runtime baseline을 설명하며 `CTRL-03`의 명시적 전환이
-끝날 때까지 유지한다. 전환은 서로 다른 기존 scope를 조용히 넓히지 않고 fail-closed한다.
+[ADR 0017](0017-shared-source-access-and-resource-tier.md)의 shared-access 결정에 따라
+source publish/deactivate는 모든 query identity의 visibility를 함께 바꾼다. Stable caller/tenant
+identity는 audit와 source-native RLS에 계속 사용하지만 source access, budget, quota나 비용
+dimension을 선택하지 않는다.
 
 ## Consequences
 
-- Access policy의 source 오타, 중복 caller/token reference, source 범위의 누락·중복,
-  누락되거나 32자 미만인 secret은 startup을 fail-closed시킨다.
-- `operator` flag는 query cancel/운영 endpoint 권한에만 사용하고 일반 source 접근을
-  넓히지 않는다.
-- 현재 `allowed_sources`로 제한된 caller의 목록 변경에는 service restart가 필요하다.
-  `CTRL-03` 이후에는 제한 caller를 유지하거나 개별 hot-grant하는 대신 모든 query principal을
-  non-admin shared-access policy로 전환한다.
+- Version 오류, legacy scope field, 중복 caller/token reference, 누락되거나 범위를 벗어난
+  secret은 startup을 fail-closed시킨다.
+- Source hot-add에는 caller grant 변경이나 service restart가 없다.
+- 같은 source에서도 RLS tenant에 따라 row 결과는 달라질 수 있지만 source visibility와
+  `budget_profile`은 같다.
+- 이 전환은 application access-policy schema 변경이며 Control DB migration이나 dependency를
+  추가하지 않는다.

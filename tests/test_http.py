@@ -60,6 +60,9 @@ class FailingAccessPolicy:
 class RecordingQueryExecutor:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, str | None]] = []
+        self.budgets: list[object] = []
+        self.cancel_calls: list[str] = []
+        self.cancel_result = False
 
     async def execute(
         self,
@@ -72,6 +75,7 @@ class RecordingQueryExecutor:
         tenant_id: str | None = None,
     ) -> dict[str, object]:
         self.calls.append((source.source_id, validated.fingerprint, tenant_id))
+        self.budgets.append(source.budget)
         return {
             "status": "ok",
             "query_id": query_id or "test-query-id",
@@ -90,8 +94,43 @@ class RecordingQueryExecutor:
     async def close(self) -> None:
         pass
 
-    async def cancel(self, _query_id: str, _allowed_sources: frozenset[str]) -> bool:
-        return False
+    async def cancel(self, query_id: str) -> bool:
+        self.cancel_calls.append(query_id)
+        return self.cancel_result
+
+
+_QUERY_A_TOKEN = "query-a-token-value-with-at-least-32-characters"
+_QUERY_B_TOKEN = "query-b-token-value-with-at-least-32-characters"
+_ADMIN_TOKEN = "admin-token-value-with-at-least-32-characters"
+
+
+def _shared_access_policy(tmp_path: Path) -> AccessPolicy:
+    policy_path = tmp_path / "shared-access.yaml"
+    policy_path.write_text(
+        """
+version: 2
+callers:
+  - caller_id: query-a
+    tenant_id: engineering
+    token_env: QUERY_A_TOKEN
+  - caller_id: query-b
+    tenant_id: quality
+    token_env: QUERY_B_TOKEN
+  - caller_id: admin
+    tenant_id: operations
+    token_env: ADMIN_TOKEN
+    operator: true
+""".strip(),
+        encoding="utf-8",
+    )
+    return AccessPolicy.load(
+        policy_path,
+        {
+            "QUERY_A_TOKEN": _QUERY_A_TOKEN,
+            "QUERY_B_TOKEN": _QUERY_B_TOKEN,
+            "ADMIN_TOKEN": _ADMIN_TOKEN,
+        },
+    )
 
 
 def test_meta_openapi_declares_revisions_and_sql_capabilities() -> None:
@@ -473,17 +512,26 @@ async def test_mcp_transport_requires_current_protocol_version() -> None:
 
 
 @pytest.mark.asyncio
-async def test_public_readiness_hides_inventory_and_operator_metrics_are_detailed() -> None:
-    async with client(ReturningCatalog(minimal_development_snapshot())) as session:
+async def test_public_readiness_hides_inventory_and_operator_metrics_are_detailed(
+    tmp_path: Path,
+) -> None:
+    access_policy = _shared_access_policy(tmp_path)
+    query_headers = {"authorization": f"Bearer {_QUERY_A_TOKEN}"}
+    admin_headers = {"authorization": f"Bearer {_ADMIN_TOKEN}"}
+    async with client(
+        ReturningCatalog(minimal_development_snapshot()),
+        access_policy=access_policy,
+    ) as session:
         initializing = await session.get("/ready")
         await session.post(
             "/meta",
+            headers=query_headers,
             json={"source_id": "development-issues", "question": "최근 문제"},
         )
         degraded = await session.get("/ready")
-        detailed = await session.get("/admin/health")
+        detailed = await session.get("/admin/health", headers=admin_headers)
         operations.increment("metadata_refresh_succeeded")
-        metrics = await session.get("/admin/metrics")
+        metrics = await session.get("/admin/metrics", headers=admin_headers)
 
     assert initializing.status_code == 503
     assert initializing.json() == {"status": "initializing"}
@@ -500,7 +548,9 @@ async def test_public_readiness_hides_inventory_and_operator_metrics_are_detaile
 
 
 @pytest.mark.asyncio
-async def test_startup_probe_is_bounded_and_keeps_usable_gateway_degraded() -> None:
+async def test_startup_probe_is_bounded_and_keeps_usable_gateway_degraded(
+    tmp_path: Path,
+) -> None:
     loaded = load_test_registry()
     registry = SourceRegistry(
         [
@@ -516,6 +566,7 @@ async def test_startup_probe_is_bounded_and_keeps_usable_gateway_degraded() -> N
         runtime_config(),
         registry=registry,
         catalog=PartiallyHangingCatalog(minimal_development_snapshot()),
+        access_policy=_shared_access_policy(tmp_path),
     )
 
     started = time.monotonic()
@@ -526,7 +577,10 @@ async def test_startup_probe_is_bounded_and_keeps_usable_gateway_degraded() -> N
             base_url="http://test",
         ) as session:
             ready = await session.get("/ready")
-            detailed = await session.get("/admin/health")
+            detailed = await session.get(
+                "/admin/health",
+                headers={"authorization": f"Bearer {_ADMIN_TOKEN}"},
+            )
 
     assert startup_elapsed < 0.5
     assert ready.status_code == 200
@@ -629,9 +683,16 @@ async def test_rejects_client_supplied_tenant_context() -> None:
 
 
 @pytest.mark.asyncio
-async def test_unknown_source_has_non_disclosing_error() -> None:
+async def test_unknown_source_has_non_disclosing_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    source_id = "not-registered"
+    caplog.set_level(logging.WARNING, logger="query_man.audit")
     async with client(NeverCalledCatalog()) as session:
-        response = await session.post("/meta", json={"source_id": "not-registered", "question": "anything"})
+        response = await session.post(
+            "/meta",
+            json={"source_id": source_id, "question": "anything"},
+        )
     assert response.status_code == 404
     assert response.json() == {
         "error": {
@@ -639,6 +700,8 @@ async def test_unknown_source_has_non_disclosing_error() -> None:
             "message": "The requested source was not found.",
         }
     }
+    assert "authorization_denied" in caplog.text
+    assert source_id not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -652,33 +715,80 @@ async def test_raw_database_errors_are_not_disclosed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_source_admin_requires_operator_and_hides_credential() -> None:
-    policy_path = ROOT_DIRECTORY / "config" / "access-policies.example.yaml"
-    token = "development-analyst-token-at-least-32-characters"
-    policy = AccessPolicy.load(
-        policy_path,
-        ["development-issues", "market-voc"],
-        {
-            "DEVELOPMENT_ANALYST_API_TOKEN": token,
-            "QUALITY_OPERATOR_API_TOKEN": "operator-token-at-least-thirty-two-characters",
-        },
-    )
+async def test_query_credentials_reject_every_admin_operation_and_cancel(
+    tmp_path: Path,
+) -> None:
+    policy = _shared_access_policy(tmp_path)
     credential = "must-not-appear-in-response"
-    async with client(NeverCalledCatalog(), access_policy=policy) as session:
-        response = await session.put(
+    query_id = "30c7b03d-659d-47d4-b6f5-cb2ea9a9eaf0"
+    executor = RecordingQueryExecutor()
+    executor.cancel_result = True
+    requests: list[tuple[str, str, dict[str, object] | None]] = [
+        ("GET", "/admin/health", None),
+        ("GET", "/admin/metrics", None),
+        (
+            "PUT",
             "/admin/sources/new-source",
-            headers={"authorization": f"Bearer {token}"},
-            json={"manifest": {}, "credential": credential},
+            {"manifest": {}, "credential": credential},
+        ),
+        (
+            "POST",
+            "/admin/sources/new-source/credential",
+            {"credential": credential},
+        ),
+        (
+            "POST",
+            "/admin/sources/new-source/verified-queries",
+            {
+                "query_id": "admin-boundary-check",
+                "question": "관리 경계를 검증해줘",
+                "metadata_revision": f"sha256:{'0' * 64}",
+                "relations": ["ai.issue_overview"],
+                "sql": "SELECT issue_id FROM ai.issue_overview LIMIT 1",
+                "expected": {
+                    "columns": ["issue_id"],
+                    "row_count": 0,
+                    "result_hash": f"sha256:{'0' * 64}",
+                },
+            },
+        ),
+        ("POST", "/admin/sources/new-source/rollback/1", None),
+        ("POST", "/admin/sources/new-source/metadata/resume", None),
+        ("DELETE", "/admin/sources/new-source", None),
+        ("DELETE", f"/queries/{query_id}", None),
+    ]
+    async with client(
+        NeverCalledCatalog(),
+        query_executor=executor,
+        access_policy=policy,
+    ) as session:
+        for token in (_QUERY_A_TOKEN, _QUERY_B_TOKEN):
+            headers = {"authorization": f"Bearer {token}"}
+            for method, path, body in requests:
+                options = {} if body is None else {"json": body}
+                response = await session.request(
+                    method,
+                    path,
+                    headers=headers,
+                    **options,  # type: ignore[arg-type]
+                )
+                assert response.status_code == 403, (method, path, response.text)
+                assert response.json()["error"]["code"] == "OPERATOR_REQUIRED"
+                assert credential not in response.text
+
+        admin_headers = {"authorization": f"Bearer {_ADMIN_TOKEN}"}
+        health = await session.get("/admin/health", headers=admin_headers)
+        metrics = await session.get("/admin/metrics", headers=admin_headers)
+        cancelled = await session.delete(
+            f"/queries/{query_id}",
+            headers=admin_headers,
         )
-        resume = await session.post(
-            "/admin/sources/new-source/metadata/resume",
-            headers={"authorization": f"Bearer {token}"},
-        )
-    assert response.status_code == 403
-    assert response.json()["error"]["code"] == "OPERATOR_REQUIRED"
-    assert credential not in response.text
-    assert resume.status_code == 403
-    assert resume.json()["error"]["code"] == "OPERATOR_REQUIRED"
+
+    assert health.status_code == 200
+    assert metrics.status_code == 200
+    assert cancelled.status_code == 200
+    assert cancelled.json() == {"status": "cancel_requested", "query_id": query_id}
+    assert executor.cancel_calls == [query_id]
 
 
 @pytest.mark.asyncio
@@ -839,113 +949,70 @@ async def test_query_invalid_returns_only_bounded_correction_reason() -> None:
 
 
 @pytest.mark.asyncio
-async def test_caller_policy_filters_and_hides_unauthorized_sources(
+async def test_query_identities_share_sources_and_source_resolved_budget(
     tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    policy_path = tmp_path / "access.yaml"
-    policy_path.write_text(
-        """
-version: 1
-callers:
-  - caller_id: development-analyst
-    tenant_id: engineering
-    token_env: DEVELOPMENT_ANALYST_TOKEN
-    allowed_sources:
-      - development-issues
-""".strip(),
-        encoding="utf-8",
-    )
-    token = "development-analyst-token-at-least-32-characters"
-    policy = AccessPolicy.load(
-        policy_path,
-        ["development-issues", "market-voc"],
-        {"DEVELOPMENT_ANALYST_TOKEN": token},
-    )
-    headers = {"authorization": f"Bearer {token}"}
+    policy = _shared_access_policy(tmp_path)
+    query_a_headers = {"authorization": f"Bearer {_QUERY_A_TOKEN}"}
+    query_b_headers = {"authorization": f"Bearer {_QUERY_B_TOKEN}"}
     executor = RecordingQueryExecutor()
-    caplog.set_level(logging.WARNING, logger="query_man.audit")
     async with client(
-        NeverCalledCatalog(),
+        ReturningCatalog(minimal_development_snapshot()),
         query_executor=executor,
         access_policy=policy,
     ) as session:
-        listed = await session.get("/sources", headers=headers)
-        denied = await session.post(
+        listed_a = await session.get("/sources", headers=query_a_headers)
+        listed_b = await session.get("/sources", headers=query_b_headers)
+        context_a = await session.post(
             "/meta",
-            headers=headers,
-            json={"source_id": "market-voc", "question": "VOC 수"},
+            headers=query_a_headers,
+            json={"source_id": "development-issues", "question": "문제 수"},
         )
-        unknown = await session.post(
+        context_b = await session.post(
             "/meta",
-            headers=headers,
-            json={"source_id": "not-registered", "question": "anything"},
+            headers=query_b_headers,
+            json={"source_id": "development-issues", "question": "문제 수"},
         )
-        denied_query = await session.post(
+        query_payload = {
+            "source_id": "development-issues",
+            "sql": "SELECT count(*) AS issue_count FROM ai.issue_overview",
+            "metadata_revision": context_a.json()["metadata_revision"],
+            "sql_policy_revision": context_a.json()["sql_policy_revision"],
+        }
+        queried_a = await session.post(
             "/query",
-            headers=headers,
-            json={
-                "source_id": "market-voc",
-                "sql": "SELECT 1",
-                "metadata_revision": f"sha256:{'0' * 64}",
-                "sql_policy_revision": SQL_POLICY_REVISION,
-            },
+            headers=query_a_headers,
+            json=query_payload,
+        )
+        queried_b = await session.post(
+            "/query",
+            headers=query_b_headers,
+            json=query_payload,
+        )
+        override = await session.post(
+            "/query",
+            headers=query_a_headers,
+            json={**query_payload, "budget_profile": "caller-selected-tier"},
         )
         unauthenticated = await session.get("/sources")
-
-    assert [source["source_id"] for source in listed.json()["sources"]] == [
-        "development-issues"
-    ]
-    assert denied.status_code == 404
-    assert denied.json() == unknown.json()
-    assert denied_query.json() == unknown.json()
-    assert executor.calls == []
-    assert unauthenticated.status_code == 401
-    assert "authorization_denied" in caplog.text
-    assert "market-voc" not in caplog.text
-    assert "not-registered" not in caplog.text
-    assert token not in caplog.text
-
-
-@pytest.mark.asyncio
-async def test_only_operator_can_request_query_cancellation(tmp_path: Path) -> None:
-    policy_path = tmp_path / "access.yaml"
-    policy_path.write_text(
-        """
-version: 1
-callers:
-  - caller_id: analyst
-    tenant_id: engineering
-    token_env: ANALYST_TOKEN
-    allowed_sources: [development-issues]
-    operator: false
-  - caller_id: operator
-    tenant_id: operations
-    token_env: OPERATOR_TOKEN
-    allowed_sources: [development-issues]
-    operator: true
-""".strip(),
-        encoding="utf-8",
-    )
-    analyst_token = "analyst-token-value-with-at-least-32-characters"
-    operator_token = "operator-token-value-with-at-least-32-characters"
-    policy = AccessPolicy.load(
-        policy_path,
-        ["development-issues", "market-voc"],
-        {"ANALYST_TOKEN": analyst_token, "OPERATOR_TOKEN": operator_token},
-    )
-    query_id = "30c7b03d-659d-47d4-b6f5-cb2ea9a9eaf0"
-    async with client(NeverCalledCatalog(), access_policy=policy) as session:
-        forbidden = await session.delete(
-            f"/queries/{query_id}",
-            headers={"authorization": f"Bearer {analyst_token}"},
-        )
-        missing = await session.delete(
-            f"/queries/{query_id}",
-            headers={"authorization": f"Bearer {operator_token}"},
+        invalid = await session.get(
+            "/sources",
+            headers={"authorization": "Bearer invalid-query-token"},
         )
 
-    assert forbidden.status_code == 403
-    assert forbidden.json()["error"]["code"] == "OPERATOR_REQUIRED"
-    assert missing.status_code == 404
-    assert missing.json()["error"]["code"] == "QUERY_NOT_FOUND"
+    expected_sources = ["development-issues", "market-voc"]
+    assert [source["source_id"] for source in listed_a.json()["sources"]] == expected_sources
+    assert listed_b.json() == listed_a.json()
+    assert context_a.status_code == context_b.status_code == 200
+    assert context_b.json() == context_a.json()
+    assert queried_a.status_code == queried_b.status_code == 200
+    assert queried_b.json()["rows"] == queried_a.json()["rows"]
+    assert [call[2] for call in executor.calls] == ["engineering", "quality"]
+    assert len(executor.budgets) == 2
+    assert executor.budgets[0] == executor.budgets[1]
+    assert override.status_code == 400
+    assert override.json()["error"]["code"] == "INVALID_REQUEST"
+    assert len(executor.calls) == 2
+    assert unauthenticated.status_code == invalid.status_code == 401
+    assert unauthenticated.json()["error"]["code"] == "UNAUTHORIZED"
+    assert invalid.json() == unauthenticated.json()

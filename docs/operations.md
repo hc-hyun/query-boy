@@ -79,15 +79,23 @@ development authority fingerprint가 동일한지 확인한다. CI가 비정상 
 
 Runtime은 process 전체의 source authority를 한 mode로 고정한다.
 
-| Mode | Valid configuration | Startup authority |
+| Mode | Valid source configuration | Authentication |
 |---|---|---|
-| `bootstrap` (default) | Control DSN/key 없음 | Repository source와 filesystem verified contract |
-| `managed` | Control DSN/key 모두 있음 | Control DB lifecycle와 verified contract만 사용 |
+| `bootstrap` (default) | Control DSN/key 없음 | Loopback anonymous, query-only API token 또는 version 2 policy |
+| `managed` | Control DSN/key 모두 있음 | Version 2 policy file 필수; query/admin identity 분리 |
 
 Bootstrap에 Control 설정이 하나라도 있거나 managed에 둘 중 하나가 빠지면 configuration error로
 시작하지 않는다. Mode를 `auto`로 추론하거나 source별로 섞지 않는다. Managed startup은 source
 directory와 filesystem verified-query file을 열지 않지만 budget profile과 configured
 authentication/access policy는 계속 deployment configuration에서 읽는다.
+
+Access-policy version 2 caller는 `caller_id`, `tenant_id`, `token_env`와 `operator`만 선언한다.
+모든 인증 identity는 모든 active source를 보며 source별 scope나 grant가 없다. Version 1,
+`allowed_sources`와 `all_sources`가 남은 file은 자동으로 권한을 넓히지 않고 startup에서
+거부한다. Managed mode에는 최소 한 개의 non-admin query identity와 한 개의 explicit operator
+admin identity가 필요하며 `QUERY_MAN_API_TOKEN`과 anonymous local identity를 허용하지 않는다.
+Bootstrap의 anonymous/API-token identity는 query-only다. `operator`는 query 권한에 admin API와
+cancel을 추가하는 capability superset이고 별도 role hierarchy는 아니다.
 
 Managed lifespan은 empty registry/verified map에서 Control DB를 scan한 뒤 enabled generation을
 decrypt·validate하고 stored metadata/quality gate를 통과한 source만 적용한다. Disabled lifecycle은
@@ -98,8 +106,8 @@ process의 이후 poll이 실패하면 마지막 verified registry를 유지하�
 
 ### Existing Bootstrap Source Cutover
 
-1. Production과 분리된 migration/admin identity로 Control schema를 적용하고 runtime writer와
-   encryption key recovery를 확인한다.
+1. Production과 분리된 migration/admin identity로 Control schema를 적용하고 runtime writer,
+   encryption key recovery와 version 2 query/admin access policy를 확인한다.
 2. Query traffic을 받지 않는 managed instance를 직접 시작한다. Empty Control DB에서는
    `/ready` 503이 정상이며 admin endpoint는 별도 운영 경로로 호출한다.
 3. 기존 admin API로 source를 L0/L1 staged publish한다. Reader credential은 external secret
@@ -124,8 +132,8 @@ Public endpoint는 inventory를 노출하지 않는다.
 |---|---|---|
 | `GET /health` | Public/load balancer | Process liveness만 `ok` |
 | `GET /ready` | Public/load balancer | 아래 aggregate status만 반환; source ID 없음 |
-| `GET /admin/health` | Operator | source별 `initializing`, `healthy`, `stale`, `unavailable` |
-| `GET /admin/metrics` | Operator | source/component health와 bounded counter/total snapshot |
+| `GET /admin/health` | Query Man admin | source별 `initializing`, `healthy`, `stale`, `unavailable` |
+| `GET /admin/metrics` | Query Man admin | source/component health와 bounded counter/total snapshot |
 
 Startup은 authority mode에서 등록된 source별 published-metadata 제공 경로를 각 metadata
 statement timeout 안에서 병렬 확인한다. Managed mode는 이 probe 전에 Control lifecycle scan을
@@ -167,7 +175,7 @@ health를 변경하지 않는다.
   `source_reload_apply_failed`, `source_reload_metadata_probe_failed`
 - Shutdown: `shutdown_started`, `shutdown_drained`, `shutdown_forced_cancel`
 
-Replica별 in-process metric이므로 collector는 operator endpoint를 scrape한 뒤 source/replica
+Replica별 in-process metric이므로 collector는 admin endpoint를 scrape한 뒤 source/replica
 label로 합산한다. Counter 차이로 rate를, `*_sum / *_count`로 구간 평균을 계산할 수 있다.
 현재 snapshot만으로 percentile을 복원할 수 없으므로 P95/P99는 audit event histogram 또는
 별도 metric instrumentation이 필요하다. Process restart 때 in-memory 값은 초기화된다.
@@ -182,8 +190,8 @@ Application port는 container 내부 `3000`, host loopback의 `${QUERY_MAN_PORT:
 PostgreSQL은 container network에서 `postgres:5432`다.
 
 Compose는 `QUERY_MAN_SOURCE_MODE=bootstrap`이고 access policy는
-`QUERY_MAN_CODEX_MCP_TOKEN` caller를 두 bootstrap source로만
-제한하고 operator 권한을 주지 않는다. Token과 reader password는 `.env`에서 주입하지만
+`QUERY_MAN_CODEX_MCP_TOKEN`을 모든 active bootstrap source를 보는 query-only caller로 만들고
+operator 권한을 주지 않는다. Token과 reader password는 `.env`에서 주입하지만
 image build context와 Git에는 포함하지 않는다. Application container에는 PostgreSQL
 administrator password를 전달하지 않는다. 기본 Compose는 control-plane DSN/key를 주입하지
 않으므로 source admin endpoint가 비활성인 local runtime이다. Managed source test나 production

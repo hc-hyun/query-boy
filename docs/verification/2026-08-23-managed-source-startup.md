@@ -91,7 +91,8 @@ Mutation timeout은 blind retry하지 않고 authoritative Control DB state를 �
 - Existing staged source and verified-query admin endpoints를 재사용한다. Bulk/startup import endpoint는
   없다.
 - Budget profile/access policy는 file-backed deployment configuration으로 유지한다.
-- Query/admin identity 분리와 shared-access fail-closed 전환은 `CTRL-03`이다.
+- Query/admin identity 분리와 shared-access fail-closed 전환은 `CTRL-03`에서 구현했으며
+  [shared access audit](2026-08-23-shared-access.md)이 현재 계약과 증거를 관리한다.
 
 ## Future Triggers
 

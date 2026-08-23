@@ -242,7 +242,7 @@ class StaticQueryExecutor:
             "plan_summary": {"total_cost": 1.0, "max_rows": 1, "node_count": 1},
         }
 
-    async def cancel(self, _query_id: str, _allowed_sources: frozenset[str]) -> bool:
+    async def cancel(self, _query_id: str) -> bool:
         return False
 
     async def close(self) -> None:
