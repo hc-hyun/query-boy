@@ -21,6 +21,11 @@ _source_health_updates_suppressed: ContextVar[bool] = ContextVar(
     default=False,
 )
 _STRUCTURED_LOG_FIELDS = (
+    "mcp_call_id",
+    "tool_name",
+    "protocol_version",
+    "duration_ms",
+    "outcome",
     "query_id",
     "caller_id",
     "tenant_id",
@@ -189,7 +194,10 @@ class OperationalState:
                     **({"source_id": source_id} if source_id is not None else {}),
                     "value": value,
                 }
-                for (name, source_id), value in sorted(self._counters.items())
+                for (name, source_id), value in sorted(
+                    self._counters.items(),
+                    key=lambda item: (item[0][0], item[0][1] or ""),
+                )
             ]
             metrics.extend(
                 {
@@ -197,7 +205,10 @@ class OperationalState:
                     **({"source_id": source_id} if source_id is not None else {}),
                     "value": value,
                 }
-                for (name, source_id), value in sorted(self._totals.items())
+                for (name, source_id), value in sorted(
+                    self._totals.items(),
+                    key=lambda item: (item[0][0], item[0][1] or ""),
+                )
             )
             return {
                 "accepting": self._accepting,

@@ -12,6 +12,7 @@ from query_man.gateway import GatewayService
 from query_man.mcp_server import create_mcp_server
 from query_man.metadata import MetadataService
 from query_man.models import CatalogSnapshot, SourceProfile
+from query_man.operations import operations
 from query_man.query import QueryService
 from query_man.sql_validation import ValidatedSql
 from tests.helpers import load_test_registry, minimal_development_snapshot
@@ -83,14 +84,21 @@ class ExplodingGateway:
         raise RuntimeError(self.detail)
 
 
-def mcp_fixture() -> tuple[object, MetadataService]:
+class InvalidResultGateway(ExplodingGateway):
+    def list_sources(self, _caller: CallerContext) -> dict[str, object]:
+        return {"invalid": object()}
+
+
+def mcp_fixture(
+    caller: CallerContext | None = None,
+) -> tuple[object, MetadataService]:
     registry = load_test_registry()
     metadata = MetadataService(registry, StaticCatalog())
     executor = StaticExecutor()
     queries = QueryService(registry, metadata, executor)
     policy = AccessPolicy.local(["development-issues"])
     gateway = GatewayService(registry, metadata, queries, policy)
-    caller = CallerContext(
+    caller = caller or CallerContext(
         caller_id="test-analyst",
         tenant_id="engineering",
         allowed_sources=frozenset({"development-issues"}),
@@ -108,6 +116,12 @@ async def test_mcp_exposes_fixed_tools_and_reuses_gateway_policy() -> None:
             "query",
         ]
         assert all("host" not in tool.input_schema.get("properties", {}) for tool in listed_tools.tools)
+        assert all(
+            tool.output_schema is not None
+            and tool.output_schema.get("type") == "object"
+            and tool.output_schema.get("additionalProperties") is True
+            for tool in listed_tools.tools
+        )
         schemas = {tool.name: tool.input_schema for tool in listed_tools.tools}
         assert all(schema["additionalProperties"] is False for schema in schemas.values())
         assert schemas["list_sources"]["properties"] == {}
@@ -124,9 +138,7 @@ async def test_mcp_exposes_fixed_tools_and_reuses_gateway_policy() -> None:
             "sql",
             "metadata_revision",
         ]
-        assert schemas["query"]["properties"]["metadata_revision"]["pattern"] == (
-            r"^sha256:[a-f0-9]{64}$"
-        )
+        assert schemas["query"]["properties"]["metadata_revision"]["pattern"] == (r"^sha256:[a-f0-9]{64}$")
 
         sources = await client.call_tool("list_sources")
         assert len(json.dumps(sources.structured_content).encode()) < 1_024
@@ -144,6 +156,7 @@ async def test_mcp_exposes_fixed_tools_and_reuses_gateway_policy() -> None:
                 "message": "The requested source was not found.",
             }
         }
+        assert denied.is_error is True
 
         rejected_extras = [
             await client.call_tool("list_sources", {"host": "attacker.invalid"}),
@@ -200,6 +213,161 @@ async def test_mcp_context_revision_and_query_contract() -> None:
         assert mismatch.structured_content["error"]["code"] == (  # type: ignore[index]
             "METADATA_REVISION_MISMATCH"
         )
+        assert mismatch.is_error is True
+
+
+async def test_mcp_normalizes_strings_and_rejects_implicit_integer_coercion() -> None:
+    server, _metadata = mcp_fixture()
+    async with Client(server) as client:  # type: ignore[arg-type]
+        context = await client.call_tool(
+            "get_context",
+            {
+                "source_id": " development-issues ",
+                "question": " 문제 수 ",
+                "max_objects": 2,
+            },
+        )
+        assert context.is_error is False
+        revision = str(context.structured_content["metadata_revision"])  # type: ignore[index]
+        queried = await client.call_tool(
+            "query",
+            {
+                "source_id": " development-issues ",
+                "sql": " SELECT count(*) AS issue_count FROM ai.issue_overview ",
+                "metadata_revision": f" {revision} ",
+            },
+        )
+        assert queried.is_error is False
+        assert queried.structured_content["row_count"] == 1  # type: ignore[index]
+
+        rejected = [
+            await client.call_tool(
+                "get_context",
+                {
+                    "source_id": "development-issues",
+                    "question": "문제 수",
+                    "max_objects": value,
+                },
+            )
+            for value in (True, "2", 2.0)
+        ]
+        blank_question = await client.call_tool(
+            "get_context",
+            {"source_id": "development-issues", "question": "   "},
+        )
+
+    assert all(result.is_error is True for result in [*rejected, blank_question])
+
+
+async def test_mcp_validation_does_not_echo_oversized_sensitive_input() -> None:
+    marker = "SENSITIVE_SQL_MARKER_DO_NOT_ECHO"
+    server, _metadata = mcp_fixture()
+    async with Client(server) as client:  # type: ignore[arg-type]
+        result = await client.call_tool(
+            "query",
+            {
+                "source_id": "development-issues",
+                "sql": marker + ("x" * 100_000),
+                "metadata_revision": f"sha256:{'0' * 64}",
+            },
+        )
+
+    assert result.is_error is True
+    assert result.structured_content is None
+    assert marker not in str(result.content)
+
+
+async def test_mcp_debug_logs_correlate_calls_without_recording_inputs(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    question_marker = "SENSITIVE_QUESTION_MARKER"
+    sql_marker = "SENSITIVE_SQL_MARKER"
+    operations.reset()
+    server, _metadata = mcp_fixture(
+        CallerContext(
+            caller_id="test-analyst",
+            tenant_id="engineering",
+            allowed_sources=frozenset(),
+            all_sources=True,
+        )
+    )
+    caplog.set_level(logging.DEBUG, logger="query_man.mcp")
+
+    async with Client(server) as client:  # type: ignore[arg-type]
+        context = await client.call_tool(
+            "get_context",
+            {"source_id": "development-issues", "question": question_marker},
+        )
+        await client.call_tool(
+            "query",
+            {
+                "source_id": "development-issues",
+                "sql": f"SELECT count(*) AS issue_count FROM ai.issue_overview /* {sql_marker} */",
+                "metadata_revision": context.structured_content["metadata_revision"],  # type: ignore[index]
+            },
+        )
+
+    records = [
+        record
+        for record in caplog.records
+        if record.name == "query_man.mcp" and record.getMessage().startswith("mcp_tool_")
+    ]
+    started = [record for record in records if record.getMessage() == "mcp_tool_started"]
+    completed = [record for record in records if record.getMessage() == "mcp_tool_completed"]
+    assert len(started) == len(completed) == 2
+    assert {record.mcp_call_id for record in started} == {record.mcp_call_id for record in completed}
+    assert {record.tool_name for record in completed} == {"get_context", "query"}
+    assert all(record.outcome == "success" for record in completed)
+    assert all(record.caller_id == "test-analyst" for record in completed)
+    assert all(record.source_id == "development-issues" for record in completed)
+    assert all(isinstance(record.duration_ms, int) for record in completed)
+    assert question_marker not in caplog.text
+    assert sql_marker not in caplog.text
+    metrics = {
+        (metric["name"], metric.get("source_id")): metric["value"] for metric in operations.snapshot()["metrics"]
+    }
+    assert metrics[("mcp_tool_started", None)] == 2
+    assert metrics[("mcp_tool_completed", "development-issues")] == 2
+    assert metrics[("mcp_tool_duration_ms_count", "development-issues")] == 2
+    operations.reset()
+
+
+async def test_mcp_unknown_source_is_not_logged_or_used_as_metric_label(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    unknown_source = "unregistered-sensitive-source"
+    operations.reset()
+    server, _metadata = mcp_fixture(
+        CallerContext(
+            caller_id="test-operator",
+            tenant_id="engineering",
+            allowed_sources=frozenset(),
+            all_sources=True,
+        )
+    )
+    caplog.set_level(logging.DEBUG)
+
+    async with Client(server) as client:  # type: ignore[arg-type]
+        result = await client.call_tool(
+            "query",
+            {
+                "source_id": unknown_source,
+                "sql": "SELECT 1",
+                "metadata_revision": f"sha256:{'0' * 64}",
+            },
+        )
+
+    assert result.is_error is True
+    assert result.structured_content == {
+        "error": {
+            "code": "SOURCE_NOT_FOUND",
+            "message": "The requested source was not found.",
+        }
+    }
+    assert unknown_source not in caplog.text
+    metrics = operations.snapshot()["metrics"]
+    assert all(metric.get("source_id") != unknown_source for metric in metrics)
+    operations.reset()
 
 
 async def test_mcp_sanitizes_unexpected_tool_errors(
@@ -239,10 +407,50 @@ async def test_mcp_sanitizes_unexpected_tool_errors(
             "message": "An internal error occurred.",
         }
     }
-    assert all(result.is_error is False for result in results)
+    assert all(result.is_error is True for result in results)
     assert all(result.structured_content == expected for result in results)
     assert all(ExplodingGateway.detail not in str(result.content) for result in results)
     assert caplog.messages.count("Unhandled MCP tool error") == 3
+
+
+async def test_mcp_serialization_failure_records_one_error_completion(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    operations.reset()
+    caller = CallerContext(
+        caller_id="test-analyst",
+        tenant_id="engineering",
+        allowed_sources=frozenset({"development-issues"}),
+    )
+    server = create_mcp_server(
+        cast(GatewayService, InvalidResultGateway()),
+        lambda: caller,
+    )
+    caplog.set_level(logging.DEBUG, logger="query_man.mcp")
+
+    async with Client(server) as client:
+        result = await client.call_tool("list_sources", {})
+
+    completed = [
+        record
+        for record in caplog.records
+        if record.name == "query_man.mcp" and record.getMessage() == "mcp_tool_completed"
+    ]
+    assert result.is_error is True
+    assert result.structured_content == {
+        "error": {
+            "code": "INTERNAL_ERROR",
+            "message": "An internal error occurred.",
+        }
+    }
+    assert len(completed) == 1
+    assert completed[0].outcome == "error"
+    assert completed[0].error_code == "INTERNAL_ERROR"
+    metrics = {(metric["name"], metric["value"]) for metric in operations.snapshot()["metrics"]}
+    assert ("mcp_tool_completed", 1) in metrics
+    assert ("mcp_tool_failed", 1) in metrics
+    assert ("mcp_tool_duration_ms_count", 1) in metrics
+    operations.reset()
 
 
 async def test_mcp_sanitizes_unexpected_caller_provider_errors(
@@ -282,7 +490,7 @@ async def test_mcp_sanitizes_unexpected_caller_provider_errors(
             "message": "An internal error occurred.",
         }
     }
-    assert all(result.is_error is False for result in results)
+    assert all(result.is_error is True for result in results)
     assert all(result.structured_content == expected for result in results)
     assert all(detail not in str(result.content) for result in results)
     assert caplog.messages.count("Unhandled MCP tool error") == 3

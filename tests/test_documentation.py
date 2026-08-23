@@ -20,6 +20,9 @@ REFACTORING_AUDIT = (
 CONTAINER_AUDIT = (
     ROOT_DIRECTORY / "docs" / "verification" / "2026-08-23-container-runtime.md"
 )
+MCP_SERVER_AUDIT = (
+    ROOT_DIRECTORY / "docs" / "verification" / "2026-08-23-mcp-server-assurance.md"
+)
 EXPECTED_ID_COUNTS = {
     "BASE": 10,
     "DEC": 9,
@@ -34,6 +37,7 @@ EXPECTED_ID_COUNTS = {
     "EXT": 8,
     "REF": 15,
     "DEP": 8,
+    "MCPX": 8,
 }
 
 
@@ -42,7 +46,7 @@ def test_roadmap_has_one_completed_checkbox_for_every_expected_id() -> None:
     matches = re.findall(r"^- \[([ x])\] `([A-Z]+)-(\d{2})`", text, re.MULTILINE)
     ids = [f"{prefix}-{number}" for _checked, prefix, number in matches]
 
-    assert len(ids) == sum(EXPECTED_ID_COUNTS.values()) == 123
+    assert len(ids) == sum(EXPECTED_ID_COUNTS.values()) == 131
     assert len(ids) == len(set(ids))
     assert all(checked == "x" for checked, _prefix, _number in matches)
     for prefix, count in EXPECTED_ID_COUNTS.items():
@@ -57,22 +61,27 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
     baseline_audit = BASELINE_AUDIT.read_text(encoding="utf-8")
     refactoring_audit = REFACTORING_AUDIT.read_text(encoding="utf-8")
     container_audit = CONTAINER_AUDIT.read_text(encoding="utf-8")
+    mcp_server_audit = MCP_SERVER_AUDIT.read_text(encoding="utf-8")
 
     assert "Status: Production ready" in roadmap
     assert "Status: Production ready" in architecture
     assert "Status: Complete" in baseline_audit
     assert "Status: Complete" in refactoring_audit
     assert "Status: Complete" in container_audit
+    assert "Status: Complete" in mcp_server_audit
     assert REFACTORING_AUDIT.name in roadmap
     assert REFACTORING_AUDIT.name in architecture
     assert CONTAINER_AUDIT.name in roadmap
     assert CONTAINER_AUDIT.name in architecture
+    assert MCP_SERVER_AUDIT.name in roadmap
+    assert MCP_SERVER_AUDIT.name in architecture
     for prefix, count in EXPECTED_ID_COUNTS.items():
         audit = {
             "DEP": container_audit,
+            "MCPX": mcp_server_audit,
             "REF": refactoring_audit,
         }.get(prefix, baseline_audit)
-        if prefix in {"DEP", "REF"}:
+        if prefix in {"DEP", "MCPX", "REF"}:
             for number in range(1, count + 1):
                 assert f"`{prefix}-{number:02}`" in audit
         else:

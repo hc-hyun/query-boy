@@ -9,7 +9,9 @@ Status: Production ready
 [completion audit](verification/2026-08-23-completion-audit.md)에 production baseline으로,
 [refactoring assurance](verification/2026-08-23-refactoring-assurance.md)에 현재 최종 회귀와
 의도적인 운영 경계로, [container runtime audit](verification/2026-08-23-container-runtime.md)에
-Docker HTTP/MCP 실행 증거로 기록한다.
+Docker HTTP/MCP 실행 증거로,
+[MCP server assurance](verification/2026-08-23-mcp-server-assurance.md)에 실제 server의
+대량·병렬·코너케이스·사용성 검증으로 기록한다.
 
 ## Final Outcome
 
@@ -263,6 +265,32 @@ Dependencies: production baseline and `ADR-0015`
 - [x] `DEP-08` README, architecture, operations, MVP 실행 절차와 재사용 가능한 container
   verification script를 정비하고 전체 회귀 증거를 남긴다.
 
+## 13. MCP Server Assurance
+
+Dependencies: `MCP-*`, `DEP-*`, query budget and observability baseline
+
+완료 표시는 in-process adapter test가 아니라 실행 중인 Compose `/mcp` endpoint, 공식 MCP
+client와 실제 PostgreSQL fixture를 사용해야 한다. 실행 결과와 남은 선택지는
+[MCP server assurance](verification/2026-08-23-mcp-server-assurance.md)에 기록한다.
+
+- [x] `MCPX-01` Docker MCP 전용 marker와 loopback/token-safe client fixture를 만들고 기본
+  unit/integration selection 및 CI container job과 분리한다.
+- [x] `MCPX-02` Versioned quality case 전체를 MCP `get_context`로 실행해 relation,
+  answerability와 context byte gate를 자동 확장형으로 검증한다.
+- [x] `MCPX-03` Verified query contract 전체를 MCP context→query로 실행해 revision, relation,
+  typed result hash, truncation과 unique query ID를 검증한다.
+- [x] `MCPX-04` Host/Origin, 인증, 단일 exact media type, body limit, malformed JSON과 strict
+  tool argument의 bounded 비노출 거부를 실제 transport에서 검증한다.
+- [x] `MCPX-05` Application 오류를 safe structured payload와 MCP `isError=true`로 함께
+  반환하고 string normalization 및 integer coercion 거부를 고정한다.
+- [x] `MCPX-06` Tool마다 server-generated correlation ID, caller, 허가 source, duration,
+  outcome과 public error를 기록하되 SQL/question/token은 기록하지 않는 debug log와 metric을
+  추가한다.
+- [x] `MCPX-07` 동일 client 24개 병렬 query, 독립 session 8개와 source concurrency 포화를
+  실행해 exact result, overload, timeout, source 격리 및 즉시 복구를 검증한다.
+- [x] `MCPX-08` Modern MCP POST disconnect를 query cancel/rollback으로 전파하고 같은 client
+  재사용을 실제 socket에서 검증하며 stateless legacy cancellation 한계를 문서화한다.
+
 ## Recommended Milestones
 
 | Milestone | Scope | Exit |
@@ -276,6 +304,7 @@ Dependencies: production baseline and `ADR-0015`
 | M7 Extension Assurance | `EXT-*` | 네 번째 source와 production-authenticated multi-replica MCP 회귀를 통과한다. |
 | M8 Refactoring Assurance | `REF-*` | 상태 경쟁, 권한 drift, 종료·비용 경계를 재검증하고 문서와 실제 보장을 일치시킨다. |
 | M9 Container Runtime | `DEP-*` | Compose의 단일 HTTP/MCP image가 격리·인증·health·실제 query acceptance를 통과한다. |
+| M10 MCP Server Assurance | `MCPX-*` | 실제 Docker MCP에서 전체 contract, 병렬·포화·취소·비노출 경계를 통과한다. |
 
 위 milestone은 완료된 구현 순서를 보존한 기록이다. 새로운 기능은 기존 완료 ID를
 재사용하지 않고 별도 roadmap 항목과 검증 가능한 exit condition을 추가한다.

@@ -12,6 +12,7 @@ import pytest
 from query_man.access import AccessPolicy
 from query_man.app import build_app
 from query_man.models import CatalogSnapshot, SourceProfile
+from query_man.operations import operations
 from query_man.query import QueryExecutor
 from query_man.registry import SourceRegistry
 from query_man.runtime_config import RuntimeConfig
@@ -160,6 +161,54 @@ async def test_mcp_transport_rejects_untrusted_host_and_origin() -> None:
 
 
 @pytest.mark.asyncio
+async def test_mcp_transport_requires_exact_json_media_type() -> None:
+    app = build_app(
+        runtime_config(),
+        registry=load_test_registry(),
+        catalog=NeverCalledCatalog(),
+    )
+    initialize = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-11-25",
+            "capabilities": {},
+            "clientInfo": {"name": "transport-test", "version": "1"},
+        },
+    }
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+            base_url="http://127.0.0.1:3000",
+        ) as session:
+            accepted = await session.post(
+                "/mcp",
+                headers={"content-type": "application/json; charset=utf-8"},
+                json=initialize,
+            )
+            rejected = await session.post(
+                "/mcp",
+                headers={"content-type": "application/json-evil"},
+                content=b"{}",
+            )
+            duplicated = await session.post(
+                "/mcp",
+                headers=[
+                    ("content-type", "application/json"),
+                    ("content-type", "application/json-evil"),
+                ],
+                content=b"{}",
+            )
+
+    assert accepted.status_code == 200
+    assert rejected.status_code == 400
+    assert rejected.text == "Invalid Content-Type header"
+    assert duplicated.status_code == 400
+    assert duplicated.text == "Invalid Content-Type header"
+
+
+@pytest.mark.asyncio
 async def test_public_readiness_hides_inventory_and_operator_metrics_are_detailed() -> None:
     async with client(ReturningCatalog(minimal_development_snapshot())) as session:
         initializing = await session.get("/ready")
@@ -169,6 +218,7 @@ async def test_public_readiness_hides_inventory_and_operator_metrics_are_detaile
         )
         degraded = await session.get("/ready")
         detailed = await session.get("/admin/health")
+        operations.increment("metadata_refresh_succeeded")
         metrics = await session.get("/admin/metrics")
 
     assert initializing.status_code == 503
@@ -178,6 +228,7 @@ async def test_public_readiness_hides_inventory_and_operator_metrics_are_detaile
     assert "development-issues" not in degraded.text
     assert detailed.json()["status"] == "degraded"
     assert detailed.json()["sources"]["development-issues"] == "healthy"
+    assert metrics.status_code == 200
     assert any(
         metric["name"] == "metadata_refresh_succeeded"
         for metric in metrics.json()["metrics"]
@@ -255,6 +306,22 @@ async def test_bearer_token_is_required_when_configured(
     assert authorized.status_code == 200
     assert "authentication_failed" in caplog.text
     assert token not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_duplicate_authorization_headers_are_rejected() -> None:
+    token = "test-token-with-at-least-thirty-two-characters"
+    async with client(NeverCalledCatalog(), token) as session:
+        response = await session.get(
+            "/sources",
+            headers=[
+                ("authorization", f"Bearer {token}"),
+                ("authorization", f"Bearer {token}"),
+            ],
+        )
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "UNAUTHORIZED"
 
 
 @pytest.mark.asyncio

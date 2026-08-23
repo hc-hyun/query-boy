@@ -14,12 +14,20 @@ replica identity를 추가해야 한다.
 
 Audit event는 다음 bounded field만 사용한다.
 
+- MCP tool 시작/완료(DEBUG): server-generated `mcp_call_id`, 고정 tool name, protocol,
+  caller/tenant, 허가된 source, duration, outcome과 공개 error/reason code
 - Query 시작: `query_id`, caller ID, tenant ID, source ID
 - Query 성공: 위 식별자, fingerprint, queue/elapsed ms, row/result byte, truncation과 plan cost
 - Query 실패/중단: 위 식별자와 공개 가능한 application error code 또는 interrupted 상태
 - Cancel 요청: `query_id`, caller ID와 tenant ID
 - 인증 실패: HTTP method만 기록하고 bearer token과 path는 기록하지 않음
 - 인가 실패: caller ID, tenant ID와 operation만 기록하고 requested source는 기록하지 않음
+
+MCP 로그는 question, SQL, 전체 arguments, body, token 또는 비인가 source를 기록하지 않는다.
+성공한 MCP `query` 완료 event의 `query_id`로 같은 query audit와 연결할 수 있다. 로컬에서
+호출 순서와 병렬 결과를 조사할 때만 `.env`의 `QUERY_MAN_LOG_LEVEL=debug`를 설정해 application
+container를 재생성하고 `docker compose logs -f query-man`으로 본다. 장기 운영의 기본 INFO
+수준을 debug로 올린 채 두지 않는다.
 
 Executor는 PostgreSQL transaction-local `application_name=query-man:<query_id>`를 설정하므로
 동일 query ID로 application audit와 `pg_stat_activity`를 연결할 수 있다.
@@ -68,6 +76,8 @@ health를 변경하지 않는다.
   `query_rejected`, `query_revision_rejected`, `query_timeout`, `query_failed`
 - Result/cancel: `query_truncated`, `query_cancel_requested`, `query_cancelled`,
   `query_interrupted`, `query_shutdown_cancelled`
+- MCP: `mcp_tool_started`, source별 `mcp_tool_completed`, `mcp_tool_failed`,
+  `mcp_tool_cancelled`, `mcp_tool_duration_ms_count/sum`
 - Startup/reload: `startup_metadata_probe_failed`, `source_reload_scan_failed`,
   `source_reload_apply_failed`, `source_reload_metadata_probe_failed`
 - Shutdown: `shutdown_started`, `shutdown_drained`, `shutdown_forced_cancel`
@@ -99,11 +109,23 @@ process 종료 overhead를 포함해 더 크게 조정한다. Runtime log는
 `docker compose logs -f query-man`으로 읽고 종료는 `docker compose down`을 사용한다.
 `./scripts/verify-container.sh`는 exact readiness, 무인증 401, non-root/read-only image 경계와
 공식 MCP client의 tool discovery 및 실제 guarded query를 한 번에 검증한다.
+`uv run pytest -m mcp_server -s`는 같은 published loopback endpoint에서 전체 metadata 품질
+case, verified query, raw protocol/보안 경계, 입력 비노출, 병렬 session과 비용 포화·복구를
+검증한다. 이 suite는 실행 중인 Compose application을 변경하지 않으며 token을 출력하지 않는다.
 
 MCP transport는 bind 주소와 관계없이 DNS rebinding 보호를 활성화한다. 기본 Compose는
 loopback Host/Origin만 허용한다. Reverse proxy나 외부 hostname으로 배포할 때는
 `QUERY_MAN_MCP_ALLOWED_HOSTS`와 `QUERY_MAN_MCP_ALLOWED_ORIGINS`를 실제 공개 Host와 HTTPS
 Origin의 comma-separated allowlist로 명시하며 wildcard 전체 허용을 사용하지 않는다.
+MCP POST는 정확한 `application/json` media type 하나만 허용한다. Parameter는 허용하지만
+prefix 변형이나 중복 Content-Type/Authorization header는 거부한다.
+
+Modern protocol의 JSON response 경로에서는 Query Man이 ASGI disconnect를 직접 감시해 실행
+중 query를 취소·rollback한다. Legacy client는 취소를 별도 notification POST로 보내므로
+stateless transport에서 원 요청과 안전하게 연결할 수 없다. Legacy 취소는 statement/transaction
+timeout이 최종 상한이다. Legacy 즉시 취소가 필수라면 stateful session, caller-bound session
+ownership, idle expiry와 multi-replica routing을 함께 설계해야 하며 transport만 단독 전환하지
+않는다.
 
 ## Alert Policy
 

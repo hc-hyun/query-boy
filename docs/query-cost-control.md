@@ -159,8 +159,12 @@ major version이나 object OID 변화에 걸친 stable application identifier가
    materialized view를 검토한다.
 3. Production에서 무제한 `EXPLAIN ANALYZE`를 실행하지 않는다. 격리 replica나 대표 fixture로
    결과 정확성, plan과 부하를 재검증한다.
-4. Verified query, `uv run query-man-verify`, integration과 `uv run pytest -m load -s`를
-   통과시킨다.
+4. Verified query, `uv run query-man-verify`, integration과
+   `uv run pytest -m 'load and not mcp_server' -s`를 통과시킨다. Compose MCP 경계를 바꾸면
+   `uv run pytest -m mcp_server -s`의 실제 server
+   saturation도 통과시킨다. 이 검증은 source concurrency 2를 채운 상태의 세 번째 요청이
+   `QUERY_OVERLOADED`, 5초 statement 상한을 넘긴 실행이 `QUERY_TIMEOUT`, 다른 source와
+   후속 정상 query가 계속 성공하는지 확인한다.
 5. 그래도 profile 변경이 필요하면 concurrency를 포함한 최악 자원량과 reader connection
    capacity를 review한다. Profile 변경은 metadata revision 재발행과 L2 verified contract
    재검증을 요구한다.

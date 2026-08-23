@@ -208,6 +208,8 @@ class GatewayService:
         operation: str,
     ) -> None:
         try:
+            if self._registry.get(source_id) is None:
+                raise SourceNotFoundError
             self._access.require_source(caller, source_id)
         except SourceNotFoundError:
             logger.warning(

@@ -64,7 +64,7 @@ class BearerAuth(httpx2.Auth):
 async def verify() -> None:
     token = os.environ["QUERY_MAN_CODEX_MCP_TOKEN"]
     async with (
-        httpx2.AsyncClient(auth=BearerAuth(token)) as authenticated_http,
+        httpx2.AsyncClient(auth=BearerAuth(token), trust_env=False) as authenticated_http,
         Client(
             streamable_http_client(
                 "http://127.0.0.1:3000/mcp",

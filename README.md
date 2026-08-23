@@ -126,6 +126,10 @@ source allowlist만 저장하며 형식은
 [`query-man-text-to-sql` Skill](skills/query-man-text-to-sql/SKILL.md)을 사용합니다.
 Codex는 같은 `QUERY_MAN_CODEX_MCP_TOKEN`을 환경변수로 받은 새 session에서 연결해야 합니다.
 HTTP와 MCP container 경계는 `./scripts/verify-container.sh`로 함께 재검증할 수 있습니다.
+Application 오류는 안전한 `structuredContent.error`와 `isError=true`를 함께 반환합니다.
+Modern MCP client가 실행 중인 `query` POST를 닫으면 gateway가 PostgreSQL 작업도 취소하고
+rollback합니다. Stateless legacy cancellation 한계는
+[`ADR 0006`](docs/decisions/0006-mcp-transport-and-workflow.md)에 명시합니다.
 
 개발 검증은 다음 명령으로 실행합니다.
 
@@ -133,7 +137,8 @@ HTTP와 MCP container 경계는 `./scripts/verify-container.sh`로 함께 재검
 uv run ruff check .
 uv run mypy src
 uv run pytest
-uv run pytest -m load -s
+uv run pytest -m 'load and not mcp_server' -s
+uv run pytest -m mcp_server -s
 uv run query-man-evaluate
 uv run query-man-verify
 ```
@@ -142,7 +147,10 @@ uv run query-man-verify
 pytest marker로 표현합니다. `uv run pytest`는 기본적으로 단위 테스트를 실행합니다. 실행 중인
 로컬 PostgreSQL을 사용하는 통합 테스트는 `uv run pytest -m integration`으로 별도 실행합니다. 신규 source 등록 절차는
 [docs/source-onboarding.md](docs/source-onboarding.md)를 참고합니다.
-초기 budget의 bounded load 검증은 `uv run pytest -m load -s`로 실행합니다.
+초기 budget의 service load 검증은 `uv run pytest -m 'load and not mcp_server' -s`로,
+실행 중인 Compose MCP의 전체 contract·병렬·비용 경계는
+`uv run pytest -m mcp_server -s`로 실행합니다. MCP server test는 안전을 위해 credential이
+없는 loopback `http://` URL만 허용하고 `.env` token을 출력하지 않습니다.
 전체 golden question의 revision, relation, SQL과 결과 invariant는
 [`docs/verified-queries.md`](docs/verified-queries.md)의 계약에 따라
 `uv run query-man-verify`로 검증합니다.

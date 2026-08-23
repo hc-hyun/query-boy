@@ -45,6 +45,10 @@ def test_safe_json_formatter_emits_bounded_audit_fields_as_top_level_json() -> N
     )
     record.query_id = "query-1"
     record.source_id = "development-issues"
+    record.mcp_call_id = "mcp-call-1"
+    record.tool_name = "query"
+    record.duration_ms = 13
+    record.outcome = "success"
     record.fingerprint = "pg_query:abc"
     record.elapsed_ms = 12
     record.plan_total_cost = 42.5
@@ -53,6 +57,10 @@ def test_safe_json_formatter_emits_bounded_audit_fields_as_top_level_json() -> N
 
     assert payload["query_id"] == "query-1"
     assert payload["source_id"] == "development-issues"
+    assert payload["mcp_call_id"] == "mcp-call-1"
+    assert payload["tool_name"] == "query"
+    assert payload["duration_ms"] == 13
+    assert payload["outcome"] == "success"
     assert payload["fingerprint"] == "pg_query:abc"
     assert payload["elapsed_ms"] == 12
     assert payload["plan_total_cost"] == 42.5
@@ -106,6 +114,35 @@ def test_inventory_reconcile_removes_inactive_and_ignores_late_health_write() ->
         ("query_execution_started", "active-source"),
         ("source_reload_scan_failed", None),
     }
+
+
+def test_metric_snapshot_sorts_global_and_source_labels_together() -> None:
+    state = OperationalState()
+    state.increment("mcp_tool_completed")
+    state.increment("mcp_tool_completed", "development-issues")
+    state.observe("mcp_tool_duration_ms", 3)
+    state.observe("mcp_tool_duration_ms", 7, "development-issues")
+
+    assert state.snapshot()["metrics"] == [
+        {"name": "mcp_tool_completed", "value": 1},
+        {
+            "name": "mcp_tool_completed",
+            "source_id": "development-issues",
+            "value": 1,
+        },
+        {"name": "mcp_tool_duration_ms_count", "value": 1},
+        {
+            "name": "mcp_tool_duration_ms_count",
+            "source_id": "development-issues",
+            "value": 1,
+        },
+        {"name": "mcp_tool_duration_ms_sum", "value": 3.0},
+        {
+            "name": "mcp_tool_duration_ms_sum",
+            "source_id": "development-issues",
+            "value": 7.0,
+        },
+    ]
 
 
 def test_staging_scope_does_not_mutate_production_source_health() -> None:

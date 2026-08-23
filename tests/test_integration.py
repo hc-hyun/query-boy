@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import os
 import socket
 import uuid
@@ -814,7 +815,7 @@ async def test_onboards_third_source_without_runtime_restart() -> None:
             assert queried.json()["row_count"] == 3
 
             async with (
-                httpx2.AsyncClient() as mcp_http,
+                httpx2.AsyncClient(trust_env=False) as mcp_http,
                 Client(
                     streamable_http_client(
                         f"http://127.0.0.1:{port}/mcp",
@@ -1071,14 +1072,20 @@ callers:
                 headers={"Authorization": f"Bearer {operator_token}"},
             ) as admin_session:
                 async with (
-                    httpx2.AsyncClient(auth=BearerAuth(operator_token)) as operator_http,
+                    httpx2.AsyncClient(
+                        auth=BearerAuth(operator_token),
+                        trust_env=False,
+                    ) as operator_http,
                     Client(
                         streamable_http_client(
                             f"{replica_b_url}/mcp",
                             http_client=operator_http,
                         )
                     ) as operator_mcp,
-                    httpx2.AsyncClient(auth=BearerAuth(restricted_token)) as restricted_http,
+                    httpx2.AsyncClient(
+                        auth=BearerAuth(restricted_token),
+                        trust_env=False,
+                    ) as restricted_http,
                     Client(
                         streamable_http_client(
                             f"{replica_b_url}/mcp",
@@ -1688,6 +1695,82 @@ async def test_socket_disconnect_cancels_http_query() -> None:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_modern_mcp_disconnect_cancels_query_before_client_session_closes(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    executor = DisconnectExecutor()
+    runtime = RuntimeConfig(
+        host="127.0.0.1",
+        port=0,
+        log_level="critical",
+        api_token=None,
+        source_directory=ROOT_DIRECTORY / "config" / "sources",
+        budget_file=ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
+        access_policy_file=None,
+        metadata_cache_ttl_ms=30_000,
+        metadata_max_stale_ms=300_000,
+        metadata_retry_delay_ms=5_000,
+    )
+    app = build_app(
+        runtime,
+        registry=load_test_registry(),
+        catalog=DisconnectCatalog(),
+        query_executor=executor,
+    )
+    caplog.set_level(logging.DEBUG, logger="query_man.mcp")
+
+    async with _serve_test_app(app) as server_url:
+        async with (
+            httpx2.AsyncClient(timeout=15, trust_env=False) as mcp_http,
+            Client(
+                streamable_http_client(
+                    f"{server_url}/mcp",
+                    http_client=mcp_http,
+                ),
+                mode="auto",
+                read_timeout_seconds=15,
+            ) as client,
+        ):
+            assert client.protocol_version == "2026-07-28"
+            context = await client.call_tool(
+                "get_context",
+                {"source_id": "development-issues", "question": "문제 수"},
+            )
+            query = asyncio.create_task(
+                client.call_tool(
+                    "query",
+                    {
+                        "source_id": "development-issues",
+                        "sql": "SELECT count(*) FROM ai.issue_overview",
+                        "metadata_revision": context.structured_content[  # type: ignore[index]
+                            "metadata_revision"
+                        ],
+                    },
+                )
+            )
+            await asyncio.wait_for(executor.started.wait(), timeout=2)
+            query.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await query
+            await asyncio.wait_for(executor.cancelled.wait(), timeout=2)
+            sources = await client.call_tool("list_sources", {})
+            assert sources.structured_content["sources"]  # type: ignore[index]
+
+    cancelled = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "mcp_tool_completed"
+        and getattr(record, "outcome", None) == "cancelled"
+    ]
+    assert len(cancelled) == 1
+    assert cancelled[0].cancel_reason == "client_disconnected"
+    assert not any(
+        record.getMessage() == "Unhandled request error" for record in caplog.records
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_streamable_http_mcp_runs_all_golden_queries() -> None:
     load_dotenv(ROOT_DIRECTORY / ".env")
     required = ["DEVELOPMENT_ISSUES_READER_PASSWORD", "MARKET_VOC_READER_PASSWORD"]
@@ -1747,7 +1830,8 @@ async def test_streamable_http_mcp_runs_all_golden_queries() -> None:
 
         async with (
             httpx2.AsyncClient(
-                auth=BearerAuth("mcp-integration-token-at-least-thirty-two-characters")
+                auth=BearerAuth("mcp-integration-token-at-least-thirty-two-characters"),
+                trust_env=False,
             ) as authenticated_http,
             Client(
                 streamable_http_client(

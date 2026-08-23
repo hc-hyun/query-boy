@@ -39,12 +39,13 @@ build-backend = "hatchling.build"
 packages = ["src/query_man"]
 
 [tool.pytest.ini_options]
-addopts = "-ra -m 'not integration'"
+addopts = "-ra -m 'not integration and not mcp_server'"
 asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
   "integration: requires the local PostgreSQL services",
   "load: runs the bounded local load verification",
+  "mcp_server: requires the Docker MCP server on the configured loopback URL",
 ]
 
 [tool.ruff]

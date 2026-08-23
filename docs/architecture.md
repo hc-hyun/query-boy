@@ -51,7 +51,9 @@ admission을 공유한다. Container network의 PostgreSQL service name은 manif
 loopback으로 제한하고 container 내부 non-loopback bind에는 source-limited bearer policy를
 강제한다. Image, secret, readiness와 shutdown 경계는
 [ADR 0015](decisions/0015-containerized-local-runtime.md)를 따르며 실제 container acceptance는
-[container runtime audit](verification/2026-08-23-container-runtime.md)에 기록한다.
+[container runtime audit](verification/2026-08-23-container-runtime.md)에 기록한다. 전체
+MCP contract와 병렬·포화·취소·비노출 경계의 실제 server 검증은
+[MCP server assurance](verification/2026-08-23-mcp-server-assurance.md)에 기록한다.
 
 ## Component Boundaries
 

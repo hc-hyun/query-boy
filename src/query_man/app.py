@@ -10,7 +10,7 @@ from typing import cast
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
@@ -233,7 +233,7 @@ def build_app(
     app.state.source_reloader = source_reloader
 
     @app.middleware("http")
-    async def authenticate(request: Request, call_next: object) -> JSONResponse:
+    async def authenticate(request: Request, call_next: object) -> Response:
         if (
             operations.public_status() == "shutting_down"
             and request.url.path not in {"/health", "/ready"}
@@ -248,13 +248,14 @@ def build_app(
                 },
             )
         if request.url.path not in {"/health", "/ready"}:
-            authorization = request.headers.get("authorization")
+            authorizations = request.headers.getlist("authorization")
+            authorization = authorizations[0] if len(authorizations) == 1 else None
             received = (
                 authorization[7:]
                 if authorization is not None and authorization.startswith("Bearer ")
                 else None
             )
-            caller = access_policy.authenticate(received)
+            caller = access_policy.authenticate(received) if len(authorizations) <= 1 else None
             if caller is None:
                 audit_logger.warning(
                     "authentication_failed method=%s",
@@ -273,6 +274,20 @@ def build_app(
             request.state.caller = caller
             context_token = _current_caller.set(caller)
             try:
+                content_types = request.headers.getlist("content-type")
+                if (
+                    request.url.path == "/mcp"
+                    and request.method == "POST"
+                    and (
+                        len(content_types) != 1
+                        or not _is_json_content_type(content_types[0])
+                    )
+                ):
+                    return Response(
+                        "Invalid Content-Type header",
+                        status_code=400,
+                        media_type="text/plain",
+                    )
                 return await call_next(request)  # type: ignore[operator, no-any-return]
             finally:
                 _current_caller.reset(context_token)
@@ -508,6 +523,13 @@ def _mcp_caller() -> CallerContext:
     if caller is None:
         raise RuntimeError("MCP caller context is unavailable")
     return caller
+
+
+def _is_json_content_type(value: str | None) -> bool:
+    if value is None:
+        return False
+    media_type, _separator, _parameters = value.partition(";")
+    return media_type.strip().casefold() == "application/json"
 
 
 def _require_operator(request: Request) -> None:
