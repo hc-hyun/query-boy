@@ -49,7 +49,7 @@ Control DB와 하나의 admin management API에서 관리한다. 실제 DB, secr
 [source management plane](source-management-plane.md)을 따른다. Query access와 resource tier는
 [ADR 0017](decisions/0017-shared-source-access-and-resource-tier.md)을 따른다.
 
-- [ ] `CTRL-01` Control schema에 번호 기반 migration을 도입하고 production/development와
+- [x] `CTRL-01` Control schema에 번호 기반 migration을 도입하고 production/development와
   disposable integration-test Control DB를 분리해 fixture generation이 운영 history에
   누적되지 않게 한다.
 - [ ] `CTRL-02` Control DB lifecycle과 verified contract가 restart/rollback/deactivate 뒤에도
@@ -84,8 +84,16 @@ Control DB와 하나의 admin management API에서 관리한다. 실제 DB, secr
 - [ ] `CTRL-09` 전체 authority table의 backup/restore와 retention, encryption-key recovery,
   zero-bootstrap 복구 및 multi-replica management-plane release acceptance를 재현한다.
 
-현재 다음 작업은 `CTRL-01`이다. 이 track에서는 다단계 RBAC, caller grant storage,
+`CTRL-01`의 migration checksum, fresh/reapply, 개발 history 비오염과 disposable DB 삭제 증거는
+[control schema migration audit](verification/2026-08-23-control-schema-migrations.md)에 기록한다.
+
+현재 다음 작업은 `CTRL-02`다. 이 track에서는 다단계 RBAC, caller grant storage,
 user/organization별 tier·quota와 AI production executor를 구현하지 않는다.
+
+두 번째 numbered migration이 추가될 때는 N-1→N data-preserving upgrade, 실패 migration의
+transaction rollback, concurrent pending apply와 rolling application compatibility를 같은
+변경에서 검증한다. 실제로 crash 잔여 test DB가 반복 관측되기 전에는 prefix/age cleanup daemon을
+추가하지 않는다.
 
 ## P2 — Source Onboarding Skill
 

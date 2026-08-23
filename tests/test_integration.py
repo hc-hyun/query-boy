@@ -661,19 +661,14 @@ async def test_catalog_and_query_enforce_versioned_session_budget(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_onboards_third_source_without_runtime_restart() -> None:
+async def test_onboards_third_source_without_runtime_restart(
+    disposable_control_dsn: str,
+) -> None:
     load_dotenv(ROOT_DIRECTORY / ".env")
     required = ["POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB"]
     if any(not os.environ.get(name) for name in required):
         pytest.skip("local PostgreSQL credentials are not configured")
-    control_dsn = make_conninfo(
-        host="127.0.0.1",
-        port=os.environ.get("POSTGRES_PORT", "5432"),
-        dbname=os.environ["POSTGRES_DB"],
-        user=os.environ["POSTGRES_USER"],
-        password=os.environ["POSTGRES_PASSWORD"],
-        sslmode="disable",
-    )
+    control_dsn = disposable_control_dsn
     encryption_key = base64.urlsafe_b64encode(b"acceptance-source-key-material!!").decode(
         "ascii"
     )
@@ -932,6 +927,7 @@ async def test_onboards_third_source_without_runtime_restart() -> None:
 @pytest.mark.asyncio
 async def test_onboards_commerce_edges_across_authenticated_mcp_replicas(
     tmp_path: Path,
+    disposable_control_dsn: str,
 ) -> None:
     load_dotenv(ROOT_DIRECTORY / ".env")
     required = [
@@ -944,14 +940,7 @@ async def test_onboards_commerce_edges_across_authenticated_mcp_replicas(
     if any(not os.environ.get(name) for name in required):
         pytest.skip("local PostgreSQL credentials are not configured")
 
-    control_dsn = make_conninfo(
-        host="127.0.0.1",
-        port=os.environ.get("POSTGRES_PORT", "5432"),
-        dbname=os.environ["POSTGRES_DB"],
-        user=os.environ["POSTGRES_USER"],
-        password=os.environ["POSTGRES_PASSWORD"],
-        sslmode="disable",
-    )
+    control_dsn = disposable_control_dsn
     encryption_key = base64.urlsafe_b64encode(b"acceptance-source-key-material!!").decode(
         "ascii"
     )
@@ -1164,6 +1153,7 @@ callers:
                         published_body = published.json()
                         assert published_body["quality_level"] == "L0"
                         old_revision = published_body["metadata_revision"]
+                        l0_generation = published_body["generation"]
 
                         l0_context_body: dict[str, object] | None = None
                         for _ in range(100):
@@ -1178,6 +1168,10 @@ callers:
                             if (
                                 isinstance(candidate, dict)
                                 and candidate.get("metadata_revision") == old_revision
+                                and replica_b.state.registry.get(
+                                    "commerce-edges"
+                                ).control_generation
+                                == l0_generation
                             ):
                                 l0_context_body = candidate
                                 break
@@ -1220,6 +1214,7 @@ callers:
                         )
                         assert semantic_published.status_code == 200, semantic_published.text
                         semantic_revision = semantic_published.json()["metadata_revision"]
+                        semantic_generation = semantic_published.json()["generation"]
                         assert semantic_revision != old_revision
 
                         semantic_context_body: dict[str, object] | None = None
@@ -1236,6 +1231,10 @@ callers:
                                 isinstance(candidate, dict)
                                 and candidate.get("metadata_revision")
                                 == semantic_revision
+                                and replica_b.state.registry.get(
+                                    "commerce-edges"
+                                ).control_generation
+                                == semantic_generation
                             ):
                                 semantic_context_body = candidate
                                 break
@@ -1281,6 +1280,7 @@ callers:
                         assert l2_published.status_code == 200, l2_published.text
                         assert l2_published.json()["metadata_revision"] == semantic_revision
                         assert l2_published.json()["quality_level"] == "L2"
+                        l2_generation = l2_published.json()["generation"]
 
                         final_context_body: dict[str, object] | None = None
                         for _ in range(100):
@@ -1297,6 +1297,10 @@ callers:
                                 and candidate.get("metadata_revision")
                                 == semantic_revision
                                 and candidate.get("quality_level") == "L2"
+                                and replica_b.state.registry.get(
+                                    "commerce-edges"
+                                ).control_generation
+                                == l2_generation
                             ):
                                 final_context_body = candidate
                                 break

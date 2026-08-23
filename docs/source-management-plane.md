@@ -37,10 +37,11 @@ tier를 정한다. 이 문서는 현재 공백과 `CTRL-*` 구현 순서를 관�
 - Runtime polling과 no-restart registry reload
 - Source-resolved `budget_profile`과 HTTP/MCP 공통 query 경계
 - `operator`로 보호된 mutation/cancel endpoint
+- Checksum을 기록하는 numbered Control DB migration과 반복 가능한 role/ACL reconciliation
+- 개발 Control DB를 변경하지 않는 function-scoped disposable integration-test Control DB
 
 아직 구현할 공백:
 
-- Production/development/disposable-test Control DB migration과 lifecycle 격리
 - Filesystem seed를 import한 뒤 Control DB만 우선하는 zero-bootstrap managed startup
 - Query credential과 admin credential의 명시적 분리. 현재 single-token/local compatibility가
   암시적으로 admin이 될 수 있어 source management 환경에서 제거해야 한다.
@@ -171,6 +172,7 @@ threat model/ADR 뒤에 설계한다.
 
 기존 immutable revision/pointer table을 재사용하고 필요한 책임만 추가한다.
 
+- Migration ledger: version, immutable filename/checksum, applied time와 migration identity
 - Minimal catalog: owner, environment와 DB migration provenance
 - Mutation event/receipt: idempotency, actor, reason, request hash와 outcome
 - Runtime observation: replica별 desired/applied state와 freshness
@@ -184,7 +186,7 @@ hour/day rollup만 저장하고 retention/cardinality 상한을 둔다.
 
 Canonical status는 [active development TODO](development-todo.md)의 `CTRL-*`가 관리한다.
 
-1. Versioned migration과 disposable test-store isolation
+1. **Complete:** versioned migration과 disposable test-store isolation
 2. Control DB precedence, zero-bootstrap과 verified-contract seed import
 3. Shared query access와 explicit admin/query credential separation
 4. Minimal catalog와 admin list/detail/history
@@ -196,6 +198,8 @@ Canonical status는 [active development TODO](development-todo.md)의 `CTRL-*`�
 
 DB-native collector와 provider connector는 rollout의 선행 조건이 아니다. 연결되지 않은 값은
 `not_configured`로 표시하고 `COST-*`가 이후 aggregate를 추가한다.
+첫 단계의 실행 증거는
+[control schema migration audit](verification/2026-08-23-control-schema-migrations.md)에 있다.
 
 ## Release Acceptance
 

@@ -43,6 +43,12 @@ MCP_SOAK_AUDIT = (
     / "verification"
     / "2026-08-23-mcp-multi-replica-soak.md"
 )
+CONTROL_MIGRATION_AUDIT = (
+    ROOT_DIRECTORY
+    / "docs"
+    / "verification"
+    / "2026-08-23-control-schema-migrations.md"
+)
 EXPECTED_ID_COUNTS = {
     "BASE": 10,
     "DEC": 9,
@@ -65,6 +71,13 @@ EXPECTED_ACTIVE_ID_COUNTS = {
     "SKILL": 6,
     "COST": 5,
     "TRACE": 4,
+}
+EXPECTED_ACTIVE_COMPLETED_COUNTS = {
+    "SOAK": 7,
+    "CTRL": 1,
+    "SKILL": 0,
+    "COST": 0,
+    "TRACE": 0,
 }
 
 
@@ -94,6 +107,7 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
     central_source_adr = CENTRAL_SOURCE_ADR.read_text(encoding="utf-8")
     shared_access_adr = SHARED_ACCESS_ADR.read_text(encoding="utf-8")
     mcp_soak_audit = MCP_SOAK_AUDIT.read_text(encoding="utf-8")
+    control_migration_audit = CONTROL_MIGRATION_AUDIT.read_text(encoding="utf-8")
 
     assert "Status: Production ready" in roadmap
     assert "Status: Production ready" in architecture
@@ -106,6 +120,7 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
     assert "Status: Accepted" in central_source_adr
     assert "Status: Accepted" in shared_access_adr
     assert "Status: Complete" in mcp_soak_audit
+    assert "Status: Complete" in control_migration_audit
     assert REFACTORING_AUDIT.name in roadmap
     assert REFACTORING_AUDIT.name in architecture
     assert CONTAINER_AUDIT.name in roadmap
@@ -122,6 +137,8 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
     assert SHARED_ACCESS_ADR.name in development_todo
     assert MCP_SOAK_AUDIT.name in roadmap
     assert MCP_SOAK_AUDIT.name in architecture
+    assert CONTROL_MIGRATION_AUDIT.name in development_todo
+    assert CONTROL_MIGRATION_AUDIT.name in source_management_plan
     for prefix, count in EXPECTED_ID_COUNTS.items():
         audit = {
             "DEP": container_audit,
@@ -136,9 +153,10 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
             assert f"`{prefix}-{count:02}`" in audit
 
 
-def test_active_todo_has_prioritized_unique_checklists_and_soak_evidence() -> None:
+def test_active_todo_has_prioritized_unique_checklists_and_completed_evidence() -> None:
     todo = DEVELOPMENT_TODO.read_text(encoding="utf-8")
     soak_audit = MCP_SOAK_AUDIT.read_text(encoding="utf-8")
+    control_migration_audit = CONTROL_MIGRATION_AUDIT.read_text(encoding="utf-8")
     matches = re.findall(r"^- \[([ x])\] `([A-Z]+)-(\d{2})`", todo, re.MULTILINE)
     ids = [f"{prefix}-{number}" for _checked, prefix, number in matches]
 
@@ -153,11 +171,15 @@ def test_active_todo_has_prioritized_unique_checklists_and_soak_evidence() -> No
         assert [item for _checked, item in prefix_matches] == [
             f"{prefix}-{number:02}" for number in range(1, count + 1)
         ]
-        expected_status = "x" if prefix == "SOAK" else " "
-        assert all(checked == expected_status for checked, _item in prefix_matches)
+        completed_count = EXPECTED_ACTIVE_COMPLETED_COUNTS[prefix]
+        assert [checked for checked, _item in prefix_matches] == [
+            *("x" for _ in range(completed_count)),
+            *(" " for _ in range(count - completed_count)),
+        ]
 
     for number in range(1, EXPECTED_ACTIVE_ID_COUNTS["SOAK"] + 1):
         assert f"`SOAK-{number:02}`" in soak_audit
+    assert "`CTRL-01`" in control_migration_audit
 
 
 def test_initial_access_and_resource_tier_decision_stays_minimal() -> None:

@@ -1,21 +1,4 @@
-BEGIN;
-
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'query_man_control_writer'
-  ) THEN
-    CREATE ROLE query_man_control_writer
-      NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;
-  END IF;
-END;
-$$;
-
-ALTER ROLE query_man_control_writer
-  NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;
-
 CREATE SCHEMA IF NOT EXISTS control;
-REVOKE ALL ON SCHEMA control FROM PUBLIC;
 
 CREATE TABLE IF NOT EXISTS control.metadata_snapshots (
   source_id text NOT NULL,
@@ -109,6 +92,7 @@ CREATE TABLE IF NOT EXISTS control.verified_query_contracts (
     CHECK (jsonb_typeof(expected) = 'object')
 );
 
+-- These ALTER statements adopt the exact unversioned baseline without deleting its history.
 ALTER TABLE control.active_metadata_revisions
   ADD COLUMN IF NOT EXISTS pinned boolean NOT NULL DEFAULT false;
 
@@ -168,28 +152,6 @@ CREATE TRIGGER verified_query_contracts_are_immutable
 BEFORE UPDATE OR DELETE ON control.verified_query_contracts
 FOR EACH ROW EXECUTE FUNCTION control.reject_source_profile_revision_mutation();
 
-REVOKE ALL ON ALL TABLES IN SCHEMA control FROM PUBLIC;
-REVOKE ALL ON FUNCTION control.reject_metadata_snapshot_mutation() FROM PUBLIC;
-REVOKE ALL ON FUNCTION control.reject_source_profile_revision_mutation() FROM PUBLIC;
-DO $$
-BEGIN
-  EXECUTE format(
-    'GRANT CONNECT ON DATABASE %I TO query_man_control_writer',
-    pg_catalog.current_database()
-  );
-END;
-$$;
-GRANT USAGE ON SCHEMA control TO query_man_control_writer;
-GRANT SELECT, INSERT ON control.metadata_snapshots TO query_man_control_writer;
-GRANT SELECT, INSERT, UPDATE ON control.active_metadata_revisions
-  TO query_man_control_writer;
-GRANT SELECT, INSERT ON control.source_profile_revisions
-  TO query_man_control_writer;
-GRANT SELECT, INSERT, UPDATE ON control.active_source_profiles
-  TO query_man_control_writer;
-GRANT SELECT, INSERT ON control.verified_query_contracts
-  TO query_man_control_writer;
-
 COMMENT ON TABLE control.metadata_snapshots IS
   'Immutable reader-visible catalog snapshots keyed by source and metadata revision.';
 COMMENT ON TABLE control.active_metadata_revisions IS
@@ -200,5 +162,3 @@ COMMENT ON TABLE control.active_source_profiles IS
   'Atomic active generation and enabled state for each control-plane source.';
 COMMENT ON TABLE control.verified_query_contracts IS
   'Immutable guarded-query result contracts bound to a metadata revision.';
-
-COMMIT;

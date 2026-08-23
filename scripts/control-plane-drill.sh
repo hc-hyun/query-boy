@@ -44,14 +44,15 @@ docker compose exec -T postgres pg_dump \
   --exit-on-error >/dev/null
 
 for _migration_pass in 1 2; do
-  docker compose exec -T postgres psql \
-    --username query_man_admin \
-    --dbname "$drill_database" \
-    --set=ON_ERROR_STOP=1 \
-    --file=/docker-entrypoint-initdb.d/05-control-plane.sql >/dev/null
+  docker compose exec -T \
+    --env PGUSER=query_man_admin \
+    --env PGDATABASE="$drill_database" \
+    postgres \
+    bash /docker-entrypoint-initdb.d/control-migrations/apply.sh >/dev/null
 done
 
 for table_name in \
+  schema_migrations \
   metadata_snapshots \
   active_metadata_revisions \
   source_profile_revisions \
@@ -92,10 +93,19 @@ schema_contract="$(docker compose exec -T postgres psql \
          ON namespace_row.oid = relation_row.relnamespace
        WHERE namespace_row.nspname = 'control'
          AND NOT trigger_row.tgisinternal),
+      (SELECT bool_and(
+         filename ~ '^[0-9]{4}_[a-z0-9_]+[.]sql$'
+         AND checksum ~ '^sha256:[a-f0-9]{64}$'
+       ) AND count(*) > 0
+       FROM control.schema_migrations),
       has_database_privilege(
         'query_man_control_writer', pg_catalog.current_database(), 'CONNECT'
       )
       AND has_schema_privilege('query_man_control_writer', 'control', 'USAGE')
+      AND NOT has_table_privilege(
+        'query_man_control_writer', 'control.schema_migrations',
+        'SELECT,INSERT,UPDATE,DELETE'
+      )
       AND has_table_privilege(
         'query_man_control_writer', 'control.metadata_snapshots', 'SELECT,INSERT'
       )
@@ -129,9 +139,37 @@ schema_contract="$(docker compose exec -T postgres psql \
         'query_man_control_writer', 'control.verified_query_contracts', 'UPDATE,DELETE'
       );")"
 
-if [[ "$schema_contract" != "4|3|t" ]]; then
+if [[ "$schema_contract" != "4|3|t|t" ]]; then
   echo "Restored control schema contract mismatch: $schema_contract" >&2
   exit 1
 fi
 
-echo "control-plane restore drill: PASS (custom archive, 5 tables, 4 FKs, 3 triggers, writer ACL)"
+docker compose exec -T postgres psql \
+  --username query_man_admin \
+  --dbname "$drill_database" \
+  --set=ON_ERROR_STOP=1 \
+  --command="
+    INSERT INTO control.metadata_snapshots (source_id, revision, snapshot)
+    VALUES (
+      'restore-drill-sentinel',
+      'sha256:0000000000000000000000000000000000000000000000000000000000000000',
+      '{\"relations\": []}'::jsonb
+    )
+    ON CONFLICT DO NOTHING;
+    DO \$\$
+    BEGIN
+      BEGIN
+        UPDATE control.metadata_snapshots
+        SET snapshot = snapshot
+        WHERE source_id = 'restore-drill-sentinel';
+        RAISE EXCEPTION 'immutable trigger did not reject the update';
+      EXCEPTION
+        WHEN raise_exception THEN
+          IF SQLERRM = 'immutable trigger did not reject the update' THEN
+            RAISE;
+          END IF;
+      END;
+    END;
+    \$\$;" >/dev/null
+
+echo "control-plane restore drill: PASS (custom archive, 6 tables, migration ledger, 4 FKs, 3 triggers, immutable history, writer ACL)"

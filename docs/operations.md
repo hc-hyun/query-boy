@@ -45,6 +45,36 @@ Executor는 PostgreSQL transaction-local `application_name=query-man:<query_id>`
 비싼 query 조사와 `pg_stat_statements` 경계는
 [query cost runbook](query-cost-control.md)을 따른다.
 
+## Control DB Migration And Environment Isolation
+
+Control DB는 production, development와 integration test가 서로 다른 physical database/DSN을
+사용한다. Production 관리자는 대상 identity를 확인한 뒤 database owner용 표준 libpq
+`PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSFILE` 또는 managed authentication을 설정하고
+다음을 실행한다. Password나 전체 DSN을 command argument 또는 change log에 넣지 않는다.
+
+```bash
+./scripts/apply-control-schema.sh
+```
+
+Runner는 `docker/postgres/init/control-migrations`의 연속된 `NNNN_name.sql`만 번호순으로
+적용한다. `control.schema_migrations`에는 filename과 SHA-256 checksum을 기록하고, 각 pending
+migration의 DDL과 ledger insert를 같은 transaction 및 database advisory lock 안에서 처리한다.
+재실행은 이미 적용된 migration을 건너뛰며 repository와 DB의 filename/checksum이 다르거나 DB가
+현재 checkout보다 앞서 있으면 DDL 전에 fail-closed한다. 적용된 migration 파일이나 ledger를
+수정해 맞추지 말고 새 forward migration을 추가한다. Schema downgrade는 지원하지 않는다.
+
+Schema migration과 global `query_man_control_writer`/DB ACL은 의도적으로 분리돼 있다.
+`reconcile-security.sql`은 매 실행마다 role을 harden하고 현재 DB의 최소 권한을 복구한다. 따라서
+`pg_dump --no-privileges` restore에서도 pending migration이 없어도 ACL이 복구된다. Runtime
+writer에는 migration ledger, schema CREATE 또는 DDL 권한을 부여하지 않는다.
+
+Local/CI의 `apply-db.sh`는 development fixture DB에 같은 runner를 적용하지만 production
+migration 명령이 아니다. Control-store와 hot-add integration test는
+`query_man_control_test_<random>` DB를 test마다 생성하고, 모든 pool을 닫은 뒤 삭제하며 전후
+development authority fingerprint가 동일한지 확인한다. CI가 비정상 종료돼 scratch DB가 남으면
+해당 ephemeral Compose volume을 폐기한다. 운영 DB나 사용자가 지정한 임의 DB를 test cleanup
+대상으로 삼지 않는다.
+
 ## Health And Metrics
 
 Public endpoint는 inventory를 노출하지 않는다.

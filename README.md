@@ -196,6 +196,8 @@ database·role·seed를 만드는 local/CI bootstrap이며 production migration�
 전용 LOGIN의 TLS DSN을 `QUERY_MAN_CONTROL_DSN`에 사용합니다. 자세한 설치·복구 순서는
 [source onboarding](docs/source-onboarding.md)과
 [disaster recovery](docs/disaster-recovery.md)를 따릅니다.
+Control schema는 filename/checksum을 기록하는 numbered migration이며 integration test는
+개발 Control DB가 아니라 test마다 생성·삭제되는 임시 database를 사용합니다.
 
 Retrieval 품질은 [`config/quality-evaluation.yaml`](config/quality-evaluation.yaml)의
 versioned case와 gate로 관리합니다. `uv run query-man-evaluate`는 golden/paraphrase relation

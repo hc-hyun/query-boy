@@ -210,9 +210,10 @@ libpq `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSFILE`/managed-auth 환�
 ./scripts/apply-control-schema.sh
 ```
 
-이 script는 현재 `PGDATABASE`에 control schema, immutable trigger,
-`query_man_control_writer` NOLOGIN group과 최소 ACL만 idempotent하게 적용한다. 네 fixture
-database·role·seed를 만드는 `scripts/apply-db.sh`는 production migration에 사용하지 않는다.
+이 script는 현재 `PGDATABASE`에 checksum이 일치하는 pending numbered migration만 적용하고,
+`query_man_control_writer` NOLOGIN group과 최소 ACL을 매번 reconcile한다. 이미 적용된 migration
+file은 수정하지 않고 schema 변경마다 새 번호를 추가한다. 네 fixture database·role·seed를
+만드는 `scripts/apply-db.sh`는 production migration에 사용하지 않는다.
 전용 LOGIN은 database/IAM 운영 절차로 별도 생성하고 `query_man_control_writer` membership만
 부여한다. LOGIN은 `INHERIT`, `NOSUPERUSER`, `NOCREATEDB`, `NOCREATEROLE`, `NOREPLICATION`,
 `NOBYPASSRLS`와 유한 connection limit를 사용한다. Metadata/source store pool이 각각 replica당

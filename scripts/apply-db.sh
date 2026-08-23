@@ -7,8 +7,10 @@ cd "$project_dir"
 docker compose exec -T postgres \
   bash /docker-entrypoint-initdb.d/01-source-bootstrap.sh
 
+docker compose exec -T postgres \
+  bash /docker-entrypoint-initdb.d/05-control-plane.sh
+
 for sql_file in \
-  05-control-plane.sql \
   10-development-issues-schema.sql \
   20-development-issues-seed.sql \
   30-market-voc-schema.sql \

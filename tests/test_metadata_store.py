@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import os
 from dataclasses import replace
 
 import pytest
 import yaml
-from dotenv import load_dotenv
 from psycopg import AsyncConnection, errors
-from psycopg.conninfo import make_conninfo
 
 from query_man.metadata_store import (
     PostgresMetadataStore,
@@ -25,19 +22,10 @@ from tests.helpers import ROOT_DIRECTORY, load_test_registry, minimal_developmen
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_postgres_metadata_store_publishes_immutable_revisions_and_rolls_back() -> None:
-    load_dotenv(ROOT_DIRECTORY / ".env")
-    required = ["POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB"]
-    if any(not os.environ.get(name) for name in required):
-        pytest.skip("local PostgreSQL control-plane credentials are not configured")
-    dsn = make_conninfo(
-        host="127.0.0.1",
-        port=os.environ.get("POSTGRES_PORT", "5432"),
-        dbname=os.environ["POSTGRES_DB"],
-        user=os.environ["POSTGRES_USER"],
-        password=os.environ["POSTGRES_PASSWORD"],
-        sslmode="disable",
-    )
+async def test_postgres_metadata_store_publishes_immutable_revisions_and_rolls_back(
+    disposable_control_dsn: str,
+) -> None:
+    dsn = disposable_control_dsn
     source = load_test_registry().get("development-issues")
     assert source is not None
     source = replace(source, source_id="metadata-store-fixture-v2")
@@ -163,19 +151,10 @@ async def test_postgres_metadata_store_publishes_immutable_revisions_and_rolls_b
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_metadata_publish_rejects_superseded_control_generation() -> None:
-    load_dotenv(ROOT_DIRECTORY / ".env")
-    required = ["POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB"]
-    if any(not os.environ.get(name) for name in required):
-        pytest.skip("local PostgreSQL control-plane credentials are not configured")
-    dsn = make_conninfo(
-        host="127.0.0.1",
-        port=os.environ.get("POSTGRES_PORT", "5432"),
-        dbname=os.environ["POSTGRES_DB"],
-        user=os.environ["POSTGRES_USER"],
-        password=os.environ["POSTGRES_PASSWORD"],
-        sslmode="disable",
-    )
+async def test_metadata_publish_rejects_superseded_control_generation(
+    disposable_control_dsn: str,
+) -> None:
+    dsn = disposable_control_dsn
     raw = yaml.safe_load(
         (ROOT_DIRECTORY / "config" / "sources" / "development-issues.yaml").read_text(
             encoding="utf-8"

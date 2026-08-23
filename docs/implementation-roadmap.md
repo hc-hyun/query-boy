@@ -311,6 +311,9 @@ client와 실제 PostgreSQL fixture를 사용해야 한다. 실행 결과와 남
 centralized source management, onboarding planning Skill, database-native 비용 귀속,
 workflow trace다. 완료된 두 replica soak 실행 증거는
 [multi-replica soak audit](verification/2026-08-23-mcp-multi-replica-soak.md)에 기록한다.
+Centralized management의 첫 단계인 numbered Control DB migration과 disposable test-store
+격리는 [control schema migration audit](verification/2026-08-23-control-schema-migrations.md)에
+기록한다.
 
 ## Recommended Milestones
 
