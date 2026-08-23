@@ -9,9 +9,11 @@ Status: Production ready
 신호를 관리한다. 신규 데이터베이스 추가 과정에서 애플리케이션 코드 변경과 배포가 발생하지
 않는 것을 최종 성공 기준으로 삼는다.
 
-이 문서의 `Production ready` 상태는 완료된 query/data-plane baseline을 뜻한다. 아래의 중앙
-management-plane 표기와 단일 운영 화면은 승인된 목표 설계이며 [active development
-TODO](development-todo.md)의 `CTRL-*`가 완료되기 전까지 현재 제공 기능이 아니다.
+이 문서의 `Production ready` 상태는 완료된 query/data-plane baseline을 뜻한다. 중앙
+management plane은 단계적으로 구현 중이다. Source inventory/history와 mutation receipt는
+`CTRL-01`~`CTRL-05`로 구현됐고, replica convergence, 규모·사용량·비용 freshness와 전체
+recovery acceptance는 [active development TODO](development-todo.md)의 `CTRL-06`~`CTRL-09`
+목표다.
 
 완전한 무설정 자동화를 목표로 하지 않는다. 자동으로 알 수 없는 비즈니스 의미는
 희소한 선언형 metadata와 curated view로 제공한다.
@@ -38,7 +40,8 @@ Query Gateway + Source Registry <--- validated hot reload --- Control Plane
   |-- Physical Catalog                                  |-- Source Catalog/Generations
   |-- Semantic Overlay                                  |-- Active State/History
   |-- Resource Tier (budget_profile)                    |-- Metadata/Verified Contracts
-  `-- guarded connection                                `-- Replica/Measurements/Audit (target)
+  |                                                     |-- Mutation Receipts/Audit
+  `-- guarded connection                                `-- Replica/Measurements (target)
         |
 PostgreSQL Reader / Analytics Replica
 ```
@@ -309,7 +312,7 @@ Schema drift로 overlay가 깨지면 신규 revision 발행을 중단하고 마�
 Production acceptance까지의 구현 순서와 완료 증거는
 [implementation-roadmap.md](implementation-roadmap.md)와
 [completion audit](verification/2026-08-23-completion-audit.md)에서 baseline으로 관리한다.
-현재 코드의 refactoring assurance와 의도적인 운영 경계는
+해당 시점의 refactoring baseline과 의도적인 운영 경계는
 [refactoring assurance audit](verification/2026-08-23-refactoring-assurance.md)에 기록한다.
 Managed source authority startup과 bootstrap cutover 증거는
 [managed source startup audit](verification/2026-08-23-managed-source-startup.md)에 기록한다.

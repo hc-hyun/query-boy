@@ -2,9 +2,10 @@
 
 Status: Complete
 
-> 이 문서는 production baseline 완료 당시의 역사적 실행 증거다. 이후 refactoring에서
-> 변경된 현재 수치와 보장 범위는
-> [refactoring assurance audit](2026-08-23-refactoring-assurance.md)를 우선한다.
+> 이 문서는 production baseline 완료 당시의 역사적 실행 증거다. 이후 refactoring은
+> [refactoring assurance audit](2026-08-23-refactoring-assurance.md), 더 나중의 변경은
+> [architecture Completion Tracking](../architecture.md#completion-tracking)에 나열한 scoped audit을 따른다.
+> 어느 한 역사적 audit도 자신의 실행 시점 이후 변경을 자동으로 포괄하지 않는다.
 
 ## Audit Method
 

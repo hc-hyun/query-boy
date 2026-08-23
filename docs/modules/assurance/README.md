@@ -18,7 +18,7 @@ membership과 offline 품질 증거를 제공하고 동일 기준을 회귀 검�
 - Versioned verified query, exact metadata revision/relation/result expectation schema
 - Verified query registry와 source별 verified revision membership
 - Guarded Query를 통한 live verification 순서와 mismatch reporting
-- Ordered columns, row count와 canonical rows를 묶는 verified result hash
+- Ordered columns와 canonical rows를 묶는 verified result hash와 별도 exact row-count 비교
 - `query-man-evaluate`와 `query-man-verify` command의 exit/result contract
 - Bootstrap/acceptance quality 및 verified configuration
 
@@ -58,7 +58,8 @@ HTTP/MCP runtime wiring이나 domain policy를 소유하지 않는다.
 
 ### Verified query contract
 
-Strict version 1 contract는 다음을 고정한다.
+Bootstrap filesystem의 strict version 1 contract는 한 file 안에서 globally unique한 `query_id`와
+다음 내용을 고정한다.
 
 ```text
 unique query_id
@@ -70,6 +71,10 @@ exact ordered columns
 exact row_count
 canonical result_hash
 ```
+
+Managed Control DB의 immutable contract identity는
+`(source_id, query_id, metadata_revision)`다. 따라서 bootstrap file의 `query_id` global uniqueness와
+managed persistence의 composite identity를 서로 같은 계약으로 해석하지 않는다.
 
 Verification은 current published metadata revision 확인, SQL AST validation, 실제 relation set 확인,
 현재 `QueryService` 실행, `truncated=false`, exact columns/row count/hash 비교 순서로 수행한다.
@@ -133,13 +138,14 @@ Assurance는 Delivery transport나 Control DB concrete adapter를 통해 검증 
 
 - Report formatting과 CLI orchestration 정리
 - 같은 comparison을 만드는 loop/helper 개선
-- Versioned schema 안에서 quality/verified case 추가·보강
 - 동일 membership을 만드는 registry lookup/data structure 개선
 - Hash input/serialization을 바꾸지 않는 hashing helper 정리
 
 ## 사용자 승인이 필요한 계약 변경
 
 - Quality 또는 verified configuration schema/version/default 변경
+- Versioned quality/verified case를 추가·보강해 acceptance gate, expected result 또는
+  verified revision membership을 바꾸는 변경
 - Expected relation ordering, answerability, accuracy/recall/context-byte 계산이나 threshold 의미 변경
 - Verified query의 revision/relation/truncation/column/row-count matching 의미 변경
 - Result hash algorithm, payload, canonical JSON 또는 prefix 변경

@@ -108,26 +108,27 @@ Timeout은 아래 reconciliation 절차를 따르며 새 key로 blind retry하�
 
 ## Admin View
 
-### Inventory And History
+### Current Inventory And History
 
 - Source ID, name, description, owner와 environment
 - Active/deactivated state, generation/state version, metadata revision/quality
 - Effective `budget_profile`과 관련 metadata revision
 - DB migration reference와 generation creation time처럼 비밀이 아닌 provenance
-- Replica convergence, latest record/storage observation과 usage/cost availability
 - Actor, reason, request hash, expected/resulting state, outcome과 timestamp
 
 Host/database/user는 mutation 검토에 필요한 admin에게만 제한적으로 제공한다. Credential,
 bearer, master key, provider secret path, raw database error, ad-hoc question과 SQL은 response와
 audit에서 제외한다.
 
-### Replica State
+아래 replica, data-size와 usage/cost 투영은 `CTRL-06`~`CTRL-08`에서 추가할 목표다.
+
+### Planned Replica State (`CTRL-06`)
 
 - Replica ID별 applied generation/state version/metadata revision
 - Last observed time, health, stale age와 desired/applied drift
 - Control-plane 장애와 runtime validation 거부를 구분한 bounded reason
 
-### Data Size And Growth
+### Planned Data Size And Growth (`CTRL-07`)
 
 관측값은 configuration revision과 분리하고 다음 bounded shape를 사용한다.
 
@@ -141,7 +142,7 @@ definition_revision, metadata_revision?, observed_at, fresh_until
 grain은 DB owner가 지정한다. Growth는 같은 metric, method와 `definition_revision` 사이에서만
 계산한다.
 
-### Usage And Cost
+### Planned Usage And Cost (`CTRL-07`, `CTRL-08`)
 
 초기 집계 key는 bounded한 `source_id + budget_profile + metadata_revision + time bucket`이다.
 Budget 정의가 metadata revision 재료이므로 별도 tier revision entity를 만들지 않는다.
@@ -175,10 +176,10 @@ Source-native RLS가 필요한 source는 ADR 0014의 trusted `tenant_id`를 계�
 사용자가 같은 source를 보고 같은 resource tier를 쓴다는 결정과 독립된 row-isolation 경계다.
 Control Plane이 user/organization별 RLS policy를 관리한다는 뜻은 아니다.
 
-## Current And Planned Management Contract
+## Current Management Operations
 
-아래는 구현 목표다. 기존 direct mutation endpoint는 유지하고 공통 idempotency/audit 계약을
-덧붙인다.
+아래 operation은 모두 구현됐다. 기존 direct mutation endpoint를 유지하면서 공통
+idempotency/audit 계약을 적용한 현재 관리 표면이다.
 
 | Operation | Status and purpose |
 |---|---|
@@ -259,15 +260,16 @@ Runtime mode는 deployment configuration이고 existing source/metadata pointer�
 managed authority를 모두 표현한다. 따라서 mode, origin 또는 bootstrap import marker를 위한 table과
 `CTRL-02` schema migration은 추가하지 않는다.
 
-- Migration ledger: version, immutable filename/checksum, applied time와 migration identity
-- Minimal catalog: owner, environment와 DB migration provenance
-- Mutation event/receipt: idempotency, actor, reason, request hash와 outcome
-- Runtime observation: replica별 desired/applied state와 freshness
-- Source observation: record/storage/growth method, definition revision과 snapshot
-- Usage/cost rollup: bounded source/profile time bucket, availability와 provider provenance
+- **Implemented:** migration ledger의 version, immutable filename/checksum, applied time과 migration identity
+- **Implemented:** minimal catalog의 owner, environment와 DB migration provenance
+- **Implemented:** mutation event/receipt의 idempotency, actor, reason, request hash와 outcome
+- **Planned (`CTRL-06`):** runtime observation의 replica별 desired/applied state와 freshness
+- **Planned (`CTRL-07`):** source observation의 record/storage/growth method, definition revision과 snapshot
+- **Planned (`CTRL-07`, `CTRL-08`):** usage/cost rollup의 bounded source/profile time bucket,
+  availability와 provider provenance
 
-High-frequency raw event를 Control DB에 무제한 적재하지 않는다. 초기에는 latest snapshot과
-hour/day rollup만 저장하고 retention/cardinality 상한을 둔다.
+계획된 observation storage는 high-frequency raw event를 Control DB에 무제한 적재하지 않는다.
+초기에는 latest snapshot과 hour/day rollup만 저장하고 retention/cardinality 상한을 둔다.
 
 ## Rollout Checklist
 
@@ -300,8 +302,10 @@ operator-first validation 증거는
 
 ## Release Acceptance
 
-- 운영자는 Git checkout 없이 모든 managed source의 owner, active state, history, resource tier와
-  freshness를 조회한다.
+현재 `CTRL-01`~`CTRL-05`가 충족한 acceptance:
+
+- 운영자는 Git checkout 없이 모든 managed source의 owner, active state, history와 resource tier를
+  조회한다.
 - Production source addition은 repository file이나 application deploy를 만들지 않는다.
 - 서로 다른 두 query identity가 같은 active source 목록을 보고 caller override 없이 같은
   source-resolved budget 정의를 적용받는다. Public query API에 profile field를 새로 노출할
@@ -309,13 +313,19 @@ operator-first validation 증거는
 - Query credential은 모든 admin endpoint와 cancel에서 거부되고 admin credential만 mutation한다.
 - Single-token/local compatibility path가 source management 환경에서 암시적 admin을 만들지 않는다.
 - 같은 idempotency key의 재호출은 새 generation을 만들지 않고 authoritative result를 반환한다.
-- 모든 target replica의 desired/applied 차이를 source별로 확인한다.
+- Production/development/test Control DB가 분리된다.
+
+`CTRL-06`~`CTRL-09`에서 충족할 planned acceptance:
+
+- 모든 target replica의 desired/applied 차이와 freshness를 source별로 확인한다.
 - Record/storage 값은 method/definition revision/time/freshness를 포함하고 unbounded count를
   실행하지 않는다.
 - Cost는 근거가 있을 때만 표시하며 미구성/미시도/오래됨/실패 상태를 구분한다.
+- Authority table과 encryption key의 backup/restore 검증이 재현 가능하다.
+
+현재와 planned 계약에 모두 적용하는 불변조건:
+
 - Secret, ad-hoc question/SQL과 내부 DB error가 management response, audit와 metric에 없다.
-- Production/development/test Control DB가 분리되고 authority table과 encryption key의
-  backup/restore 검증이 재현 가능하다.
 
 ## Explicitly Deferred
 

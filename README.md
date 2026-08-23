@@ -48,13 +48,18 @@ docker compose down
 [docs/development-todo.md](docs/development-todo.md)를 참고합니다. Module 단위로 작업할 때는
 [module boundaries](docs/modules/README.md)에서 owner, 계약과 집중해서 읽을 범위를 먼저 확인합니다.
 기존 production baseline 증거는
-[completion audit](docs/verification/2026-08-23-completion-audit.md), 현재 최종 회귀와 운영 경계는
+[completion audit](docs/verification/2026-08-23-completion-audit.md), 그 이후 refactoring baseline과 당시 운영 경계는
 [refactoring assurance](docs/verification/2026-08-23-refactoring-assurance.md), 컨테이너 실행 증거는
 [container runtime audit](docs/verification/2026-08-23-container-runtime.md), 두 replica soak 증거는
 [multi-replica soak audit](docs/verification/2026-08-23-mcp-multi-replica-soak.md), managed authority
 전환 증거는
 [managed source startup audit](docs/verification/2026-08-23-managed-source-startup.md), shared query/admin
-경계는 [shared access audit](docs/verification/2026-08-23-shared-access.md)을 참고합니다.
+경계는 [shared access audit](docs/verification/2026-08-23-shared-access.md), 현재 source catalog와 mutation
+receipt 증거는 각각
+[source management catalog audit](docs/verification/2026-08-23-source-management-catalog.md)과
+[source mutation receipt audit](docs/verification/2026-08-23-source-mutation-receipts.md)을 참고합니다. 각 audit는
+적힌 scope의 실행 시점 증거이며, 나중 audit을 모두 포괄하는 단일 “현재 최종” 증거로
+해석하지 않습니다.
 
 ## Metadata And Query API
 
@@ -68,8 +73,9 @@ uv sync --locked
 uv run query-man
 ```
 
-기본 주소는 `http://127.0.0.1:3000`입니다. Compose runtime은 source 범위가 제한된 bearer
-caller를 사용합니다. 아래 예시에서는 Git에서 제외된 `.env`의 token 한 개만 현재 shell로
+기본 주소는 `http://127.0.0.1:3000`입니다. Compose runtime은 모든 active bootstrap source를 보지만
+admin/cancel을 사용할 수 없는 query-only bearer caller를 사용합니다. 아래 예시에서는 Git에서
+제외된 `.env`의 token 한 개만 현재 shell로
 가져옵니다.
 
 ```bash

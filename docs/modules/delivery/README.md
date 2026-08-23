@@ -153,7 +153,9 @@ Delivery는 domain module의 concrete PostgreSQL adapter나 Control DB table을 
 - Unknown source, SQL/question/token/credential과 내부 오류를 log/metric label로 새지 않는다.
 - Client disconnect는 실행 task cancellation을 통해 database cancel/rollback으로 전파된다.
 - MCP SDK workaround가 protocol contract나 domain policy를 대신하지 않는다.
-- Public source projection에는 connection endpoint와 internal control state가 포함되지 않는다.
+- Query-facing `GET /sources`/`list_sources()` projection에는 connection endpoint와 internal
+  control state가 포함되지 않는다. Operator-only admin detail의 제한된 connection projection은
+  Control Plane management contract를 따른다.
 
 ## 모듈 내부 변경
 

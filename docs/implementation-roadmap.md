@@ -7,12 +7,14 @@ Status: Production ready
 [mvp.md](mvp.md), source 등록 규칙은 [source-onboarding.md](source-onboarding.md)를
 따른다. 전체 항목의 구현·검증 연결은
 [completion audit](verification/2026-08-23-completion-audit.md)에 production baseline으로,
-[refactoring assurance](verification/2026-08-23-refactoring-assurance.md)에 현재 최종 회귀와
+[refactoring assurance](verification/2026-08-23-refactoring-assurance.md)에 그 시점의 refactoring baseline과
 의도적인 운영 경계로, [container runtime audit](verification/2026-08-23-container-runtime.md)에
 Docker HTTP/MCP 실행 증거로,
 [MCP server assurance](verification/2026-08-23-mcp-server-assurance.md)에 실제 server의
 대량·병렬·코너케이스·사용성 검증으로 기록한다. 완료 baseline 이후의 우선순위와 열린
 checklist는 [active development TODO](development-todo.md)에서 별도로 관리한다.
+각 verification 문서는 자신의 scope와 실행 시점에 대한 증거이며 후속 변경까지 자동으로
+포괄하는 단일 최종 audit로 해석하지 않는다.
 완료 이력의 caller별 source-scope 문구는 당시 acceptance를 보존하며, 현재 version 2 shared-access
 계약은 [shared access audit](verification/2026-08-23-shared-access.md)이 우선한다.
 
