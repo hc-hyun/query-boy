@@ -42,11 +42,13 @@ docker compose down
 데이터 손실을 확인한 후 `docker compose down -v`를 사용합니다.
 
 전체 설계 기준은 [docs/architecture.md](docs/architecture.md), 현재 MVP 범위는
-[docs/mvp.md](docs/mvp.md), 최종 목적 기반 구현 TODO는
-[docs/implementation-roadmap.md](docs/implementation-roadmap.md), 기존 production baseline 증거는
+[docs/mvp.md](docs/mvp.md), 완료된 구현 이력은
+[docs/implementation-roadmap.md](docs/implementation-roadmap.md), 현재 우선순위 TODO는
+[docs/development-todo.md](docs/development-todo.md), 기존 production baseline 증거는
 [completion audit](docs/verification/2026-08-23-completion-audit.md), 현재 최종 회귀와 운영 경계는
 [refactoring assurance](docs/verification/2026-08-23-refactoring-assurance.md), 컨테이너 실행 증거는
-[container runtime audit](docs/verification/2026-08-23-container-runtime.md)을 참고합니다.
+[container runtime audit](docs/verification/2026-08-23-container-runtime.md), 두 replica soak 증거는
+[multi-replica soak audit](docs/verification/2026-08-23-mcp-multi-replica-soak.md)을 참고합니다.
 
 ## Metadata And Query API
 
@@ -125,10 +127,28 @@ source allowlist만 저장하며 형식은
 세 tool만 제공하며 host나 credential을 입력받지 않습니다. 모델 workflow에는
 [`query-man-text-to-sql` Skill](skills/query-man-text-to-sql/SKILL.md)을 사용합니다.
 Codex는 같은 `QUERY_MAN_CODEX_MCP_TOKEN`을 환경변수로 받은 새 session에서 연결해야 합니다.
+Codex CLI 0.149.0에서는 modern MCP가 아직 opt-in 기능이므로 client project의
+`.codex/config.toml`에 다음 설정이 필요합니다. `codex features list`에서
+`mcp_2026_07_28`이 `true`인지 확인합니다.
+
+```toml
+[features]
+mcp_2026_07_28 = true
+
+[shell_environment_policy.filters]
+QUERY_MAN_CODEX_MCP_TOKEN = "exclude"
+```
+
+Project `.env`는 Codex가 자동으로 읽지 않으므로 새 shell에서 실행할 때는 token을 먼저
+export합니다. 환경 filter는 Codex 자체의 MCP 인증에는 token을 남기면서 Codex가 실행하는
+shell command에는 전달하지 않습니다. Client `.env`에는 이 token만 두고 database password를
+복사하지 않습니다. Codex가 이 protocol을 기본값으로 전환하거나 flag를 제거하는 release에서는
+실제 `/mcp` 연결을 재검증한 뒤 feature override를 삭제합니다.
 HTTP와 MCP container 경계는 `./scripts/verify-container.sh`로 함께 재검증할 수 있습니다.
 Application 오류는 안전한 `structuredContent.error`와 `isError=true`를 함께 반환합니다.
-Modern MCP client가 실행 중인 `query` POST를 닫으면 gateway가 PostgreSQL 작업도 취소하고
-rollback합니다. Stateless legacy cancellation 한계는
+MCP endpoint는 protocol version `2026-07-28`만 지원하며 이전 handshake, 누락·미지원·중복
+version header를 거부합니다. 지원 중인 client가 실행 중인 `query` POST를 닫으면 gateway가
+PostgreSQL 작업도 취소하고 rollback합니다. Version 경계는
 [`ADR 0006`](docs/decisions/0006-mcp-transport-and-workflow.md)에 명시합니다.
 
 개발 검증은 다음 명령으로 실행합니다.
@@ -138,7 +158,7 @@ uv run ruff check .
 uv run mypy src
 uv run pytest
 uv run pytest -m 'load and not mcp_server' -s
-uv run pytest -m mcp_server -s
+uv run pytest -m 'mcp_server and not soak' -s
 uv run query-man-evaluate
 uv run query-man-verify
 ```
@@ -149,8 +169,18 @@ pytest marker로 표현합니다. `uv run pytest`는 기본적으로 단위 테�
 [docs/source-onboarding.md](docs/source-onboarding.md)를 참고합니다.
 초기 budget의 service load 검증은 `uv run pytest -m 'load and not mcp_server' -s`로,
 실행 중인 Compose MCP의 전체 contract·병렬·비용 경계는
-`uv run pytest -m mcp_server -s`로 실행합니다. MCP server test는 안전을 위해 credential이
-없는 loopback `http://` URL만 허용하고 `.env` token을 출력하지 않습니다.
+`uv run pytest -m 'mcp_server and not soak' -s`로 실행합니다. MCP server test는 안전을 위해
+credential이 없는 loopback `http://` URL만 허용하고 `.env` token을 출력하지 않습니다.
+두 replica의 1,000-session resource soak는 일반 개발/PR 경로와 분리해 실행합니다.
+
+```bash
+docker compose --profile soak build query-man
+docker compose --profile soak up -d --no-build --wait query-man query-man-replica
+uv run pytest -m soak -s
+```
+
+현재 fixture connection budget은 두 replica까지만 보장합니다. 종료할 때는
+`docker compose --profile soak down`을 사용합니다.
 전체 golden question의 revision, relation, SQL과 결과 invariant는
 [`docs/verified-queries.md`](docs/verified-queries.md)의 계약에 따라
 `uv run query-man-verify`로 검증합니다.

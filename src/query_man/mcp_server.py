@@ -21,6 +21,7 @@ from query_man.gateway import GatewayService
 from query_man.operations import operations
 
 logger = logging.getLogger("query_man.mcp")
+MCP_PROTOCOL_VERSION = "2026-07-28"
 
 
 class _MCPRequestDisconnected(Exception):

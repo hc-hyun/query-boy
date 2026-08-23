@@ -35,7 +35,7 @@ services:
     shm_size: 256mb
     stop_grace_period: 30s
 
-  query-man:
+  query-man: &query-man-service
     build:
       context: .
     image: query-man:local
@@ -84,6 +84,12 @@ services:
       - no-new-privileges:true
     stop_signal: SIGTERM
     stop_grace_period: 30s
+
+  query-man-replica:
+    <<: *query-man-service
+    profiles: [soak]
+    ports:
+      - "127.0.0.1:${QUERY_MAN_REPLICA_PORT:-3001}:3000"
 
 volumes:
   postgres_data:

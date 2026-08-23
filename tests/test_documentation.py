@@ -23,6 +23,13 @@ CONTAINER_AUDIT = (
 MCP_SERVER_AUDIT = (
     ROOT_DIRECTORY / "docs" / "verification" / "2026-08-23-mcp-server-assurance.md"
 )
+DEVELOPMENT_TODO = ROOT_DIRECTORY / "docs" / "development-todo.md"
+MCP_SOAK_AUDIT = (
+    ROOT_DIRECTORY
+    / "docs"
+    / "verification"
+    / "2026-08-23-mcp-multi-replica-soak.md"
+)
 EXPECTED_ID_COUNTS = {
     "BASE": 10,
     "DEC": 9,
@@ -39,6 +46,7 @@ EXPECTED_ID_COUNTS = {
     "DEP": 8,
     "MCPX": 8,
 }
+EXPECTED_ACTIVE_ID_COUNTS = {"SOAK": 7, "COST": 5, "TRACE": 4}
 
 
 def test_roadmap_has_one_completed_checkbox_for_every_expected_id() -> None:
@@ -62,6 +70,8 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
     refactoring_audit = REFACTORING_AUDIT.read_text(encoding="utf-8")
     container_audit = CONTAINER_AUDIT.read_text(encoding="utf-8")
     mcp_server_audit = MCP_SERVER_AUDIT.read_text(encoding="utf-8")
+    development_todo = DEVELOPMENT_TODO.read_text(encoding="utf-8")
+    mcp_soak_audit = MCP_SOAK_AUDIT.read_text(encoding="utf-8")
 
     assert "Status: Production ready" in roadmap
     assert "Status: Production ready" in architecture
@@ -69,12 +79,18 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
     assert "Status: Complete" in refactoring_audit
     assert "Status: Complete" in container_audit
     assert "Status: Complete" in mcp_server_audit
+    assert "Status: Active" in development_todo
+    assert "Status: Complete" in mcp_soak_audit
     assert REFACTORING_AUDIT.name in roadmap
     assert REFACTORING_AUDIT.name in architecture
     assert CONTAINER_AUDIT.name in roadmap
     assert CONTAINER_AUDIT.name in architecture
     assert MCP_SERVER_AUDIT.name in roadmap
     assert MCP_SERVER_AUDIT.name in architecture
+    assert DEVELOPMENT_TODO.name in roadmap
+    assert DEVELOPMENT_TODO.name in architecture
+    assert MCP_SOAK_AUDIT.name in roadmap
+    assert MCP_SOAK_AUDIT.name in architecture
     for prefix, count in EXPECTED_ID_COUNTS.items():
         audit = {
             "DEP": container_audit,
@@ -87,6 +103,30 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
         else:
             assert f"`{prefix}-01`" in audit
             assert f"`{prefix}-{count:02}`" in audit
+
+
+def test_active_todo_has_prioritized_unique_checklists_and_soak_evidence() -> None:
+    todo = DEVELOPMENT_TODO.read_text(encoding="utf-8")
+    soak_audit = MCP_SOAK_AUDIT.read_text(encoding="utf-8")
+    matches = re.findall(r"^- \[([ x])\] `([A-Z]+)-(\d{2})`", todo, re.MULTILINE)
+    ids = [f"{prefix}-{number}" for _checked, prefix, number in matches]
+
+    assert len(ids) == sum(EXPECTED_ACTIVE_ID_COUNTS.values()) == 16
+    assert len(ids) == len(set(ids))
+    for prefix, count in EXPECTED_ACTIVE_ID_COUNTS.items():
+        prefix_matches = [
+            (checked, f"{matched_prefix}-{number}")
+            for checked, matched_prefix, number in matches
+            if matched_prefix == prefix
+        ]
+        assert [item for _checked, item in prefix_matches] == [
+            f"{prefix}-{number:02}" for number in range(1, count + 1)
+        ]
+        expected_status = "x" if prefix == "SOAK" else " "
+        assert all(checked == expected_status for checked, _item in prefix_matches)
+
+    for number in range(1, EXPECTED_ACTIVE_ID_COUNTS["SOAK"] + 1):
+        assert f"`SOAK-{number:02}`" in soak_audit
 
 
 def test_runtime_has_no_fixture_source_specialization() -> None:

@@ -109,23 +109,47 @@ process 종료 overhead를 포함해 더 크게 조정한다. Runtime log는
 `docker compose logs -f query-man`으로 읽고 종료는 `docker compose down`을 사용한다.
 `./scripts/verify-container.sh`는 exact readiness, 무인증 401, non-root/read-only image 경계와
 공식 MCP client의 tool discovery 및 실제 guarded query를 한 번에 검증한다.
-`uv run pytest -m mcp_server -s`는 같은 published loopback endpoint에서 전체 metadata 품질
-case, verified query, raw protocol/보안 경계, 입력 비노출, 병렬 session과 비용 포화·복구를
-검증한다. 이 suite는 실행 중인 Compose application을 변경하지 않으며 token을 출력하지 않는다.
+`uv run pytest -m 'mcp_server and not soak' -s`는 같은 published loopback endpoint에서 전체
+metadata 품질 case, verified query, raw protocol/보안 경계, 입력 비노출, 병렬 session과 비용
+포화·복구를 검증한다. 이 suite는 실행 중인 Compose application을 변경하지 않으며 token을
+출력하지 않는다.
 
 MCP transport는 bind 주소와 관계없이 DNS rebinding 보호를 활성화한다. 기본 Compose는
 loopback Host/Origin만 허용한다. Reverse proxy나 외부 hostname으로 배포할 때는
 `QUERY_MAN_MCP_ALLOWED_HOSTS`와 `QUERY_MAN_MCP_ALLOWED_ORIGINS`를 실제 공개 Host와 HTTPS
 Origin의 comma-separated allowlist로 명시하며 wildcard 전체 허용을 사용하지 않는다.
-MCP POST는 정확한 `application/json` media type 하나만 허용한다. Parameter는 허용하지만
-prefix 변형이나 중복 Content-Type/Authorization header는 거부한다.
+MCP POST는 정확한 `application/json` media type 하나와 `mcp-protocol-version: 2026-07-28`
+하나만 허용한다. Media type parameter는 허용하지만 prefix 변형, 누락·이전·미지원 protocol
+version과 중복 Content-Type/Authorization/protocol header는 거부한다. 이전 initialize
+handshake를 위한 compatibility path는 운영하지 않는다.
 
-Modern protocol의 JSON response 경로에서는 Query Man이 ASGI disconnect를 직접 감시해 실행
-중 query를 취소·rollback한다. Legacy client는 취소를 별도 notification POST로 보내므로
-stateless transport에서 원 요청과 안전하게 연결할 수 없다. Legacy 취소는 statement/transaction
-timeout이 최종 상한이다. Legacy 즉시 취소가 필수라면 stateful session, caller-bound session
-ownership, idle expiry와 multi-replica routing을 함께 설계해야 하며 transport만 단독 전환하지
-않는다.
+Codex CLI 0.149.0 client project는 `.codex/config.toml`의
+`features.mcp_2026_07_28 = true`로 이 protocol을 명시적으로 활성화한다. Client project에서
+`codex features list`를 실행해 값이 `true`인지 확인하고, token은 값 자체를 출력하지 않은 채
+현재 shell 환경에 존재하는지만 확인한다. `.env` 파일만 생성해서는 Codex process에 자동
+전달되지 않는다. Client `.env`에는 MCP token만 두며 database credential을 복사하지 않는다.
+`shell_environment_policy.filters.QUERY_MAN_CODEX_MCP_TOKEN = "exclude"`를 설정해 Codex가
+실행하는 shell command에는 token이 상속되지 않게 한다. Codex upgrade 뒤에는 실제 startup과
+`/mcp` tool inventory를 다시 확인하며, flag가 기본값이 되거나 제거되면 project override도
+삭제한다.
+
+지원 protocol의 JSON response 경로에서는 Query Man이 ASGI disconnect를 직접 감시해 실행 중
+query를 취소·rollback한다. Database statement/transaction timeout은 최종 실행 상한이다.
+
+두 replica 내구성 검증은 기본 Compose topology를 바꾸지 않는 `soak` profile로 실행한다.
+
+```bash
+docker compose --profile soak build query-man
+docker compose --profile soak up -d --no-build --wait query-man query-man-replica
+uv run pytest -m soak -s
+```
+
+이 suite는 1,000개 stateless session의 정확한 500/500 분배, 양쪽 source 포화·복구, PID,
+restart/OOM, FD와 RSS growth를 검사한다. 주간·수동 workflow에서 실행하며 일반 PR gate에는
+포함하지 않는다. 현재 reader connection limit은
+`2 replicas × (query pool 2 + metadata pool 1) + staging 1 = 7`에 맞으므로 세 번째 replica를
+추가하기 전에 connection budget을 재검토한다. 상세 threshold와 최근 증거는
+[multi-replica soak audit](verification/2026-08-23-mcp-multi-replica-soak.md)을 따른다.
 
 ## Alert Policy
 

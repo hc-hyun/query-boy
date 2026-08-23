@@ -12,6 +12,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from mcp.server.transport_security import TransportSecuritySettings
+from mcp.types import UNSUPPORTED_PROTOCOL_VERSION
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 from query_man.access import AccessPolicy, CallerContext
@@ -23,7 +24,7 @@ from query_man.errors import (
     SourceControlUnavailableError,
 )
 from query_man.gateway import GatewayService
-from query_man.mcp_server import create_mcp_server
+from query_man.mcp_server import MCP_PROTOCOL_VERSION, create_mcp_server
 from query_man.metadata import MetadataService
 from query_man.metadata_store import PostgresMetadataStore
 from query_man.models import CatalogProvider
@@ -287,6 +288,24 @@ def build_app(
                         "Invalid Content-Type header",
                         status_code=400,
                         media_type="text/plain",
+                    )
+                protocol_versions = request.headers.getlist("mcp-protocol-version")
+                if (
+                    request.url.path == "/mcp"
+                    and request.method == "POST"
+                    and protocol_versions != [MCP_PROTOCOL_VERSION]
+                ):
+                    return JSONResponse(
+                        status_code=400,
+                        content={
+                            "jsonrpc": "2.0",
+                            "id": None,
+                            "error": {
+                                "code": UNSUPPORTED_PROTOCOL_VERSION,
+                                "message": "Unsupported protocol version",
+                                "data": {"supported": [MCP_PROTOCOL_VERSION]},
+                            },
+                        },
                     )
                 return await call_next(request)  # type: ignore[operator, no-any-return]
             finally:

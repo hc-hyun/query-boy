@@ -49,6 +49,8 @@ import httpx2
 from mcp.client import Client
 from mcp.client.streamable_http import streamable_http_client
 
+MCP_PROTOCOL_VERSION = "2026-07-28"
+
 
 class BearerAuth(httpx2.Auth):
     def __init__(self, token: str) -> None:
@@ -70,6 +72,7 @@ async def verify() -> None:
                 "http://127.0.0.1:3000/mcp",
                 http_client=authenticated_http,
             ),
+            mode=MCP_PROTOCOL_VERSION,
             read_timeout_seconds=10,
         ) as client,
     ):

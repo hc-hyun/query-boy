@@ -1,0 +1,47 @@
+name: mcp-soak
+
+on:
+  schedule:
+    # Monday 03:17 KST. Keep the long-running resource test out of the PR path.
+    - cron: "17 18 * * 0"
+  workflow_dispatch:
+
+concurrency:
+  group: mcp-soak
+  cancel-in-progress: false
+
+jobs:
+  soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      QUERY_MAN_CODEX_MCP_TOKEN: ci-only-not-a-secret-soak-token-0001
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install locked test environment
+        run: uv sync --locked
+      - name: Prepare deterministic PostgreSQL fixtures
+        run: |
+          cp .env.example .env
+          docker compose up -d --wait --wait-timeout 120 postgres
+          ./scripts/apply-db.sh
+      - name: Build and start two MCP replicas
+        run: |
+          docker compose --profile soak config --quiet
+          docker compose --profile soak build query-man
+          docker compose --profile soak up -d --no-build --wait --wait-timeout 120 query-man query-man-replica
+      - name: Run multi-replica resource soak
+        run: uv run pytest -m soak -s -q
+      - name: Show replica state and bounded logs on failure
+        if: failure()
+        run: |
+          docker compose --profile soak ps
+          docker compose --profile soak logs --no-color --tail=300 postgres query-man query-man-replica
+      - name: Stop containerized soak runtime
+        if: always()
+        run: docker compose --profile soak down -v --remove-orphans

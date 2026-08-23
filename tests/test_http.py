@@ -11,6 +11,7 @@ import pytest
 
 from query_man.access import AccessPolicy
 from query_man.app import build_app
+from query_man.mcp_server import MCP_PROTOCOL_VERSION
 from query_man.models import CatalogSnapshot, SourceProfile
 from query_man.operations import operations
 from query_man.query import QueryExecutor
@@ -144,7 +145,11 @@ async def test_mcp_transport_rejects_untrusted_host_and_origin() -> None:
         ) as session:
             untrusted_host = await session.post(
                 "/mcp",
-                headers={"host": "attacker.invalid"},
+                headers={
+                    "host": "attacker.invalid",
+                    "mcp-protocol-version": MCP_PROTOCOL_VERSION,
+                    "mcp-method": "server/discover",
+                },
                 json={},
             )
             untrusted_origin = await session.post(
@@ -152,6 +157,8 @@ async def test_mcp_transport_rejects_untrusted_host_and_origin() -> None:
                 headers={
                     "host": "127.0.0.1:3000",
                     "origin": "https://attacker.invalid",
+                    "mcp-protocol-version": MCP_PROTOCOL_VERSION,
+                    "mcp-method": "server/discover",
                 },
                 json={},
             )
@@ -167,15 +174,24 @@ async def test_mcp_transport_requires_exact_json_media_type() -> None:
         registry=load_test_registry(),
         catalog=NeverCalledCatalog(),
     )
-    initialize = {
+    discover = {
         "jsonrpc": "2.0",
         "id": 1,
-        "method": "initialize",
+        "method": "server/discover",
         "params": {
-            "protocolVersion": "2025-11-25",
-            "capabilities": {},
-            "clientInfo": {"name": "transport-test", "version": "1"},
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": MCP_PROTOCOL_VERSION,
+                "io.modelcontextprotocol/clientInfo": {
+                    "name": "transport-test",
+                    "version": "1",
+                },
+                "io.modelcontextprotocol/clientCapabilities": {},
+            }
         },
+    }
+    modern_headers = {
+        "mcp-protocol-version": MCP_PROTOCOL_VERSION,
+        "mcp-method": "server/discover",
     }
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(
@@ -184,17 +200,22 @@ async def test_mcp_transport_requires_exact_json_media_type() -> None:
         ) as session:
             accepted = await session.post(
                 "/mcp",
-                headers={"content-type": "application/json; charset=utf-8"},
-                json=initialize,
+                headers={
+                    **modern_headers,
+                    "content-type": "application/json; charset=utf-8",
+                },
+                json=discover,
             )
             rejected = await session.post(
                 "/mcp",
-                headers={"content-type": "application/json-evil"},
+                headers={**modern_headers, "content-type": "application/json-evil"},
                 content=b"{}",
             )
             duplicated = await session.post(
                 "/mcp",
                 headers=[
+                    ("mcp-protocol-version", MCP_PROTOCOL_VERSION),
+                    ("mcp-method", "server/discover"),
                     ("content-type", "application/json"),
                     ("content-type", "application/json-evil"),
                 ],
@@ -206,6 +227,88 @@ async def test_mcp_transport_requires_exact_json_media_type() -> None:
     assert rejected.text == "Invalid Content-Type header"
     assert duplicated.status_code == 400
     assert duplicated.text == "Invalid Content-Type header"
+
+
+@pytest.mark.asyncio
+async def test_mcp_transport_requires_current_protocol_version() -> None:
+    app = build_app(
+        runtime_config(),
+        registry=load_test_registry(),
+        catalog=NeverCalledCatalog(),
+    )
+    discover = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "server/discover",
+        "params": {
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": MCP_PROTOCOL_VERSION,
+                "io.modelcontextprotocol/clientInfo": {
+                    "name": "protocol-test",
+                    "version": "1",
+                },
+                "io.modelcontextprotocol/clientCapabilities": {},
+            }
+        },
+    }
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+            base_url="http://127.0.0.1:3000",
+        ) as session:
+            accepted = await session.post(
+                "/mcp",
+                headers={
+                    "mcp-protocol-version": MCP_PROTOCOL_VERSION,
+                    "mcp-method": "server/discover",
+                },
+                json=discover,
+            )
+            responses = [
+                await session.post("/mcp", json=discover),
+                await session.post(
+                    "/mcp",
+                    headers={
+                        "mcp-protocol-version": "2025-11-25",
+                        "mcp-method": "server/discover",
+                    },
+                    json=discover,
+                ),
+                await session.post(
+                    "/mcp",
+                    headers={
+                        "mcp-protocol-version": "2099-01-01",
+                        "mcp-method": "server/discover",
+                    },
+                    json=discover,
+                ),
+                await session.post(
+                    "/mcp",
+                    headers=[
+                        ("mcp-protocol-version", MCP_PROTOCOL_VERSION),
+                        ("mcp-protocol-version", MCP_PROTOCOL_VERSION),
+                        ("mcp-method", "server/discover"),
+                        ("content-type", "application/json"),
+                    ],
+                    content=b"{}",
+                ),
+            ]
+
+    assert accepted.status_code == 200
+    assert accepted.json()["result"]["supportedVersions"] == [MCP_PROTOCOL_VERSION]
+    assert all(response.status_code == 400 for response in responses)
+    assert all(
+        response.json() == {
+            "jsonrpc": "2.0",
+            "id": None,
+            "error": {
+                "code": -32022,
+                "message": "Unsupported protocol version",
+                "data": {"supported": [MCP_PROTOCOL_VERSION]},
+            },
+        }
+        for response in responses
+    )
 
 
 @pytest.mark.asyncio

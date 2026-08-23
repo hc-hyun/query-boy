@@ -35,6 +35,7 @@ from query_man.errors import (
     QueryTimeoutError,
     QueryUnavailableError,
 )
+from query_man.mcp_server import MCP_PROTOCOL_VERSION
 from query_man.metadata import MetadataService
 from query_man.models import CatalogSnapshot, SourceProfile
 from query_man.query import PostgresQueryExecutor, QueryService
@@ -820,7 +821,8 @@ async def test_onboards_third_source_without_runtime_restart() -> None:
                     streamable_http_client(
                         f"http://127.0.0.1:{port}/mcp",
                         http_client=mcp_http,
-                    )
+                    ),
+                    mode=MCP_PROTOCOL_VERSION,
                 ) as mcp_client,
             ):
                 mcp_sources = await mcp_client.call_tool("list_sources", {})
@@ -1080,7 +1082,8 @@ callers:
                         streamable_http_client(
                             f"{replica_b_url}/mcp",
                             http_client=operator_http,
-                        )
+                        ),
+                        mode=MCP_PROTOCOL_VERSION,
                     ) as operator_mcp,
                     httpx2.AsyncClient(
                         auth=BearerAuth(restricted_token),
@@ -1090,7 +1093,8 @@ callers:
                         streamable_http_client(
                             f"{replica_b_url}/mcp",
                             http_client=restricted_http,
-                        )
+                        ),
+                        mode=MCP_PROTOCOL_VERSION,
                     ) as restricted_mcp,
                 ):
                     try:
@@ -1727,11 +1731,11 @@ async def test_modern_mcp_disconnect_cancels_query_before_client_session_closes(
                     f"{server_url}/mcp",
                     http_client=mcp_http,
                 ),
-                mode="auto",
+                mode=MCP_PROTOCOL_VERSION,
                 read_timeout_seconds=15,
             ) as client,
         ):
-            assert client.protocol_version == "2026-07-28"
+            assert client.protocol_version == MCP_PROTOCOL_VERSION
             context = await client.call_tool(
                 "get_context",
                 {"source_id": "development-issues", "question": "문제 수"},
@@ -1837,7 +1841,8 @@ async def test_streamable_http_mcp_runs_all_golden_queries() -> None:
                 streamable_http_client(
                     f"http://127.0.0.1:{port}/mcp",
                     http_client=authenticated_http,
-                )
+                ),
+                mode=MCP_PROTOCOL_VERSION,
             ) as client,
         ):
             tools = await client.list_tools()

@@ -18,6 +18,10 @@ Metadata revision이 바뀐 뒤 기존 SQL을 그대로 재전송하는 흐름�
 endpoint를 제공한다. JSON response mode를 사용하며 request body는 1 MiB로 제한한다.
 SDK의 host 검증과 애플리케이션의 bind 설정을 함께 적용한다.
 Application은 POST media type과 Authorization header를 exact/단일 값으로 먼저 검증하고,
+`mcp-protocol-version`도 정확히 한 개의 `2026-07-28` 값만 허용한다. Header가 누락되거나
+이전·미지원 값 또는 중복 값이면 child SDK에 전달하기 전에 bounded protocol error로
+거부한다. 개발 단계에서는 이전 initialize handshake나 version별 compatibility branch를
+유지하지 않으며 version 변경을 명시적인 server/client 동시 upgrade로 취급한다.
 tool argument model은 coercion과 추가 field를 거부하며 validation error에 입력값을 반사하지
 않는다. Application 오류는 structured error payload를 유지하면서 MCP `isError=true`로
 표시한다.
@@ -61,10 +65,11 @@ gateway와 PostgreSQL hard limit이 거부한다.
 - SDK 2.0의 modern JSON response 경로는 ASGI disconnect를 감시하지 않으므로 Query Man의
   `query` tool이 request disconnect와 gateway 실행을 경쟁시켜 PostgreSQL cancel/rollback을
   전파한다.
-- Legacy client의 cancellation notification은 stateless 별도 POST에서 원 실행과 session
-  correlation이 없다. 따라서 legacy 즉시 취소는 보장하지 않고 database timeout을 최종
-  상한으로 둔다. 이를 바꾸려면 stateful session의 caller ownership, idle expiry와
-  multi-replica routing을 함께 결정해야 한다.
+- 이전 handshake와 protocol version은 지원 대상이 아니므로 legacy cancellation이나
+  stateful compatibility session도 제공하지 않는다. 지원 version의 POST disconnect와
+  database timeout이 각각 조기 취소와 최종 실행 상한이다.
+- Protocol version을 바꿀 때는 parent header gate, 공식 client mode, raw transport 회귀,
+  container verification과 운영 문서를 한 변경에서 함께 갱신한다.
 - 현재 인증은 기존 bearer policy를 재사용한다. OAuth discovery나 별도 MCP identity
   provider는 이 ADR의 범위가 아니다.
 - Immutable control-plane revision이 도입되어도 tool schema와 application service 경계는

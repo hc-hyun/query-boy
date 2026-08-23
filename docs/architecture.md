@@ -53,7 +53,9 @@ loopback으로 제한하고 container 내부 non-loopback bind에는 source-limi
 [ADR 0015](decisions/0015-containerized-local-runtime.md)를 따르며 실제 container acceptance는
 [container runtime audit](verification/2026-08-23-container-runtime.md)에 기록한다. 전체
 MCP contract와 병렬·포화·취소·비노출 경계의 실제 server 검증은
-[MCP server assurance](verification/2026-08-23-mcp-server-assurance.md)에 기록한다.
+[MCP server assurance](verification/2026-08-23-mcp-server-assurance.md)에, 두 replica session
+내구성과 resource 경계는
+[multi-replica soak audit](verification/2026-08-23-mcp-multi-replica-soak.md)에 기록한다.
 
 ## Component Boundaries
 
@@ -231,3 +233,5 @@ Production acceptance까지의 구현 순서와 완료 증거는
 이후 범위 변경도 완료된 ID를 재사용하지 않고 새 decision과 roadmap ID로 추가한다.
 네 번째 source 확장 감사와 남은 경계는
 [source extension assurance](verification/2026-08-23-source-extension.md)에 기록한다.
+현재 열린 작업의 우선순위와 checklist는
+[active development TODO](development-todo.md)에서 관리한다.

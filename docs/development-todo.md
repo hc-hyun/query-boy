@@ -1,0 +1,85 @@
+# Active Development TODO
+
+Status: Active
+
+이 문서는 완료된 production baseline 이후의 개발 작업을 우선순위대로 관리한다. 완료된
+역사는 [implementation roadmap](implementation-roadmap.md)에 보존하고, 여기에는 지금부터
+실행할 작업과 검증 가능한 종료 조건만 둔다.
+
+## Management Rules
+
+- 위에서 아래로 진행하며, 더 높은 우선순위가 열려 있으면 낮은 우선순위를 먼저 시작하지
+  않는다.
+- `[x]`는 구현, 자동 테스트, 운영 문서와 실행 증거가 모두 있을 때만 표시한다.
+- 각 항목은 하나의 검증 가능한 결과를 가지며 ID를 재사용하지 않는다.
+- 비밀, 질문 원문, SQL text와 parameter는 비용·trace 수집에도 저장하지 않는다.
+- MCP는 현재 지원 버전 `2026-07-28`만 받는다. 이전 handshake와 protocol version을 위한
+  compatibility branch는 만들지 않으며 version 변경은 명시적인 upgrade 작업으로 처리한다.
+
+## P0 — Multi-Replica MCP Soak
+
+목표: 실제 Docker replica 두 개에서 protocol, query budget과 process resource 경계가
+반복 가능한지 검증한다. 현재 fixture reader role의 connection budget은 정확히 두 replica만
+지원하므로 세 번째 replica는 이 범위에 포함하지 않는다.
+
+- [x] `SOAK-01` `/mcp`가 `2026-07-28` protocol header만 허용하고 누락·이전·미지원·중복
+  version을 bounded error로 거부한다.
+- [x] `SOAK-02` 기본 Compose는 한 replica를 유지하고 `soak` profile에서만 동일 image의 두
+  번째 loopback replica를 시작한다.
+- [x] `SOAK-03` 두 replica가 같은 tool schema와 metadata revision으로 exact verified query를
+  실행하고 전체 `query_id`가 고유한지 검증한다.
+- [x] `SOAK-04` 두 replica의 source별 concurrency를 동시에 포화시켜 각각 overload되며 다른
+  source는 성공하고 timeout 뒤 즉시 복구되는지 검증한다.
+- [x] `SOAK-05` 공식 client의 stateless session 1,000개를 동시성 20으로 실행해 replica별
+  정확히 500개씩 성공하는지 검증한다.
+- [x] `SOAK-06` session churn 전후 PID, restart, OOM, file descriptor와 RSS를 측정하고 bounded
+  growth 기준을 CI assertion으로 고정한다.
+- [x] `SOAK-07` 장시간 soak를 일반 PR gate와 분리한 주간·수동 CI workflow와 재현 가능한 실행
+  기록을 제공한다.
+
+실행 증거와 threshold는
+[multi-replica soak audit](verification/2026-08-23-mcp-multi-replica-soak.md)에 기록한다.
+
+## P1 — Database-Native Cost Attribution
+
+목표: 이미 적용 중인 timeout, concurrency, result, memory/temp/JIT hard limit에 더해 완료된
+query의 실제 DB 자원 사용을 fingerprint 단위로 측정한다. 통화 단위 청구액은 provider billing
+자료가 있을 때만 별도 계산한다.
+
+- [ ] `COST-01` 대상 PostgreSQL의 monitoring identity, 최소 권한, 지원 extension과 reset/보존
+  정책을 inventory하고 개발·production별 사용 가능 신호를 decision record로 확정한다.
+- [ ] `COST-02` `pg_stat_statements` 기반 sample collector를 구현해 fingerprint별 calls,
+  execution time, rows, shared/local/temp block과 WAL 수치를 수집하되 SQL text와 parameter는
+  저장하지 않는다.
+- [ ] `COST-03` source, tenant, gateway fingerprint와 DB-native 통계를 bounded-cardinality로
+  연결하고 reset, eviction, replica 중복과 sampling 오차를 명시한다.
+- [ ] `COST-04` 비용 급증 threshold, alert, retention과 operator 조회 계약을 정의하고 public
+  endpoint·metric label에 source나 tenant를 노출하지 않는다.
+- [ ] `COST-05` 실제 fixture에서 저비용·CPU·I/O·temp 사용 query를 구분하는 acceptance와
+  chargeback 불가 시의 운영 판단 절차를 문서화한다.
+
+현재 다음 작업은 `COST-01`이다. 이 항목의 결정 전에는 collector schema나 통화 단위 비용을
+추정해서 구현하지 않는다.
+
+## P2 — End-to-End Workflow Trace
+
+목표: 한 transport 요청에서 여러 tool call과 retry로 이어지는 사용자 workflow를 민감 입력
+없이 추적한다.
+
+- [ ] `TRACE-01` client 제공 trace ID의 문자 집합, 길이, 생성·신뢰 경계와 충돌 정책을
+  decision record로 확정한다.
+- [ ] `TRACE-02` 검증된 trace ID를 HTTP/MCP context, tool lifecycle과 query audit에
+  전달하고 server-generated call/query ID와 연결한다.
+- [ ] `TRACE-03` trace ID를 metric label로 사용하지 않으며 question, SQL, token과 비인가
+  source가 log에 유입되지 않는지 검증한다.
+- [ ] `TRACE-04` 병렬 tool call, revision retry, disconnect와 multi-replica 호출에서 correlation
+  누락·혼선이 없는지 end-to-end로 검증한다.
+
+## Explicit Non-Goals
+
+- 이전 MCP handshake 또는 protocol version 지원, legacy cancellation, stateful compatibility
+  session은 backlog에 두지 않는다.
+- 두 replica를 합친 distributed global query quota나 load balancer 선택은 현재 soak가
+  보장하지 않는다. 필요하면 connection budget과 routing decision을 먼저 추가한다.
+- Planner cost, gateway latency 또는 cloud vCPU 가격만으로 query별 통화 비용을 가장하지
+  않는다.

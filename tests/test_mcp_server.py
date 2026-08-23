@@ -19,6 +19,7 @@ from mcp.client import Client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.types import CallToolResult
 
+from query_man.mcp_server import MCP_PROTOCOL_VERSION
 from query_man.quality import QualityEvaluation
 from query_man.verified import VerifiedQuery, VerifiedQueryRegistry, create_result_hash
 from tests.helpers import ROOT_DIRECTORY
@@ -26,14 +27,47 @@ from tests.helpers import ROOT_DIRECTORY
 pytestmark = [pytest.mark.mcp_server, pytest.mark.asyncio]
 
 _KNOWN_SOURCES = {"development-issues", "market-voc"}
-_INITIALIZE_REQUEST = {
+_DISCOVER_REQUEST = {
     "jsonrpc": "2.0",
     "id": 1,
+    "method": "server/discover",
+    "params": {
+        "_meta": {
+            "io.modelcontextprotocol/protocolVersion": MCP_PROTOCOL_VERSION,
+            "io.modelcontextprotocol/clientInfo": {
+                "name": "query-man-server-test",
+                "version": "1",
+            },
+            "io.modelcontextprotocol/clientCapabilities": {},
+        }
+    },
+}
+_HANDSHAKE_REQUEST = {
+    "jsonrpc": "2.0",
+    "id": 2,
     "method": "initialize",
     "params": {
         "protocolVersion": "2025-11-25",
         "capabilities": {},
-        "clientInfo": {"name": "query-man-server-test", "version": "1"},
+        "clientInfo": {"name": "query-man-handshake-test", "version": "1"},
+    },
+}
+_CURRENT_VERSION_HANDSHAKE_REQUEST = {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "initialize",
+    "params": {
+        "_meta": {
+            "io.modelcontextprotocol/protocolVersion": MCP_PROTOCOL_VERSION,
+            "io.modelcontextprotocol/clientInfo": {
+                "name": "query-man-handshake-test",
+                "version": "1",
+            },
+            "io.modelcontextprotocol/clientCapabilities": {},
+        },
+        "protocolVersion": "2025-11-25",
+        "capabilities": {},
+        "clientInfo": {"name": "query-man-handshake-test", "version": "1"},
     },
 }
 
@@ -76,6 +110,11 @@ def mcp_server_settings() -> McpServerSettings:
         "QUERY_MAN_MCP_TEST_URL",
         os.environ.get("QUERY_MAN_MCP_URL", f"http://127.0.0.1:{port}/mcp"),
     )
+    _validate_loopback_mcp_url(url)
+    return McpServerSettings(url=url, token=token)
+
+
+def _validate_loopback_mcp_url(url: str) -> None:
     parsed = urlsplit(url)
     try:
         loopback = parsed.hostname == "localhost" or (
@@ -94,7 +133,6 @@ def mcp_server_settings() -> McpServerSettings:
         or parsed.password is not None
     ):
         pytest.fail("MCP server tests require an uncredentialed loopback http:// URL ending in /mcp")
-    return McpServerSettings(url=url, token=token)
 
 
 @pytest.fixture(scope="module")
@@ -126,6 +164,7 @@ async def _mcp_client(settings: McpServerSettings) -> AsyncIterator[Client]:
                 settings.url,
                 http_client=authenticated_http,
             ),
+            mode=MCP_PROTOCOL_VERSION,
             read_timeout_seconds=15,
         ) as client,
     ):
@@ -154,7 +193,7 @@ def _assert_verified_result(result: CallToolResult, contract: VerifiedQuery) -> 
     return query_id
 
 
-async def test_discovery_and_revision_refresh_workflow(
+async def test_tools_and_revision_refresh_workflow(
     mcp_server_settings: McpServerSettings,
     verified_queries: VerifiedQueryRegistry,
 ) -> None:
@@ -168,10 +207,7 @@ async def test_discovery_and_revision_refresh_workflow(
         ]
         assert all(tool.description for tool in tools.tools)
         assert all(tool.input_schema["additionalProperties"] is False for tool in tools.tools)
-        assert client.instructions is not None
-        assert "list_sources" in client.instructions
-        assert "get_context" in client.instructions
-        assert "METADATA_REVISION_MISMATCH" in client.instructions
+        assert client.protocol_version == MCP_PROTOCOL_VERSION
 
         listed = _structured(await client.call_tool("list_sources", {}))
         assert {source["source_id"] for source in listed["sources"]} == _KNOWN_SOURCES
@@ -316,7 +352,16 @@ async def test_raw_transport_security_and_protocol_boundaries(
     mcp_server_settings: McpServerSettings,
 ) -> None:
     auth_header = {"authorization": f"Bearer {mcp_server_settings.token}"}
-    initialize_body = json.dumps(_INITIALIZE_REQUEST, separators=(",", ":")).encode()
+    discover_body = json.dumps(_DISCOVER_REQUEST, separators=(",", ":")).encode()
+    handshake_body = json.dumps(_HANDSHAKE_REQUEST, separators=(",", ":")).encode()
+    current_version_handshake_body = json.dumps(
+        _CURRENT_VERSION_HANDSHAKE_REQUEST,
+        separators=(",", ":"),
+    ).encode()
+    modern_headers = {
+        "mcp-protocol-version": MCP_PROTOCOL_VERSION,
+        "mcp-method": "server/discover",
+    }
     marker = "SENSITIVE_MALFORMED_BODY_MARKER"
     async with httpx2.AsyncClient(
         timeout=httpx2.Timeout(15),
@@ -326,48 +371,67 @@ async def test_raw_transport_security_and_protocol_boundaries(
             mcp_server_settings.url,
             headers={
                 **auth_header,
+                **modern_headers,
                 "content-type": "application/json; charset=utf-8",
             },
-            content=initialize_body,
+            content=discover_body,
         )
         untrusted_host = await client.post(
             mcp_server_settings.url,
-            headers={**auth_header, "host": "attacker.invalid"},
+            headers={**auth_header, **modern_headers, "host": "attacker.invalid"},
             json={},
         )
         untrusted_origin = await client.post(
             mcp_server_settings.url,
-            headers={**auth_header, "origin": "https://attacker.invalid"},
+            headers={
+                **auth_header,
+                **modern_headers,
+                "origin": "https://attacker.invalid",
+            },
             json={},
         )
         wrong_media_type = await client.post(
             mcp_server_settings.url,
-            headers={**auth_header, "content-type": "text/plain"},
-            content=initialize_body,
+            headers={**auth_header, **modern_headers, "content-type": "text/plain"},
+            content=discover_body,
         )
         prefixed_media_type = await client.post(
             mcp_server_settings.url,
-            headers={**auth_header, "content-type": "application/json-evil"},
-            content=initialize_body,
+            headers={
+                **auth_header,
+                **modern_headers,
+                "content-type": "application/json-evil",
+            },
+            content=discover_body,
         )
         duplicate_media_type = await client.post(
             mcp_server_settings.url,
             headers=[
                 ("authorization", f"Bearer {mcp_server_settings.token}"),
+                ("mcp-protocol-version", MCP_PROTOCOL_VERSION),
+                ("mcp-method", "server/discover"),
                 ("content-type", "application/json"),
                 ("content-type", "application/json-evil"),
             ],
-            content=initialize_body,
+            content=discover_body,
         )
         oversized = await client.post(
             mcp_server_settings.url,
-            headers={**auth_header, "content-type": "application/json"},
+            headers={
+                **auth_header,
+                **modern_headers,
+                "content-type": "application/json",
+            },
             content=marker.encode() + (b"x" * 1_048_576),
         )
         malformed = [
             await client.post(
                 mcp_server_settings.url,
-                headers={**auth_header, "content-type": "application/json"},
+                headers={
+                    **auth_header,
+                    **modern_headers,
+                    "content-type": "application/json",
+                },
                 content=body,
             )
             for body in (
@@ -380,24 +444,63 @@ async def test_raw_transport_security_and_protocol_boundaries(
         unauthenticated = await client.post(
             mcp_server_settings.url,
             headers={"content-type": "application/json"},
-            content=initialize_body,
+            content=discover_body,
         )
         invalid_token = await client.post(
             mcp_server_settings.url,
             headers={
                 "authorization": "Bearer invalid-test-token",
+                **modern_headers,
                 "content-type": "application/json",
             },
-            content=initialize_body,
+            content=discover_body,
         )
         duplicate_token = await client.post(
             mcp_server_settings.url,
             headers=[
                 ("authorization", f"Bearer {mcp_server_settings.token}"),
                 ("authorization", f"Bearer {mcp_server_settings.token}"),
+                ("mcp-protocol-version", MCP_PROTOCOL_VERSION),
+                ("mcp-method", "server/discover"),
                 ("content-type", "application/json"),
             ],
-            content=initialize_body,
+            content=discover_body,
+        )
+        unsupported_protocol = [
+            await client.post(
+                mcp_server_settings.url,
+                headers={
+                    **auth_header,
+                    "content-type": "application/json",
+                    **headers,
+                },
+                content=handshake_body,
+            )
+            for headers in (
+                {},
+                {"mcp-protocol-version": "2025-11-25"},
+                {"mcp-protocol-version": "2099-01-01"},
+            )
+        ]
+        duplicate_protocol = await client.post(
+            mcp_server_settings.url,
+            headers=[
+                ("authorization", f"Bearer {mcp_server_settings.token}"),
+                ("content-type", "application/json"),
+                ("mcp-protocol-version", MCP_PROTOCOL_VERSION),
+                ("mcp-protocol-version", MCP_PROTOCOL_VERSION),
+            ],
+            content=handshake_body,
+        )
+        current_version_handshake = await client.post(
+            mcp_server_settings.url,
+            headers={
+                **auth_header,
+                "content-type": "application/json",
+                "mcp-protocol-version": MCP_PROTOCOL_VERSION,
+                "mcp-method": "initialize",
+            },
+            content=current_version_handshake_body,
         )
         modern_get = await client.get(
             mcp_server_settings.url,
@@ -417,6 +520,11 @@ async def test_raw_transport_security_and_protocol_boundaries(
 
     assert accepted.status_code == 200
     assert accepted.json()["jsonrpc"] == "2.0"
+    assert accepted.json()["result"]["supportedVersions"] == [MCP_PROTOCOL_VERSION]
+    instructions = accepted.json()["result"]["instructions"]
+    assert "list_sources" in instructions
+    assert "get_context" in instructions
+    assert "METADATA_REVISION_MISMATCH" in instructions
     assert untrusted_host.status_code == 421
     assert untrusted_origin.status_code == 403
     assert wrong_media_type.status_code == 400
@@ -431,6 +539,21 @@ async def test_raw_transport_security_and_protocol_boundaries(
         assert response.status_code == 401
         assert response.json()["error"]["code"] == "UNAUTHORIZED"
         assert len(response.content) < 1_024
+    for response in (*unsupported_protocol, duplicate_protocol):
+        assert response.status_code == 400
+        assert response.json()["error"] == {
+            "code": -32022,
+            "message": "Unsupported protocol version",
+            "data": {"supported": [MCP_PROTOCOL_VERSION]},
+        }
+        assert len(response.content) < 1_024
+    assert current_version_handshake.status_code == 404
+    assert current_version_handshake.json()["error"] == {
+        "code": -32601,
+        "message": "Method not found",
+        "data": "initialize",
+    }
+    assert len(current_version_handshake.content) < 1_024
     assert modern_get.status_code == 405
     assert modern_get.headers["allow"] == "POST"
     assert modern_delete.status_code == 405

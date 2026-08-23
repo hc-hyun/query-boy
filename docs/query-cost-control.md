@@ -37,6 +37,11 @@ source storage quota를 뜻하지 않는다. Reader는 별도로 database TEMP �
 현재 경계는 replica 전체의 distributed source quota, caller/tenant별 quota, host cgroup
 CPU/memory quota와 일·월 통화 budget을 제공하지 않는다.
 
+두 replica의 독립 concurrency·connection 경계와 session resource 누수는
+[multi-replica soak audit](verification/2026-08-23-mcp-multi-replica-soak.md)에서 검증한다.
+이 결과는 distributed global quota를 뜻하지 않는다. DB-native 비용 귀속의 구현 순서와
+종료 조건은 [active development TODO](development-todo.md)의 `COST-*`에서 관리한다.
+
 ## What Is Measured
 
 각 성공 응답과 `query_succeeded` audit event는 다음 값을 같은 `query_id`와 fingerprint에
@@ -161,7 +166,7 @@ major version이나 object OID 변화에 걸친 stable application identifier가
    결과 정확성, plan과 부하를 재검증한다.
 4. Verified query, `uv run query-man-verify`, integration과
    `uv run pytest -m 'load and not mcp_server' -s`를 통과시킨다. Compose MCP 경계를 바꾸면
-   `uv run pytest -m mcp_server -s`의 실제 server
+   `uv run pytest -m 'mcp_server and not soak' -s`의 실제 server
    saturation도 통과시킨다. 이 검증은 source concurrency 2를 채운 상태의 세 번째 요청이
    `QUERY_OVERLOADED`, 5초 statement 상한을 넘긴 실행이 `QUERY_TIMEOUT`, 다른 source와
    후속 정상 query가 계속 성공하는지 확인한다.

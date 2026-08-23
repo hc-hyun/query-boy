@@ -58,7 +58,7 @@ jobs:
       - name: Verify container and MCP boundary
         run: ./scripts/verify-container.sh
       - name: Verify MCP usability, contracts and bounded parallel load
-        run: uv run pytest -m mcp_server -s
+        run: uv run pytest -m 'mcp_server and not soak' -s
       - name: Show container logs on failure
         if: failure()
         run: docker compose logs --no-color --tail=200 query-man

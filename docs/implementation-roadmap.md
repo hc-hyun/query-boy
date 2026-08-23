@@ -2,7 +2,7 @@
 
 Status: Production ready
 
-이 문서는 Query Man의 최종 목적을 구현하기 위한 TODO의 단일 관리 문서다.
+이 문서는 Query Man의 최종 목적을 구현한 production baseline과 완료 이력을 보존한다.
 세부 설계 원칙은 [architecture.md](architecture.md), 현재 검증용 데이터와 계약은
 [mvp.md](mvp.md), source 등록 규칙은 [source-onboarding.md](source-onboarding.md)를
 따른다. 전체 항목의 구현·검증 연결은
@@ -11,7 +11,8 @@ Status: Production ready
 의도적인 운영 경계로, [container runtime audit](verification/2026-08-23-container-runtime.md)에
 Docker HTTP/MCP 실행 증거로,
 [MCP server assurance](verification/2026-08-23-mcp-server-assurance.md)에 실제 server의
-대량·병렬·코너케이스·사용성 검증으로 기록한다.
+대량·병렬·코너케이스·사용성 검증으로 기록한다. 완료 baseline 이후의 우선순위와 열린
+checklist는 [active development TODO](development-todo.md)에서 별도로 관리한다.
 
 ## Final Outcome
 
@@ -280,7 +281,8 @@ client와 실제 PostgreSQL fixture를 사용해야 한다. 실행 결과와 남
 - [x] `MCPX-03` Verified query contract 전체를 MCP context→query로 실행해 revision, relation,
   typed result hash, truncation과 unique query ID를 검증한다.
 - [x] `MCPX-04` Host/Origin, 인증, 단일 exact media type, body limit, malformed JSON과 strict
-  tool argument의 bounded 비노출 거부를 실제 transport에서 검증한다.
+  tool argument 및 단일 current protocol version의 bounded 비노출 거부를 실제 transport에서
+  검증한다.
 - [x] `MCPX-05` Application 오류를 safe structured payload와 MCP `isError=true`로 함께
   반환하고 string normalization 및 integer coercion 거부를 고정한다.
 - [x] `MCPX-06` Tool마다 server-generated correlation ID, caller, 허가 source, duration,
@@ -288,8 +290,15 @@ client와 실제 PostgreSQL fixture를 사용해야 한다. 실행 결과와 남
   추가한다.
 - [x] `MCPX-07` 동일 client 24개 병렬 query, 독립 session 8개와 source concurrency 포화를
   실행해 exact result, overload, timeout, source 격리 및 즉시 복구를 검증한다.
-- [x] `MCPX-08` Modern MCP POST disconnect를 query cancel/rollback으로 전파하고 같은 client
-  재사용을 실제 socket에서 검증하며 stateless legacy cancellation 한계를 문서화한다.
+- [x] `MCPX-08` Current MCP POST disconnect를 query cancel/rollback으로 전파하고 같은 client
+  재사용을 실제 socket에서 검증하며 이전 handshake/version을 fail-closed한다.
+
+## 14. Active Development
+
+완료된 131개 baseline ID는 이 문서에서 변경하지 않는다. 이후 작업은
+[active development TODO](development-todo.md)의 별도 ID로 관리하며 현재 순서는
+multi-replica soak, database-native 비용 귀속, workflow trace다. 두 replica soak 실행 증거는
+[multi-replica soak audit](verification/2026-08-23-mcp-multi-replica-soak.md)에 기록한다.
 
 ## Recommended Milestones
 
@@ -305,6 +314,9 @@ client와 실제 PostgreSQL fixture를 사용해야 한다. 실행 결과와 남
 | M8 Refactoring Assurance | `REF-*` | 상태 경쟁, 권한 drift, 종료·비용 경계를 재검증하고 문서와 실제 보장을 일치시킨다. |
 | M9 Container Runtime | `DEP-*` | Compose의 단일 HTTP/MCP image가 격리·인증·health·실제 query acceptance를 통과한다. |
 | M10 MCP Server Assurance | `MCPX-*` | 실제 Docker MCP에서 전체 contract, 병렬·포화·취소·비노출 경계를 통과한다. |
+| M11 Multi-Replica Soak | `SOAK-*` | 두 Docker replica의 exact result, 독립 포화·복구와 1,000-session resource gate를 통과한다. |
+| M12 Cost Attribution | `COST-*` | DB-native 사용량을 민감 SQL 없이 fingerprint에 연결하고 운영 threshold를 고정한다. |
+| M13 Workflow Trace | `TRACE-*` | 여러 tool call과 retry를 bounded trace ID로 안전하게 연결한다. |
 
 위 milestone은 완료된 구현 순서를 보존한 기록이다. 새로운 기능은 기존 완료 ID를
 재사용하지 않고 별도 roadmap 항목과 검증 가능한 exit condition을 추가한다.

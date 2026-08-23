@@ -46,6 +46,7 @@ markers = [
   "integration: requires the local PostgreSQL services",
   "load: runs the bounded local load verification",
   "mcp_server: requires the Docker MCP server on the configured loopback URL",
+  "soak: requires both Docker MCP replicas and runs the scheduled resource test",
 ]
 
 [tool.ruff]
