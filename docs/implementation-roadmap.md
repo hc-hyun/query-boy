@@ -333,10 +333,12 @@ client와 실제 PostgreSQL fixture를 사용해야 한다. 실행 결과와 남
 | `QCORR-01` | 수정 가능한 query/argument 오류에 bounded reason별 correction action을 추가하고 한 번의 retry workflow를 고정했다. | Commit `de2b364`; [ADR 0002](decisions/0002-guarded-query-contract.md), [ADR 0006](decisions/0006-mcp-transport-and-workflow.md), [`test_query.py`](../tests/test_query.py), [`test_mcp.py`](../tests/test_mcp.py) |
 | `MOD-01` | 논리 module owner, 허용 dependency, 계약 승인과 module-scoped agent 절차를 문서·테스트로 고정했다. | Commit `de2b364`; [ADR 0018](decisions/0018-module-ownership-and-contract-governance.md), [module index](modules/README.md), [`test_documentation.py`](../tests/test_documentation.py) |
 | `MOD-02` | Active-only TODO, module별 작업 gate, non-Python artifact primary owner/single-writer와 immutable baseline description 검사를 추가했다. | [active TODO](development-todo.md), [module index](modules/README.md), [`test_documentation.py`](../tests/test_documentation.py) |
+| `MOD-03` | Startup cleanup과 다섯 contract debt의 용어, 객관식 선택지, 영향·불변조건·승인 형식을 이해 문서로 고정했다. | [module contract decision guide](module-contract-decision-guide.md), [`test_documentation.py`](../tests/test_documentation.py) |
 
 Ledger의 완료 결과 column은 찾기 쉬운 요약일 뿐 acceptance를 축소하지 않는다. 각 ID에 연결된
-audit가 해당 완료 작업의 상세 경계와 실행 증거를 보존한다. 각 audit는 자신의 실행 시점과
-scope만 증명하며, post-baseline code 변경 전체를 하나의 과거 audit가 포괄한다고 해석하지 않는다.
+evidence가 해당 완료 작업의 상세 경계와 실행 증거를 보존한다. Audit가 연결된 row에서 각 audit는
+자신의 실행 시점과 scope만 증명하며, post-baseline code 변경 전체를 하나의 과거 audit가
+포괄한다고 해석하지 않는다.
 
 ## Recommended Milestones
 

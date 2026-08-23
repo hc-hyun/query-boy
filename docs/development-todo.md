@@ -182,9 +182,10 @@ Production mutation executor는 이 track에 없다. 필요해지면 credential 
 ## Approval-Gated Contract Debts
 
 현재 확인된 hidden dependency, Source Catalog read/write capability, deep immutability, Runtime
-lifecycle Protocol과 Assurance offline composition 경계는 조사된 계약 후보일 뿐 active
-implementation checklist가 아니다. 선택지를 승인받기 전에는 관련 code/schema/config/contract
-문서를 의미상 변경하지 않는다.
+lifecycle Protocol과 Assurance offline composition 경계는
+[module contract decision guide](module-contract-decision-guide.md)의 조사된 계약 후보일 뿐
+active implementation checklist가 아니다. Startup cleanup을 포함해 선택 ID를 승인받기 전에는
+관련 code/schema/config/contract 문서를 의미상 변경하지 않는다.
 
 ## Explicit Non-Goals
 

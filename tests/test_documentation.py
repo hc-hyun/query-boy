@@ -38,6 +38,9 @@ SHARED_ACCESS_ADR = (
     / "0017-shared-source-access-and-resource-tier.md"
 )
 MODULE_INDEX = ROOT_DIRECTORY / "docs" / "modules" / "README.md"
+MODULE_CONTRACT_DECISION_GUIDE = (
+    ROOT_DIRECTORY / "docs" / "module-contract-decision-guide.md"
+)
 MODULE_NAMES = (
     "source-catalog",
     "metadata",
@@ -148,6 +151,7 @@ EXPECTED_POST_BASELINE_COMPLETED_IDS = (
     "QCORR-01",
     "MOD-01",
     "MOD-02",
+    "MOD-03",
 )
 CRITICAL_NON_PYTHON_MODULE_MAPPINGS = (
     "| `config/sources/`, `config/budget-profiles.yaml` | Source Catalog |",
@@ -431,6 +435,25 @@ def test_module_boundary_docs_cover_owners_contracts_and_current_python_files() 
 
     for mapping in CRITICAL_NON_PYTHON_MODULE_MAPPINGS:
         assert mapping in index, f"Missing or changed module mapping: {mapping}"
+
+
+def test_module_contract_decision_guide_is_explicitly_unapproved_and_discoverable() -> None:
+    guide = MODULE_CONTRACT_DECISION_GUIDE.read_text(encoding="utf-8")
+    readme = (ROOT_DIRECTORY / "README.md").read_text(encoding="utf-8")
+    index = MODULE_INDEX.read_text(encoding="utf-8")
+    todo = DEVELOPMENT_TODO.read_text(encoding="utf-8")
+    roadmap = ROADMAP.read_text(encoding="utf-8")
+
+    assert "Status: Proposal — 사용자 선택 전에는 승인된 계약이 아님" in guide
+    assert "## 용어사전" in guide
+    assert "## 승인 회신 방법" in guide
+    for decision in range(6):
+        assert f"## D{decision}." in guide
+        for option in "ABC":
+            assert f"D{decision}-{option}" in guide
+    assert "D0-A, D1-A, D2-A, D3-A, D4-A, D5-A" in guide
+    for document in (readme, index, todo, roadmap):
+        assert MODULE_CONTRACT_DECISION_GUIDE.name in document
 
 
 def _markdown_heading_anchors(path: Path) -> set[str]:

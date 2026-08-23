@@ -173,6 +173,14 @@ Module contract는 사용자 명시적 승인 없이 변경하지 않는다. 일
 사용자가 해당 계약과 영향 범위를 명시적으로 승인한 뒤에만 code, schema, configuration과 계약
 문서를 같은 변경에서 갱신한다. 승인 범위를 넘어서는 추가 계약 변경은 다시 승인을 받는다.
 
+## 승인 대기 중인 계약 강화
+
+현재 조사된 startup cleanup, hidden dependency, read/write capability, deep immutability,
+lifecycle Protocol과 offline composition 선택지는
+[module contract decision guide](../module-contract-decision-guide.md)에 설명한다. 이 문서는
+proposal이며 선택 ID와 공통 불변조건을 사용자가 명시적으로 승인하기 전에는 accepted ADR이나
+현재 contract가 아니다.
+
 ## Agent 작업 절차
 
 1. 요청을 담당하는 primary module을 고른다.
