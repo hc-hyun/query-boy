@@ -80,18 +80,15 @@ Dependencies: `SQL-01`~`SQL-05`, `SQL-07`~`SQL-10`은 `DEC-01`~`DEC-03`을 따�
 - [x] `SQL-02` `SELECT`와 허용된 read-only `WITH` 외 DDL, DML, transaction, session statement를 거부한다.
 - [x] `SQL-03` AST에서 참조 relation과 schema를 추출하고 현재 source의 published catalog allowlist와 대조한다.
 - [x] `SQL-04` 함수와 operator를 추출하고 `BETWEEN` 같은 grammar construct를 effective
-  operator로 정규화하며 승인한 cast type과 window·ordered-set·문자열·JSON 함수를
-  제한한다.
+  operator로 정규화하며 승인한 cast type과 분석 함수를 제한한다.
 - [x] `SQL-05` system schema, temp object, cross-database 접근과 client 지정 search path를 거부한다.
 - [x] `SQL-06` 요청의 `metadata_revision`과 `sql_policy_revision`이 실행 직전 published
   metadata와 validator policy digest에 각각 같은지 검증한다.
 - [x] `SQL-07` SQL을 canonicalize하고 민감 literal을 노출하지 않는 query fingerprint를 생성한다.
-- [x] `SQL-08` 정책 거부는 안정적인 reason code와 bounded detail로, 수정 가능한 database
-  의미 오류는 reason별 correction message·action·retryable detail로 반환하고 parser/database
-  내부 오류를 공개하지 않는다.
-- [x] `SQL-09` `DATE BETWEEN`, cast와 승인한 분석·문자열·JSON 함수를 포함한
-  허용·거부 corpus, 우회 문법, nested query, CTE와 Unicode identifier 회귀 테스트를
-  추가한다.
+- [x] `SQL-08` 정책 거부와 수정 가능한 database 의미 오류를 안정적인 reason code와 bounded
+  detail로 반환하고 parser/database 내부 오류를 공개하지 않는다.
+- [x] `SQL-09` `DATE BETWEEN`, cast와 분석 함수를 포함한 허용·거부 corpus, 우회 문법,
+  nested query, CTE와 Unicode identifier 회귀 테스트를 추가한다.
 - [x] `SQL-10` Property/fuzz test로 parser failure가 실행으로 이어지지 않는 fail-closed 성질을 검증한다.
 
 ## 3. Guarded Query Execution
@@ -108,9 +105,8 @@ Dependencies: `SQL-01`~`SQL-09`, `DEC-06`
 - [x] `EXEC-07` Queue timeout과 pool 고갈을 안정적인 overload reason code로 반환한다.
 - [x] `EXEC-08` Optional `EXPLAIN` admission을 구현하되 planner cost만으로 안전을 보장하지 않도록 한다.
 - [x] `EXEC-09` `query_id`, fingerprint, elapsed time, row/byte 수, truncation과 plan summary를 반환한다.
-- [x] `EXEC-10` 수정 가능한 고정 SQLSTATE만 reason별 bounded correction이 있는
-  `QUERY_INVALID`로 분리하고 나머지 DB 오류, timeout, cancel과 serialization failure를
-  비공개 또는 전용 오류 계약으로 매핑한다.
+- [x] `EXEC-10` 수정 가능한 고정 SQLSTATE만 bounded `QUERY_INVALID`로 분리하고 나머지 DB 오류,
+  timeout, cancel과 serialization failure를 비공개 또는 전용 오류 계약으로 매핑한다.
 - [x] `EXEC-11` 동시성, timeout, invalid query, large result, disconnect, cancel과 rollback 통합
   테스트를 추가한다.
 - [x] `EXEC-12` Reader가 base schema, write statement와 비승인 함수를 실행할 수 없는지 end-to-end로 검증한다.
@@ -137,19 +133,16 @@ Physical catalog, immutable publish와 품질 gate를 하나의 revision 계약�
 Dependencies: `EXEC-01`~`EXEC-10`, `META-05`~`META-08`, `DEC-08`
 
 - [x] `MCP-01` HTTP와 동일한 service를 호출하는 단일 MCP server를 구현한다.
-- [x] `MCP-02` 고정 schema의 `list_sources`, `get_context`, `query` tool, 두 exact revision과 bounded
-  argument를 명시한 description 및 SQL capability를 제공한다.
-- [x] `MCP-03` MCP 요청에도 동일한 caller authorization, budget과 오류 reason code를 적용하고,
-  argument validation을 입력을 반사하지 않는 bounded action으로 반환한다.
+- [x] `MCP-02` 고정 schema의 `list_sources`, `get_context`, `query` tool, bounded argument
+  description과 SQL capability를 제공한다.
+- [x] `MCP-03` MCP 요청에도 동일한 caller authorization, budget와 오류 reason code를 적용한다.
 - [x] `MCP-04` `answerability`가 `needs_clarification` 또는 `unsupported`이면 query 단계로 진행하지 않는 workflow를 검증한다.
 - [x] `MCP-05` Metadata revision mismatch 시 context를 다시 조회하고 SQL을 재생성하는 workflow를 검증한다.
 - [x] `MCP-06` Grain, fanout, composition, business predicate와 SQL capability를 준수하고 bounded
-  error action에 따른 argument·query correction을 한 번만 수행하는 공통 Text-to-SQL Skill을
-  작성한다.
+  invalid-query correction을 한 번만 수행하는 공통 Text-to-SQL Skill을 작성한다.
 - [x] `MCP-07` 두 MVP source의 전체 golden question을 MCP tool 호출부터 실제 결과까지 end-to-end 검증한다.
-- [x] `MCP-08` Tool schema·description·structured validation error 호환성, 응답 크기와
-  `/mcp` request arrival부터 final ASGI body까지의 bounded lifecycle timing 회귀 테스트를
-  추가한다.
+- [x] `MCP-08` Tool schema 호환성, 응답 크기와 `/mcp` request arrival부터 final ASGI body까지의
+  bounded lifecycle timing 회귀 테스트를 추가한다.
 
 ## 6. No-Deploy Source Onboarding
 
@@ -315,24 +308,35 @@ client와 실제 PostgreSQL fixture를 사용해야 한다. 실행 결과와 남
 - [x] `MCPX-08` Current MCP POST disconnect를 query cancel/rollback으로 전파하고 같은 client
   재사용을 실제 socket에서 검증하며 이전 handshake/version을 fail-closed한다.
 
-## 14. Active Development
+## 14. Post-Baseline Completion Ledger And Active Development
 
-완료된 131개 baseline ID는 이 문서에서 변경하지 않는다. 이후 작업은
-[active development TODO](development-todo.md)의 별도 ID로 관리하며 현재 순서는
-centralized source management, onboarding planning Skill, database-native 비용 귀속,
-workflow trace다. 완료된 두 replica soak 실행 증거는
-[multi-replica soak audit](verification/2026-08-23-mcp-multi-replica-soak.md)에 기록한다.
-Centralized management의 첫 단계인 numbered Control DB migration과 disposable test-store
-격리는 [control schema migration audit](verification/2026-08-23-control-schema-migrations.md)에
-기록한다.
-Mutually exclusive source authority mode와 zero-bootstrap Control DB precedence는
-[managed source startup audit](verification/2026-08-23-managed-source-startup.md)에 기록한다.
-Access-policy version 2 fail-closed cutover, shared source visibility와 explicit admin capability는
-[shared access audit](verification/2026-08-23-shared-access.md)에 기록한다.
-Strict manifest v2 provenance와 secret-free source catalog는
-[source management catalog audit](verification/2026-08-23-source-management-catalog.md)에 기록한다.
-Expected-state mutation, authoritative receipt와 lifecycle history는
-[source mutation receipt audit](verification/2026-08-23-source-mutation-receipts.md)에 기록한다.
+완료된 131개 baseline checkbox의 설명과 ID는 당시 acceptance를 보존한다. 이후 기능 보강은
+기존 설명을 소급 확장하지 않고 아래 ledger의 새 ID로 기록한다. 아직 끝나지 않은 항목은
+[active development TODO](development-todo.md)에만 두며, 완료 시 같은 변경에서 이 ledger로
+옮긴다.
+
+| ID | 완료 결과 | 실행 증거 |
+|---|---|---|
+| `SOAK-01` | MCP protocol version의 누락·이전·미지원·중복을 bounded error로 거부했다. | [multi-replica soak audit](verification/2026-08-23-mcp-multi-replica-soak.md) |
+| `SOAK-02` | 기본 1 replica와 soak 전용 2 replica Compose 구성을 분리했다. | [multi-replica soak audit](verification/2026-08-23-mcp-multi-replica-soak.md) |
+| `SOAK-03` | 두 replica의 tool schema, metadata revision, exact result와 query ID uniqueness를 검증했다. | [multi-replica soak audit](verification/2026-08-23-mcp-multi-replica-soak.md) |
+| `SOAK-04` | Replica별 source concurrency 포화·격리·timeout 후 복구를 검증했다. | [multi-replica soak audit](verification/2026-08-23-mcp-multi-replica-soak.md) |
+| `SOAK-05` | 공식 client의 1,000 stateless session을 두 replica에서 균등하게 통과시켰다. | [multi-replica soak audit](verification/2026-08-23-mcp-multi-replica-soak.md) |
+| `SOAK-06` | Session churn 전후 process, FD와 RSS growth gate를 고정했다. | [multi-replica soak audit](verification/2026-08-23-mcp-multi-replica-soak.md) |
+| `SOAK-07` | 장시간 soak를 주간·수동 CI와 재현 절차로 분리했다. | [multi-replica soak audit](verification/2026-08-23-mcp-multi-replica-soak.md) |
+| `CTRL-01` | Numbered Control DB migration과 disposable integration store를 도입했다. | [control schema migration audit](verification/2026-08-23-control-schema-migrations.md) |
+| `CTRL-02` | Managed authority mode, zero-bootstrap와 Control DB lifecycle precedence를 고정했다. | [managed source startup audit](verification/2026-08-23-managed-source-startup.md) |
+| `CTRL-03` | Access policy v2, shared visibility/resource tier와 query/admin capability 분리를 고정했다. | [shared access audit](verification/2026-08-23-shared-access.md) |
+| `CTRL-04` | Strict manifest v2 provenance와 secret-free admin catalog/history를 구현했다. | [source management catalog audit](verification/2026-08-23-source-management-catalog.md) |
+| `CTRL-05` | Expected-state mutation, authoritative receipt와 append-only lifecycle history를 구현했다. | [source mutation receipt audit](verification/2026-08-23-source-mutation-receipts.md) |
+| `SQLX-01` | 기존 SQL validation baseline 뒤 window·ordered-set·문자열·JSON 함수 정책과 corpus를 보강했다. | Commit `de2b364`; [ADR 0001](decisions/0001-postgresql-ast-validation.md), [`test_sql_validation.py`](../tests/test_sql_validation.py) |
+| `QCORR-01` | 수정 가능한 query/argument 오류에 bounded reason별 correction action을 추가하고 한 번의 retry workflow를 고정했다. | Commit `de2b364`; [ADR 0002](decisions/0002-guarded-query-contract.md), [ADR 0006](decisions/0006-mcp-transport-and-workflow.md), [`test_query.py`](../tests/test_query.py), [`test_mcp.py`](../tests/test_mcp.py) |
+| `MOD-01` | 논리 module owner, 허용 dependency, 계약 승인과 module-scoped agent 절차를 문서·테스트로 고정했다. | Commit `de2b364`; [ADR 0018](decisions/0018-module-ownership-and-contract-governance.md), [module index](modules/README.md), [`test_documentation.py`](../tests/test_documentation.py) |
+| `MOD-02` | Active-only TODO, module별 작업 gate, non-Python artifact primary owner/single-writer와 immutable baseline description 검사를 추가했다. | [active TODO](development-todo.md), [module index](modules/README.md), [`test_documentation.py`](../tests/test_documentation.py) |
+
+Ledger의 완료 결과 column은 찾기 쉬운 요약일 뿐 acceptance를 축소하지 않는다. 각 ID에 연결된
+audit가 해당 완료 작업의 상세 경계와 실행 증거를 보존한다. 각 audit는 자신의 실행 시점과
+scope만 증명하며, post-baseline code 변경 전체를 하나의 과거 audit가 포괄한다고 해석하지 않는다.
 
 ## Recommended Milestones
 
@@ -354,5 +358,6 @@ Expected-state mutation, authoritative receipt와 lifecycle history는
 | M14 Cost Attribution | `COST-*` | DB-native 사용량을 source/resource-tier time bucket으로 bounded 집계하고 운영 threshold를 고정한다. |
 | M15 Workflow Trace | `TRACE-*` | 여러 tool call과 retry를 bounded trace ID로 안전하게 연결한다. |
 
-M1부터 M11까지는 완료된 구현 순서이고 M12 이후는 active plan이다. 새로운 기능은 기존 완료
-ID를 재사용하지 않고 별도 roadmap 항목과 검증 가능한 exit condition을 추가한다.
+M1부터 M11까지는 완료됐고 M12는 `CTRL-01`~`CTRL-05`까지 완료된 상태다. M12의
+`CTRL-06`~`CTRL-09`와 M13 이후는 active plan이다. 새로운 기능은 기존 완료 ID나 설명을
+소급 변경하지 않고 별도 roadmap 항목과 검증 가능한 exit condition을 추가한다.

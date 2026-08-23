@@ -223,7 +223,11 @@ Metadata 작업은 기본적으로 다음만 읽는다.
 1. 이 문서와 [module index](../README.md)
 2. 변경 대상 metadata code와 focused tests
 3. Source Catalog의 소비 필드와 MetadataStore port
-4. Metadata/revision/quality/physical disclosure 관련 ADR
+4. [ADR 0007](../../decisions/0007-immutable-metadata-publishing.md),
+   [ADR 0008](../../decisions/0008-physical-key-and-index-disclosure.md),
+   [ADR 0009](../../decisions/0009-question-scoped-column-disclosure.md),
+   [ADR 0010](../../decisions/0010-revision-scoped-retrieval-index.md)과
+   [ADR 0011](../../decisions/0011-metadata-quality-level-publish-gate.md) 중 변경과 직접 관련된 결정
 5. Context 또는 revision을 소비하는 module contract
 
 MCP SDK 구현, source admin HTTP route와 query pool internals는 계약을 변경하지 않는 한 읽을

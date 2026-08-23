@@ -1,6 +1,6 @@
 # Source Onboarding Skill Plan
 
-Status: Accepted plan; implementation pending
+Status: Accepted planning baseline; `SKILL-01`/`SKILL-02` release reviews pending; implementation pending
 
 Last updated: 2026-08-23
 

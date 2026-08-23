@@ -46,6 +46,9 @@ HTTP와 MCP parity는 모든 endpoint가 같다는 뜻이 아니다. 공통 data
   disconnect; composition/lifespan 부분은 Runtime 소유
 - [`errors.py`](../../../src/query_man/errors.py): public `AppError` envelope/rendering contract;
   각 domain error의 업무 의미는 해당 producer module과 공동 소유
+- `config/access-policies*.yaml`: bootstrap/Compose caller identity와 capability input
+- [`skills/query-man-text-to-sql`](../../../skills/query-man-text-to-sql): MCP/context/query
+  workflow를 설명하는 consumer Skill; 안전 enforcement boundary가 아님
 - Focused tests: [`test_access.py`](../../../tests/test_access.py),
   [`test_http.py`](../../../tests/test_http.py),
   [`test_mcp.py`](../../../tests/test_mcp.py),
@@ -212,7 +215,11 @@ Delivery 작업은 기본적으로 다음만 읽는다.
 1. 이 문서와 [module index](../README.md)
 2. 변경 대상 access/gateway/HTTP/MCP/admin-route/error code와 focused tests
 3. 호출하는 domain operation의 input/output/error 계약
-4. Caller authorization, MCP transport와 guarded query 관련 ADR
+4. [ADR 0002](../../decisions/0002-guarded-query-contract.md),
+   [ADR 0004](../../decisions/0004-caller-source-authorization.md),
+   [ADR 0006](../../decisions/0006-mcp-transport-and-workflow.md),
+   [ADR 0015](../../decisions/0015-containerized-local-runtime.md)와
+   [ADR 0017](../../decisions/0017-shared-source-access-and-resource-tier.md) 중 변경과 직접 관련된 결정
 5. `app.py` lifecycle을 건드릴 때 Runtime 계약
 
 Catalog SQL, source persistence transaction과 query executor 내부는 계약을 바꾸지 않는 한 읽을

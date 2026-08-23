@@ -42,6 +42,12 @@ Query Man은 현재 하나의 deployable process인 modular monolith다. Runtime
   `RuntimeConfig`
 - [`operations.py`](../../../src/query_man/operations.py): `OperationalState`, safe formatter와 redaction
 - [`__init__.py`](../../../src/query_man/__init__.py): package identity/version
+- [`Dockerfile`](../../../Dockerfile), [`compose.yaml`](../../../compose.yaml),
+  [`.env.example`](../../../.env.example): image, process, network, secret/config와 health lifecycle
+- [`verify-container.sh`](../../../scripts/verify-container.sh): Assurance가 소유하고 Runtime
+  container contract를 소비하는 shared transition acceptance script
+- [`pyproject.toml`](../../../pyproject.toml), [`uv.lock`](../../../uv.lock): application
+  entrypoint/dependency와 locked build; test tooling 부분은 Assurance와 공유
 - Focused tests: [`test_runtime_config.py`](../../../tests/test_runtime_config.py),
   [`test_operations.py`](../../../tests/test_operations.py),
   [`test_server.py`](../../../tests/test_server.py),
@@ -202,7 +208,10 @@ Runtime 작업은 기본적으로 다음만 읽는다.
 1. 이 문서와 [module index](../README.md)
 2. 변경 대상 composition/config/operations/server code와 focused tests
 3. 조립하거나 lifecycle을 호출하는 module의 공개 계약
-4. Container runtime, mutually exclusive management authority와 MCP lifecycle ADR
+4. [ADR 0006](../../decisions/0006-mcp-transport-and-workflow.md),
+   [ADR 0015](../../decisions/0015-containerized-local-runtime.md),
+   [ADR 0016](../../decisions/0016-centralized-source-management-plane.md)과
+   [ADR 0017](../../decisions/0017-shared-source-access-and-resource-tier.md) 중 변경과 직접 관련된 결정
 5. `app.py` route/middleware를 건드릴 때 Delivery 계약
 
 Metadata ranking, SQL AST walker와 store transaction 내부는 lifecycle 계약을 바꾸지 않는 한 읽을

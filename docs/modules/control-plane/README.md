@@ -49,6 +49,9 @@ Control Plane은 “어떤 source 정의와 metadata/verified revision이 현재
   numbered migration entrypoint
 - [`control-migrations`](../../../docker/postgres/init/control-migrations): immutable numbered schema
   migration, checksum ledger, apply lock와 least-privilege reconciliation
+- [`apply-control-schema.sh`](../../../scripts/apply-control-schema.sh),
+  [`control-plane-drill.sh`](../../../scripts/control-plane-drill.sh): production-style schema
+  apply와 recovery/acceptance drill
 - Focused tests: [`test_source_admin.py`](../../../tests/test_source_admin.py),
   [`test_source_store.py`](../../../tests/test_source_store.py),
   [`test_metadata_store.py`](../../../tests/test_metadata_store.py),
@@ -250,7 +253,10 @@ Control Plane 작업은 기본적으로 다음만 읽는다.
 1. 이 문서와 [module index](../README.md)
 2. 변경 대상 admin/reloader/store/secret code, numbered migration과 focused tests
 3. Source validator, MetadataStore/codec, verified/query의 소비 계약
-4. Control source revision, verified publish와 centralized management ADR
+4. [ADR 0012](../../decisions/0012-control-plane-source-revisions.md),
+   [ADR 0013](../../decisions/0013-control-plane-verified-query-publishing.md),
+   [ADR 0016](../../decisions/0016-centralized-source-management-plane.md)과
+   [ADR 0017](../../decisions/0017-shared-source-access-and-resource-tier.md) 중 변경과 직접 관련된 결정
 5. 변경되는 management catalog/mutation의 Delivery와 Runtime 계약
 
 Metadata relevance algorithm, MCP SDK 내부와 query cursor 구현은 계약을 바꾸지 않는 한 읽을

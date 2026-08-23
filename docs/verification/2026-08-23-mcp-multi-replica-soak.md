@@ -4,7 +4,8 @@ Status: Complete
 
 ## Scope And Verdict
 
-[active development TODO](../development-todo.md)의 `SOAK-01`~`SOAK-07`을 닫았다. 같은
+[implementation roadmap ledger](../implementation-roadmap.md#14-post-baseline-completion-ledger-and-active-development)에
+보존된 `SOAK-01`~`SOAK-07`을 닫았다. 같은
 application image를 쓰는 두 Compose replica와 실제 PostgreSQL fixture에서 modern-only MCP
 경계, exact result, 동시 포화·복구와 1,000개 stateless session의 process resource 변화를
 검증했다.

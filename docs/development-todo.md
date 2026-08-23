@@ -2,75 +2,72 @@
 
 Status: Active
 
-이 문서는 완료된 production baseline 이후의 개발 작업을 우선순위대로 관리한다. 완료된
-역사는 [implementation roadmap](implementation-roadmap.md)에 보존하고, 여기에는 지금부터
-실행할 작업과 검증 가능한 종료 조건만 둔다.
+이 문서는 완료된 production baseline 이후에 **아직 끝나지 않은 작업만** 우선순위대로
+관리한다. 완료 이력과 실행 증거는
+[implementation roadmap](implementation-roadmap.md#14-post-baseline-completion-ledger-and-active-development)에
+옮긴다. 따라서 이 문서에는 `[x]`가 없어야 한다.
 
 ## Management Rules
 
-- 위에서 아래로 진행하며, 더 높은 우선순위가 열려 있으면 낮은 우선순위를 먼저 시작하지
-  않는다.
-- `[x]`는 구현, 자동 테스트, 운영 문서와 실행 증거가 모두 있을 때만 표시한다.
-- 각 항목은 하나의 검증 가능한 결과를 가지며 ID를 재사용하지 않는다.
+- 전역 순서는 위에서 아래다. 더 높은 priority의 항목이 열려 있으면 낮은 track은 설계와
+  조사만 할 수 있고 구현을 먼저 시작하지 않는다.
+- 항목을 완료하면 같은 변경에서 이 문서에서 제거하고 roadmap의 post-baseline completion
+  ledger에 결과와 실행 증거를 기록한다. 완료 ID는 재사용하지 않는다.
+- 각 track은 `Primary module`, `Direct consumers`, `Affected providers/verifiers`,
+  `Contract baseline`, `Approval gate`, `Single writer`, `Start gate`, `Verification`을 명시한다.
+  `Direct consumers`는 결과를 쓰는 쪽, `Affected providers/verifiers`는 필요한 입력·계약을
+  제공하거나 결과를 검증하는 쪽이다. Agent는 이 범위부터 읽고 다른 module로 넘어가는
+  complete end-to-end slice만 추가로 읽는다.
+- TODO에 항목을 적는 것은 module contract 변경 승인이 아니다. Public Python/wire/persisted
+  schema, lifecycle 또는 정책 의미가 바뀌면 정확한 제안과 영향을 사용자에게 제시하고 별도
+  승인을 받은 뒤 시작한다.
+- 공통 contract, shared transition file과 migration은 coordinating agent가 single-writer로
+  직렬화한다. 고정된 계약을 소비하는 서로 다른 module implementation만 병렬화한다.
 - 비밀, 질문 원문, SQL text와 parameter는 비용·trace 수집에도 저장하지 않는다.
 - MCP는 현재 지원 버전 `2026-07-28`만 받는다. 이전 handshake와 protocol version을 위한
   compatibility branch는 만들지 않으며 version 변경은 명시적인 upgrade 작업으로 처리한다.
 
-## P0 — Multi-Replica MCP Soak
+## P0 — Runtime Startup Failure Cleanup
 
-목표: 실제 Docker replica 두 개에서 protocol, query budget과 process resource 경계가
-반복 가능한지 검증한다. 현재 fixture reader role의 connection budget은 정확히 두 replica만
-지원하므로 세 번째 replica는 이 범위에 포함하지 않는다.
+목표: MCP child application의 lifespan 진입 중 실패해도 parent composition이 그 전에 만든
+resource를 역순으로 정리해 connection pool이나 background task를 남기지 않게 한다.
 
-- [x] `SOAK-01` `/mcp`가 `2026-07-28` protocol header만 허용하고 누락·이전·미지원·중복
-  version을 bounded error로 거부한다.
-- [x] `SOAK-02` 기본 Compose는 한 replica를 유지하고 `soak` profile에서만 동일 image의 두
-  번째 loopback replica를 시작한다.
-- [x] `SOAK-03` 두 replica가 같은 tool schema와 metadata revision으로 exact verified query를
-  실행하고 전체 `query_id`가 고유한지 검증한다.
-- [x] `SOAK-04` 두 replica의 source별 concurrency를 동시에 포화시켜 각각 overload되며 다른
-  source는 성공하고 timeout 뒤 즉시 복구되는지 검증한다.
-- [x] `SOAK-05` 공식 client의 stateless session 1,000개를 동시성 20으로 실행해 replica별
-  정확히 500개씩 성공하는지 검증한다.
-- [x] `SOAK-06` session churn 전후 PID, restart, OOM, file descriptor와 RSS를 측정하고 bounded
-  growth 기준을 CI assertion으로 고정한다.
-- [x] `SOAK-07` 장시간 soak를 일반 PR gate와 분리한 주간·수동 CI workflow와 재현 가능한 실행
-  기록을 제공한다.
+| 작업 경계 | 내용 |
+|---|---|
+| Primary module | Runtime |
+| Direct consumers | Runtime server/process lifecycle과 readiness; 새 cross-module consumer는 없음 |
+| Affected providers/verifiers | Delivery MCP child lifespan과 이미 조립된 Control Plane/Metadata/Guarded Query resource의 cleanup capability; Runtime/Delivery failure-path tests |
+| Contract baseline | [Runtime startup contract](modules/runtime/README.md#startup-contract)은 child `enter` 실패 시 역순 cleanup을 현재 보장하지 않는 debt로 명시한다. |
+| Approval gate | Exactly-once 역순 cleanup과 원래 startup error 보존은 새 lifecycle 보장이다. 선택지와 provider 영향을 사용자에게 제시해 승인받기 전에는 구현하지 않는다. Method, grace, startup/shutdown 순서나 public health 의미까지 바뀌면 그 범위도 별도 승인받는다. |
+| Single writer | Runtime owner가 `app.py` lifespan symbol을 수정하고 Delivery owner는 route/wire 부분을 동시 편집하지 않는다. |
+| Start gate | 계약 선택 승인 전 blocked; 승인되면 repository 전체의 다음 구현 작업 |
+| Verification | Runtime/Delivery focused failure-path test, `ruff`, `mypy`, root `pytest`; DB resource 경계를 건드리면 integration test |
 
-실행 증거와 threshold는
-[multi-replica soak audit](verification/2026-08-23-mcp-multi-replica-soak.md)에 기록한다.
+- [ ] `RTSAFE-01` MCP child lifespan의 `__aenter__`가 실패하면 진입하지 못한 child에
+  `__aexit__`를 호출하지 않고, parent가 그 전에 만든 reload task/pool/service resource만
+  정확히 한 번 역순 정리하며 원래 startup error를 보존하는 계약·회귀 테스트와 구현을
+  완료한다. Child의 partial-enter cleanup은 child lifespan 자체의 책임으로 유지한다.
 
 ## P1 — Centralized Source Management Plane
 
-목표: Production managed source의 정의, 활성 상태, 이력, 소유권, 규모와 비용 projection을
-Control DB와 하나의 admin management API에서 관리한다. 실제 DB, secret과 raw metric은
-분산돼도 관리자는 한 surface에서 authority와 freshness를 확인한다. Authority와 artifact
-경계는 [ADR 0016](decisions/0016-centralized-source-management-plane.md), 상세 구현 계획은
-[source management plane](source-management-plane.md)을 따른다. Query access와 resource tier는
+목표: Production managed source의 authority, replica 상태, 규모와 비용 projection을 Control DB와
+하나의 admin surface에서 관리한다. `CTRL-01`~`CTRL-05`의 완료 이력은 roadmap ledger에 있고,
+현재 track은 `CTRL-06`부터 시작한다. 상세 목표는
+[source management plane](source-management-plane.md), authority 경계는
+[ADR 0016](decisions/0016-centralized-source-management-plane.md), shared access/resource tier는
 [ADR 0017](decisions/0017-shared-source-access-and-resource-tier.md)을 따른다.
 
-- [x] `CTRL-01` Control schema에 번호 기반 migration을 도입하고 production/development와
-  disposable integration-test Control DB를 분리해 fixture generation이 운영 history에
-  누적되지 않게 한다.
-- [x] `CTRL-02` Control DB lifecycle과 verified contract가 restart/rollback/deactivate 뒤에도
-  bootstrap seed/contract보다 우선하는 managed-mode startup을 구현한다. 일회성 import가 필요한
-  contract를 Control DB로 이관한 뒤 filesystem contract를 무시하게 하고 zero-bootstrap
-  production 및 precedence 회귀를 격리 Control DB에서 검증한다.
-- [x] `CTRL-03` Version 2 access policy에서 caller별 source scope를 제거하고 version 1 및 legacy
-  scope field를 자동 권한 확대 없이 fail-closed한다. 모든 인증 identity는 active source 전체와
-  같은 source-resolved `budget_profile`을 공유한다. Managed mode는 explicit non-admin query와
-  operator admin identity를 모두 요구하고 API-token/anonymous caller를 거부한다. Bootstrap
-  local/API-token identity는 query-only다. 두 query identity의 visibility/budget parity와 모든
-  admin endpoint/cancel 거부를 검증한다.
-- [x] `CTRL-04` Source owner, environment와 DB migration provenance를 immutable lifecycle에
-  연결하고 admin-only source list/detail/generation history API에 pagination, filter와 bounded
-  redaction을 적용한다. Effective `budget_profile`과 관련 metadata revision을 함께 보여주고
-  query token을 거부한다.
-- [x] `CTRL-05` 기존 direct admin mutation을 유지하면서 idempotency key, canonical request hash,
-  actor/reason, expected/resulting state, authoritative mutation receipt와 append-only lifecycle
-  audit를 추가한다. 같은 key/different hash를 fail-closed하고 timeout 뒤 receipt 조회로
-  reconcile하며 blind retry하지 않는다. 별도 approval table/endpoint나 AI credential 전달
-  경로는 만들지 않는다.
+| 작업 경계 | 내용 |
+|---|---|
+| Primary module | Control Plane |
+| Direct consumers | Delivery admin API와 Runtime authority/recovery composition |
+| Affected providers/verifiers | Runtime replica heartbeat/reloader, Source Catalog/Metadata/Guarded Query observation signal과 Assurance integration/recovery acceptance |
+| Contract baseline | `CTRL-01`~`CTRL-05` ledger와 ADR 0016/0017, 현재 Control Plane/Delivery/Runtime module contract |
+| Approval gate | `CTRL-06`~`CTRL-08`의 새 Control DB schema, observation shape, freshness와 admin response 의미는 구현 전 정확한 계약 승인이 필요하다. `CTRL-09`가 기존 backup/restore 절차만 재현하면 새 승인이 없지만 schema·retention·key recovery 의미를 바꾸면 승인받는다. |
+| Single writer | Control Plane owner가 schema/contract를 직렬화하고 baseline 확정 뒤 Runtime reporter와 Delivery projection을 병렬화한다. |
+| Start gate | `RTSAFE-01` 완료 뒤 `CTRL-06`부터 순서대로 진행 |
+| Verification | Provider와 직접 consumer contract test, root gate, Control DB integration, migration/rollback/recovery와 scoped verification record |
+
 - [ ] `CTRL-06` Replica별 applied generation/state version/metadata revision/health heartbeat를
   수집해 desired/applied drift와 freshness를 management API에서 조회한다.
 - [ ] `CTRL-07` Representative record-volume metric, estimated rows, table/index/storage bytes와
@@ -84,50 +81,27 @@ Control DB와 하나의 admin management API에서 관리한다. 실제 DB, secr
 - [ ] `CTRL-09` 전체 authority table의 backup/restore와 retention, encryption-key recovery,
   zero-bootstrap 복구 및 multi-replica management-plane release acceptance를 재현한다.
 
-`CTRL-01`의 migration checksum, fresh/reapply, 개발 history 비오염과 disposable DB 삭제 증거는
-[control schema migration audit](verification/2026-08-23-control-schema-migrations.md)에 기록한다.
-`CTRL-02`의 mutually exclusive runtime mode, zero-bootstrap, file non-read와 Control DB
-restart/rollback/deactivate/verified-contract precedence 증거는
-[managed source startup audit](verification/2026-08-23-managed-source-startup.md)에 기록한다.
-`CTRL-03`의 policy v2 cutover, shared visibility/budget과 query/admin capability 분리 증거는
-[shared access audit](verification/2026-08-23-shared-access.md)에 기록한다. 최종 전체 gate가
-완료됐으며 audit status는 Complete다. `CTRL-04`의 strict manifest v2, immutable provenance,
-secret-free pagination/filter, metadata revision 구분과 admin/query 경계 증거는
-[source management catalog audit](verification/2026-08-23-source-management-catalog.md)에 기록한다.
-`CTRL-05`의 atomic success/rejection receipt, same-key replay/conflict, operator-first HTTP
-validation, N-1 migration/rolling writer와 immutable audit 증거는
-[source mutation receipt audit](verification/2026-08-23-source-mutation-receipts.md)에 기록한다.
-
-현재 다음 작업은 `CTRL-06`이다. 이 track에서는 다단계 RBAC, caller grant storage,
-user/organization별 tier·quota와 AI production executor를 구현하지 않는다.
-
-`CTRL-05`에서 source-admin route registration과 operator-first manual parsing을
-`source_admin_routes.py`로 분리해 `build_app`의 C90을 55에서 37로 낮췄다. Lifespan, middleware와
-범용 controller framework는 건드리지 않았다. Mutation service에는 operation별 staging/검증/commit
-차이 때문에 threshold 10을 넘는 함수가 남아 있다. 일곱 번째 mutation이 추가되거나 같은
-preflight/rejection/finalization 변경이 여러 operation에 반복될 때는 그 lifecycle만 작은
-coordinator로 추출하고 operation별 검증은 그대로 둔다. 측정 근거 없이 generic command framework나
-새 dependency를 만들지 않는다.
-
-Receipt는 terminal-only라 commit 전 동시 same-key 요청의 staging/verified query가 중복될 수 있다.
-Admin workload에서 실제 중복 비용이나 충돌이 관측되면 source I/O 동안 transaction lock을 유지하지
-않는 만료형 distributed in-flight lease를 별도 작업으로 설계한다. 관측 전에는 pending table과
-cleanup worker를 추가하지 않는다.
-
-Runtime writer 밖의 주체가 receipt를 직접 SQL로 쓸 요구가 생기거나 compromised-writer까지 감사
-무결성 threat model에 포함할 때는 forward migration으로 operation별 exact result constraint를
-추가하고 direct receipt INSERT를 제한된 database function으로 회수한다. 현재는 authority 자체를
-쓰는 trusted application role과 store-level transition/result binding을 경계로 삼는다.
-
-두 번째 numbered migration은 N-1→N data-preserving upgrade, 실패 migration의 transaction
-rollback, concurrent pending apply와 rolling version 1 writer compatibility를 함께 검증했다.
-실제로 crash 잔여 test DB가 반복 관측되기 전에는 prefix/age cleanup daemon을 추가하지 않는다.
+이 track에서는 다단계 RBAC, caller grant storage, user/organization별 tier·quota와 AI production
+executor를 구현하지 않는다.
 
 ## P2 — Source Onboarding Skill
+
+Status: Accepted planning baseline; `SKILL-01`/`SKILL-02` release reviews pending; implementation pending
 
 목표: 기존 no-restart source onboarding 계약을 Codex가 반복 가능한 plan과 관리자 handoff로
 정리한다. V1은 plan-only이며 credential을 읽거나 admin API를 호출하지 않는다. 상세 설계와
 단계별 gate는 [source onboarding Skill plan](source-onboarding-skill-plan.md)에서 관리한다.
+
+| 작업 경계 | 내용 |
+|---|---|
+| Primary module | Source Catalog |
+| Direct consumers | DB owner와 Query Man admin/operator handoff workflow; production module runtime dependency는 없음 |
+| Affected providers/verifiers | Source onboarding/config 계약, Control Plane 공개 admin 계약, Delivery의 기존 query Skill negative-routing 경계와 Assurance evaluation |
+| Contract baseline | Source onboarding/runbook, ADR 0016/0017과 accepted plan-only Skill boundary |
+| Approval gate | 현재 accepted plan의 구현은 가능하다. Output schema, trigger/scope, secret·mutation 경계 또는 production authority를 바꾸면 사용자 승인을 먼저 받는다. |
+| Single writer | Source Catalog owner가 Skill과 plan을 쓰고 shared onboarding/config 문서는 coordinating agent가 직렬화한다. |
+| Start gate | `RTSAFE-*`와 `CTRL-*`가 닫힌 뒤 `SKILL-01`부터 진행; 아래의 “다음”은 track-local 순서다. |
+| Verification | Positive/negative/adversarial Skill eval, mutation 0 증거, 관련 onboarding/Delivery/Assurance 회귀와 root gate |
 
 - [ ] `SKILL-01` Skill scope, repository 위치, request/trigger 경계와 manual runbook·query
   Skill의 책임 분리를 설계 review로 확정한다.
@@ -142,14 +116,24 @@ rollback, concurrent pending apply와 rolling version 1 writer compatibility를 
 - [ ] `SKILL-06` Skill validation, 관련 회귀, 운영 문서와 재현 증거를 완료한 뒤 기본
   onboarding planning workflow 채택 여부를 기록한다.
 
-이 track의 다음 작업은 `SKILL-01`이다. Production mutation executor는 이 track에 없으며
-필요해지면 credential broker와 admin apply 계약을 별도 ADR에서 먼저 설계한다.
+Production mutation executor는 이 track에 없다. 필요해지면 credential broker와 admin apply
+계약을 별도 ADR에서 먼저 설계하고 승인받는다.
 
 ## P3 — Database-Native Cost Attribution
 
-목표: 이미 적용 중인 timeout, concurrency, result, memory/temp/JIT hard limit에 더해 완료된
-query의 실제 DB 자원 사용을 source/resource-tier 단위부터 측정한다. 통화 단위 청구액은
-provider billing 자료가 있을 때만 별도 계산한다.
+목표: 이미 적용 중인 hard limit에 더해 완료된 query의 실제 DB 자원 사용을 source/resource-tier
+단위부터 측정한다. 통화 단위 청구액은 provider billing 자료가 있을 때만 별도 계산한다.
+
+| 작업 경계 | 내용 |
+|---|---|
+| Primary module | Control Plane |
+| Direct consumers | Delivery admin projection과 operator workflow |
+| Affected providers/verifiers | Guarded Query/Runtime usage signal, Source Catalog budget 의미, Metadata revision, `CTRL-07`/`CTRL-08` observation baseline과 Assurance acceptance |
+| Contract baseline | ADR 0016/0017, `CTRL-07` observation method/freshness와 `CTRL-08` usage/cost state |
+| Approval gate | Monitoring identity, collector/rollup schema, retention, status와 admin projection은 새 persisted/public 계약이므로 각 단계 구현 전 사용자 승인이 필요하다. |
+| Single writer | Control Plane owner가 observation 계약을 먼저 확정하고 signal producer와 Delivery consumer는 이후 병렬화한다. |
+| Start gate | `CTRL-07`/`CTRL-08` baseline과 앞선 priority 완료 뒤 `COST-01`부터 진행; 아래의 “다음”은 track-local 순서다. |
+| Verification | 최소 권한 DB integration, reset/eviction/replica/cardinality 경계, redaction과 root gate |
 
 - [ ] `COST-01` 대상 PostgreSQL의 monitoring identity, 최소 권한, 지원 extension과 reset/보존
   정책을 inventory하고 개발·production별 사용 가능 신호를 decision record로 확정한다.
@@ -166,18 +150,25 @@ provider billing 자료가 있을 때만 별도 계산한다.
   provider 자료가 없거나 user/organization chargeback이 불가능할 때의 운영 판단 절차를
   문서화한다.
 
-이 track의 다음 작업은 `COST-01`이다. `CTRL-07`의 observation method/freshness와 `CTRL-08`의
-usage/cost projection 입력 계약 없이 collector schema나 통화 단위 비용을 추정해서 구현하지
+`CTRL-07`/`CTRL-08` 입력 계약 없이 collector schema나 통화 단위 비용을 추정해서 구현하지
 않는다.
 
 ## P4 — End-to-End Workflow Trace
 
 목표: 한 transport 요청에서 여러 tool call과 retry로 이어지는 사용자 workflow를 민감 입력
-없이 추적한다.
+없이 추적한다. 현재 server-generated MCP HTTP request ID는 하나의 POST lifecycle만 연결하며
+여러 POST와 model reasoning을 잇는 workflow trace는 아니다.
 
-현재 server-generated MCP HTTP request ID는 하나의 POST lifecycle과 그 안의 tool/query만
-연결한다. Client가 여러 POST와 model reasoning을 잇는 workflow trace는 아니므로 아래 항목을
-대체하지 않는다.
+| 작업 경계 | 내용 |
+|---|---|
+| Primary module | Delivery |
+| Direct consumers | Runtime operations와 Guarded Query audit |
+| Affected providers/verifiers | 승인될 경우 client trace input, 현재 Delivery auth/HTTP/MCP context, Runtime operations sink와 Assurance end-to-end verification |
+| Contract baseline | 현재 HTTP/MCP correlation, audit/redaction과 supported MCP protocol |
+| Approval gate | Client trace input, trust/collision policy, public header/schema와 audit field는 새 wire/observability 계약이다. `TRACE-01`에서 선택지를 제시하고 사용자 승인을 받은 뒤 구현한다. |
+| Single writer | Delivery owner가 wire 계약을 직렬화하고 baseline 확정 뒤 Runtime/Guarded Query propagation을 병렬화한다. |
+| Start gate | 앞선 priority 완료 뒤 `TRACE-01` 조사·결정을 수행하고, 사용자 승인 뒤에만 `TRACE-02`~`TRACE-04`를 구현한다. |
+| Verification | HTTP/MCP contract, redaction/cardinality, parallel/retry/disconnect/multi-replica end-to-end와 root gate |
 
 - [ ] `TRACE-01` client 제공 trace ID의 문자 집합, 길이, 생성·신뢰 경계와 충돌 정책을
   decision record로 확정한다.
@@ -187,6 +178,13 @@ usage/cost projection 입력 계약 없이 collector schema나 통화 단위 비
   source가 log에 유입되지 않는지 검증한다.
 - [ ] `TRACE-04` 병렬 tool call, revision retry, disconnect와 multi-replica 호출에서 correlation
   누락·혼선이 없는지 end-to-end로 검증한다.
+
+## Approval-Gated Contract Debts
+
+현재 확인된 hidden dependency, Source Catalog read/write capability, deep immutability, Runtime
+lifecycle Protocol과 Assurance offline composition 경계는 조사된 계약 후보일 뿐 active
+implementation checklist가 아니다. 선택지를 승인받기 전에는 관련 code/schema/config/contract
+문서를 의미상 변경하지 않는다.
 
 ## Explicit Non-Goals
 

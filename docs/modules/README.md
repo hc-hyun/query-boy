@@ -66,6 +66,10 @@ contract package를 만드는 결정은 실제 중복/필요와 사용자 승인
 
 ## 현재 코드 전환 맵
 
+`논리적 owner`는 기본적으로 해당 artifact의 단일 primary owner다. 같은 file 안에서 symbol이나
+configuration section별 owner가 다른 경우에는 별도 row로 나눈다. Consumer나 verification
+owner는 주의점에 기록하며 primary owner와 같은 뜻으로 해석하지 않는다.
+
 | 현재 파일 또는 영역 | 논리적 owner | 전환상 주의점 |
 |---|---|---|
 | `models.py` source/budget/semantic/provenance types | Source Catalog | Catalog/metadata types도 같은 파일에 있으므로 type 변경은 Metadata 계약도 확인한다. |
@@ -73,7 +77,7 @@ contract package를 만드는 결정은 실제 중복/필요와 사용자 승인
 | `registry.py` | Source Catalog | Control Plane은 validator와 projection writer를 소비한다. |
 | `catalog.py`, `metadata.py`, `relevance.py`, `revision.py`, `quality_level.py` | Metadata | `reader_policy.py`와 SQL capability는 cross-module 계약이다. |
 | `query.py`, `sql_validation.py`, `result_encoding.py` | Guarded Query | `query.py`의 result dictionary와 lifecycle capability는 아직 암묵 계약이다. |
-| `reader_policy.py` | Source Catalog safety contract; Metadata/Guarded Query consumers | 두 DB 경로가 같은 policy를 사용해야 한다. |
+| `reader_policy.py` | Source Catalog | Metadata와 Guarded Query가 소비하며 두 DB 경로가 같은 safety policy를 사용해야 한다. |
 | `source_admin.py`, `source_store.py`, `secrets.py` | Control Plane | Source projection, management catalog, mutation receipt와 Control DB transaction을 함께 보존한다. |
 | `metadata_store.py` Protocol/codec | Metadata contract | PostgreSQL store와 Control DB transaction ownership은 Control Plane이다. |
 | `metadata_store.py` PostgreSQL implementation | Control Plane | Metadata가 implementation을 알지 않도록 한다. |
@@ -86,6 +90,32 @@ contract package를 만드는 결정은 실제 중복/필요와 사용자 승인
 | `__init__.py` | Runtime | Package identity/version만 소유하며 domain contract export를 모으지 않는다. |
 | `verified.py`, `quality.py` | Assurance | Verified DTO/hash는 Control Plane이 소비하고 hash는 Guarded Query encoding에 의존한다. |
 | `docker/postgres/init/05-control-plane.sh`, `docker/postgres/init/control-migrations/` | Control Plane | Migration ledger/checksum, 번호, FK, lock, CAS와 privilege는 하나의 owner가 관리한다. |
+| `config/sources/`, `config/budget-profiles.yaml` | Source Catalog | Bootstrap/fixture definition과 versioned resource tier다. Managed production authority로 해석하지 않는다. |
+| `config/access-policies*.yaml` | Delivery | Caller identity/capability 입력이며 source visibility와 tier 의미는 ADR 0017을 함께 따른다. |
+| `config/quality-evaluation.yaml`, `config/verified-queries.yaml`, `config/security-evaluation.yaml` | Assurance | Metadata/Guarded Query acceptance data다. Version, case와 expected result 변경은 관련 provider 계약도 확인한다. |
+| `config/onboarding/<source>.yaml`, `config/onboarding/<source>-l2.yaml` | Source Catalog | Control Plane candidate staging이 소비하는 fixture source/semantic input이다. |
+| `config/onboarding/<source>-verified-query.yaml` | Assurance | Control Plane candidate staging이 소비하는 verified expectation이다. |
+| `Dockerfile`, `compose.yaml`, `.env.example` | Runtime | Image, process, network, secret/config와 lifecycle 조립 계약이다. HTTP/MCP probe 변경은 Delivery도 확인한다. |
+| `scripts/verify-container.sh` | Assurance | Runtime container와 Delivery HTTP/MCP 계약을 소비하는 shared transition acceptance script다. |
+| `scripts/apply-control-schema.sh`, `scripts/control-plane-drill.sh` | Control Plane | Schema apply/recovery 절차다. Drill의 acceptance 결과는 Assurance evidence로 남긴다. |
+| `scripts/apply-db.sh` | Assurance | Source fixture와 Control Plane migration을 함께 호출하는 shared transition composition script다. 각 provider-owned script의 의미를 바꾸지 않는다. |
+| `docker/postgres/init/00-bootstrap.sql`, `01-source-bootstrap.sh`, source fixture SQL `10`~`90` | Assurance | Production source schema authority가 아닌 fixture infrastructure다. `05-control-plane.sh`와 `control-migrations/`는 포함하지 않는다. |
+| `.github/workflows/ci.yml`, `.github/workflows/mcp-soak.yml` | Assurance | 모든 provider의 repository gate와 실행 증거를 조립하는 shared transition artifact다. |
+| `skills/query-man-text-to-sql/` | Delivery | Metadata/Guarded Query 계약을 소비하는 workflow이며 module contract나 enforcement boundary가 아니다. |
+| `pyproject.toml` package/dependency/entrypoint sections | Runtime | 모든 module이 소비하는 shared transition toolchain이다. |
+| `pyproject.toml` Ruff/mypy/pytest sections | Assurance | Runtime-owned package section과 같은 file이므로 coordinating agent가 single-writer로 편집한다. |
+| `uv.lock` | Runtime | 모든 module이 소비하는 shared transition lockfile이며 dependency owner 변경과 함께 갱신한다. |
+| `.python-version`, `.dockerignore` | Runtime | Python/container build와 build-context secret boundary다. Assurance가 supply-chain gate를 검증한다. |
+| `.gitleaksignore`, `.trivyignore.yaml` | Assurance | Secret/vulnerability scan의 bounded exception이다. 변경 시 근거·scope를 검토하고 vulnerability exception의 expiry를 유지한다. |
+| `.github/dependabot.yml` | Runtime | Dependency update automation이다. Assurance gate와 lockfile single-writer 절차를 따른다. |
+| `.gitignore` | Coordinating agent | Repository hygiene artifact다. Secret/runtime file 포함 여부를 바꾸면 Runtime과 Assurance 경계를 확인한다. |
+
+명시적 shared transition artifact는 `models.py`, `reader_policy.py`, `metadata_store.py`,
+`errors.py`, `app.py`, `scripts/verify-container.sh`, `scripts/apply-db.sh`, CI workflow,
+`pyproject.toml`, `uv.lock`, root `AGENTS.md`, 이 index와 공통 contract 문서다. 이 목록은
+coordinating agent가 single-writer로 직렬화한다. 나머지는 primary owner가 쓰고 소비자는 계약
+영향만 검토한다. Test code는 계속 root `tests/`에 두되 해당 test가 검증하는 provider와 직접
+consumer module을 owner로 판단한다.
 
 ## 새 데이터베이스 추가 시 영향
 

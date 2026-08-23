@@ -109,19 +109,100 @@ EXPECTED_ID_COUNTS = {
     "DEP": 8,
     "MCPX": 8,
 }
-EXPECTED_ACTIVE_ID_COUNTS = {
-    "SOAK": 7,
-    "CTRL": 9,
-    "SKILL": 6,
-    "COST": 5,
-    "TRACE": 4,
-}
-EXPECTED_ACTIVE_COMPLETED_COUNTS = {
-    "SOAK": 7,
-    "CTRL": 5,
-    "SKILL": 0,
-    "COST": 0,
-    "TRACE": 0,
+EXPECTED_OPEN_TODO_IDS = (
+    "RTSAFE-01",
+    "CTRL-06",
+    "CTRL-07",
+    "CTRL-08",
+    "CTRL-09",
+    "SKILL-01",
+    "SKILL-02",
+    "SKILL-03",
+    "SKILL-04",
+    "SKILL-05",
+    "SKILL-06",
+    "COST-01",
+    "COST-02",
+    "COST-03",
+    "COST-04",
+    "COST-05",
+    "TRACE-01",
+    "TRACE-02",
+    "TRACE-03",
+    "TRACE-04",
+)
+EXPECTED_POST_BASELINE_COMPLETED_IDS = (
+    "SOAK-01",
+    "SOAK-02",
+    "SOAK-03",
+    "SOAK-04",
+    "SOAK-05",
+    "SOAK-06",
+    "SOAK-07",
+    "CTRL-01",
+    "CTRL-02",
+    "CTRL-03",
+    "CTRL-04",
+    "CTRL-05",
+    "SQLX-01",
+    "QCORR-01",
+    "MOD-01",
+    "MOD-02",
+)
+CRITICAL_NON_PYTHON_MODULE_MAPPINGS = (
+    "| `config/sources/`, `config/budget-profiles.yaml` | Source Catalog |",
+    "| `config/access-policies*.yaml` | Delivery |",
+    "| `config/quality-evaluation.yaml`, `config/verified-queries.yaml`, "
+    "`config/security-evaluation.yaml` | Assurance |",
+    "| `config/onboarding/<source>.yaml`, `config/onboarding/<source>-l2.yaml` | "
+    "Source Catalog |",
+    "| `config/onboarding/<source>-verified-query.yaml` | Assurance |",
+    "| `Dockerfile`, `compose.yaml`, `.env.example` | Runtime |",
+    "| `scripts/verify-container.sh` | Assurance |",
+    "| `scripts/apply-control-schema.sh`, `scripts/control-plane-drill.sh` | "
+    "Control Plane |",
+    "| `scripts/apply-db.sh` | Assurance |",
+    "| `.github/workflows/ci.yml`, `.github/workflows/mcp-soak.yml` | Assurance |",
+    "| `skills/query-man-text-to-sql/` | Delivery |",
+    "| `pyproject.toml` package/dependency/entrypoint sections | Runtime |",
+    "| `pyproject.toml` Ruff/mypy/pytest sections | Assurance |",
+    "| `uv.lock` | Runtime |",
+    "| `.python-version`, `.dockerignore` | Runtime |",
+    "| `.gitleaksignore`, `.trivyignore.yaml` | Assurance |",
+    "| `.github/dependabot.yml` | Runtime |",
+)
+LOCKED_BASELINE_DESCRIPTIONS = {
+    "SQL-04": (
+        "함수와 operator를 추출하고 `BETWEEN` 같은 grammar construct를 effective operator로 "
+        "정규화하며 승인한 cast type과 분석 함수를 제한한다."
+    ),
+    "SQL-08": (
+        "정책 거부와 수정 가능한 database 의미 오류를 안정적인 reason code와 bounded detail로 "
+        "반환하고 parser/database 내부 오류를 공개하지 않는다."
+    ),
+    "SQL-09": (
+        "`DATE BETWEEN`, cast와 분석 함수를 포함한 허용·거부 corpus, 우회 문법, nested query, "
+        "CTE와 Unicode identifier 회귀 테스트를 추가한다."
+    ),
+    "EXEC-10": (
+        "수정 가능한 고정 SQLSTATE만 bounded `QUERY_INVALID`로 분리하고 나머지 DB 오류, "
+        "timeout, cancel과 serialization failure를 비공개 또는 전용 오류 계약으로 매핑한다."
+    ),
+    "MCP-02": (
+        "고정 schema의 `list_sources`, `get_context`, `query` tool, bounded argument description과 "
+        "SQL capability를 제공한다."
+    ),
+    "MCP-03": (
+        "MCP 요청에도 동일한 caller authorization, budget와 오류 reason code를 적용한다."
+    ),
+    "MCP-06": (
+        "Grain, fanout, composition, business predicate와 SQL capability를 준수하고 bounded "
+        "invalid-query correction을 한 번만 수행하는 공통 Text-to-SQL Skill을 작성한다."
+    ),
+    "MCP-08": (
+        "Tool schema 호환성, 응답 크기와 `/mcp` request arrival부터 final ASGI body까지의 "
+        "bounded lifecycle timing 회귀 테스트를 추가한다."
+    ),
 }
 
 
@@ -137,6 +218,19 @@ def test_roadmap_has_one_completed_checkbox_for_every_expected_id() -> None:
         assert [item for item in ids if item.startswith(f"{prefix}-")] == [
             f"{prefix}-{number:02}" for number in range(1, count + 1)
         ]
+
+
+def test_completed_baseline_descriptions_are_not_retroactively_expanded() -> None:
+    text = ROADMAP.read_text(encoding="utf-8")
+
+    for item_id, expected in LOCKED_BASELINE_DESCRIPTIONS.items():
+        match = re.search(
+            rf"^- \[x\] `{re.escape(item_id)}` (.*(?:\n  .*)*)$",
+            text,
+            re.MULTILINE,
+        )
+        assert match is not None, item_id
+        assert " ".join(match.group(1).split()) == expected
 
 
 def test_production_status_and_completion_audits_cover_every_roadmap_group() -> None:
@@ -189,16 +283,16 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
     assert SHARED_ACCESS_ADR.name in development_todo
     assert MCP_SOAK_AUDIT.name in roadmap
     assert MCP_SOAK_AUDIT.name in architecture
-    assert CONTROL_MIGRATION_AUDIT.name in development_todo
+    assert CONTROL_MIGRATION_AUDIT.name in roadmap
     assert CONTROL_MIGRATION_AUDIT.name in source_management_plan
-    assert MANAGED_SOURCE_STARTUP_AUDIT.name in development_todo
+    assert MANAGED_SOURCE_STARTUP_AUDIT.name in roadmap
     assert MANAGED_SOURCE_STARTUP_AUDIT.name in source_management_plan
-    assert SHARED_ACCESS_AUDIT.name in development_todo
+    assert SHARED_ACCESS_AUDIT.name in roadmap
     assert SHARED_ACCESS_AUDIT.name in source_management_plan
     assert SHARED_ACCESS_AUDIT.name in architecture
-    assert SOURCE_MANAGEMENT_CATALOG_AUDIT.name in development_todo
+    assert SOURCE_MANAGEMENT_CATALOG_AUDIT.name in roadmap
     assert SOURCE_MANAGEMENT_CATALOG_AUDIT.name in source_management_plan
-    assert SOURCE_MUTATION_RECEIPT_AUDIT.name in development_todo
+    assert SOURCE_MUTATION_RECEIPT_AUDIT.name in roadmap
     assert SOURCE_MUTATION_RECEIPT_AUDIT.name in source_management_plan
     for prefix, count in EXPECTED_ID_COUNTS.items():
         audit = {
@@ -214,8 +308,9 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
             assert f"`{prefix}-{count:02}`" in audit
 
 
-def test_active_todo_has_prioritized_unique_checklists_and_completed_evidence() -> None:
+def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_work() -> None:
     todo = DEVELOPMENT_TODO.read_text(encoding="utf-8")
+    roadmap = ROADMAP.read_text(encoding="utf-8")
     soak_audit = MCP_SOAK_AUDIT.read_text(encoding="utf-8")
     control_migration_audit = CONTROL_MIGRATION_AUDIT.read_text(encoding="utf-8")
     managed_source_startup_audit = MANAGED_SOURCE_STARTUP_AUDIT.read_text(encoding="utf-8")
@@ -229,24 +324,27 @@ def test_active_todo_has_prioritized_unique_checklists_and_completed_evidence() 
     matches = re.findall(r"^- \[([ x])\] `([A-Z]+)-(\d{2})`", todo, re.MULTILINE)
     ids = [f"{prefix}-{number}" for _checked, prefix, number in matches]
 
-    assert len(ids) == sum(EXPECTED_ACTIVE_ID_COUNTS.values()) == 31
+    assert tuple(ids) == EXPECTED_OPEN_TODO_IDS
     assert len(ids) == len(set(ids))
-    for prefix, count in EXPECTED_ACTIVE_ID_COUNTS.items():
-        prefix_matches = [
-            (checked, f"{matched_prefix}-{number}")
-            for checked, matched_prefix, number in matches
-            if matched_prefix == prefix
-        ]
-        assert [item for _checked, item in prefix_matches] == [
-            f"{prefix}-{number:02}" for number in range(1, count + 1)
-        ]
-        completed_count = EXPECTED_ACTIVE_COMPLETED_COUNTS[prefix]
-        assert [checked for checked, _item in prefix_matches] == [
-            *("x" for _ in range(completed_count)),
-            *(" " for _ in range(count - completed_count)),
-        ]
+    assert all(checked == " " for checked, _prefix, _number in matches)
+    assert "- [x]" not in todo
+    for field in (
+        "Primary module",
+        "Direct consumers",
+        "Affected providers/verifiers",
+        "Contract baseline",
+        "Approval gate",
+        "Single writer",
+        "Start gate",
+        "Verification",
+    ):
+        assert todo.count(f"| {field} |") == 5
 
-    for number in range(1, EXPECTED_ACTIVE_ID_COUNTS["SOAK"] + 1):
+    for item_id in EXPECTED_POST_BASELINE_COMPLETED_IDS:
+        assert f"`{item_id}`" in roadmap
+        assert not re.search(rf"^- \[[ x]\] `{re.escape(item_id)}`", todo, re.MULTILINE)
+
+    for number in range(1, 8):
         assert f"`SOAK-{number:02}`" in soak_audit
     assert "`CTRL-01`" in control_migration_audit
     assert "`CTRL-02`" in managed_source_startup_audit
@@ -330,6 +428,9 @@ def test_module_boundary_docs_cover_owners_contracts_and_current_python_files() 
         relative_path = path.relative_to(source_root)
         mapped_path = path.name if relative_path.parent == Path(".") else relative_path.as_posix()
         assert f"`{mapped_path}`" in index, f"Unmapped module owner: {relative_path}"
+
+    for mapping in CRITICAL_NON_PYTHON_MODULE_MAPPINGS:
+        assert mapping in index, f"Missing or changed module mapping: {mapping}"
 
 
 def _markdown_heading_anchors(path: Path) -> set[str]:

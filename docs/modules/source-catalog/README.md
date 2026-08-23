@@ -39,6 +39,9 @@ metadata revision/context 생성은 [Metadata](../metadata/README.md)가 담당�
   reader-session safety contract
 - [`config/sources`](../../../config/sources): local/CI bootstrap source definitions; managed authority가 아님
 - [`config/budget-profiles.yaml`](../../../config/budget-profiles.yaml): versioned resource tier definitions
+- `config/onboarding/<source>.yaml`과 `config/onboarding/<source>-l2.yaml`: Control Plane
+  candidate staging이 소비하는 fixture source/semantic input; 같은 directory의
+  `<source>-verified-query.yaml`은 Assurance 소유
 - [`tests/test_registry.py`](../../../tests/test_registry.py),
   [`tests/test_runtime_config.py`](../../../tests/test_runtime_config.py): focused tests
 
@@ -157,7 +160,12 @@ Source Catalog 작업은 기본적으로 다음만 읽는다.
 1. 이 문서와 [module index](../README.md)
 2. 변경 대상인 `registry.py`, source-related `models.py`, `reader_policy.py`
 3. 위 focused tests와 관련 config fixture
-4. Source identity, budget, reader 또는 tenant 관련 ADR
+4. [ADR 0003](../../decisions/0003-reader-and-resolved-object-policy.md),
+   [ADR 0005](../../decisions/0005-initial-query-budgets.md),
+   [ADR 0012](../../decisions/0012-control-plane-source-revisions.md),
+   [ADR 0014](../../decisions/0014-trusted-rls-tenant-context.md),
+   [ADR 0016](../../decisions/0016-centralized-source-management-plane.md)과
+   [ADR 0017](../../decisions/0017-shared-source-access-and-resource-tier.md) 중 변경과 직접 관련된 결정
 5. 변경이 닿는 제공/소비 계약 문서
 
 Physical metadata response, MCP SDK 내부와 query pool 구현은 계약이 바뀌지 않는 한 읽을 필요가

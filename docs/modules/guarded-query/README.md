@@ -44,6 +44,8 @@ Guarded Query는 이미 선택된 source와 published metadata revision을 기�
   의미; public rendering은 Delivery 계약
 - [`reader_policy.py`](../../../src/query_man/reader_policy.py): Source Catalog가 소유하고 Metadata와
   이 module이 함께 소비하는 reader-session safety contract
+- [`config/security-evaluation.yaml`](../../../config/security-evaluation.yaml): Assurance가
+  소유하고 이 module의 parser/execution safety를 검증하는 versioned corpus
 - Focused tests: [`test_sql_validation.py`](../../../tests/test_sql_validation.py),
   [`test_security_evaluation.py`](../../../tests/test_security_evaluation.py),
   [`test_query.py`](../../../tests/test_query.py),
@@ -217,7 +219,11 @@ Guarded Query 작업은 기본적으로 다음만 읽는다.
 1. 이 문서와 [module index](../README.md)
 2. 변경 대상 query/validator/encoding code와 focused tests
 3. Source profile의 소비 필드, published metadata와 reader safety 계약
-4. Guarded query, parser, reader, budget와 tenant 관련 ADR
+4. [ADR 0001](../../decisions/0001-postgresql-ast-validation.md),
+   [ADR 0002](../../decisions/0002-guarded-query-contract.md),
+   [ADR 0003](../../decisions/0003-reader-and-resolved-object-policy.md),
+   [ADR 0005](../../decisions/0005-initial-query-budgets.md)와
+   [ADR 0014](../../decisions/0014-trusted-rls-tenant-context.md) 중 변경과 직접 관련된 결정
 5. 변경되는 result/error/lifecycle의 직접 consumer contract
 
 Control DB persistence와 metadata relevance algorithm은 계약을 변경하지 않는 한 읽을 필요가 없다.

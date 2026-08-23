@@ -273,7 +273,9 @@ managed authority를 모두 표현한다. 따라서 mode, origin 또는 bootstra
 
 ## Rollout Checklist
 
-Canonical status는 [active development TODO](development-todo.md)의 `CTRL-*`가 관리한다.
+완료된 `CTRL-01`~`CTRL-05` 상태는
+[implementation roadmap ledger](implementation-roadmap.md#14-post-baseline-completion-ledger-and-active-development),
+열린 `CTRL-06`~`CTRL-09`는 [active development TODO](development-todo.md)가 관리한다.
 
 1. **Complete:** versioned migration과 disposable test-store isolation
 2. **Complete:** mutually exclusive source mode, Control DB precedence, zero-bootstrap과

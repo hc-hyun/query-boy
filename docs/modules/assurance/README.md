@@ -39,8 +39,18 @@ membership과 offline 품질 증거를 제공하고 동일 기준을 회귀 검�
 - [`quality-evaluation.yaml`](../../../config/quality-evaluation.yaml): versioned retrieval quality cases
 - [`verified-queries.yaml`](../../../config/verified-queries.yaml): bootstrap-only verified contracts;
   managed authority가 읽거나 병합하지 않음
+- [`security-evaluation.yaml`](../../../config/security-evaluation.yaml): parser/query safety
+  allow/deny regression corpus
 - `config/onboarding/*-verified-query.yaml`: Assurance-owned verified expectations. 같은 directory의
   base/`*-l2.yaml` manifest는 Source Catalog/Control staging input이다.
+- [`ci.yml`](../../../.github/workflows/ci.yml),
+  [`mcp-soak.yml`](../../../.github/workflows/mcp-soak.yml): repository gate와 scheduled/manual
+  execution evidence
+- [`apply-db.sh`](../../../scripts/apply-db.sh): Source fixture와 Control Plane migration을
+  조립하는 Assurance-owned shared transition script
+- `docker/postgres/init/00-bootstrap.sql`, `01-source-bootstrap.sh`와 source fixture SQL
+  `10`~`90`: production authority가 아닌 acceptance infrastructure.
+  `05-control-plane.sh`와 `control-migrations/`는 Control Plane 소유라 이 범위에 포함하지 않음
 - Focused tests: [`test_quality.py`](../../../tests/test_quality.py),
   [`test_verified.py`](../../../tests/test_verified.py),
   [`test_quality_level.py`](../../../tests/test_quality_level.py),
@@ -185,7 +195,10 @@ Assurance 작업은 기본적으로 다음만 읽는다.
 1. 이 문서와 [module index](../README.md)
 2. 변경 대상 quality/verified code, config와 focused tests
 3. Metadata context/quality와 Guarded Query result/hash 소비 계약
-4. Metadata quality와 verified publishing ADR
+4. [ADR 0006](../../decisions/0006-mcp-transport-and-workflow.md),
+   [ADR 0007](../../decisions/0007-immutable-metadata-publishing.md),
+   [ADR 0011](../../decisions/0011-metadata-quality-level-publish-gate.md)과
+   [ADR 0013](../../decisions/0013-control-plane-verified-query-publishing.md) 중 변경과 직접 관련된 결정
 5. Persistence를 바꾸는 경우 Control Plane contract
 
 HTTP/MCP middleware, source store transaction과 query pool 내부는 계약을 바꾸지 않는 한 읽을
