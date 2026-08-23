@@ -37,7 +37,7 @@ Single MCP Server / HTTP API
 Query Gateway + Source Registry <--- validated hot reload --- Control Plane
   |-- Physical Catalog                                  |-- Source Catalog/Generations
   |-- Semantic Overlay                                  |-- Active State/History
-  |-- Budget Profile                                    |-- Metadata/Verified Contracts
+  |-- Resource Tier (budget_profile)                    |-- Metadata/Verified Contracts
   `-- guarded connection                                `-- Replica/Measurements/Audit (target)
         |
 PostgreSQL Reader / Analytics Replica
@@ -104,7 +104,7 @@ Source profile에는 다음 운영 설정만 둔다.
 - statement, lock 및 queue timeout
 - work memory, temporary file, parallel worker, JIT와 동시 실행 수
 - 결과 row와 byte 제한
-- plan admission 정책 profile
+- plan admission을 포함한 중앙 `budget_profile` resource tier
 
 현재 bootstrap registry는 `config/sources/*.yaml`을 먼저 읽는다. Credential 값은 manifest에
 저장하지 않고 환경 변수 이름만 참조한다. 이 파일은 local/CI seed이며 production hot-added
@@ -117,25 +117,24 @@ DB가 authority다. Source publish가 repository YAML이나 commit을 만들지 
 대한 Control DB 우선 규칙은 [ADR 0016](decisions/0016-centralized-source-management-plane.md)의
 후속 구현 범위다. 현재 구현의 dual-origin과 YAML 필수 startup은 운영 gap으로 남아 있다.
 
-No-deploy source 등록과 caller별 접근 grant는 서로 다른 변경이다. 미래 source까지
-명시적으로 신뢰한 `all_sources` caller는 hot-added source를 즉시 사용할 수 있다. 제한
-caller의 개별 allowlist는 현재 startup 설정이므로 grant 변경에는 restart가 필요하다. 목표
-managed mode에서는 caller/tenant 인증 authority를 유지하되 source grant를 Control DB로 한 번
-import하고, 이후 versioned grant와 effective visibility를 중앙 관리한다. Startup seed는 import
-marker 뒤 다시 합치지 않는다. Import는 replica startup이 아니라 canonical seed digest에 묶인
-explicit platform-admin transaction 하나가 전체 grant/audit/marker를 원자적으로 적용한다.
+초기 목표 운영에서는 모든 인증된 query principal이 같은 active source 목록을 본다. Source
+publish/deactivate가 visibility를 한 번에 바꾸므로 caller별 grant, import marker와 dynamic
+allowlist를 만들지 않는다. Source마다 관리자가 기존 `budget_profile` 하나를 선택하고 모든
+사용자는 같은 profile 정의를 공유한다. 현재 `allowed_sources|all_sources` baseline에서의
+명시적 전환과 admin/query credential 분리는 `CTRL-03`에서 fail-closed하게 구현한다.
 
 ### Source Management Plane
 
-Public `/sources`는 query caller에게 허용된 active source만 반환하며 operator catalog가 아니다.
+Public `/sources`는 query caller에게 active source만 반환하며 admin catalog가 아니다.
 목표 management surface는 비밀이 제거된 source inventory, generation/history, ownership,
-effective budget/access, replica convergence, size/growth와 usage/cost projection을 하나의 관리자
+effective `budget_profile`, replica convergence, size/growth와 usage/cost projection을 하나의 관리자
 HTTP API로 제공한다. 실제 DB 객체, secret, raw metric과 provider bill은 각 authority에 남을 수
 있다. Control Plane은 같은 `source_id`와 provenance로 이를 모아 보여준다.
 
-Management viewer, source operator, approver와 platform admin은 query caller와 분리한다. 현재
-boolean operator와 mutation-only admin endpoint는 이 목표를 아직 충족하지 않는다. 상세 설계와
-구현 순서는 [source management plane](source-management-plane.md)과 `CTRL-*`가 관리한다.
+초기 management 권한은 query user와 Query Man admin 두 종류다. 기존 boolean operator를 admin
+capability로 재사용하고 역할 계층, caller grant와 별도 `cost_tier`를 만들지 않는다. 현재
+암시적 admin compatibility와 mutation-only admin endpoint는 목표 상태가 아니며 상세 구현
+순서는 [source management plane](source-management-plane.md)과 `CTRL-*`가 관리한다.
 
 ### Query Gateway
 
@@ -231,6 +230,8 @@ Schema drift로 overlay가 깨지면 신규 revision 발행을 중단하고 마�
 - 실제 질문과 SQL로 source별 품질을 회귀 검증할 수 있다.
 - 운영자는 한 management surface에서 source의 owner, active/applied state, history, 규모와 비용
   freshness를 조회할 수 있다. 이 항목은 `CTRL-*` 완료 전까지 목표 상태다.
+- 모든 query 사용자는 같은 active source 목록과 source별 `budget_profile` 정의를 사용하며
+  query credential은 admin endpoint를 호출할 수 없다. 이 항목은 `CTRL-03` 완료 전까지 목표다.
 
 ## Decisions
 
@@ -264,8 +265,10 @@ Schema drift로 overlay가 깨지면 신규 revision 발행을 중단하고 마�
   [ADR 0014](decisions/0014-trusted-rls-tenant-context.md)를 따른다.
 - Local/CI container topology와 secret/readiness 경계는
   [ADR 0015](decisions/0015-containerized-local-runtime.md)를 따른다.
-- Production source authority와 단일 operator management surface는
+- Production source authority와 단일 admin management surface는
   [ADR 0016](decisions/0016-centralized-source-management-plane.md)을 따른다.
+- Shared source access, admin 경계와 source별 공통 resource tier는
+  [ADR 0017](decisions/0017-shared-source-access-and-resource-tier.md)을 따른다.
 
 ## Completion Tracking
 

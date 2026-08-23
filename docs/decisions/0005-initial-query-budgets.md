@@ -37,6 +37,13 @@ review를 통과해야 한다. Query와 metadata transaction은 `work_mem`, `tem
 `max_parallel_workers_per_gather`, `jit`를 local setting으로 적용한 뒤 effective 값을
 재검증한다. Reader가 필요한 parameter `SET` 권한을 잃거나 값이 drift하면 fail-closed한다.
 
+`budget_profile`은 Query Man의 유일한 resource tier다. 관리자가 source별로 기존 profile 하나를
+선택하며 그 source를 사용하는 모든 query principal에게 같은 profile 정의가 적용된다.
+Caller/user/organization별 override나 별도 `cost_tier`를 만들지 않는다. 이 profile은 실행 시간,
+동시성, 결과 크기 같은 피해 상한이지 가격표나 chargeback 등급이 아니다. 운영 rollup은 적용된
+profile 이름과 budget 정의를 포함한 metadata revision을 남길 수 있지만 provider billing 없이
+이를 통화 비용으로 환산하지 않는다.
+
 Reader connection capacity는 `replica 수 × (query pool + metadata pool) + 동시 staging`으로
 계산한다. 현재 acceptance는 두 replica와 한 staging connection을 동시에 사용하므로 7이다.
 Replica를 늘리려면 role hard cap과 database `max_connections` 여유를 먼저 다시 산정한다.

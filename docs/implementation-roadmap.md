@@ -308,7 +308,8 @@ client와 실제 PostgreSQL fixture를 사용해야 한다. 실행 결과와 남
 
 완료된 131개 baseline ID는 이 문서에서 변경하지 않는다. 이후 작업은
 [active development TODO](development-todo.md)의 별도 ID로 관리하며 현재 순서는
-multi-replica soak, database-native 비용 귀속, workflow trace다. 두 replica soak 실행 증거는
+centralized source management, onboarding planning Skill, database-native 비용 귀속,
+workflow trace다. 완료된 두 replica soak 실행 증거는
 [multi-replica soak audit](verification/2026-08-23-mcp-multi-replica-soak.md)에 기록한다.
 
 ## Recommended Milestones
@@ -326,8 +327,10 @@ multi-replica soak, database-native 비용 귀속, workflow trace다. 두 replic
 | M9 Container Runtime | `DEP-*` | Compose의 단일 HTTP/MCP image가 격리·인증·health·실제 query acceptance를 통과한다. |
 | M10 MCP Server Assurance | `MCPX-*` | 실제 Docker MCP에서 전체 contract, 병렬·포화·취소·비노출 경계를 통과한다. |
 | M11 Multi-Replica Soak | `SOAK-*` | 두 Docker replica의 exact result, 독립 포화·복구와 1,000-session resource gate를 통과한다. |
-| M12 Cost Attribution | `COST-*` | DB-native 사용량을 민감 SQL 없이 fingerprint에 연결하고 운영 threshold를 고정한다. |
-| M13 Workflow Trace | `TRACE-*` | 여러 tool call과 retry를 bounded trace ID로 안전하게 연결한다. |
+| M12 Centralized Source Management | `CTRL-*` | Admin 한곳에서 source authority, 공통 resource tier, 상태·규모·비용 freshness를 관리한다. |
+| M13 Onboarding Planning Skill | `SKILL-*` | Credential·mutation 없이 반복 가능한 source plan과 admin handoff를 만든다. |
+| M14 Cost Attribution | `COST-*` | DB-native 사용량을 source/resource-tier time bucket으로 bounded 집계하고 운영 threshold를 고정한다. |
+| M15 Workflow Trace | `TRACE-*` | 여러 tool call과 retry를 bounded trace ID로 안전하게 연결한다. |
 
-위 milestone은 완료된 구현 순서를 보존한 기록이다. 새로운 기능은 기존 완료 ID를
-재사용하지 않고 별도 roadmap 항목과 검증 가능한 exit condition을 추가한다.
+M1부터 M11까지는 완료된 구현 순서이고 M12 이후는 active plan이다. 새로운 기능은 기존 완료
+ID를 재사용하지 않고 별도 roadmap 항목과 검증 가능한 exit condition을 추가한다.

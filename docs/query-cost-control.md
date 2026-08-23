@@ -10,7 +10,10 @@ Query Man이 직접 통제하는 대상은 query가 소비할 수 있는 databas
 ## Enforced Layers
 
 `config/budget-profiles.yaml`의 budget schema `version: 2` profile을 모든 source에 같은 순서로
-적용한다. 이는 source manifest schema `version: 1`과 별도 계약이다. 현재 `interactive` 값은
+적용한다. 이는 source manifest schema `version: 1`과 별도 계약이다. `budget_profile`은
+유일한 resource tier이며 관리자가 source마다 기존 profile 하나를 선택한다. 같은 source의
+모든 query 사용자는 같은 profile 정의를 쓴다. 별도 `cost_tier`나 caller/user/organization
+override는 없다. 현재 `interactive` 값은
 [ADR 0005](decisions/0005-initial-query-budgets.md)에 고정한다.
 
 | Layer | Enforced control | Failure or result signal |
@@ -21,7 +24,7 @@ Query Man이 직접 통제하는 대상은 query가 소비할 수 있는 databas
 | Memory/temp/CPU shape | `work_mem=8MiB`, `temp_file_limit=64MiB`, parallel gather 0, JIT off | 적용값 재검증 실패 시 `QUERY_UNAVAILABLE` |
 | Capacity | replica/source당 query concurrency 2와 pool 2, reader role connection hard cap | queue/pool reject metric |
 | Result | 최대 1,000 rows와 compact JSON 1MiB | bounded rows와 `truncated=true` |
-| Intervention | `query_id`를 허용 source와 대조한 operator cancel | PostgreSQL cancel, rollback, cancel metric |
+| Intervention | `query_id`를 active source와 대조한 admin cancel | PostgreSQL cancel, rollback, cancel metric |
 
 Plan admission은 명백히 큰 추정치를 실행 전에 거르는 첫 방어선이다. 통계 오차, 함수
 실행 비용, lock과 I/O 변동을 모두 예측하지 못하므로 time/resource/capacity/result 경계를
@@ -34,16 +37,17 @@ concurrency, parallel worker와 reader connection limit를 함께 제한한다. 
 한 PostgreSQL process가 sort/hash 등에 만든 임시 파일 상한이며 명시적 temporary relation이나
 source storage quota를 뜻하지 않는다. Reader는 별도로 database TEMP 권한도 갖지 않는다.
 
-현재 경계는 replica 전체의 distributed source quota, caller/tenant별 quota, host cgroup
-CPU/memory quota와 일·월 통화 budget을 제공하지 않는다.
+현재 경계는 replica 전체의 distributed source quota, caller/tenant별 quota·fairness,
+user/organization별 tier, host cgroup CPU/memory quota와 일·월 통화 budget을 제공하지 않는다.
+이는 초기 운영의 명시적 deferred scope이며 미리 assignment table이나 counter를 만들지 않는다.
 
 두 replica의 독립 concurrency·connection 경계와 session resource 누수는
 [multi-replica soak audit](verification/2026-08-23-mcp-multi-replica-soak.md)에서 검증한다.
 이 결과는 distributed global quota를 뜻하지 않는다. DB-native 비용 귀속의 구현 순서와
 종료 조건은 [active development TODO](development-todo.md)의 `COST-*`에서 관리한다. Source
-규모·증가량의 측정 방법과 freshness 계약은 먼저 `CTRL-09`에서 구현하고, 최종 운영 projection은
+규모·증가량의 측정 방법과 freshness 계약은 먼저 `CTRL-07`에서 구현하고, 최종 운영 projection은
 [source management plane](source-management-plane.md)의 한 management surface에서 제공한다.
-`CTRL-10`은 비용 신호를 `not_configured|pending|available|stale|unavailable`로 구분하고 마지막
+`CTRL-08`은 비용 신호를 `not_configured|pending|available|stale|unavailable`로 구분하고 마지막
 시도 시각과 bounded reason을 제공하며, missing/failed 값을 0으로 표시하지 않는다. 이 항목들은
 모두 현재는 구현 목표다.
 
@@ -55,6 +59,13 @@ CPU/memory quota와 일·월 통화 budget을 제공하지 않는다.
 - `queue_ms`, `elapsed_ms`
 - `plan_summary.total_cost`, `max_rows`, `node_count`
 - `row_count`, `result_bytes`, `truncated`
+
+운영 rollup은 bounded한
+`source_id + budget_profile + metadata_revision + time bucket`을 기본 key로 사용한다. Budget
+정의는 metadata revision 재료이므로 별도 tier revision entity를 만들지 않는다.
+`pg_stat_statements`의 query ID와 gateway fingerprint는 정확히 대응한다고 가정하지 않는다.
+Caller/tenant는 security audit에는 남을 수 있지만 비용, quota 또는 metric label dimension으로
+쓰지 않는다.
 
 `query_failed` event는 같은 식별자와 공개 가능한 application `error_code`/`reason_code`를
 기록한다. AST 검증 전에는 fingerprint가 없을 수 있고, executor에 진입한 실패는 같은
@@ -76,10 +87,10 @@ arrival부터 response start와 final ASGI body 전달까지를 측정해 pool/c
 serialization을 포함한다. 이 값도 client 수신, decode, tool scheduling과 model 응답 시간은
 포함하지 않는다.
 
-통화 단위 chargeback은 같은 기간의 source database/cluster billing을 gateway의 source별
-성공 수, elapsed 합계와 database-native I/O/CPU 지표에 결합한다. 공유 cluster에서는 이
-값이 배분 기준일 뿐 query별 정확한 원가가 아니므로 추정 방식과 오차를 dashboard에 함께
-표시한다.
+통화 단위 source cost projection은 같은 기간의 database/cluster billing을 gateway의 source별
+성공 수, elapsed 합계와 database-native I/O/CPU 지표에 결합할 수 있다. 공유 cluster에서는
+배분 추정일 뿐 query별 정확한 원가가 아니므로 방법과 오차를 함께 표시한다.
+User/organization별 chargeback은 현재 제공하지 않는다.
 
 ## Live Investigation
 
@@ -101,13 +112,14 @@ serialization을 포함한다. 이 값도 client 수신, decode, tool scheduling
    `application_name`은 인증 식별자가 아니므로 database와 reader role을 함께 제한한다.
    기본 조회에서는 SQL literal 노출을 피하려고 `query` text를 선택하지 않는다.
 
-3. 즉시 피해를 줄여야 하면 caller의 source allowlist를 확인하는 gateway 경계를 사용한다.
+3. 즉시 피해를 줄여야 하면 별도 admin credential로 gateway cancel 경계를 사용한다.
 
    ```text
    DELETE /queries/<query_id>
    ```
 
-   Application reader나 일반 operator에게 `pg_cancel_backend` 권한을 주지 않는다.
+   Application reader와 query user에게 `pg_cancel_backend` 또는 Query Man cancel 권한을 주지
+   않는다.
 4. `/admin/metrics`에서 같은 source의 queue, pool exhaustion, timeout, reject와 truncation
    변화를 확인한다. `plan_summary`가 높은지와 실제 elapsed/I/O가 높은지는 별도로 판단한다.
 5. 선택적으로 DBA가 `pg_stat_statements`를 운영한다. 이는 normalized statement의 장기

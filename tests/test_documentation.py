@@ -31,6 +31,12 @@ CENTRAL_SOURCE_ADR = (
     / "decisions"
     / "0016-centralized-source-management-plane.md"
 )
+SHARED_ACCESS_ADR = (
+    ROOT_DIRECTORY
+    / "docs"
+    / "decisions"
+    / "0017-shared-source-access-and-resource-tier.md"
+)
 MCP_SOAK_AUDIT = (
     ROOT_DIRECTORY
     / "docs"
@@ -55,8 +61,8 @@ EXPECTED_ID_COUNTS = {
 }
 EXPECTED_ACTIVE_ID_COUNTS = {
     "SOAK": 7,
-    "CTRL": 10,
-    "SKILL": 10,
+    "CTRL": 9,
+    "SKILL": 6,
     "COST": 5,
     "TRACE": 4,
 }
@@ -86,6 +92,7 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
     development_todo = DEVELOPMENT_TODO.read_text(encoding="utf-8")
     source_management_plan = SOURCE_MANAGEMENT_PLAN.read_text(encoding="utf-8")
     central_source_adr = CENTRAL_SOURCE_ADR.read_text(encoding="utf-8")
+    shared_access_adr = SHARED_ACCESS_ADR.read_text(encoding="utf-8")
     mcp_soak_audit = MCP_SOAK_AUDIT.read_text(encoding="utf-8")
 
     assert "Status: Production ready" in roadmap
@@ -97,6 +104,7 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
     assert "Status: Active" in development_todo
     assert "Status: Accepted design; implementation pending" in source_management_plan
     assert "Status: Accepted" in central_source_adr
+    assert "Status: Accepted" in shared_access_adr
     assert "Status: Complete" in mcp_soak_audit
     assert REFACTORING_AUDIT.name in roadmap
     assert REFACTORING_AUDIT.name in architecture
@@ -110,6 +118,8 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
     assert SOURCE_MANAGEMENT_PLAN.name in development_todo
     assert CENTRAL_SOURCE_ADR.name in architecture
     assert CENTRAL_SOURCE_ADR.name in development_todo
+    assert SHARED_ACCESS_ADR.name in architecture
+    assert SHARED_ACCESS_ADR.name in development_todo
     assert MCP_SOAK_AUDIT.name in roadmap
     assert MCP_SOAK_AUDIT.name in architecture
     for prefix, count in EXPECTED_ID_COUNTS.items():
@@ -132,7 +142,7 @@ def test_active_todo_has_prioritized_unique_checklists_and_soak_evidence() -> No
     matches = re.findall(r"^- \[([ x])\] `([A-Z]+)-(\d{2})`", todo, re.MULTILINE)
     ids = [f"{prefix}-{number}" for _checked, prefix, number in matches]
 
-    assert len(ids) == sum(EXPECTED_ACTIVE_ID_COUNTS.values()) == 36
+    assert len(ids) == sum(EXPECTED_ACTIVE_ID_COUNTS.values()) == 31
     assert len(ids) == len(set(ids))
     for prefix, count in EXPECTED_ACTIVE_ID_COUNTS.items():
         prefix_matches = [
@@ -148,6 +158,18 @@ def test_active_todo_has_prioritized_unique_checklists_and_soak_evidence() -> No
 
     for number in range(1, EXPECTED_ACTIVE_ID_COUNTS["SOAK"] + 1):
         assert f"`SOAK-{number:02}`" in soak_audit
+
+
+def test_initial_access_and_resource_tier_decision_stays_minimal() -> None:
+    decision = SHARED_ACCESS_ADR.read_text(encoding="utf-8")
+    management_plan = SOURCE_MANAGEMENT_PLAN.read_text(encoding="utf-8")
+
+    assert "`budget_profile`을 유일한 resource tier" in decision
+    assert "별도 `cost_tier`" in decision
+    assert "인증된 query principal은 모두 같은 active source 목록" in decision
+    assert "User/organization별" in management_plan
+    assert "caller-grant table" in management_plan
+    assert "source-changes/{change_id}/approval" not in management_plan
 
 
 def test_runtime_has_no_fixture_source_specialization() -> None:

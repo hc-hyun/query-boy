@@ -47,7 +47,7 @@ ownership, state, history, size와 cost를 조회하는 목표 계약은
 | Encrypted reader credential | Control DB; plaintext/master key 제외 |
 | Plaintext credential and master key | External secret system/runtime secret |
 | Curated view, reader role and grants | Source DB and DB-owner migration system |
-| Budget hard-limit template and current bootstrap/access policy | Deployment configuration |
+| Budget hard-limit template/resource-tier catalog and current bootstrap/access policy | Deployment configuration |
 | Ownership, audit, size/growth and cost projection | Control DB management plane; implementation pending |
 | Bootstrap and acceptance input | Repository YAML seed/fixture only |
 
@@ -61,23 +61,24 @@ Control DB 우선 startup은 `CTRL-*`가 구현하기 전까지 완료된 기능
 2. 별도 LOGIN reader에 해당 view의 `USAGE`와 `SELECT`만 부여한다.
 3. Reader에 read-only, timeout, temp resource와 replica/pool capacity에 맞춘 connection
    limit을 설정한다.
-4. L0 manifest와 reader credential을 operator 전용 source admin API에 전달한다.
-5. 격리 staging에서 connection, reader identity, catalog, overlay, budget과 quality gate 결과를 확인한다.
-6. Canonical manifest, generation, active pointer와 metadata snapshot을 Control DB에 publish하고
+4. 기존 `budget_profile` 중 workload에 맞는 resource tier 하나를 선택한다.
+5. L0 manifest와 reader credential을 admin 전용 source management 경계에 전달한다.
+6. 격리 staging에서 connection, reader identity, catalog, overlay, budget과 quality gate 결과를 확인한다.
+7. Canonical manifest, generation, active pointer와 metadata snapshot을 Control DB에 publish하고
    응답의 generation과 metadata revision을 변경 기록에 남긴다. Runtime 재시작은 필요 없다.
-7. `/sources`, `/meta`, `/query` 또는 MCP에서 실제 질문과 결과를 검증한다.
+8. 서로 다른 query identity로 같은 `/sources`를 보는지 검증한다. Integration 검증은 caller
+   override 없이 같은 source-resolved budget 정의가 적용되는지 확인하고, admin 기록에는
+   선택한 `budget_profile`과 관련 metadata revision을 남긴다.
 
-Production caller에게 source를 공개할 때는 access-policy manifest의
-`allowed_sources`에 source ID를 명시한다. 미래의 control-plane source를 모두 신뢰하도록
-정책 소유자가 명시적으로 승인한 caller만 `all_sources: true`를 사용할 수 있으며 이 caller는
-재시작 없이 신규 source를 본다. 이 범위는 admin `operator` 권한과 독립적이다. 제한 caller의
-allowlist는 startup에 고정되므로 현재 개별 grant 변경에는 service restart가 필요하다. Token
-값은 manifest가 참조하는 환경 변수에만 저장한다. 예시는
-[`config/access-policies.example.yaml`](../config/access-policies.example.yaml)을 따른다.
-`CTRL-07` 이후에는 caller/tenant 인증 authority는 유지하되 source grant를 Control DB로 일회성
-import하며, access-policy source 범위는 restart 때 다시 합치지 않는 seed가 된다. Import는 replica
-startup이 아니라 complete canonical seed digest에 묶인 explicit platform-admin migration이 전체
-grant/audit/consumed marker를 한 transaction에서 적용한다.
+[ADR 0017](decisions/0017-shared-source-access-and-resource-tier.md)의 목표 운영에서는 admin이
+source를 활성화하면 모든 인증된 query principal에게 동시에 공개된다. 별도 caller grant나
+재시작은 없다. 한 source의 모든 사용자는 manifest가 선택한 같은 `budget_profile` 정의를
+쓰며 query 사용자가 이를 바꾸지 못한다. Stable caller/tenant identity는 audit와 source-native
+RLS에만 남는다.
+
+현재 runtime은 아직 ADR 0004의 `allowed_sources|all_sources` policy를 지원한다. `CTRL-03`의
+shared-access cutover 전에는 [`config/access-policies.example.yaml`](../config/access-policies.example.yaml)
+규칙이 실제 동작이며, 서로 다른 scope를 자동으로 넓혀 목표 정책처럼 취급하지 않는다.
 
 최소 manifest는 semantic overlay 없이도 동작한다. 아래 YAML은 API manifest document를 읽기
 쉽게 표현한 예이며 production repository file을 요구한다는 의미가 아니다.
@@ -103,7 +104,8 @@ budget_profile: interactive
 이 상태는 L0 best-effort 검색이다. 한국어 질문, grain과 비표준 join이 필요할 때만
 `semantic_overlay`를 추가한다.
 
-현재 mutation endpoint는 operator caller만 사용할 수 있다.
+현재 mutation endpoint는 `operator` caller만 사용할 수 있다. 목표 상태에서는 이 capability를
+explicit Query Man admin만 갖고 일반 query credential과 anonymous local caller는 갖지 않는다.
 
 | Operation | Endpoint | 안전 조건 |
 |---|---|---|
@@ -114,16 +116,14 @@ budget_profile: interactive
 | Resume metadata publish | `POST /admin/sources/{source_id}/metadata/resume` | Rollback 점검 완료 후 metadata pin만 명시적으로 해제 |
 | Deactivate | `DELETE /admin/sources/{source_id}` | Active pointer만 disable하고 immutable history 유지 |
 
-현재는 sanitized operator inventory/detail/history와 authoritative change-result 조회 endpoint가
+현재는 sanitized admin inventory/detail/history와 authoritative mutation-result 조회 endpoint가
 없다. Public `/sources`는 query caller에게 허용된 active source 목록일 뿐 관리 catalog가 아니다.
-해당 read model, non-publishing plan과 idempotent apply는 `CTRL-04`부터 `CTRL-06`까지의 후속
-구현이다.
+해당 read model은 `CTRL-04`, idempotency/receipt/audit는 `CTRL-05`의 후속 구현이다.
 
-현재 direct publish의 body credential은 manual operator용 전환 경계다. 목표 change API는
-plaintext 대신 external credential broker에 미리 등록된 opaque `credential_binding_id`를 받고
-source ID, resolved host/port/database/user/TLS, `query_reader` purpose와 exact provider version을
-plan/approval/apply에 묶는다. Binding 생성·회전은 external secret admin/DB owner가 담당한다. 이
-계약이 구현되기 전에는 AI executor가 direct publish를 호출하거나 credential을 전달하지 않는다.
+현재 direct publish의 body credential은 trusted manual-admin 경계다. Plan-only onboarding
+Skill은 이 endpoint를 호출하거나 credential을 읽지 않는다. AI production executor가 실제
+요구가 되면 target-bound credential broker와 plan-ID apply를 별도 threat model/ADR 뒤에
+설계한다.
 
 Admin API는 TLS 뒤에서만 노출하고 request body를 access log에 기록하지 않는다. Credential은
 응답, manifest JSON과 metadata에 포함되지 않으며 `QUERY_MAN_SOURCE_ENCRYPTION_KEY`로
