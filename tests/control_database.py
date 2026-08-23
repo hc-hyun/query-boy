@@ -8,6 +8,7 @@ import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from dotenv import load_dotenv
 from psycopg import AsyncConnection, sql
@@ -21,6 +22,7 @@ _AUTHORITY_TABLES = (
     "source_profile_revisions",
     "active_source_profiles",
     "verified_query_contracts",
+    "source_mutation_receipts",
 )
 _TEST_DATABASE_PREFIX = "query_man_control_test_"
 _TEST_DATABASE_NAME = re.compile(rf"^{_TEST_DATABASE_PREFIX}[0-9a-f]{{32}}$")
@@ -53,11 +55,25 @@ def postgres_dsn(environment: dict[str, str], database: str) -> str:
     )
 
 
-def apply_control_migrations(database: DisposableControlDatabase) -> None:
+def apply_control_migrations(
+    database: DisposableControlDatabase,
+    migration_directory: Path | None = None,
+) -> None:
     if _TEST_DATABASE_NAME.fullmatch(database.name) is None:
         raise ValueError("Refusing to migrate an unmanaged test database")
-    migration_directory = ROOT_DIRECTORY / "docker" / "postgres" / "init" / "control-migrations"
-    container_directory = f"/tmp/query-man-control-migrations-{database.name}"
+    if migration_directory is None:
+        migration_directory = (
+            ROOT_DIRECTORY / "docker" / "postgres" / "init" / "control-migrations"
+        )
+    migration_directory = migration_directory.resolve(strict=True)
+    if not migration_directory.is_dir():
+        raise ValueError("Control migration path must be a directory")
+    for required_name in ("apply.sh", "reconcile-security.sql"):
+        if not (migration_directory / required_name).is_file():
+            raise ValueError(f"Control migration directory is missing {required_name}")
+    container_directory = (
+        f"/tmp/query-man-control-migrations-{database.name}-{uuid.uuid4().hex}"
+    )
     compose = ["docker", "compose"]
     run_options = {
         "cwd": ROOT_DIRECTORY,
@@ -68,7 +84,16 @@ def apply_control_migrations(database: DisposableControlDatabase) -> None:
     created = False
     try:
         subprocess.run(
-            [*compose, "exec", "-T", "postgres", "mkdir", "--mode=700", container_directory],
+            [
+                *compose,
+                "exec",
+                "-T",
+                "postgres",
+                "mkdir",
+                "--mode=700",
+                "--",
+                container_directory,
+            ],
             **run_options,
         )
         created = True
@@ -105,6 +130,13 @@ async def authority_fingerprint(dsn: str) -> tuple[tuple[str, int, str], ...]:
         fingerprints: list[tuple[str, int, str]] = []
         for table_name in _AUTHORITY_TABLES:
             cursor = await connection.execute(
+                "SELECT pg_catalog.to_regclass(%s)",
+                (f"control.{table_name}",),
+            )
+            if await cursor.fetchone() == (None,):
+                fingerprints.append((table_name, -1, "missing"))
+                continue
+            cursor = await connection.execute(
                 sql.SQL(
                     "SELECT count(*), md5(coalesce(string_agg(to_jsonb(row_value)::text, '' "
                     "ORDER BY to_jsonb(row_value)::text), '')) FROM control.{} AS row_value"
@@ -121,6 +153,7 @@ async def authority_fingerprint(dsn: str) -> tuple[tuple[str, int, str], ...]:
 @asynccontextmanager
 async def disposable_control_database(
     environment: dict[str, str],
+    migration_directory: Path | None = None,
 ) -> AsyncIterator[DisposableControlDatabase]:
     database_name = f"{_TEST_DATABASE_PREFIX}{uuid.uuid4().hex}"
     if len(database_name) > 63:
@@ -141,7 +174,7 @@ async def disposable_control_database(
             )
         )
         created = True
-        apply_control_migrations(database)
+        apply_control_migrations(database, migration_directory)
         yield database
     finally:
         try:

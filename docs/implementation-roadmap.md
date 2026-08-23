@@ -320,6 +320,10 @@ Mutually exclusive source authority mode와 zero-bootstrap Control DB precedence
 [managed source startup audit](verification/2026-08-23-managed-source-startup.md)에 기록한다.
 Access-policy version 2 fail-closed cutover, shared source visibility와 explicit admin capability는
 [shared access audit](verification/2026-08-23-shared-access.md)에 기록한다.
+Strict manifest v2 provenance와 secret-free source catalog는
+[source management catalog audit](verification/2026-08-23-source-management-catalog.md)에 기록한다.
+Expected-state mutation, authoritative receipt와 lifecycle history는
+[source mutation receipt audit](verification/2026-08-23-source-mutation-receipts.md)에 기록한다.
 
 ## Recommended Milestones
 

@@ -49,7 +49,8 @@ ownership, state, history, size와 cost를 조회하는 목표 계약은
 | Curated view, reader role and grants | Source DB and DB-owner migration system |
 | Budget hard-limit template/resource-tier catalog and current bootstrap/access policy | Deployment configuration |
 | Owner, environment and DB migration reference | Control DB immutable manifest generation |
-| Mutation audit, size/growth and cost projection | Control DB management plane; implementation pending |
+| Mutation audit and authoritative receipt | Control DB management plane; implemented |
+| Size/growth and cost projection | Control DB management plane; implementation pending |
 | Bootstrap and acceptance input | Repository YAML seed/fixture only |
 
 `config/sources/*.yaml`은 local/CI bootstrap seed이고 `config/onboarding/*.yaml`은 integration
@@ -77,7 +78,9 @@ budget file과 runtime secret은 있어야 한다.
 2. Serving traffic 밖에서 managed runtime을 시작한다. 아직 active source가 없으면 `/ready` 503이
    정상이며 admin endpoint는 별도 운영 경로로 호출한다.
 3. Existing manifest의 `minimum_quality_level`을 L0/L1로 두고 기존 `PUT /admin/sources/{source_id}`로
-   stage/publish한다. 응답의 generation과 metadata revision을 확인한다.
+   stage/publish한다. 새 UUID, change reference와 expected generation/state를 header에 넣는다. 첫
+   Control publish는 `0/0`, 이후 publish는 직전에 조회한 현재값을 쓴다. 응답 receipt의 resulting
+   state와 metadata revision을 확인한다.
 4. File의 reviewed verified query를 현재 revision에 맞춰
    `POST /admin/sources/{source_id}/verified-queries`로 실행·저장한다. Revision이나 result invariant가
    다르면 자동 보정하지 않고 이관을 중단한다.
@@ -89,8 +92,12 @@ budget file과 runtime secret은 있어야 한다.
 
 이 절차는 기존 staged admin API만 사용한다. Startup importer, bulk import endpoint, source별
 mode/origin, seed digest/marker와 repository write-back은 없다. Plaintext credential은 관리자가
-external secret system에서 직접 가져와 trusted manual-admin request에만 전달한다. Timeout 뒤에는
-blind retry하지 않고 Control DB state를 먼저 reconcile한다.
+external secret system에서 직접 가져와 trusted manual-admin request에만 전달한다. 각 mutation은
+`Idempotency-Key`, `X-Query-Man-Reason`, `X-Expected-Generation`,
+`X-Expected-State-Version`을 요구하고 metadata resume만 현재 pinned revision을
+`X-Expected-Metadata-Revision`으로 추가한다. Timeout 뒤에는 key로 receipt를 조회하고 source
+generation/state를 대조한 뒤에만 같은 key로 재시도한다. 새 key로 blind retry하지 않는다. 상세
+절차는 [source management plane](source-management-plane.md#timeout-reconciliation)을 따른다.
 
 ## Steps
 
@@ -157,6 +164,8 @@ capability superset이다.
 | Inventory | `GET /admin/sources` | Exact filter와 bounded keyset page; 비활성 source도 기본 포함 |
 | Effective detail | `GET /admin/sources/{source_id}` | 현재 generation과 active metadata pointer를 구분한 secret-free projection |
 | Generation history | `GET /admin/sources/{source_id}/history` | 불변 generation을 내림차순으로 조회; lifecycle event audit은 별도 |
+| Mutation history | `GET /admin/sources/{source_id}/mutations` | Actor/change reference와 expected/resulting state의 secret-free chronology |
+| Receipt lookup | `GET /admin/mutations/{idempotency_key}` | Timeout 뒤 terminal success/rejection을 authoritative하게 조회 |
 | Stage + publish | `PUT /admin/sources/{source_id}` | Body의 `manifest`, `credential`을 분리하고 path ID 일치 검증 |
 | Credential rotation | `POST /admin/sources/{source_id}/credential` | Enabled/unpinned source에서 새 credential staging 후 generation 교체 |
 | Verified contract | `POST /admin/sources/{source_id}/verified-queries` | 현재 revision에서 guarded SQL 결과와 expected invariant 일치 |
@@ -167,8 +176,10 @@ capability superset이다.
 Public `/sources`는 모든 인증 query caller가 공유하는 active source 목록일 뿐 관리 catalog가
 아니다. Admin read API는 raw manifest 대신 명시적으로 허용한 필드만 반환하며 credential,
 secret locator, semantic 자유형 text, verified question/SQL과 metadata snapshot을 포함하지 않는다.
-현재 history는 generation 생성 이력만 제공한다. Idempotency, mutation receipt, actor/reason과
-deactivate/rollback event chronology는 `CTRL-05`의 후속 구현이다.
+Generation history는 immutable manifest 생성 순서이고 mutation history는 publish, credential
+rotation, verified contract, rollback, metadata resume와 deactivate의 append-only chronology다.
+Request hash는 keyed HMAC이라 payload를 복원할 수 없고 response/audit에는 credential, manifest,
+question과 SQL이 없다.
 
 현재 direct publish의 body credential은 trusted manual-admin 경계다. Plan-only onboarding
 Skill은 이 endpoint를 호출하거나 credential을 읽지 않는다. AI production executor가 실제
@@ -258,9 +269,11 @@ catalog가 사라졌다는 뜻이 아니라 question context에서 일부 column
 이는 SQL column authorization 경계가 아니므로 민감 column은 curated view 자체에서
 제거해야 한다.
 
-Production managed mode에서는 database owner 또는 `CREATEROLE`과 schema DDL 권한을 가진 관리자가 표준
-libpq `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSFILE`/managed-auth 환경을 설정하고
-다음을 실행한다. Password가 든 DSN을 command argument에 넣지 않는다.
+Production managed mode에서는 target database/schema/control object owner 권한과
+`query_man_control_writer`를 create·alter하고 남은 membership을 회수할 cluster role 관리 권한을
+모두 가진 migration identity가 표준 libpq `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`,
+`PGPASSFILE`/managed-auth 환경을 설정하고 다음을 실행한다. Database owner 권한만으로는 충분하지
+않다. Password가 든 DSN을 command argument에 넣지 않는다.
 
 ```bash
 ./scripts/apply-control-schema.sh

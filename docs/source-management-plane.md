@@ -43,10 +43,11 @@ tier를 정한다. 이 문서는 현재 공백과 `CTRL-*` 구현 순서를 관�
 - 모든 authenticated identity의 implicit active-source visibility와 source-resolved budget
 - Strict source manifest v2의 immutable owner/environment/DB migration provenance
 - Secret-free admin source inventory, effective detail와 generation history read API
+- 여섯 direct admin mutation의 공통 idempotency/state precondition과 immutable terminal receipt
+- Operator-only receipt lookup과 source별 lifecycle event keyset history
 
 아직 구현할 공백:
 
-- Idempotency, actor/reason/request hash, mutation receipt와 durable lifecycle audit
 - Replica별 desired/applied state와 freshness
 - Bounded record/storage/growth observation과 source/profile별 usage/cost projection
 - Authority table backup/restore, retention과 encryption-key recovery 검증
@@ -101,8 +102,9 @@ directory와 filesystem verified contract가 없어도 시작할 수 있다.
    재시작한다. 이후 repository seed는 제거하거나 남겨도 runtime authority가 아니다.
 
 Reader plaintext credential은 admin이 external secret boundary에서 직접 전달한다. Startup importer,
-bulk import endpoint, seed digest/marker와 filesystem write-back은 만들지 않는다. 현재 mutation
-receipt가 구현되기 전 timeout을 blind retry하지 않으며 Control DB state를 먼저 reconcile한다.
+bulk import endpoint, seed digest/marker와 filesystem write-back은 만들지 않는다. 모든 mutation은
+현재 generation/state와 change reference를 명시하고 성공 응답의 receipt를 변경 기록에 남긴다.
+Timeout은 아래 reconciliation 절차를 따르며 새 key로 blind retry하지 않는다.
 
 ## Admin View
 
@@ -182,13 +184,59 @@ Control Plane이 user/organization별 RLS policy를 관리한다는 뜻은 아�
 |---|---|
 | `GET /admin/sources` | Implemented: exact filter와 source-ID keyset pagination을 쓰는 sanitized inventory |
 | `GET /admin/sources/{source_id}` | Implemented: effective source/resource tier와 published/active metadata revision을 구분한 detail |
-| `GET /admin/sources/{source_id}/history` | Implemented: generation-descending immutable manifest history; lifecycle event chronology는 아직 아님 |
-| Existing `PUT/POST/DELETE /admin/...` | Implemented: admin-only staged validation과 atomic mutation |
-| `GET /admin/mutations/{idempotency_key}` | Planned in `CTRL-05`: timeout 뒤 authoritative result/reconciliation 조회 |
+| `GET /admin/sources/{source_id}/history` | Implemented: generation-descending immutable manifest history |
+| `GET /admin/sources/{source_id}/mutations` | Implemented: event-ID keyset pagination의 sanitized lifecycle receipt history |
+| Existing `PUT/POST/DELETE /admin/...` | Implemented: admin-only staged validation, expected-state CAS와 atomic success receipt |
+| `GET /admin/mutations/{idempotency_key}` | Implemented: timeout 뒤 terminal result/rejection reconciliation 조회 |
 
-모든 mutation은 idempotency key, canonical request hash, actor, reason, expected generation/state와
+모든 mutation은 idempotency key, key 자체를 포함한 canonical request hash, actor, reason, expected generation/state와
 bounded outcome을 기록한다. 같은 key와 같은 hash는 기존 결과를 반환하고 다른 hash는
 fail-closed한다. 별도 request/approval table이나 approver endpoint는 만들지 않는다.
+
+### Mutation Request And Receipt Contract
+
+여섯 mutation은 다음 header를 모두 요구한다.
+
+| Header | Contract |
+|---|---|
+| `Idempotency-Key` | Client가 생성한 canonical lowercase UUID. 재시도에서도 그대로 유지 |
+| `X-Query-Man-Reason` | 1~128자의 ticket/change reference. 자유형 설명이나 secret 금지 |
+| `X-Expected-Generation` | Client가 직전에 조회한 generation |
+| `X-Expected-State-Version` | 같은 snapshot의 state version |
+| `X-Expected-Metadata-Revision` | Metadata resume에만 필수인 현재 pinned revision |
+
+새 source의 첫 publish만 generation/state `0/0`을 사용하고 기존 source mutation은 양의 현재값을
+사용한다. 두 expected 값 중 하나만 0인 요청, 중복 header, 예상 범위를 넘는 값과 불필요한 metadata
+header는 400이다. Actor는 인증된 operator의 `caller_id`에서 파생하며 body/header로 받지 않는다.
+Query/anonymous caller는 path, query, header와 body 검증보다 먼저 403/401로 거부된다.
+
+성공 response는 원래 operation 결과를 `result`에 담은 terminal receipt다. Receipt에는 event ID,
+key, key-bound `hmac-sha256` request hash, operation/source, actor/change reference, expected/resulting state,
+outcome/status와 recorded time만 있다. Credential, manifest, verified question/SQL, metadata snapshot과
+내부 오류는 저장하거나 반환하지 않는다. 결정적인 validation/state conflict도 같은 key의 immutable
+rejection receipt를 남기지만 인증 실패와 Control/source dependency의 unavailable 오류는 receipt로
+성공처럼 고정하지 않는다.
+
+같은 key와 canonical request의 terminal exact replay는 기존 receipt를 반환하고 staging/query나
+state/generation 변경을 다시 수행하지 않는다. Credential, manifest array order, actor, reason, expected state 또는 operation
+중 하나라도 다르면 409다. JSON object key order와 표현상 공백은 canonicalization으로 동일하게
+취급한다.
+
+### Timeout Reconciliation
+
+Receipt table은 terminal-only이며 별도 pending row/table을 만들지 않는다. 따라서 404는 실패가
+아니라 아직 staging 또는 transaction 중이라는 뜻일 수 있다.
+
+1. 요청에 사용한 key로 `GET /admin/mutations/{idempotency_key}`를 bounded polling한다.
+2. Receipt가 있으면 `outcome`, `resulting_state`와 source detail을 대조하고 그 결과를 authoritative로
+   사용한다. Rejection이면 원인을 수정한 새 의도에 새 key를 발급한다.
+3. Receipt가 없으면 source detail의 generation/state가 요청 전 expected state인지 확인하고 원래
+   요청이 끝날 시간을 기다린다. 새 key나 변경된 payload로 보내지 않는다.
+4. Bounded wait 뒤에도 receipt가 없고 state가 expected와 같음을 다시 확인한 경우에만 같은 key와
+   같은 semantic 요청을 한 번 재전송한다. Fan-out 재시도는 하지 않는다. Terminal-only storage라
+   서로 다른 replica가 receipt 생성 전에 같은 key를 동시에 받으면 catalog staging 또는 verified
+   query가 중복될 수 있지만 store의 key/source lock과 atomic receipt가 중복 authority commit을
+   막는다. State가 달라졌다면 먼저 source mutation history로 변경 주체를 확인한다.
 
 현재 direct source publish는 credential을 request body에서 받는 trusted manual-admin
 boundary다. TLS, access-log body 비기록, redaction, staged validation과 AES-256-GCM at-rest
@@ -201,10 +249,11 @@ threat model/ADR 뒤에 설계한다.
 기존 immutable revision/pointer table을 재사용하고 필요한 책임만 추가한다.
 
 Owner, environment와 DB migration reference는 strict manifest v2의 `provenance` block에 포함해
-`source_profile_revisions.manifest`에 generation과 함께 저장한다. 별도 catalog table이나 중복
-column, 두 번째 Control schema migration은 만들지 않는다. 이 값만 변경한 publish도 새
-generation을 만들고 rollback은 당시 provenance를 그대로 복원한다. Query metadata revision은
-query contract에 영향을 주는 필드만 hash하므로 provenance 변경으로 달라지지 않는다.
+`source_profile_revisions.manifest`에 generation과 함께 저장한다. Provenance를 위한 별도 catalog
+table, 중복 column이나 `CTRL-04` schema migration은 만들지 않았다. `CTRL-05`의 두 번째 Control
+schema migration은 이 provenance와 별개인 mutation receipt table만 추가한다. Provenance 값만
+변경한 publish도 새 generation을 만들고 rollback은 당시 값을 그대로 복원한다. Query metadata
+revision은 query contract에 영향을 주는 필드만 hash하므로 provenance 변경으로 달라지지 않는다.
 
 Runtime mode는 deployment configuration이고 existing source/metadata pointer와 verified contract가
 managed authority를 모두 표현한다. 따라서 mode, origin 또는 bootstrap import marker를 위한 table과
@@ -229,7 +278,7 @@ Canonical status는 [active development TODO](development-todo.md)의 `CTRL-*`�
    verified-contract admin import cutover
 3. **Complete:** shared query access와 explicit admin/query credential separation
 4. **Complete:** immutable provenance, minimal catalog와 admin list/detail/history
-5. Existing mutations의 idempotency, receipt와 durable audit
+5. **Complete:** existing mutations의 idempotency, receipt와 durable audit
 6. Replica convergence/drift observation
 7. Bounded record/storage/usage/cost observation
 8. Usage/cost availability와 cardinality/retention
@@ -245,6 +294,9 @@ DB-native collector와 provider connector는 rollout의 선행 조건이 아니�
 [shared access audit](verification/2026-08-23-shared-access.md)에 기록한다.
 네 번째 단계의 strict manifest, redaction, pagination, revision 구분과 admin-only 증거는
 [source management catalog audit](verification/2026-08-23-source-management-catalog.md)에 기록한다.
+다섯 번째 단계의 atomic receipt, exact replay/conflict, migration/rolling compatibility와
+operator-first validation 증거는
+[source mutation receipt audit](verification/2026-08-23-source-mutation-receipts.md)에 기록한다.
 
 ## Release Acceptance
 

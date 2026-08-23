@@ -5,6 +5,7 @@ project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_dir"
 
 drill_database="query_man_restore_drill"
+migration_stage=""
 
 existing="$({ docker compose exec -T postgres psql \
   --username query_man_admin \
@@ -18,6 +19,9 @@ if [[ -n "$existing" ]]; then
 fi
 
 cleanup() {
+  if [[ -n "$migration_stage" ]]; then
+    docker compose exec -T postgres rm -r -- "$migration_stage" >/dev/null
+  fi
   docker compose exec -T postgres dropdb \
     --username query_man_admin \
     --if-exists \
@@ -28,6 +32,14 @@ trap cleanup EXIT
 docker compose exec -T postgres createdb \
   --username query_man_admin \
   "$drill_database"
+
+migration_stage="$(
+  docker compose exec -T postgres \
+    mktemp -d /tmp/query-man-control-drill.XXXXXX | tr -d '\r'
+)"
+docker compose cp \
+  "$project_dir/docker/postgres/init/control-migrations/." \
+  "postgres:$migration_stage" >/dev/null
 
 docker compose exec -T postgres pg_dump \
   --username query_man_admin \
@@ -48,7 +60,7 @@ for _migration_pass in 1 2; do
     --env PGUSER=query_man_admin \
     --env PGDATABASE="$drill_database" \
     postgres \
-    bash /docker-entrypoint-initdb.d/control-migrations/apply.sh >/dev/null
+    bash "$migration_stage/apply.sh" >/dev/null
 done
 
 for table_name in \
@@ -57,7 +69,8 @@ for table_name in \
   active_metadata_revisions \
   source_profile_revisions \
   active_source_profiles \
-  verified_query_contracts
+  verified_query_contracts \
+  source_mutation_receipts
 do
   source_count="$(docker compose exec -T postgres psql \
     --username query_man_admin --dbname query_man --tuples-only --no-align \
@@ -137,9 +150,23 @@ schema_contract="$(docker compose exec -T postgres psql \
       )
       AND NOT has_table_privilege(
         'query_man_control_writer', 'control.verified_query_contracts', 'UPDATE,DELETE'
+      )
+      AND has_table_privilege(
+        'query_man_control_writer', 'control.source_mutation_receipts', 'SELECT,INSERT'
+      )
+      AND NOT has_table_privilege(
+        'query_man_control_writer', 'control.source_mutation_receipts', 'UPDATE,DELETE'
+      )
+      AND has_sequence_privilege(
+        'query_man_control_writer',
+        'control.source_mutation_receipts_event_id_seq', 'USAGE'
+      )
+      AND NOT has_sequence_privilege(
+        'query_man_control_writer',
+        'control.source_mutation_receipts_event_id_seq', 'SELECT,UPDATE'
       );")"
 
-if [[ "$schema_contract" != "4|3|t|t" ]]; then
+if [[ "$schema_contract" != "4|4|t|t" ]]; then
   echo "Restored control schema contract mismatch: $schema_contract" >&2
   exit 1
 fi
@@ -170,6 +197,42 @@ docker compose exec -T postgres psql \
           END IF;
       END;
     END;
+    \$\$;
+    INSERT INTO control.source_mutation_receipts (
+      idempotency_key, request_hash, operation, source_id, actor, reason,
+      expected_generation, expected_state_version, outcome, http_status,
+      error_code, result
+    ) VALUES (
+      '00000000-0000-4000-8000-000000000000',
+      'hmac-sha256:0000000000000000000000000000000000000000000000000000000000000000',
+      'deactivate_source', 'restore-drill-sentinel', 'RestoreDrill',
+      'drill/CTRL-05', 0, 0, 'rejected', 400,
+      'SOURCE_VALIDATION_FAILED', '{}'::jsonb
+    );
+    DO \$\$
+    BEGIN
+      BEGIN
+        UPDATE control.source_mutation_receipts
+        SET result = result
+        WHERE idempotency_key = '00000000-0000-4000-8000-000000000000';
+        RAISE EXCEPTION 'mutation receipt update was not rejected';
+      EXCEPTION
+        WHEN raise_exception THEN
+          IF SQLERRM = 'mutation receipt update was not rejected' THEN
+            RAISE;
+          END IF;
+      END;
+      BEGIN
+        DELETE FROM control.source_mutation_receipts
+        WHERE idempotency_key = '00000000-0000-4000-8000-000000000000';
+        RAISE EXCEPTION 'mutation receipt delete was not rejected';
+      EXCEPTION
+        WHEN raise_exception THEN
+          IF SQLERRM = 'mutation receipt delete was not rejected' THEN
+            RAISE;
+          END IF;
+      END;
+    END;
     \$\$;" >/dev/null
 
-echo "control-plane restore drill: PASS (custom archive, 6 tables, migration ledger, 4 FKs, 3 triggers, immutable history, writer ACL)"
+echo "control-plane restore drill: PASS (custom archive, 7 tables, migration ledger, 4 FKs, 4 triggers, immutable history/receipts, writer ACL)"

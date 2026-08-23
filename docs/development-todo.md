@@ -66,7 +66,7 @@ Control DB와 하나의 admin management API에서 관리한다. 실제 DB, secr
   연결하고 admin-only source list/detail/generation history API에 pagination, filter와 bounded
   redaction을 적용한다. Effective `budget_profile`과 관련 metadata revision을 함께 보여주고
   query token을 거부한다.
-- [ ] `CTRL-05` 기존 direct admin mutation을 유지하면서 idempotency key, canonical request hash,
+- [x] `CTRL-05` 기존 direct admin mutation을 유지하면서 idempotency key, canonical request hash,
   actor/reason, expected/resulting state, authoritative mutation receipt와 append-only lifecycle
   audit를 추가한다. 같은 key/different hash를 fail-closed하고 timeout 뒤 receipt 조회로
   reconcile하며 blind retry하지 않는다. 별도 approval table/endpoint나 AI credential 전달
@@ -94,20 +94,34 @@ restart/rollback/deactivate/verified-contract precedence 증거는
 완료됐으며 audit status는 Complete다. `CTRL-04`의 strict manifest v2, immutable provenance,
 secret-free pagination/filter, metadata revision 구분과 admin/query 경계 증거는
 [source management catalog audit](verification/2026-08-23-source-management-catalog.md)에 기록한다.
+`CTRL-05`의 atomic success/rejection receipt, same-key replay/conflict, operator-first HTTP
+validation, N-1 migration/rolling writer와 immutable audit 증거는
+[source mutation receipt audit](verification/2026-08-23-source-mutation-receipts.md)에 기록한다.
 
-현재 다음 작업은 `CTRL-05`다. 이 track에서는 다단계 RBAC, caller grant storage,
+현재 다음 작업은 `CTRL-06`이다. 이 track에서는 다단계 RBAC, caller grant storage,
 user/organization별 tier·quota와 AI production executor를 구현하지 않는다.
 
-`ruff C90` 진단에서 `build_app`의 cyclomatic complexity가 기존 49에서 이번 admin GET 세 개를
-포함해 55로 증가했다. `CTRL-05`가 management endpoint를 더 추가할 때 source-admin route
-registration과 operator-first validation을 하나의 작은 module/helper로 분리한다. Lifespan,
-middleware나 범용 API framework까지 함께 재설계하지 않으며 behavior-preserving route test를 먼저
-고정한다.
+`CTRL-05`에서 source-admin route registration과 operator-first manual parsing을
+`source_admin_routes.py`로 분리해 `build_app`의 C90을 55에서 37로 낮췄다. Lifespan, middleware와
+범용 controller framework는 건드리지 않았다. Mutation service에는 operation별 staging/검증/commit
+차이 때문에 threshold 10을 넘는 함수가 남아 있다. 일곱 번째 mutation이 추가되거나 같은
+preflight/rejection/finalization 변경이 여러 operation에 반복될 때는 그 lifecycle만 작은
+coordinator로 추출하고 operation별 검증은 그대로 둔다. 측정 근거 없이 generic command framework나
+새 dependency를 만들지 않는다.
 
-두 번째 numbered migration이 추가될 때는 N-1→N data-preserving upgrade, 실패 migration의
-transaction rollback, concurrent pending apply와 rolling application compatibility를 같은
-변경에서 검증한다. 실제로 crash 잔여 test DB가 반복 관측되기 전에는 prefix/age cleanup daemon을
-추가하지 않는다.
+Receipt는 terminal-only라 commit 전 동시 same-key 요청의 staging/verified query가 중복될 수 있다.
+Admin workload에서 실제 중복 비용이나 충돌이 관측되면 source I/O 동안 transaction lock을 유지하지
+않는 만료형 distributed in-flight lease를 별도 작업으로 설계한다. 관측 전에는 pending table과
+cleanup worker를 추가하지 않는다.
+
+Runtime writer 밖의 주체가 receipt를 직접 SQL로 쓸 요구가 생기거나 compromised-writer까지 감사
+무결성 threat model에 포함할 때는 forward migration으로 operation별 exact result constraint를
+추가하고 direct receipt INSERT를 제한된 database function으로 회수한다. 현재는 authority 자체를
+쓰는 trusted application role과 store-level transition/result binding을 경계로 삼는다.
+
+두 번째 numbered migration은 N-1→N data-preserving upgrade, 실패 migration의 transaction
+rollback, concurrent pending apply와 rolling version 1 writer compatibility를 함께 검증했다.
+실제로 crash 잔여 test DB가 반복 관측되기 전에는 prefix/age cleanup daemon을 추가하지 않는다.
 
 ## P2 — Source Onboarding Skill
 

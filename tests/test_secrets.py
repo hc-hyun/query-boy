@@ -25,3 +25,20 @@ def test_source_secret_key_requires_urlsafe_base64_32_bytes() -> None:
 
     with pytest.raises(SecretKeyConfigurationError):
         SourceSecretCipher.from_base64(base64.urlsafe_b64encode(b"short").decode("ascii"))
+
+
+def test_mutation_request_hash_is_keyed_deterministic_and_domain_separated() -> None:
+    request = b'{"credential":"low-entropy-secret"}'
+    first = SourceSecretCipher(b"a" * 32)
+    second = SourceSecretCipher(b"b" * 32)
+
+    digest = first.mutation_request_hash(request)
+
+    assert digest == first.mutation_request_hash(request)
+    assert digest != first.mutation_request_hash(request + b" ")
+    assert digest != second.mutation_request_hash(request)
+    assert digest.startswith("hmac-sha256:")
+    assert len(digest) == len("hmac-sha256:") + 64
+    assert "low-entropy-secret" not in digest
+    with pytest.raises(ValueError):
+        first.mutation_request_hash(b"")

@@ -91,19 +91,19 @@ integration을 병행하게 되면 load fixture를 전용 disposable reader/data
 이유로 production reader limit이나 query queue 상한을 늘리지 않는다.
 
 이번 history는 generation creation과 current pointer만 뜻한다. Credential rotation,
-deactivate/rollback의 actor, reason, outcome과 시간 chronology를 추정하지 않으며 `CTRL-05`가
-append-only mutation receipt/audit로 추가한다. Replica별 실제 적용 상태는 `CTRL-06`, size/cost
-observation은 `CTRL-07`/`CTRL-08` 범위다.
+deactivate/rollback의 actor, reason, outcome과 시간 chronology를 추정하지 않는다. `CTRL-05`가
+별도 append-only mutation history/receipt API로 추가했으며 증거는
+[source mutation receipt audit](2026-08-23-source-mutation-receipts.md)에 있다. Replica별 실제 적용
+상태는 `CTRL-06`, size/cost observation은 `CTRL-07`/`CTRL-08` 범위다.
 
 Exact filter는 현재 pointer 규모에서 JSON projection scan을 사용한다. 측정된 latency나 EXPLAIN
 근거 없이 expression/composite index를 미리 추가하지 않는다. 운영 source 수가 늘어 page SLA를
 넘는 증거가 생기면 같은 query shape를 기준으로 index를 별도 migration에서 검증한다.
 
 `ruff C90` 진단에서 새 catalog/store/admin service 함수는 threshold 10을 넘지 않았지만 기존
-`build_app`은 변경 전 49에서 admin GET route 추가 후 55가 됐다. `CTRL-05`에서 endpoint를 더
-늘리기 전에 source-admin route registration만 작은 helper/module로 분리하고 operator-first
-validation과 기존 lifespan/middleware 순서를 회귀 테스트로 보존한다. 이를 범용 controller
-framework나 새 dependency 도입의 근거로 사용하지 않는다.
+`build_app`은 변경 전 49에서 admin GET route 추가 후 55가 됐다. `CTRL-05`는 source-admin route
+registration과 operator-first parsing만 별도 module로 옮겨 37로 낮췄고 기존 lifespan/middleware
+순서를 회귀 테스트로 보존했다. 범용 controller framework나 새 dependency는 도입하지 않았다.
 
 이전 source manifest generation을 자동 변환하지 않는 의도적 pre-release cutover다. Version 1
 Control data가 있는 개발 환경은 새 runtime 배포 전에 격리 backup 후 Control DB를 재생성하고

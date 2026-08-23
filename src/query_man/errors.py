@@ -122,3 +122,17 @@ class SourceGenerationConflictError(AppError):
 class SourceControlUnavailableError(AppError):
     def __init__(self) -> None:
         super().__init__(503, "SOURCE_CONTROL_UNAVAILABLE", "Source administration is unavailable.")
+
+
+class MutationNotFoundError(AppError):
+    def __init__(self) -> None:
+        super().__init__(404, "MUTATION_NOT_FOUND", "The requested mutation receipt was not found.")
+
+
+class MutationIdempotencyConflictError(AppError):
+    def __init__(self) -> None:
+        super().__init__(
+            409,
+            "MUTATION_IDEMPOTENCY_CONFLICT",
+            "The idempotency key was already used for a different mutation request.",
+        )

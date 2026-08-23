@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -37,6 +39,16 @@ class StoredSourceNotFoundError(Exception):
 
 class SourcePublishPinnedError(Exception):
     pass
+
+
+class MutationIdempotencyConflictError(Exception):
+    pass
+
+
+class MutationReplay(Exception):
+    def __init__(self, receipt: MutationReceipt) -> None:
+        super().__init__("The source mutation already has an authoritative receipt")
+        self.receipt = receipt
 
 
 @dataclass(frozen=True)
@@ -104,6 +116,44 @@ class SourceGenerationPage:
     next_before_generation: int | None
 
 
+@dataclass(frozen=True)
+class MutationRequest:
+    idempotency_key: str
+    request_hash: str
+    operation: str
+    source_id: str
+    actor: str
+    reason: str
+    expected_generation: int
+    expected_state_version: int
+
+
+@dataclass(frozen=True)
+class MutationReceipt:
+    event_id: int
+    idempotency_key: str
+    request_hash: str
+    operation: str
+    source_id: str
+    actor: str
+    reason: str
+    expected_generation: int
+    expected_state_version: int
+    outcome: str
+    resulting_generation: int | None
+    resulting_state_version: int | None
+    http_status: int
+    error_code: str | None
+    result: dict[str, object]
+    recorded_at: datetime
+
+
+@dataclass(frozen=True)
+class MutationPage:
+    items: tuple[MutationReceipt, ...]
+    next_before_event_id: int | None
+
+
 _CATALOG_PROJECTION = (
     "active.source_id, revision.generation, active.enabled, active.state_version, "
     "active.activated_at, revision.created_at AS generation_created_at, "
@@ -151,9 +201,34 @@ _CATALOG_PROJECTION = (
     "metadata.activated_at AS metadata_activated_at, "
     "active.generation = revision.generation AS is_current "
 )
+_MUTATION_PROJECTION = (
+    "receipt.event_id, receipt.idempotency_key::text AS idempotency_key, "
+    "receipt.request_hash, receipt.operation, receipt.source_id, receipt.actor, "
+    "receipt.reason, receipt.expected_generation, receipt.expected_state_version, "
+    "receipt.outcome, receipt.resulting_generation, "
+    "receipt.resulting_state_version, receipt.http_status, receipt.error_code, "
+    "receipt.result, receipt.recorded_at "
+)
 _IDENTIFIER = re.compile(IDENTIFIER_PATTERN)
 _RELATION_NAME = re.compile(RELATION_NAME_PATTERN)
 _STABLE_SLUG = re.compile(STABLE_SLUG_PATTERN)
+_IDEMPOTENCY_KEY = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
+_REQUEST_HASH = re.compile(r"^hmac-sha256:[a-f0-9]{64}$")
+_ACTOR = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,79}$")
+_REASON = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
+_ERROR_CODE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+_MUTATION_OPERATIONS = frozenset(
+    {
+        "publish_source",
+        "rotate_credential",
+        "publish_verified_query",
+        "rollback_source",
+        "resume_metadata_publish",
+        "deactivate_source",
+    }
+)
 
 
 class PostgresSourceStore:
@@ -349,6 +424,92 @@ class PostgresSourceStore:
             ),
         )
 
+    async def get_mutation(self, idempotency_key: str) -> MutationReceipt | None:
+        _validate_idempotency_key(idempotency_key)
+        pool = await self._get_pool()
+        async with pool.connection() as connection:
+            receipt = await _read_mutation(connection, idempotency_key)
+        return receipt
+
+    async def list_mutations(
+        self,
+        source_id: str,
+        *,
+        before_event_id: int | None = None,
+        limit: int = 50,
+    ) -> MutationPage | None:
+        _validate_page_limit(limit)
+        _validate_event_cursor(before_event_id)
+        pool = await self._get_pool()
+        async with pool.connection() as connection:
+            cursor = await connection.execute(
+                "WITH selected_events AS MATERIALIZED ("
+                "SELECT event_id FROM control.source_mutation_receipts "
+                "WHERE source_id = %s "
+                "AND (%s::bigint IS NULL OR event_id < %s) "
+                "ORDER BY event_id DESC LIMIT %s"
+                "), source_presence AS ("
+                "SELECT EXISTS("
+                "SELECT 1 FROM control.active_source_profiles WHERE source_id = %s"
+                ") OR EXISTS("
+                "SELECT 1 FROM control.source_mutation_receipts WHERE source_id = %s"
+                ") AS source_present"
+                ") SELECT source_presence.source_present, "
+                + _MUTATION_PROJECTION
+                + "FROM source_presence "
+                "LEFT JOIN selected_events ON true "
+                "LEFT JOIN control.source_mutation_receipts AS receipt "
+                "ON receipt.event_id = selected_events.event_id "
+                "ORDER BY receipt.event_id DESC NULLS LAST",
+                (
+                    source_id,
+                    before_event_id,
+                    before_event_id,
+                    limit + 1,
+                    source_id,
+                    source_id,
+                ),
+            )
+            rows = await cursor.fetchall()
+        if len(rows) == 1 and rows[0].get("event_id") is None:
+            return MutationPage((), None) if rows[0].get("source_present") is True else None
+        if not rows or any(row.get("source_present") is not True for row in rows):
+            raise ValueError("Stored source mutation history shape is invalid")
+        receipts = tuple(_decode_mutation(row) for row in rows[:limit])
+        return MutationPage(
+            receipts,
+            receipts[-1].event_id if len(rows) > limit else None,
+        )
+
+    async def record_mutation_rejection(
+        self,
+        mutation: MutationRequest,
+        *,
+        http_status: int,
+        error_code: str,
+    ) -> MutationReceipt:
+        _validate_mutation_request(mutation)
+        if http_status not in {400, 409} or _ERROR_CODE.fullmatch(error_code) is None:
+            raise ValueError("Mutation rejection is invalid")
+        pool = await self._get_pool()
+        async with pool.connection() as connection, connection.transaction():
+            await _lock_mutation(connection, mutation.idempotency_key)
+            existing = await _read_mutation(connection, mutation.idempotency_key)
+            if existing is not None:
+                _require_same_mutation(existing, mutation)
+                return existing
+            receipt = await _insert_mutation_receipt(
+                connection,
+                mutation,
+                outcome="rejected",
+                resulting_generation=None,
+                resulting_state_version=None,
+                http_status=http_status,
+                error_code=error_code,
+                result={},
+            )
+        return receipt
+
     async def next_generation(self, source_id: str) -> int:
         pool = await self._get_pool()
         async with pool.connection() as connection:
@@ -372,12 +533,29 @@ class PostgresSourceStore:
         metadata: PreparedMetadata,
         *,
         expected_state_version: int,
+        mutation: MutationRequest | None = None,
+        mutation_result: dict[str, object] | None = None,
     ) -> StoredSource:
         if generation <= 0:
             raise SourceGenerationConflictError
+        _validate_mutation_arguments(
+            mutation,
+            mutation_result,
+            source_id,
+            expected_generation,
+            expected_state_version,
+            allowed_operations=("publish_source", "rotate_credential"),
+        )
+        if mutation_result is not None:
+            _require_mutation_result_fields(
+                mutation_result,
+                generation=generation,
+                metadata_revision=metadata.revision,
+            )
         snapshot = encode_snapshot(metadata.snapshot)
         pool = await self._get_pool()
         async with pool.connection() as connection, connection.transaction():
+            await _require_new_mutation(connection, mutation)
             await _lock_source_transition(connection, source_id)
             current_generation, current_state_version = await _lock_state(
                 connection,
@@ -443,6 +621,18 @@ class PostgresSourceStore:
             state_row = await cursor.fetchone()
             if state_row is None:
                 raise SourceGenerationConflictError
+            state_version = int(state_row["state_version"])
+            if mutation is not None and mutation_result is not None:
+                await _insert_mutation_receipt(
+                    connection,
+                    mutation,
+                    outcome="succeeded",
+                    resulting_generation=generation,
+                    resulting_state_version=state_version,
+                    http_status=200,
+                    error_code=None,
+                    result=mutation_result,
+                )
         return StoredSource(
             source_id,
             generation,
@@ -450,7 +640,7 @@ class PostgresSourceStore:
             encrypted_secret,
             metadata.revision,
             True,
-            int(state_row["state_version"]),
+            state_version,
         )
 
     async def deactivate(
@@ -459,9 +649,20 @@ class PostgresSourceStore:
         expected_generation: int,
         *,
         expected_state_version: int,
+        mutation: MutationRequest | None = None,
+        mutation_result: dict[str, object] | None = None,
     ) -> int:
+        _validate_mutation_arguments(
+            mutation,
+            mutation_result,
+            source_id,
+            expected_generation,
+            expected_state_version,
+            allowed_operations=("deactivate_source",),
+        )
         pool = await self._get_pool()
         async with pool.connection() as connection, connection.transaction():
+            await _require_new_mutation(connection, mutation)
             await _lock_source_transition(connection, source_id)
             cursor = await connection.execute(
                 "UPDATE control.active_source_profiles "
@@ -475,7 +676,19 @@ class PostgresSourceStore:
             row = await cursor.fetchone()
             if row is None:
                 raise SourceGenerationConflictError
-        return int(row["state_version"])
+            state_version = int(row["state_version"])
+            if mutation is not None and mutation_result is not None:
+                await _insert_mutation_receipt(
+                    connection,
+                    mutation,
+                    outcome="succeeded",
+                    resulting_generation=expected_generation,
+                    resulting_state_version=state_version,
+                    http_status=200,
+                    error_code=None,
+                    result=mutation_result,
+                )
+        return state_version
 
     async def rollback(
         self,
@@ -484,9 +697,20 @@ class PostgresSourceStore:
         expected_generation: int,
         *,
         expected_state_version: int,
+        mutation: MutationRequest | None = None,
+        mutation_result: dict[str, object] | None = None,
     ) -> StoredSource:
+        _validate_mutation_arguments(
+            mutation,
+            mutation_result,
+            source_id,
+            expected_generation,
+            expected_state_version,
+            allowed_operations=("rollback_source",),
+        )
         pool = await self._get_pool()
         async with pool.connection() as connection, connection.transaction():
+            await _require_new_mutation(connection, mutation)
             await _lock_source_transition(connection, source_id)
             current_generation, current_state_version = await _lock_state(
                 connection,
@@ -509,6 +733,12 @@ class PostgresSourceStore:
             if row is None:
                 raise StoredSourceNotFoundError
             value = _decode(row)
+            if mutation_result is not None:
+                _require_mutation_result_fields(
+                    mutation_result,
+                    generation=value.generation,
+                    metadata_revision=value.metadata_revision,
+                )
             cursor = await connection.execute(
                 "UPDATE control.active_source_profiles "
                 "SET generation = %s, enabled = true, state_version = state_version + 1, "
@@ -526,6 +756,18 @@ class PostgresSourceStore:
                 "WHERE source_id = %s",
                 (value.metadata_revision, source_id),
             )
+            state_version = int(state_row["state_version"])
+            if mutation is not None and mutation_result is not None:
+                await _insert_mutation_receipt(
+                    connection,
+                    mutation,
+                    outcome="succeeded",
+                    resulting_generation=value.generation,
+                    resulting_state_version=state_version,
+                    http_status=200,
+                    error_code=None,
+                    result=mutation_result,
+                )
         return StoredSource(
             value.source_id,
             value.generation,
@@ -533,10 +775,36 @@ class PostgresSourceStore:
             value.encrypted_secret,
             value.metadata_revision,
             value.enabled,
-            int(state_row["state_version"]),
+            state_version,
         )
 
-    async def publish_verified_query(self, query: VerifiedQuery) -> None:
+    async def publish_verified_query(
+        self,
+        query: VerifiedQuery,
+        *,
+        mutation: MutationRequest | None = None,
+        mutation_result: dict[str, object] | None = None,
+    ) -> None:
+        if mutation is not None:
+            _validate_mutation_arguments(
+                mutation,
+                mutation_result,
+                query.source_id,
+                mutation.expected_generation,
+                mutation.expected_state_version,
+                allowed_operations=("publish_verified_query",),
+            )
+            if mutation_result is None:
+                raise ValueError("Mutation request and result must be provided together")
+            _require_mutation_result_fields(
+                mutation_result,
+                query_id=query.query_id,
+                metadata_revision=query.metadata_revision,
+                row_count=query.expected.row_count,
+                result_hash=query.expected.result_hash,
+            )
+        elif mutation_result is not None:
+            raise ValueError("Mutation request and result must be provided together")
         document = {
             "columns": list(query.expected.columns),
             "row_count": query.expected.row_count,
@@ -545,6 +813,25 @@ class PostgresSourceStore:
         relations = list(query.relations)
         pool = await self._get_pool()
         async with pool.connection() as connection, connection.transaction():
+            await _require_new_mutation(connection, mutation)
+            if mutation is not None:
+                await _lock_source_transition(connection, query.source_id)
+                generation, state_version = await _lock_state(connection, query.source_id)
+                if (
+                    generation != mutation.expected_generation
+                    or state_version != mutation.expected_state_version
+                ):
+                    raise SourceGenerationConflictError
+                cursor = await connection.execute(
+                    "SELECT 1 FROM control.active_source_profiles AS source "
+                    "JOIN control.active_metadata_revisions AS metadata "
+                    "ON metadata.source_id = source.source_id "
+                    "WHERE source.source_id = %s AND source.enabled "
+                    "AND metadata.revision = %s",
+                    (query.source_id, query.metadata_revision),
+                )
+                if await cursor.fetchone() is None:
+                    raise SourceGenerationConflictError
             await connection.execute(
                 "INSERT INTO control.verified_query_contracts "
                 "(source_id, query_id, metadata_revision, question, relations, sql, expected) "
@@ -574,6 +861,72 @@ class PostgresSourceStore:
                 or stored["expected"] != document
             ):
                 raise SourceGenerationConflictError
+            if mutation is not None and mutation_result is not None:
+                await _insert_mutation_receipt(
+                    connection,
+                    mutation,
+                    outcome="succeeded",
+                    resulting_generation=generation,
+                    resulting_state_version=state_version,
+                    http_status=200,
+                    error_code=None,
+                    result=mutation_result,
+                )
+
+    async def resume_metadata_publish(
+        self,
+        source_id: str,
+        expected_metadata_revision: str,
+        *,
+        mutation: MutationRequest,
+        mutation_result: dict[str, object],
+    ) -> None:
+        _validate_mutation_arguments(
+            mutation,
+            mutation_result,
+            source_id,
+            mutation.expected_generation,
+            mutation.expected_state_version,
+            allowed_operations=("resume_metadata_publish",),
+        )
+        pool = await self._get_pool()
+        async with pool.connection() as connection, connection.transaction():
+            await _require_new_mutation(connection, mutation)
+            await _lock_source_transition(connection, source_id)
+            generation, state_version = await _lock_state(connection, source_id)
+            if (
+                generation != mutation.expected_generation
+                or state_version != mutation.expected_state_version
+            ):
+                raise SourceGenerationConflictError
+            cursor = await connection.execute(
+                "UPDATE control.active_metadata_revisions AS metadata "
+                "SET pinned = false "
+                "FROM control.active_source_profiles AS source "
+                "WHERE source.source_id = %s AND source.enabled "
+                "AND source.generation = %s AND source.state_version = %s "
+                "AND metadata.source_id = source.source_id "
+                "AND metadata.revision = %s AND metadata.pinned "
+                "RETURNING metadata.source_id",
+                (
+                    source_id,
+                    mutation.expected_generation,
+                    mutation.expected_state_version,
+                    expected_metadata_revision,
+                ),
+            )
+            if await cursor.fetchone() is None:
+                raise SourceGenerationConflictError
+            await _insert_mutation_receipt(
+                connection,
+                mutation,
+                outcome="succeeded",
+                resulting_generation=generation,
+                resulting_state_version=state_version,
+                http_status=200,
+                error_code=None,
+                result=mutation_result,
+            )
 
     async def verified_revision_map(self) -> dict[str, frozenset[str]]:
         pool = await self._get_pool()
@@ -642,6 +995,313 @@ async def _lock_source_transition(connection: Any, source_id: str) -> None:
     )
 
 
+async def _lock_mutation(connection: Any, idempotency_key: str) -> None:
+    await connection.execute(
+        "SELECT pg_catalog.pg_advisory_xact_lock("
+        "pg_catalog.hashtextextended(%s, 0))",
+        (f"query-man/mutation/{idempotency_key}",),
+    )
+
+
+async def _require_new_mutation(
+    connection: Any,
+    mutation: MutationRequest | None,
+) -> None:
+    if mutation is None:
+        return
+    await _lock_mutation(connection, mutation.idempotency_key)
+    existing = await _read_mutation(connection, mutation.idempotency_key)
+    if existing is not None:
+        _require_same_mutation(existing, mutation)
+        raise MutationReplay(existing)
+
+
+async def _read_mutation(
+    connection: Any,
+    idempotency_key: str,
+) -> MutationReceipt | None:
+    cursor = await connection.execute(
+        "SELECT "
+        + _MUTATION_PROJECTION
+        + "FROM control.source_mutation_receipts AS receipt "
+        "WHERE receipt.idempotency_key = %s",
+        (idempotency_key,),
+    )
+    row = await cursor.fetchone()
+    return None if row is None else _decode_mutation(row)
+
+
+async def _insert_mutation_receipt(
+    connection: Any,
+    mutation: MutationRequest,
+    *,
+    outcome: str,
+    resulting_generation: int | None,
+    resulting_state_version: int | None,
+    http_status: int,
+    error_code: str | None,
+    result: dict[str, object],
+) -> MutationReceipt:
+    _validate_mutation_completion(
+        mutation,
+        outcome=outcome,
+        resulting_generation=resulting_generation,
+        resulting_state_version=resulting_state_version,
+        http_status=http_status,
+        error_code=error_code,
+        result=result,
+    )
+    try:
+        cursor = await connection.execute(
+            "INSERT INTO control.source_mutation_receipts "
+            "(idempotency_key, request_hash, operation, source_id, actor, reason, "
+            "expected_generation, expected_state_version, resulting_generation, "
+            "resulting_state_version, outcome, http_status, error_code, result) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+            "RETURNING event_id",
+            (
+                mutation.idempotency_key,
+                mutation.request_hash,
+                mutation.operation,
+                mutation.source_id,
+                mutation.actor,
+                mutation.reason,
+                mutation.expected_generation,
+                mutation.expected_state_version,
+                resulting_generation,
+                resulting_state_version,
+                outcome,
+                http_status,
+                error_code,
+                Jsonb(result),
+            ),
+        )
+        if await cursor.fetchone() is None:
+            raise ValueError("Stored source mutation receipt insert failed")
+    except errors.UniqueViolation as error:
+        raise MutationIdempotencyConflictError from error
+    receipt = await _read_mutation(connection, mutation.idempotency_key)
+    if receipt is None:
+        raise ValueError("Stored source mutation receipt is unavailable")
+    return receipt
+
+
+def _require_same_mutation(
+    receipt: MutationReceipt,
+    mutation: MutationRequest,
+) -> None:
+    if (
+        receipt.idempotency_key != mutation.idempotency_key
+        or receipt.request_hash != mutation.request_hash
+        or receipt.operation != mutation.operation
+        or receipt.source_id != mutation.source_id
+        or receipt.actor != mutation.actor
+        or receipt.reason != mutation.reason
+        or receipt.expected_generation != mutation.expected_generation
+        or receipt.expected_state_version != mutation.expected_state_version
+    ):
+        raise MutationIdempotencyConflictError
+
+
+def _validate_mutation_arguments(
+    mutation: MutationRequest | None,
+    result: dict[str, object] | None,
+    source_id: str,
+    expected_generation: int,
+    expected_state_version: int,
+    *,
+    allowed_operations: tuple[str, ...],
+) -> None:
+    if mutation is None or result is None:
+        if mutation is not None or result is not None:
+            raise ValueError("Mutation request and result must be provided together")
+        return
+    _validate_mutation_request(mutation)
+    if (
+        mutation.operation not in allowed_operations
+        or mutation.source_id != source_id
+        or mutation.expected_generation != expected_generation
+        or mutation.expected_state_version != expected_state_version
+    ):
+        raise ValueError("Mutation request does not match the source transition")
+    _validate_success_result(mutation, result)
+
+
+def _require_mutation_result_fields(
+    result: dict[str, object],
+    **expected: object,
+) -> None:
+    if any(result.get(field) != value for field, value in expected.items()):
+        raise ValueError("Mutation result does not match the source transition")
+
+
+def _validate_mutation_request(mutation: MutationRequest) -> None:
+    _validate_idempotency_key(mutation.idempotency_key)
+    if _REQUEST_HASH.fullmatch(mutation.request_hash) is None:
+        raise ValueError("Mutation request hash is invalid")
+    if mutation.operation not in _MUTATION_OPERATIONS:
+        raise ValueError("Mutation operation is invalid")
+    if _STABLE_SLUG.fullmatch(mutation.source_id) is None:
+        raise ValueError("Mutation source_id is invalid")
+    if _ACTOR.fullmatch(mutation.actor) is None:
+        raise ValueError("Mutation actor is invalid")
+    if _REASON.fullmatch(mutation.reason) is None:
+        raise ValueError("Mutation reason is invalid")
+    for value in (mutation.expected_generation, mutation.expected_state_version):
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= POSTGRES_BIGINT_MAX:
+            raise ValueError("Mutation expected state is invalid")
+
+
+def _validate_mutation_completion(
+    mutation: MutationRequest,
+    *,
+    outcome: str,
+    resulting_generation: int | None,
+    resulting_state_version: int | None,
+    http_status: int,
+    error_code: str | None,
+    result: dict[str, object],
+) -> None:
+    _validate_mutation_request(mutation)
+    if outcome == "succeeded":
+        if (
+            http_status != 200
+            or error_code is not None
+            or resulting_generation is None
+            or resulting_state_version is None
+        ):
+            raise ValueError("Mutation success receipt is invalid")
+        for value in (resulting_generation, resulting_state_version):
+            if isinstance(value, bool) or not 0 <= value <= POSTGRES_BIGINT_MAX:
+                raise ValueError("Mutation resulting state is invalid")
+        _validate_success_result(mutation, result)
+        if mutation.operation in {
+            "publish_source",
+            "rotate_credential",
+            "rollback_source",
+        } and result.get("generation") != resulting_generation:
+            raise ValueError("Mutation result does not match the resulting generation")
+    elif outcome == "rejected":
+        if (
+            http_status not in {400, 409}
+            or error_code is None
+            or _ERROR_CODE.fullmatch(error_code) is None
+            or resulting_generation is not None
+            or resulting_state_version is not None
+            or result
+        ):
+            raise ValueError("Mutation rejection receipt is invalid")
+    else:
+        raise ValueError("Mutation outcome is invalid")
+    encoded = json.dumps(
+        result,
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    if len(encoded) > 8192:
+        raise ValueError("Mutation result is too large")
+
+
+def _validate_success_result(
+    mutation: MutationRequest,
+    result: dict[str, object],
+) -> None:
+    fields = {
+        "publish_source": {
+            "status",
+            "source_id",
+            "generation",
+            "metadata_revision",
+            "quality_level",
+        },
+        "rotate_credential": {
+            "status",
+            "source_id",
+            "generation",
+            "metadata_revision",
+            "quality_level",
+        },
+        "publish_verified_query": {
+            "status",
+            "query_id",
+            "source_id",
+            "metadata_revision",
+            "row_count",
+            "result_hash",
+        },
+        "rollback_source": {
+            "status",
+            "source_id",
+            "generation",
+            "metadata_revision",
+        },
+        "resume_metadata_publish": {"status", "source_id"},
+        "deactivate_source": {"status", "source_id"},
+    }[mutation.operation]
+    if set(result) != fields or result.get("source_id") != mutation.source_id:
+        raise ValueError("Mutation result projection is invalid")
+    expected_status = {
+        "publish_source": "published",
+        "rotate_credential": "published",
+        "publish_verified_query": "verified",
+        "rollback_source": "rolled_back",
+        "resume_metadata_publish": "resumed",
+        "deactivate_source": "deactivated",
+    }[mutation.operation]
+    if result.get("status") != expected_status:
+        raise ValueError("Mutation result status is invalid")
+    if "generation" in result:
+        generation = result["generation"]
+        if isinstance(generation, bool) or not isinstance(generation, int) or generation <= 0:
+            raise ValueError("Mutation result generation is invalid")
+    for key in ("metadata_revision", "result_hash"):
+        if key in result and not _is_revision(result[key]):
+            raise ValueError("Mutation result revision is invalid")
+    if "quality_level" in result and result["quality_level"] not in {"L0", "L1", "L2"}:
+        raise ValueError("Mutation result quality level is invalid")
+    if "query_id" in result:
+        query_id = result["query_id"]
+        if not isinstance(query_id, str) or re.fullmatch(r"^[a-z][a-z0-9-]{0,99}$", query_id) is None:
+            raise ValueError("Mutation result query_id is invalid")
+    if "row_count" in result:
+        row_count = result["row_count"]
+        if isinstance(row_count, bool) or not isinstance(row_count, int) or not 0 <= row_count <= 100_000:
+            raise ValueError("Mutation result row count is invalid")
+
+
+def _is_revision(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 71
+        and value.startswith("sha256:")
+        and all(character in "0123456789abcdef" for character in value[7:])
+    )
+
+
+def _validate_idempotency_key(idempotency_key: str) -> None:
+    if not isinstance(idempotency_key, str) or _IDEMPOTENCY_KEY.fullmatch(idempotency_key) is None:
+        raise ValueError("Mutation idempotency key is invalid")
+    try:
+        parsed = uuid.UUID(idempotency_key)
+    except ValueError as error:
+        raise ValueError("Mutation idempotency key is invalid") from error
+    if str(parsed) != idempotency_key:
+        raise ValueError("Mutation idempotency key is invalid")
+
+
+def _validate_event_cursor(before_event_id: int | None) -> None:
+    if before_event_id is None:
+        return
+    if (
+        isinstance(before_event_id, bool)
+        or not isinstance(before_event_id, int)
+        or not 1 <= before_event_id <= POSTGRES_BIGINT_MAX
+    ):
+        raise ValueError("Mutation event cursor must be a positive PostgreSQL bigint")
+
+
 def _decode(row: dict[str, Any]) -> StoredSource:
     manifest = row["manifest"]
     if not isinstance(manifest, dict):
@@ -658,6 +1318,112 @@ def _decode(row: dict[str, Any]) -> StoredSource:
         enabled=bool(row["enabled"]),
         state_version=int(row["state_version"]),
     )
+
+
+def _decode_mutation(row: dict[str, Any]) -> MutationReceipt:
+    idempotency_key = str(row.get("idempotency_key"))
+    _validate_idempotency_key(idempotency_key)
+    request_hash = row.get("request_hash")
+    operation = row.get("operation")
+    source_id = row.get("source_id")
+    actor = row.get("actor")
+    reason = row.get("reason")
+    if not isinstance(request_hash, str) or _REQUEST_HASH.fullmatch(request_hash) is None:
+        raise ValueError("Stored source mutation request hash is invalid")
+    if not isinstance(operation, str) or operation not in _MUTATION_OPERATIONS:
+        raise ValueError("Stored source mutation operation is invalid")
+    if not isinstance(source_id, str) or _STABLE_SLUG.fullmatch(source_id) is None:
+        raise ValueError("Stored source mutation source_id is invalid")
+    if not isinstance(actor, str) or _ACTOR.fullmatch(actor) is None:
+        raise ValueError("Stored source mutation actor is invalid")
+    if not isinstance(reason, str) or _REASON.fullmatch(reason) is None:
+        raise ValueError("Stored source mutation reason is invalid")
+    expected_generation = _mutation_int(row, "expected_generation", minimum=0)
+    expected_state_version = _mutation_int(row, "expected_state_version", minimum=0)
+    outcome = row.get("outcome")
+    result = row.get("result")
+    if not isinstance(result, dict):
+        raise ValueError("Stored source mutation result is invalid")
+    resulting_generation = _optional_mutation_int(row, "resulting_generation", minimum=0)
+    resulting_state_version = _optional_mutation_int(
+        row,
+        "resulting_state_version",
+        minimum=0,
+    )
+    http_status = _mutation_int(row, "http_status", minimum=100, maximum=599)
+    error_code = row.get("error_code")
+    if error_code is not None and (
+        not isinstance(error_code, str) or _ERROR_CODE.fullmatch(error_code) is None
+    ):
+        raise ValueError("Stored source mutation error code is invalid")
+    mutation = MutationRequest(
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
+        operation=operation,
+        source_id=source_id,
+        actor=actor,
+        reason=reason,
+        expected_generation=expected_generation,
+        expected_state_version=expected_state_version,
+    )
+    _validate_mutation_completion(
+        mutation,
+        outcome=str(outcome),
+        resulting_generation=resulting_generation,
+        resulting_state_version=resulting_state_version,
+        http_status=http_status,
+        error_code=error_code,
+        result=result,
+    )
+    return MutationReceipt(
+        event_id=_mutation_int(row, "event_id", minimum=1),
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
+        operation=operation,
+        source_id=source_id,
+        actor=actor,
+        reason=reason,
+        expected_generation=expected_generation,
+        expected_state_version=expected_state_version,
+        outcome=str(outcome),
+        resulting_generation=resulting_generation,
+        resulting_state_version=resulting_state_version,
+        http_status=http_status,
+        error_code=error_code,
+        result=result,
+        recorded_at=_mutation_timestamp(row, "recorded_at"),
+    )
+
+
+def _mutation_int(
+    row: dict[str, Any],
+    key: str,
+    *,
+    minimum: int,
+    maximum: int = POSTGRES_BIGINT_MAX,
+) -> int:
+    value = row.get(key)
+    if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
+        raise ValueError(f"Stored source mutation {key} is invalid")
+    return value
+
+
+def _optional_mutation_int(
+    row: dict[str, Any],
+    key: str,
+    *,
+    minimum: int,
+) -> int | None:
+    if row.get(key) is None:
+        return None
+    return _mutation_int(row, key, minimum=minimum)
+
+
+def _mutation_timestamp(row: dict[str, Any], key: str) -> datetime:
+    value = row.get(key)
+    if not isinstance(value, datetime) or value.utcoffset() is None:
+        raise ValueError(f"Stored source mutation {key} is invalid")
+    return value
 
 
 def _decode_catalog(row: dict[str, Any]) -> SourceCatalogRecord:

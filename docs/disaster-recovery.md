@@ -3,9 +3,9 @@
 ## Scope And Targets
 
 Control plane의 migration ledger, source profile generations, encrypted credentials, metadata
-snapshots와 verified contracts가 대상이다. Source business database backup은 각 source owner의
-별도 정책을 따른다. Repository source/verified file은 local/CI bootstrap fixture이며 managed
-production desired-state backup이나 recovery authority가 아니다.
+snapshots, verified contracts와 immutable mutation receipts가 대상이다. Source business database
+backup은 각 source owner의 별도 정책을 따른다. Repository source/verified file은 local/CI
+bootstrap fixture이며 managed production desired-state backup이나 recovery authority가 아니다.
 
 - 목표 RPO: control schema backup 주기 이하, production 권장 24시간 이내
 - 목표 RTO: 새 control database restore와 runtime secret 주입을 포함해 60분 이내
@@ -33,10 +33,15 @@ production desired-state backup이나 recovery authority가 아니다.
 
 ## Backup
 
-전용 backup identity로 encrypted backup storage에 다음을 수행한다.
+전용 backup job identity로 encrypted backup storage에 다음을 수행한다. Reconciliation의 direct ACL
+grantee는 Control object owner와 `query_man_control_writer`만 허용하므로 backup identity에 table
+권한을 직접 부여하지 않는다. Managed backup plane을 사용하거나, logical dump 동안에만 보호된
+owner role membership을 부여하고 `--role`로 전환한 뒤 즉시 회수한다. 이 identity는 Control DB
+전체를 읽을 수 있으므로 runtime credential과 분리하고 짧은 수명·강한 감사 경계를 적용한다.
 
 ```text
-pg_dump --format=custom --schema=control --no-owner --no-privileges query_man
+pg_dump --role=<control-owner-role> --format=custom --schema=control \
+  --no-owner --no-privileges query_man
 ```
 
 Backup job은 dump checksum, PostgreSQL version, migration version/checksum, authority row counts와
@@ -56,7 +61,9 @@ record/IaC로 복구한다.
    finite connection limit, TLS와 실제 SELECT/INSERT 권한 및 immutable table UPDATE 거부를
    확인한다.
 4. Migration ledger를 포함한 모든 control table row count, FK, immutable trigger와 실제
-   immutable UPDATE 거부를 확인한다.
+   immutable UPDATE/DELETE 거부를 확인한다. Runtime writer가 receipt table에 SELECT/INSERT와
+   identity sequence USAGE만 갖고 UPDATE/DELETE/sequence mutation은 못 하는지도 실제 role로
+   검증한다.
 5. `QUERY_MAN_SOURCE_MODE=managed`, 원래 `QUERY_MAN_SOURCE_ENCRYPTION_KEY`, 새 control-writer
    DSN과 version 2 query/admin access policy를 runtime에 함께 주입한다. Bootstrap mode,
    API-token/anonymous auth나 DSN/key 일부만으로 복구하지 않는다.
@@ -74,8 +81,9 @@ record/IaC로 복구한다.
 `./scripts/control-plane-drill.sh`는 기존 `query_man_restore_drill` DB가 있으면 덮어쓰지 않고
 중단한다. 임시 DB를 생성해 live control schema의 custom archive를 `--no-owner
 --no-privileges`로 restore하고 production과 같은 migration runner를 두 번 실행한다. Migration
-ledger를 포함한 6개 control table row count, 4개 FK, 3개 non-internal user trigger, 실제
-immutable UPDATE 거부와 writer group ACL을 확인한 뒤 임시 DB를 삭제한다.
+ledger를 포함한 7개 control table row count, 4개 FK, 4개 non-internal user trigger, 실제
+immutable history/receipt UPDATE·DELETE 거부와 writer group/receipt-sequence ACL을 확인한 뒤 임시
+DB를 삭제한다.
 Production data가 아닌 격리 fixture/복제본에서 분기별로 실행하고 결과를 change record에
 첨부한다.
 
@@ -92,8 +100,10 @@ age나 end-to-end recovery 시간을 측정했다는 뜻이 아니다. 전체 �
 ## Master-Key Change Boundary
 
 `QUERY_MAN_SOURCE_ENCRYPTION_KEY`를 새 값으로 바꾸면 기존 모든 source generation의
-credential을 decrypt할 수 없고 rollback history도 사용할 수 없다. 현재 상태에서 환경 변수만
-교체하거나 과거 ciphertext를 새 key로 암호화한 것으로 간주해서는 안 된다.
+credential을 decrypt할 수 없고 rollback history도 사용할 수 없다. Mutation request HMAC key도
+같은 master key에서 domain separation해 파생하므로 기존 key의 exact replay hash도 더는 만들 수
+없다. 현재 상태에서 환경 변수만 교체하거나 과거 ciphertext를 새 key로 암호화한 것으로
+간주해서는 안 된다.
 
 Online rotation을 도입하려면 최소한 key version 저장, old/new key 동시 decrypt, immutable
 history를 보존하는 re-encryption migration, replica 전환 순서와 rollback/restore drill이 먼저

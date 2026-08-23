@@ -91,6 +91,18 @@ append-only lifecycle audit를 추가한다. Timeout 뒤에는 receipt/state를 
 blind retry하지 않는다. 기존 staged validation, immutable generation, atomic pointer, rollback
 검증과 credential redaction/encryption을 유지한다.
 
+Receipt와 lifecycle event는 `source_mutation_receipts` 한 table의 immutable terminal row로
+통합한다. 별도 pending/request/event table은 만들지 않는다. 성공 receipt는 source pointer 또는
+verified contract 변경과 같은 transaction에 commit하고 결정적인 validation/state rejection은
+state를 바꾸지 않은 별도 transaction에 남긴다. Receipt가 없는 동안은 staging/in-flight일 수
+있으므로 404를 실패로 해석하지 않는다. Same key/same canonical request는 기존 terminal 결과를,
+same key/different request는 409를 반환한다. Actor는 인증 caller에서 파생하고 reason은 bounded
+change reference다. Idempotency key, credential과 verified question/SQL을 포함한 canonical envelope는
+메모리에서만 keyed HMAC하며 raw body나 일반 SHA digest를 저장하지 않는다. Key를 digest domain에
+묶어 서로 다른 key의 low-entropy payload가 같은 digest로 관측되는 것을 막는다. Terminal row가
+생기기 전 같은 key가 여러 replica에 동시에 도착하면 준비 I/O가 중복될 수 있지만 source/key lock은
+authority와 receipt commit을 한 번으로 제한한다.
+
 현재 plaintext credential을 받는 direct admin API는 trusted manual-admin boundary다. Plan-only
 onboarding Skill은 이 API를 호출하거나 credential을 읽지 않는다. AI 또는 다른 자동화에
 production mutation 권한을 주기로 결정할 때만 target-bound credential broker, plan-ID apply와
@@ -130,7 +142,6 @@ metadata snapshot과 verified query를 읽거나 반환하지 않는다. 이 단
 - 관리자 한 종류와 기존 `budget_profile`만 사용하므로 초기 schema와 API가 작다.
 - Control DB availability, backup, audit integrity와 admin credential 분리는 production-critical
   boundary가 된다.
-- Mutation receipt/audit, replica convergence, size/cost projection과 production 복구 검증은 남은
-  구현 gap이다.
+- Replica convergence, size/cost projection과 production 복구 검증은 남은 구현 gap이다.
 - Future per-user/org ACL, quota, tier override, multi-role approval, automated credential broker와
   chargeback은 실제 요구와 threat model이 생길 때 별도 결정으로 추가한다.

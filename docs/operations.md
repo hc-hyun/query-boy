@@ -48,9 +48,11 @@ Executor는 PostgreSQL transaction-local `application_name=query-man:<query_id>`
 ## Control DB Migration And Environment Isolation
 
 Control DB는 production, development와 integration test가 서로 다른 physical database/DSN을
-사용한다. Production 관리자는 대상 identity를 확인한 뒤 database owner용 표준 libpq
-`PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSFILE` 또는 managed authentication을 설정하고
-다음을 실행한다. Password나 전체 DSN을 command argument 또는 change log에 넣지 않는다.
+사용한다. Production 관리자는 대상 identity를 확인한 뒤 target database/schema/control object
+owner 권한과 `query_man_control_writer`를 create·alter하고 남은 membership을 회수할 cluster role
+관리 권한을 모두 가진 migration identity의 표준 libpq `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`,
+`PGPASSFILE` 또는 managed authentication을 설정하고 다음을 실행한다. Database owner만으로는
+충분하지 않다. Password나 전체 DSN을 command argument 또는 change log에 넣지 않는다.
 
 ```bash
 ./scripts/apply-control-schema.sh
@@ -60,13 +62,38 @@ Runner는 `docker/postgres/init/control-migrations`의 연속된 `NNNN_name.sql`
 적용한다. `control.schema_migrations`에는 filename과 SHA-256 checksum을 기록하고, 각 pending
 migration의 DDL과 ledger insert를 같은 transaction 및 database advisory lock 안에서 처리한다.
 재실행은 이미 적용된 migration을 건너뛰며 repository와 DB의 filename/checksum이 다르거나 DB가
-현재 checkout보다 앞서 있으면 DDL 전에 fail-closed한다. 적용된 migration 파일이나 ledger를
-수정해 맞추지 말고 새 forward migration을 추가한다. Schema downgrade는 지원하지 않는다.
+현재 checkout보다 앞서 있으면 pending numbered migration과 final security reconciliation 전에
+fail-closed한다. Bootstrap schema/ledger 존재 확인은 이 검사보다 먼저 실행될 수 있다. 적용된
+migration 파일이나 ledger를 수정해 맞추지 말고 새 forward migration을 추가한다. Schema
+downgrade는 지원하지 않는다.
+
+`0002_source_mutation_receipts.sql`은 additive라 pre-`CTRL-05` reader/writer process가 schema 적용
+전후 계속 동작한다. 그러나 이전 application은 receipt를 만들지 않으므로 rollout 동안 admin
+mutation traffic은 먼저 중단하고 schema를 적용한 뒤 `CTRL-05` application replica에만 보낸다.
+Query/data plane replica는 순차 교체할 수 있다. 모든 admin replica가 새 application임을 확인하기
+전에는 mutation traffic을 다시 열지 않는다.
 
 Schema migration과 global `query_man_control_writer`/DB ACL은 의도적으로 분리돼 있다.
 `reconcile-security.sql`은 매 실행마다 role을 harden하고 현재 DB의 최소 권한을 복구한다. 따라서
 `pg_dump --no-privileges` restore에서도 pending migration이 없어도 ACL이 복구된다. Runtime
-writer에는 migration ledger, schema CREATE 또는 DDL 권한을 부여하지 않는다.
+writer에는 migration ledger, schema CREATE 또는 DDL 권한을 부여하지 않는다. 전용 Control DB의
+`PUBLIC` CONNECT/CREATE/TEMPORARY와 writer의 과거 database/schema/table/sequence/function grant
+및 writer가 상속하던 parent-role membership을 먼저 회수한 뒤 allowlist를 다시 부여한다. Direct
+object ACL grantee는 object owner와 writer만 허용한다. Migration identity가 membership 또는
+delegated ACL을 회수할 권한이 없거나 writer가 object owner이면 exact postcondition에서
+fail-closed하므로 writer와 migration/owner role을 분리한다. Runtime LOGIN처럼 writer membership을
+받는 member role의 allowlist와 lifecycle은 database/IAM 운영 authority가 별도로 감사한다.
+
+Advisory lock은 target database 안에서만 직렬화되지만 `query_man_control_writer`와 membership은
+cluster-global이다. 같은 PostgreSQL cluster의 서로 다른 database를 대상으로 production migration,
+restore drill과 disposable migration job을 동시에 실행하지 않고 운영/CI에서 cluster 단위로
+직렬화한다. 여러 Control DB의 병렬 migration이 실제 요구가 되면 global role reconciliation을
+분리하거나 고정 coordination database의 lock을 사용하도록 먼저 설계한다.
+
+Stale membership/ACL을 복구했거나 security drift를 대응한 뒤에는 admin mutation traffic을 닫고
+모든 control-writer session과 pool을 drain/recycle한 뒤 fresh connection으로 effective privilege를
+검증한다. Membership 회수는 이미 이전 parent role로 `SET ROLE`한 session을 강제로 종료하거나 원래
+role로 되돌리지 않는다.
 
 Local/CI의 `apply-db.sh`는 development fixture DB에 같은 runner를 적용하지만 production
 migration 명령이 아니다. Control-store와 hot-add integration test는
@@ -110,8 +137,9 @@ process의 이후 poll이 실패하면 마지막 verified registry를 유지하�
    encryption key recovery와 version 2 query/admin access policy를 확인한다.
 2. Query traffic을 받지 않는 managed instance를 직접 시작한다. Empty Control DB에서는
    `/ready` 503이 정상이며 admin endpoint는 별도 운영 경로로 호출한다.
-3. 기존 admin API로 source를 L0/L1 staged publish한다. Reader credential은 external secret
-   boundary에서 관리자가 전달하고 응답 generation/metadata revision을 기록한다.
+3. 새 UUID/change reference와 expected state `0/0`으로 기존 admin API에 source를 L0/L1 staged
+   publish한다. Reader credential은 external secret boundary에서 관리자가 전달하고 응답 receipt의
+   resulting generation/state와 metadata revision을 기록한다.
 4. 기존 reviewed contract를 verified-query admin endpoint로 실행·저장한다. 현재 revision과
    invariant가 다르면 이관을 중단하고 재검토한다.
 5. 같은 semantic/budget revision에서 L2 generation을 publish하고 `/meta`, guarded query와
@@ -121,8 +149,36 @@ process의 이후 poll이 실패하면 마지막 verified registry를 유지하�
    revision이 복원되고 deactivate/rollback이 유지되는지 확인한 뒤 traffic을 전환한다.
 
 이 절차는 startup import나 새 bulk endpoint가 아니다. Seed digest/import marker와 repository
-write-back을 만들지 않으며, authoritative mutation receipt가 구현되기 전 timeout 응답을 blind
-retry하지 않고 Control DB state부터 확인한다.
+write-back을 만들지 않는다.
+
+### Admin Mutation And Timeout Reconciliation
+
+모든 source mutation에는 canonical lowercase UUID `Idempotency-Key`, ticket/change reference인
+`X-Query-Man-Reason`, 같은 admin detail snapshot에서 읽은 `X-Expected-Generation`과
+`X-Expected-State-Version`을 보낸다. 새 source 최초 publish만 `0/0`이다. Metadata resume은
+`X-Expected-Metadata-Revision`도 요구한다. Actor는 bearer에 연결된 operator caller ID로
+자동 결정된다. 이유 header에 사람 이름, credential, SQL 또는 자유형 장애 내용을 쓰지 않는다.
+
+성공하면 terminal receipt 전체를 change record에 연결하되 credential/body를 복사하지 않는다.
+409 generation conflict는 다른 변경이 먼저 commit된 것이므로 detail과
+`GET /admin/sources/{source_id}/mutations`를 다시 읽고 새 의도로 재검토한다. 같은 key/different
+request의 `MUTATION_IDEMPOTENCY_CONFLICT`는 key를 재사용한 client 결함으로 취급한다.
+
+HTTP timeout이나 연결 단절 뒤에는 다음 순서를 지킨다.
+
+1. 원래 key로 `GET /admin/mutations/{idempotency_key}`를 조회한다.
+2. Terminal receipt가 있으면 그 success/rejection과 `resulting_state`를 authoritative하게 사용한다.
+3. 404면 아직 staging/in-flight일 수 있으므로 source detail의 generation/state를 대조하며 bounded
+   polling한다. 404를 실패나 미실행 증거로 취급하지 않는다.
+4. Wait 뒤에도 receipt가 없고 source가 요청 전 expected state임을 다시 확인한 경우에만 원래
+   payload/header와 같은 key로 한 번 재전송한다. 새 key, 바뀐 reason/expected state 또는 수정한
+   body를 섞거나 여러 replica에 fan-out하지 않는다. Receipt 생성 전 동시 요청은 staging/verified
+   query를 중복 수행할 수 있지만 authority와 terminal receipt는 한 번만 commit된다.
+
+Success receipt와 source/verified-contract 변경은 한 transaction이다. Post-commit local reload가
+실패해도 success를 rollback하거나 rejection으로 바꾸지 않고 `source_reload`을 unavailable로
+표시한다. 해당 replica는 poller가 같은 desired state를 적용할 때까지 degraded일 수 있으며
+replica별 convergence의 직접 관측은 `CTRL-06`에서 추가한다.
 
 ## Health And Metrics
 

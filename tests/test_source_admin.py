@@ -8,14 +8,21 @@ import pytest
 import yaml
 
 from query_man.errors import (
+    MetadataRevisionMismatchError,
+    QueryInvalidError,
+    QueryRejectedError,
     SourceControlUnavailableError,
     SourceNotFoundError,
     SourceValidationError,
+)
+from query_man.errors import (
+    MutationIdempotencyConflictError as MutationIdempotencyConflictAppError,
 )
 from query_man.metadata import MetadataService
 from query_man.models import CatalogSnapshot, PreparedMetadata, SourceProfile
 from query_man.operations import operations
 from query_man.query import QueryService
+from query_man.reader_policy import ReaderSessionPolicyError
 from query_man.registry import (
     RegistryConfigurationError,
     SourceRegistry,
@@ -23,8 +30,13 @@ from query_man.registry import (
     validate_source_manifest,
 )
 from query_man.secrets import EncryptedSecret, SourceSecretCipher
-from query_man.source_admin import SourceAdminService, SourceReloader
+from query_man.source_admin import MutationContext, SourceAdminService, SourceReloader
 from query_man.source_store import (
+    MutationIdempotencyConflictError,
+    MutationPage,
+    MutationReceipt,
+    MutationReplay,
+    MutationRequest,
     SourceCatalogConnection,
     SourceCatalogPage,
     SourceCatalogRecord,
@@ -76,6 +88,7 @@ class MemorySourceStore:
         self.active: dict[str, StoredSource] = {}
         self.history: dict[tuple[str, int], StoredSource] = {}
         self.verified: list[VerifiedQuery] = []
+        self.mutations: dict[str, MutationReceipt] = {}
 
     async def list_active(self) -> list[StoredSource]:
         return list(self.active.values())
@@ -147,6 +160,56 @@ class MemorySourceStore:
                 records[limit - 1].generation if len(records) > limit else None
             ),
         )
+
+    async def get_mutation(self, idempotency_key: str) -> MutationReceipt | None:
+        return self.mutations.get(idempotency_key)
+
+    async def list_mutations(
+        self,
+        source_id: str,
+        *,
+        before_event_id: int | None = None,
+        limit: int = 50,
+    ) -> MutationPage | None:
+        receipts = sorted(
+            (
+                receipt
+                for receipt in self.mutations.values()
+                if receipt.source_id == source_id
+                and (before_event_id is None or receipt.event_id < before_event_id)
+            ),
+            key=lambda receipt: receipt.event_id,
+            reverse=True,
+        )
+        if source_id not in self.active and not receipts:
+            return None
+        page = tuple(receipts[:limit])
+        return MutationPage(
+            page,
+            page[-1].event_id if len(receipts) > limit else None,
+        )
+
+    async def record_mutation_rejection(
+        self,
+        mutation: MutationRequest,
+        *,
+        http_status: int,
+        error_code: str,
+    ) -> MutationReceipt:
+        existing = self._existing_mutation(mutation)
+        if existing is not None:
+            return existing
+        receipt = self._receipt(
+            mutation,
+            outcome="rejected",
+            resulting_generation=None,
+            resulting_state_version=None,
+            http_status=http_status,
+            error_code=error_code,
+            result={},
+        )
+        self.mutations[mutation.idempotency_key] = receipt
+        return receipt
 
     def _catalog_record(self, revision: StoredSource) -> SourceCatalogRecord:
         active = self.active[revision.source_id]
@@ -228,7 +291,13 @@ class MemorySourceStore:
         metadata: PreparedMetadata,
         *,
         expected_state_version: int,
+        mutation: MutationRequest | None = None,
+        mutation_result: dict[str, object] | None = None,
     ) -> StoredSource:
+        if mutation is not None:
+            existing = self._existing_mutation(mutation)
+            if existing is not None:
+                raise MutationReplay(existing)
         current = self.active.get(source_id)
         current_generation = 0 if current is None else current.generation
         current_state_version = 0 if current is None else current.state_version
@@ -253,6 +322,16 @@ class MemorySourceStore:
         self.metadata.active[source_id] = metadata.revision
         self.history[(source_id, generation)] = revision
         self.active[source_id] = record
+        if mutation is not None and mutation_result is not None:
+            self.mutations[mutation.idempotency_key] = self._receipt(
+                mutation,
+                outcome="succeeded",
+                resulting_generation=generation,
+                resulting_state_version=record.state_version,
+                http_status=200,
+                error_code=None,
+                result=mutation_result,
+            )
         return record
 
     async def deactivate(
@@ -261,7 +340,13 @@ class MemorySourceStore:
         expected_generation: int,
         *,
         expected_state_version: int,
+        mutation: MutationRequest | None = None,
+        mutation_result: dict[str, object] | None = None,
     ) -> int:
+        if mutation is not None:
+            existing = self._existing_mutation(mutation)
+            if existing is not None:
+                raise MutationReplay(existing)
         current = self.active[source_id]
         if (
             current.generation != expected_generation
@@ -275,6 +360,16 @@ class MemorySourceStore:
             enabled=False,
             state_version=state_version,
         )
+        if mutation is not None and mutation_result is not None:
+            self.mutations[mutation.idempotency_key] = self._receipt(
+                mutation,
+                outcome="succeeded",
+                resulting_generation=current.generation,
+                resulting_state_version=state_version,
+                http_status=200,
+                error_code=None,
+                result=mutation_result,
+            )
         return state_version
 
     async def rollback(
@@ -284,7 +379,13 @@ class MemorySourceStore:
         expected_generation: int,
         *,
         expected_state_version: int,
+        mutation: MutationRequest | None = None,
+        mutation_result: dict[str, object] | None = None,
     ) -> StoredSource:
+        if mutation is not None:
+            existing = self._existing_mutation(mutation)
+            if existing is not None:
+                raise MutationReplay(existing)
         current = self.active[source_id]
         if (
             current.generation != expected_generation
@@ -299,13 +400,119 @@ class MemorySourceStore:
         self.active[source_id] = record
         self.metadata.active[source_id] = record.metadata_revision
         self.metadata.pinned.add(source_id)
+        if mutation is not None and mutation_result is not None:
+            self.mutations[mutation.idempotency_key] = self._receipt(
+                mutation,
+                outcome="succeeded",
+                resulting_generation=record.generation,
+                resulting_state_version=record.state_version,
+                http_status=200,
+                error_code=None,
+                result=mutation_result,
+            )
         return record
+
+    def _existing_mutation(self, mutation: MutationRequest) -> MutationReceipt | None:
+        existing = self.mutations.get(mutation.idempotency_key)
+        if existing is None:
+            return None
+        if (
+            existing.request_hash != mutation.request_hash
+            or existing.operation != mutation.operation
+            or existing.source_id != mutation.source_id
+            or existing.actor != mutation.actor
+            or existing.reason != mutation.reason
+            or existing.expected_generation != mutation.expected_generation
+            or existing.expected_state_version != mutation.expected_state_version
+        ):
+            raise MutationIdempotencyConflictError
+        return existing
+
+    def _receipt(
+        self,
+        mutation: MutationRequest,
+        *,
+        outcome: str,
+        resulting_generation: int | None,
+        resulting_state_version: int | None,
+        http_status: int,
+        error_code: str | None,
+        result: dict[str, object],
+    ) -> MutationReceipt:
+        return MutationReceipt(
+            event_id=len(self.mutations) + 1,
+            idempotency_key=mutation.idempotency_key,
+            request_hash=mutation.request_hash,
+            operation=mutation.operation,
+            source_id=mutation.source_id,
+            actor=mutation.actor,
+            reason=mutation.reason,
+            expected_generation=mutation.expected_generation,
+            expected_state_version=mutation.expected_state_version,
+            outcome=outcome,
+            resulting_generation=resulting_generation,
+            resulting_state_version=resulting_state_version,
+            http_status=http_status,
+            error_code=error_code,
+            result=result,
+            recorded_at=datetime(2026, 8, 23, tzinfo=UTC)
+            + timedelta(seconds=len(self.mutations) + 1),
+        )
 
     async def close(self) -> None:
         pass
 
-    async def publish_verified_query(self, query: VerifiedQuery) -> None:
+    async def publish_verified_query(
+        self,
+        query: VerifiedQuery,
+        *,
+        mutation: MutationRequest | None = None,
+        mutation_result: dict[str, object] | None = None,
+    ) -> None:
+        if mutation is not None:
+            existing = self._existing_mutation(mutation)
+            if existing is not None:
+                raise MutationReplay(existing)
         self.verified.append(query)
+        if mutation is not None and mutation_result is not None:
+            current = self.active[query.source_id]
+            self.mutations[mutation.idempotency_key] = self._receipt(
+                mutation,
+                outcome="succeeded",
+                resulting_generation=current.generation,
+                resulting_state_version=current.state_version,
+                http_status=200,
+                error_code=None,
+                result=mutation_result,
+            )
+
+    async def resume_metadata_publish(
+        self,
+        source_id: str,
+        expected_metadata_revision: str,
+        *,
+        mutation: MutationRequest,
+        mutation_result: dict[str, object],
+    ) -> None:
+        existing = self._existing_mutation(mutation)
+        if existing is not None:
+            raise MutationReplay(existing)
+        current = self.active[source_id]
+        if (
+            self.metadata.active.get(source_id) != expected_metadata_revision
+            or source_id not in self.metadata.pinned
+        ):
+            raise SourceGenerationConflictError
+        self.metadata.pinned.remove(source_id)
+        self.mutations[mutation.idempotency_key] = self._receipt(
+            mutation,
+            outcome="succeeded",
+            resulting_generation=current.generation,
+            resulting_state_version=current.state_version,
+            http_status=200,
+            error_code=None,
+            result=mutation_result,
+        )
 
     async def verified_revision_map(self) -> dict[str, frozenset[str]]:
         return {
@@ -332,8 +539,10 @@ class StaticCatalog:
 class SwitchingCatalogFactory:
     def __init__(self) -> None:
         self.snapshot = minimal_development_snapshot()
+        self.calls = 0
 
     def __call__(self) -> StaticCatalog:
+        self.calls += 1
         return StaticCatalog(self.snapshot)
 
 
@@ -430,6 +639,25 @@ def _services(
         catalog_factory,  # type: ignore[arg-type]
     )
     return admin, registry, source_store, invalidator, cipher, reloader
+
+
+def _mutation_context(
+    key_suffix: int,
+    *,
+    actor: str = "operator-a",
+    reason: str = "change/CTRL-05",
+    expected_generation: int = 0,
+    expected_state_version: int = 0,
+    expected_metadata_revision: str | None = None,
+) -> MutationContext:
+    return MutationContext(
+        idempotency_key=f"00000000-0000-4000-8000-{key_suffix:012d}",
+        actor=actor,
+        reason=reason,
+        expected_generation=expected_generation,
+        expected_state_version=expected_state_version,
+        expected_metadata_revision=expected_metadata_revision,
+    )
 
 
 @pytest.mark.asyncio
@@ -1093,3 +1321,378 @@ async def test_verified_query_contract_enables_l2_publish() -> None:
     assert verified["status"] == "verified"
     assert promoted["quality_level"] == "L2"
     assert store.verified == [query]
+
+
+@pytest.mark.asyncio
+async def test_mutation_replay_returns_one_terminal_receipt_without_repeating_work() -> None:
+    catalog_factory = SwitchingCatalogFactory()
+    admin, _registry, store, _invalidator, _cipher, _reloader = _services(
+        catalog_factory
+    )
+    context = _mutation_context(1)
+    manifest = _manifest()
+
+    first = await admin.publish(
+        "third-source",
+        manifest,
+        "first-secret",
+        context,
+    )
+    reordered_manifest = dict(reversed(list(manifest.items())))
+    replay = await admin.publish(
+        "third-source",
+        reordered_manifest,
+        "first-secret",
+        context,
+    )
+    fetched = await admin.get_mutation(context.idempotency_key)
+
+    assert first == replay == fetched
+    assert first["outcome"] == "succeeded"
+    assert first["result"] == {
+        "status": "published",
+        "source_id": "third-source",
+        "generation": 1,
+        "metadata_revision": store.active["third-source"].metadata_revision,
+        "quality_level": "L1",
+    }
+    assert first["resulting_state"] == {"generation": 1, "state_version": 1}
+    assert str(first["request_hash"]).startswith("hmac-sha256:")
+    assert "first-secret" not in repr(first)
+    assert len(store.history) == 1
+    assert len(store.mutations) == 1
+    assert catalog_factory.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_same_mutation_key_rejects_any_changed_request_envelope() -> None:
+    catalog_factory = SwitchingCatalogFactory()
+    admin, _registry, store, _invalidator, _cipher, _reloader = _services(
+        catalog_factory
+    )
+    context = _mutation_context(2)
+    manifest = _manifest()
+    await admin.publish("third-source", manifest, "first-secret", context)
+
+    changed_schemas = _manifest()
+    allowed_schemas = changed_schemas["allowed_schemas"]
+    assert isinstance(allowed_schemas, list)
+    allowed_schemas.append("reporting")
+    attempts = (
+        (manifest, "changed-secret", context),
+        (manifest, "first-secret", _mutation_context(2, actor="operator-b")),
+        (manifest, "first-secret", _mutation_context(2, reason="change/CTRL-99")),
+        (
+            manifest,
+            "first-secret",
+            _mutation_context(2, expected_generation=1, expected_state_version=1),
+        ),
+        (changed_schemas, "first-secret", context),
+    )
+
+    for attempted_manifest, credential, attempted_context in attempts:
+        with pytest.raises(MutationIdempotencyConflictAppError):
+            await admin.publish(
+                "third-source",
+                attempted_manifest,
+                credential,
+                attempted_context,
+            )
+
+    assert len(store.history) == 1
+    assert len(store.mutations) == 1
+    assert catalog_factory.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_deterministic_rejection_is_receipted_and_replayed_without_payload() -> None:
+    catalog_factory = SwitchingCatalogFactory()
+    admin, _registry, store, _invalidator, _cipher, _reloader = _services(
+        catalog_factory
+    )
+    context = _mutation_context(3)
+    mismatched_manifest = _manifest()
+    mismatched_manifest["source_id"] = "different-source"
+
+    with pytest.raises(SourceValidationError):
+        await admin.publish(
+            "third-source",
+            mismatched_manifest,
+            "rejected-secret",
+            context,
+        )
+    with pytest.raises(SourceValidationError):
+        await admin.publish(
+            "third-source",
+            dict(reversed(list(mismatched_manifest.items()))),
+            "rejected-secret",
+            context,
+        )
+
+    receipt = store.mutations[context.idempotency_key]
+    second_context = _mutation_context(6)
+    with pytest.raises(SourceValidationError):
+        await admin.publish(
+            "third-source",
+            mismatched_manifest,
+            "rejected-secret",
+            second_context,
+        )
+    second_receipt = store.mutations[second_context.idempotency_key]
+    assert receipt.outcome == "rejected"
+    assert receipt.http_status == 400
+    assert receipt.error_code == "SOURCE_VALIDATION_FAILED"
+    assert receipt.result == {}
+    assert receipt.resulting_generation is None
+    assert receipt.resulting_state_version is None
+    assert "rejected-secret" not in repr(receipt)
+    assert second_receipt.request_hash != receipt.request_hash
+    assert store.active == {}
+    assert catalog_factory.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_transient_staging_failure_is_not_receipted_and_same_key_can_retry() -> None:
+    unavailable = True
+
+    class RecoveringCatalog(StaticCatalog):
+        async def load(self, source: SourceProfile) -> CatalogSnapshot:
+            if unavailable:
+                raise RuntimeError("catalog temporarily unavailable")
+            return await super().load(source)
+
+    admin, _registry, store, _invalidator, _cipher, _reloader = _services(
+        RecoveringCatalog
+    )
+    context = _mutation_context(7)
+
+    with pytest.raises(SourceControlUnavailableError):
+        await admin.publish(
+            "third-source",
+            _manifest(),
+            "retryable-secret",
+            context,
+        )
+
+    assert store.mutations == {}
+    unavailable = False
+    response = await admin.publish(
+        "third-source",
+        _manifest(),
+        "retryable-secret",
+        context,
+    )
+
+    assert response["outcome"] == "succeeded"
+    assert store.mutations[context.idempotency_key].outcome == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_deterministic_staging_rejection_is_receipted_without_restaging() -> None:
+    catalog_factory = SwitchingCatalogFactory()
+    admin, _registry, store, _invalidator, _cipher, _reloader = _services(
+        catalog_factory
+    )
+    await admin.publish("third-source", _manifest(), "first-secret")
+    current = store.active["third-source"]
+    incomplete = minimal_development_snapshot()
+    incomplete.relations = incomplete.relations[:1]
+    catalog_factory.snapshot = incomplete
+    context = _mutation_context(
+        8,
+        expected_generation=current.generation,
+        expected_state_version=current.state_version,
+    )
+
+    for _attempt in range(2):
+        with pytest.raises(SourceValidationError):
+            await admin.publish(
+                "third-source",
+                _manifest(),
+                "invalid-staged-secret",
+                context,
+            )
+
+    receipt = store.mutations[context.idempotency_key]
+    assert receipt.outcome == "rejected"
+    assert receipt.error_code == "SOURCE_VALIDATION_FAILED"
+    assert catalog_factory.calls == 2
+    assert store.active["third-source"] == current
+    assert "invalid-staged-secret" not in repr(receipt)
+
+
+@pytest.mark.asyncio
+async def test_reader_policy_staging_rejection_is_receipted() -> None:
+    class PolicyMismatchCatalog(StaticCatalog):
+        async def load(self, _source: SourceProfile) -> CatalogSnapshot:
+            raise ReaderSessionPolicyError("reader policy mismatch")
+
+    admin, _registry, store, _invalidator, _cipher, _reloader = _services(
+        PolicyMismatchCatalog
+    )
+    context = _mutation_context(9)
+
+    for _attempt in range(2):
+        with pytest.raises(SourceValidationError):
+            await admin.publish(
+                "third-source",
+                _manifest(),
+                "policy-mismatch-secret",
+                context,
+            )
+
+    receipt = store.mutations[context.idempotency_key]
+    assert receipt.outcome == "rejected"
+    assert receipt.error_code == "SOURCE_VALIDATION_FAILED"
+    assert "policy-mismatch-secret" not in repr(receipt)
+
+
+@pytest.mark.asyncio
+async def test_post_commit_reload_failure_preserves_success_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operations.reset()
+    try:
+        admin, _registry, store, _invalidator, _cipher, reloader = _services()
+        context = _mutation_context(4)
+
+        async def fail_reload(_record: StoredSource) -> None:
+            raise RuntimeError("local reload failed")
+
+        monkeypatch.setattr(reloader, "apply", fail_reload)
+        response = await admin.publish(
+            "third-source",
+            _manifest(),
+            "committed-secret",
+            context,
+        )
+
+        assert response["outcome"] == "succeeded"
+        assert response["resulting_state"] == {"generation": 1, "state_version": 1}
+        assert store.active["third-source"].generation == 1
+        assert store.mutations[context.idempotency_key].outcome == "succeeded"
+        assert operations.snapshot()["components"] == {
+            "source_reload": "unavailable"
+        }
+    finally:
+        operations.reset()
+
+
+@pytest.mark.parametrize(
+    "query_error",
+    [
+        MetadataRevisionMismatchError(),
+        QueryInvalidError("QUERY_INVALID_CAST"),
+        QueryRejectedError("QUERY_PLAN_COST_EXCEEDED"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_deterministic_verified_query_failure_is_receipted_and_replayed(
+    query_error: Exception,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    admin, _registry, store, _invalidator, _cipher, _reloader = _services()
+    await admin.publish("third-source", _manifest(), "first-secret")
+    current = store.active["third-source"]
+    rows = [{"status": "OPEN"}]
+    query = VerifiedQuery(
+        query_id="third-source-open-status",
+        source_id="third-source",
+        question="receipt에 저장하면 안 되는 질문",
+        sql="SELECT status FROM ai.issue_overview ORDER BY status LIMIT 1",
+        metadata_revision=current.metadata_revision,
+        relations=("ai.issue_overview",),
+        expected=ExpectedResult(
+            columns=("status",),
+            row_count=1,
+            result_hash=create_result_hash(("status",), rows),
+        ),
+    )
+    query_calls = 0
+
+    async def fail_query(*_args: object, **_kwargs: object) -> dict[str, object]:
+        nonlocal query_calls
+        query_calls += 1
+        raise query_error
+
+    monkeypatch.setattr(admin._queries, "query", fail_query)
+    mutation = _mutation_context(
+        5,
+        expected_generation=current.generation,
+        expected_state_version=current.state_version,
+    )
+
+    for _attempt in range(2):
+        with pytest.raises(SourceValidationError):
+            await admin.publish_verified_query(query, "engineering", mutation)
+
+    receipt = store.mutations[mutation.idempotency_key]
+    assert receipt.outcome == "rejected"
+    assert receipt.error_code == "SOURCE_VALIDATION_FAILED"
+    assert receipt.result == {}
+    assert query_calls == 1
+    assert query.question not in repr(receipt)
+    assert query.sql not in repr(receipt)
+
+
+@pytest.mark.asyncio
+async def test_verified_query_local_source_gap_is_not_receipted_and_can_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    admin, _registry, store, _invalidator, _cipher, _reloader = _services()
+    await admin.publish("third-source", _manifest(), "first-secret")
+    current = store.active["third-source"]
+    rows = [{"status": "OPEN"}]
+    query = VerifiedQuery(
+        query_id="third-source-retry-gap",
+        source_id="third-source",
+        question="로컬 적용 지연 뒤 재시도",
+        sql="SELECT status FROM ai.issue_overview ORDER BY status LIMIT 1",
+        metadata_revision=current.metadata_revision,
+        relations=("ai.issue_overview",),
+        expected=ExpectedResult(
+            columns=("status",),
+            row_count=1,
+            result_hash=create_result_hash(("status",), rows),
+        ),
+    )
+    original_query = admin._queries.query
+    query_calls = 0
+
+    async def intermittent_query(
+        source_id: str,
+        sql: str,
+        metadata_revision: str,
+        sql_policy_revision: str,
+        *,
+        query_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> dict[str, object]:
+        nonlocal query_calls
+        query_calls += 1
+        if query_calls == 1:
+            raise SourceNotFoundError
+        return await original_query(
+            source_id,
+            sql,
+            metadata_revision,
+            sql_policy_revision,
+            query_id=query_id,
+            tenant_id=tenant_id,
+        )
+
+    monkeypatch.setattr(admin._queries, "query", intermittent_query)
+    mutation = _mutation_context(
+        10,
+        expected_generation=current.generation,
+        expected_state_version=current.state_version,
+    )
+
+    with pytest.raises(SourceControlUnavailableError):
+        await admin.publish_verified_query(query, "engineering", mutation)
+    assert mutation.idempotency_key not in store.mutations
+
+    response = await admin.publish_verified_query(query, "engineering", mutation)
+    assert response["outcome"] == "succeeded"
+    assert store.mutations[mutation.idempotency_key].outcome == "succeeded"
+    assert query_calls == 2

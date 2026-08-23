@@ -231,5 +231,7 @@ query 경로가 새 revision을 활성화하지 않습니다.
 중 하나라도 없거나 단일 API token을 사용하거나 Control 설정이 불완전하면 startup이 실패합니다.
 신규 manifest는 격리 staging을 통과한 뒤 encrypted
 credential, immutable metadata와 함께 원자적으로 publish되며 runtime과 다른 replica가
-재시작 없이 반영합니다. 자세한 절차는
+재시작 없이 반영합니다. 모든 mutation은 idempotency UUID, change reference와 expected
+generation/state를 요구하고 state 변경과 immutable terminal receipt를 함께 commit합니다. Timeout은
+receipt lookup과 source-state 대조 뒤 같은 key로만 재시도합니다. 자세한 절차는
 [`docs/source-onboarding.md`](docs/source-onboarding.md)를 따릅니다.

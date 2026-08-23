@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
+import hmac
 import os
 from dataclasses import dataclass
 
@@ -28,6 +30,11 @@ class SourceSecretCipher:
         if len(key) != 32:
             raise SecretKeyConfigurationError("The source encryption key must contain 32 bytes")
         self._cipher = AESGCM(key)
+        self._mutation_hash_key = hmac.new(
+            key,
+            b"query-man/mutation-request-hash-key/v1",
+            hashlib.sha256,
+        ).digest()
 
     @classmethod
     def from_base64(cls, encoded: str) -> SourceSecretCipher:
@@ -63,6 +70,16 @@ class SourceSecretCipher:
             return plaintext.decode("utf-8")
         except (InvalidTag, ValueError, UnicodeDecodeError) as error:
             raise SecretDecryptionError("The source credential could not be decrypted") from error
+
+    def mutation_request_hash(self, canonical_request: bytes) -> str:
+        if not canonical_request:
+            raise ValueError("The canonical mutation request must not be empty")
+        digest = hmac.new(
+            self._mutation_hash_key,
+            b"query-man/mutation-request/v1\x00" + canonical_request,
+            hashlib.sha256,
+        ).hexdigest()
+        return f"hmac-sha256:{digest}"
 
 
 def _associated_data(source_id: str, generation: int) -> bytes:

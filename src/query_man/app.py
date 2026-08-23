@@ -14,18 +14,14 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import UNSUPPORTED_PROTOCOL_VERSION
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from query_man.access import AccessPolicy, CallerContext
 from query_man.catalog import PostgresCatalog
-from query_man.errors import (
-    AppError,
-    OperatorRequiredError,
-    QueryTimeoutError,
-    SourceControlUnavailableError,
-)
+from query_man.errors import AppError, QueryTimeoutError
 from query_man.gateway import GatewayService
+from query_man.http_validation import is_json_content_type
 from query_man.mcp_server import (
     MCP_PROTOCOL_VERSION,
     GetContextSuccessOutput,
@@ -33,15 +29,16 @@ from query_man.mcp_server import (
 )
 from query_man.metadata import MetadataService
 from query_man.metadata_store import PostgresMetadataStore
-from query_man.models import CatalogProvider, SourceEnvironment
+from query_man.models import CatalogProvider
 from query_man.operations import operations
 from query_man.query import PostgresQueryExecutor, QueryExecutor, QueryService
-from query_man.registry import Identifier, SourceRegistry, StableSlug, load_budget_profiles
+from query_man.registry import SourceRegistry, load_budget_profiles
 from query_man.runtime_config import RuntimeConfig
 from query_man.secrets import SourceSecretCipher
 from query_man.source_admin import SourceAdminService, SourcePoolInvalidator, SourceReloader
-from query_man.source_store import POSTGRES_BIGINT_MAX, PostgresSourceStore
-from query_man.verified import ExpectedResult, VerifiedQuery, VerifiedQueryRegistry
+from query_man.source_admin_routes import register_source_admin_routes, require_operator
+from query_man.source_store import PostgresSourceStore
+from query_man.verified import VerifiedQueryRegistry
 
 logger = logging.getLogger("query_man")
 audit_logger = logging.getLogger("query_man.audit")
@@ -62,6 +59,47 @@ def _unexpected_error_response() -> JSONResponse:
             }
         },
     )
+
+
+def _bounded_validation_details(
+    error: RequestValidationError,
+) -> list[dict[str, str]]:
+    details: list[dict[str, str]] = []
+    for issue in error.errors()[:32]:
+        location = [part for part in issue.get("loc", ()) if part != "body"]
+        issue_type = issue.get("type")
+        if issue_type == "extra_forbidden" and location:
+            location[-1] = "extra"
+        safe_location: list[str] = []
+        for part in location:
+            if isinstance(part, int) and 0 <= part <= 1_000_000:
+                safe_location.append(str(part))
+            elif (
+                isinstance(part, str)
+                and 1 <= len(part) <= 64
+                and all(
+                    character.isascii()
+                    and (character.isalnum() or character in {"_", "-"})
+                    for character in part
+                )
+            ):
+                safe_location.append(part)
+            else:
+                safe_location.append("value")
+        details.append(
+            {
+                "path": ".".join(safe_location)[:256] or "request",
+                "code": (
+                    issue_type
+                    if isinstance(issue_type, str)
+                    and 1 <= len(issue_type) <= 64
+                    and issue_type.isascii()
+                    else "value_error"
+                ),
+                "message": "Invalid request value.",
+            }
+        )
+    return details
 
 
 class _MCPRequestLifecycleMiddleware:
@@ -150,95 +188,6 @@ class QueryRequest(BaseModel):
     sql: str = Field(min_length=1, max_length=100_000)
     metadata_revision: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
     sql_policy_revision: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
-
-
-class SourcePublishRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    manifest: dict[str, object]
-    credential: SecretStr = Field(min_length=1, max_length=1_024)
-
-
-class SourceCredentialRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    credential: SecretStr = Field(min_length=1, max_length=1_024)
-
-
-class VerifiedExpectedRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    columns: list[str] = Field(min_length=1, max_length=1_600)
-    row_count: int = Field(ge=0, le=100_000)
-    result_hash: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
-
-
-class VerifiedQueryRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    query_id: str = Field(pattern=r"^[a-z][a-z0-9-]{0,99}$")
-    question: str = Field(min_length=1, max_length=2_000)
-    metadata_revision: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
-    relations: list[str] = Field(min_length=1, max_length=100)
-    sql: str = Field(min_length=1, max_length=100_000)
-    expected: VerifiedExpectedRequest
-
-
-class SourceListQuery(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    limit: int = Field(50, ge=1, le=100)
-    after_source_id: StableSlug | None = None
-    enabled: bool | None = None
-    owner: StableSlug | None = None
-    environment: SourceEnvironment | None = None
-    budget_profile: Identifier | None = None
-
-
-class SourceHistoryQuery(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-    limit: int = Field(50, ge=1, le=100)
-    before_generation: int | None = Field(None, ge=1, le=POSTGRES_BIGINT_MAX)
-
-
-class SourceDetailQuery(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-
-class SourcePathParameters(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    source_id: StableSlug
-
-
-def _parse_query_parameters[QueryParameters: BaseModel](
-    request: Request,
-    model: type[QueryParameters],
-) -> QueryParameters:
-    values: dict[str, object] = {}
-    for key, value in request.query_params.multi_items():
-        previous = values.get(key)
-        values[key] = [previous, value] if previous is not None else value
-    try:
-        return model.model_validate(values)
-    except ValidationError as error:
-        issues = [
-            {**issue, "loc": ("query", *issue["loc"])}
-            for issue in error.errors()
-        ]
-        raise RequestValidationError(issues) from error
-
-
-def _parse_source_id(source_id: str) -> str:
-    try:
-        return SourcePathParameters.model_validate({"source_id": source_id}).source_id
-    except ValidationError as error:
-        issues = [
-            {**issue, "loc": ("path", *issue["loc"])}
-            for issue in error.errors()
-        ]
-        raise RequestValidationError(issues) from error
 
 
 def build_app(
@@ -440,7 +389,7 @@ def build_app(
                     and request.method == "POST"
                     and (
                         len(content_types) != 1
-                        or not _is_json_content_type(content_types[0])
+                        or not is_json_content_type(content_types[0])
                     )
                 ):
                     return Response(
@@ -473,21 +422,13 @@ def build_app(
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(_request: Request, error: RequestValidationError) -> JSONResponse:
-        details = [
-            {
-                "path": ".".join(str(part) for part in issue["loc"] if part != "body"),
-                "code": issue["type"],
-                "message": issue["msg"],
-            }
-            for issue in error.errors()
-        ]
         return JSONResponse(
             status_code=400,
             content={
                 "error": {
                     "code": "INVALID_REQUEST",
                     "message": "The request body is invalid.",
-                    "details": details,
+                    "details": _bounded_validation_details(error),
                 }
             },
         )
@@ -520,7 +461,7 @@ def build_app(
 
     @app.get("/admin/health")
     async def detailed_health(request: Request) -> dict[str, object]:
-        _require_operator(request)
+        require_operator(request)
         snapshot = operations.snapshot()
         return {
             "status": operations.public_status(),
@@ -531,58 +472,12 @@ def build_app(
 
     @app.get("/admin/metrics")
     async def metrics(request: Request) -> dict[str, object]:
-        _require_operator(request)
+        require_operator(request)
         return operations.snapshot()
 
     @app.get("/sources")
     async def sources(request: Request) -> dict[str, object]:
         return gateway.list_sources(_caller(request))
-
-    @app.get("/admin/sources")
-    async def list_admin_sources(request: Request) -> dict[str, object]:
-        _require_operator(request)
-        parameters = _parse_query_parameters(request, SourceListQuery)
-        admin = cast(SourceAdminService | None, request.app.state.source_admin)
-        if admin is None:
-            raise SourceControlUnavailableError
-        return await admin.list_sources(
-            limit=parameters.limit,
-            after_source_id=parameters.after_source_id,
-            enabled=parameters.enabled,
-            owner=parameters.owner,
-            environment=parameters.environment,
-            budget_profile=parameters.budget_profile,
-        )
-
-    @app.get("/admin/sources/{source_id}/history")
-    async def admin_source_history(
-        source_id: str,
-        request: Request,
-    ) -> dict[str, object]:
-        _require_operator(request)
-        source_id = _parse_source_id(source_id)
-        parameters = _parse_query_parameters(request, SourceHistoryQuery)
-        admin = cast(SourceAdminService | None, request.app.state.source_admin)
-        if admin is None:
-            raise SourceControlUnavailableError
-        return await admin.source_history(
-            source_id,
-            limit=parameters.limit,
-            before_generation=parameters.before_generation,
-        )
-
-    @app.get("/admin/sources/{source_id}")
-    async def get_admin_source(
-        source_id: str,
-        request: Request,
-    ) -> dict[str, object]:
-        _require_operator(request)
-        source_id = _parse_source_id(source_id)
-        _parse_query_parameters(request, SourceDetailQuery)
-        admin = cast(SourceAdminService | None, request.app.state.source_admin)
-        if admin is None:
-            raise SourceControlUnavailableError
-        return await admin.get_source(source_id)
 
     @app.post("/meta")
     async def meta(
@@ -610,92 +505,24 @@ def build_app(
         return await _until_disconnect(request, pending)
 
     @app.delete("/queries/{query_id}")
-    async def cancel_query(query_id: uuid.UUID, request: Request) -> dict[str, str]:
-        return await gateway.cancel_query(_caller(request), str(query_id))
+    async def cancel_query(query_id: str, request: Request) -> dict[str, str]:
+        caller = require_operator(request)
+        try:
+            parsed_query_id = uuid.UUID(query_id)
+        except ValueError as error:
+            raise RequestValidationError(
+                [
+                    {
+                        "type": "uuid_parsing",
+                        "loc": ("path", "query_id"),
+                        "msg": "Invalid UUID.",
+                        "input": query_id,
+                    }
+                ]
+            ) from error
+        return await gateway.cancel_query(caller, str(parsed_query_id))
 
-    @app.put("/admin/sources/{source_id}")
-    async def publish_source(
-        source_id: str,
-        payload: SourcePublishRequest,
-        request: Request,
-    ) -> dict[str, object]:
-        _require_operator(request)
-        if source_admin is None:
-            raise SourceControlUnavailableError
-        return await source_admin.publish(
-            source_id,
-            payload.manifest,
-            payload.credential.get_secret_value(),
-        )
-
-    @app.post("/admin/sources/{source_id}/credential")
-    async def rotate_source_credential(
-        source_id: str,
-        payload: SourceCredentialRequest,
-        request: Request,
-    ) -> dict[str, object]:
-        _require_operator(request)
-        if source_admin is None:
-            raise SourceControlUnavailableError
-        return await source_admin.rotate_credential(
-            source_id,
-            payload.credential.get_secret_value(),
-        )
-
-    @app.post("/admin/sources/{source_id}/verified-queries")
-    async def publish_verified_query(
-        source_id: str,
-        payload: VerifiedQueryRequest,
-        request: Request,
-    ) -> dict[str, object]:
-        _require_operator(request)
-        if source_admin is None:
-            raise SourceControlUnavailableError
-        return await source_admin.publish_verified_query(
-            VerifiedQuery(
-                query_id=payload.query_id,
-                source_id=source_id,
-                question=payload.question,
-                sql=payload.sql,
-                metadata_revision=payload.metadata_revision,
-                relations=tuple(payload.relations),
-                expected=ExpectedResult(
-                    columns=tuple(payload.expected.columns),
-                    row_count=payload.expected.row_count,
-                    result_hash=payload.expected.result_hash,
-                ),
-            ),
-            _caller(request).tenant_id,
-        )
-
-    @app.post("/admin/sources/{source_id}/rollback/{generation}")
-    async def rollback_source(
-        source_id: str,
-        generation: int,
-        request: Request,
-    ) -> dict[str, object]:
-        _require_operator(request)
-        if source_admin is None:
-            raise SourceControlUnavailableError
-        return await source_admin.rollback(source_id, generation)
-
-    @app.post("/admin/sources/{source_id}/metadata/resume")
-    async def resume_source_metadata_publish(
-        source_id: str,
-        request: Request,
-    ) -> dict[str, object]:
-        _require_operator(request)
-        if source_admin is None:
-            raise SourceControlUnavailableError
-        return await source_admin.resume_automatic_publish(source_id)
-
-    @app.delete("/admin/sources/{source_id}")
-    async def deactivate_source(source_id: str, request: Request) -> dict[str, object]:
-        _require_operator(request)
-        if source_admin is None:
-            raise SourceControlUnavailableError
-        return await source_admin.deactivate(source_id)
-
+    register_source_admin_routes(app)
     app.add_middleware(_MCPRequestLifecycleMiddleware)
     app.mount("/", mcp_app)
 
@@ -746,24 +573,6 @@ def _mcp_caller() -> CallerContext:
     if caller is None:
         raise RuntimeError("MCP caller context is unavailable")
     return caller
-
-
-def _is_json_content_type(value: str | None) -> bool:
-    if value is None:
-        return False
-    media_type, _separator, _parameters = value.partition(";")
-    return media_type.strip().casefold() == "application/json"
-
-
-def _require_operator(request: Request) -> None:
-    caller = _caller(request)
-    if not caller.operator:
-        audit_logger.warning(
-            "authorization_denied caller_id=%s tenant_id=%s operation=source_admin",
-            caller.caller_id,
-            caller.tenant_id,
-        )
-        raise OperatorRequiredError
 
 
 async def _reload_sources(reloader: SourceReloader, interval_ms: int) -> None:

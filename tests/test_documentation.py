@@ -64,6 +64,12 @@ SOURCE_MANAGEMENT_CATALOG_AUDIT = (
     / "verification"
     / "2026-08-23-source-management-catalog.md"
 )
+SOURCE_MUTATION_RECEIPT_AUDIT = (
+    ROOT_DIRECTORY
+    / "docs"
+    / "verification"
+    / "2026-08-23-source-mutation-receipts.md"
+)
 EXPECTED_ID_COUNTS = {
     "BASE": 10,
     "DEC": 9,
@@ -89,7 +95,7 @@ EXPECTED_ACTIVE_ID_COUNTS = {
 }
 EXPECTED_ACTIVE_COMPLETED_COUNTS = {
     "SOAK": 7,
-    "CTRL": 4,
+    "CTRL": 5,
     "SKILL": 0,
     "COST": 0,
     "TRACE": 0,
@@ -126,6 +132,9 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
     source_management_catalog_audit = SOURCE_MANAGEMENT_CATALOG_AUDIT.read_text(
         encoding="utf-8"
     )
+    source_mutation_receipt_audit = SOURCE_MUTATION_RECEIPT_AUDIT.read_text(
+        encoding="utf-8"
+    )
 
     assert "Status: Production ready" in roadmap
     assert "Status: Production ready" in architecture
@@ -140,6 +149,7 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
     assert "Status: Complete" in mcp_soak_audit
     assert "Status: Complete" in control_migration_audit
     assert "Status: Complete" in source_management_catalog_audit
+    assert "Status: Complete" in source_mutation_receipt_audit
     assert REFACTORING_AUDIT.name in roadmap
     assert REFACTORING_AUDIT.name in architecture
     assert CONTAINER_AUDIT.name in roadmap
@@ -165,6 +175,8 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
     assert SHARED_ACCESS_AUDIT.name in architecture
     assert SOURCE_MANAGEMENT_CATALOG_AUDIT.name in development_todo
     assert SOURCE_MANAGEMENT_CATALOG_AUDIT.name in source_management_plan
+    assert SOURCE_MUTATION_RECEIPT_AUDIT.name in development_todo
+    assert SOURCE_MUTATION_RECEIPT_AUDIT.name in source_management_plan
     for prefix, count in EXPECTED_ID_COUNTS.items():
         audit = {
             "DEP": container_audit,
@@ -186,6 +198,9 @@ def test_active_todo_has_prioritized_unique_checklists_and_completed_evidence() 
     managed_source_startup_audit = MANAGED_SOURCE_STARTUP_AUDIT.read_text(encoding="utf-8")
     shared_access_audit = SHARED_ACCESS_AUDIT.read_text(encoding="utf-8")
     source_management_catalog_audit = SOURCE_MANAGEMENT_CATALOG_AUDIT.read_text(
+        encoding="utf-8"
+    )
+    source_mutation_receipt_audit = SOURCE_MUTATION_RECEIPT_AUDIT.read_text(
         encoding="utf-8"
     )
     matches = re.findall(r"^- \[([ x])\] `([A-Z]+)-(\d{2})`", todo, re.MULTILINE)
@@ -214,6 +229,28 @@ def test_active_todo_has_prioritized_unique_checklists_and_completed_evidence() 
     assert "`CTRL-02`" in managed_source_startup_audit
     assert "`CTRL-03`" in shared_access_audit
     assert "`CTRL-04`" in source_management_catalog_audit
+    assert "`CTRL-05`" in source_mutation_receipt_audit
+
+
+def test_mutation_receipt_docs_preserve_terminal_and_secret_boundaries() -> None:
+    plan = SOURCE_MANAGEMENT_PLAN.read_text(encoding="utf-8")
+    operations = (ROOT_DIRECTORY / "docs" / "operations.md").read_text(
+        encoding="utf-8"
+    )
+    audit = SOURCE_MUTATION_RECEIPT_AUDIT.read_text(encoding="utf-8")
+
+    for header in (
+        "Idempotency-Key",
+        "X-Query-Man-Reason",
+        "X-Expected-Generation",
+        "X-Expected-State-Version",
+        "X-Expected-Metadata-Revision",
+    ):
+        assert header in plan
+    assert "terminal-only" in plan
+    assert "404를 실패" in operations
+    assert "같은 transaction" in audit
+    assert "question/SQL" in audit
 
 
 def test_initial_access_and_resource_tier_decision_stays_minimal() -> None:

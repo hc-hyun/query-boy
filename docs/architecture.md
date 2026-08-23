@@ -136,10 +136,13 @@ effective `budget_profile`, replica convergence, size/growth와 usage/cost proje
 HTTP API로 제공한다. 실제 DB 객체, secret, raw metric과 provider bill은 각 authority에 남을 수
 있다. Control Plane은 같은 `source_id`와 provenance로 이를 모아 보여준다.
 
-현재 첫 management slice는 strict manifest v2의 owner/environment/DB migration reference를
-immutable generation에 저장하고 admin-only list/detail/generation-history API로 조회한다. API는
-raw manifest나 encrypted secret을 읽지 않는 explicit projection이며 published generation revision과
-현재 active metadata revision을 구분한다. Mutation event audit, replica/size/cost 상태는 이후
+현재 management slice는 strict manifest v2의 owner/environment/DB migration reference를
+immutable generation에 저장하고 admin-only list/detail/generation-history API로 조회한다. 여섯
+mutation은 expected state, authenticated actor/change reference와 keyed canonical request hash를
+사용하며 source/contract 변경과 terminal receipt를 원자적으로 commit한다. 별도 operator-only
+receipt lookup과 source mutation history가 timeout reconciliation과 lifecycle chronology를 제공한다.
+API는 raw manifest, encrypted secret, question/SQL을 읽지 않는 explicit projection이며 published
+generation revision과 현재 active metadata revision을 구분한다. Replica/size/cost 상태는 이후
 `CTRL-*` 단계가 추가한다.
 
 초기 management 권한은 query user와 Query Man admin 두 종류다. 기존 boolean operator를 admin
@@ -292,6 +295,10 @@ Managed source authority startup과 bootstrap cutover 증거는
 [managed source startup audit](verification/2026-08-23-managed-source-startup.md)에 기록한다.
 Version 2 shared visibility와 query/admin capability 증거는
 [shared access audit](verification/2026-08-23-shared-access.md)에 기록한다.
+Strict manifest provenance와 admin source catalog 증거는
+[source management catalog audit](verification/2026-08-23-source-management-catalog.md)에 기록한다.
+Idempotent source mutation과 immutable receipt 증거는
+[source mutation receipt audit](verification/2026-08-23-source-mutation-receipts.md)에 기록한다.
 이후 범위 변경도 완료된 ID를 재사용하지 않고 새 decision과 roadmap ID로 추가한다.
 네 번째 source 확장 감사와 남은 경계는
 [source extension assurance](verification/2026-08-23-source-extension.md)에 기록한다.

@@ -1,15 +1,25 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import Callable, Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Protocol
 
 from query_man.errors import (
+    AppError,
+    MetadataRevisionMismatchError,
+    MetadataUnavailableError,
+    MutationNotFoundError,
+    QueryInvalidError,
+    QueryRejectedError,
     SourceControlUnavailableError,
     SourceNotFoundError,
     SourceValidationError,
+)
+from query_man.errors import (
+    MutationIdempotencyConflictError as MutationIdempotencyConflictAppError,
 )
 from query_man.errors import SourceGenerationConflictError as SourceGenerationConflictAppError
 from query_man.metadata import MetadataService
@@ -18,6 +28,7 @@ from query_man.models import BudgetProfile, CatalogProvider, PreparedMetadata, S
 from query_man.operations import operations
 from query_man.quality_level import assess_quality_level
 from query_man.query import QueryService
+from query_man.reader_policy import ReaderSessionPolicyError
 from query_man.registry import (
     RegistryConfigurationError,
     SourceRegistry,
@@ -25,6 +36,11 @@ from query_man.registry import (
 )
 from query_man.secrets import EncryptedSecret, SecretDecryptionError, SourceSecretCipher
 from query_man.source_store import (
+    MutationIdempotencyConflictError,
+    MutationPage,
+    MutationReceipt,
+    MutationReplay,
+    MutationRequest,
     SourceCatalogPage,
     SourceCatalogRecord,
     SourceGenerationConflictError,
@@ -67,6 +83,24 @@ class SourceStore(Protocol):
         limit: int = 50,
     ) -> SourceGenerationPage | None: ...
 
+    async def get_mutation(self, idempotency_key: str) -> MutationReceipt | None: ...
+
+    async def list_mutations(
+        self,
+        source_id: str,
+        *,
+        before_event_id: int | None = None,
+        limit: int = 50,
+    ) -> MutationPage | None: ...
+
+    async def record_mutation_rejection(
+        self,
+        mutation: MutationRequest,
+        *,
+        http_status: int,
+        error_code: str,
+    ) -> MutationReceipt: ...
+
     async def next_generation(self, source_id: str) -> int: ...
 
     async def publish(
@@ -79,6 +113,8 @@ class SourceStore(Protocol):
         metadata: PreparedMetadata,
         *,
         expected_state_version: int,
+        mutation: MutationRequest | None = None,
+        mutation_result: dict[str, object] | None = None,
     ) -> StoredSource: ...
 
     async def deactivate(
@@ -87,6 +123,8 @@ class SourceStore(Protocol):
         expected_generation: int,
         *,
         expected_state_version: int,
+        mutation: MutationRequest | None = None,
+        mutation_result: dict[str, object] | None = None,
     ) -> int: ...
 
     async def rollback(
@@ -96,17 +134,44 @@ class SourceStore(Protocol):
         expected_generation: int,
         *,
         expected_state_version: int,
+        mutation: MutationRequest | None = None,
+        mutation_result: dict[str, object] | None = None,
     ) -> StoredSource: ...
 
     async def close(self) -> None: ...
 
-    async def publish_verified_query(self, query: VerifiedQuery) -> None: ...
+    async def publish_verified_query(
+        self,
+        query: VerifiedQuery,
+        *,
+        mutation: MutationRequest | None = None,
+        mutation_result: dict[str, object] | None = None,
+    ) -> None: ...
+
+    async def resume_metadata_publish(
+        self,
+        source_id: str,
+        expected_metadata_revision: str,
+        *,
+        mutation: MutationRequest,
+        mutation_result: dict[str, object],
+    ) -> None: ...
 
     async def verified_revision_map(self) -> dict[str, frozenset[str]]: ...
 
 
 class SourcePoolInvalidator(Protocol):
     async def invalidate(self, source_id: str) -> None: ...
+
+
+@dataclass(frozen=True)
+class MutationContext:
+    idempotency_key: str
+    actor: str
+    reason: str
+    expected_generation: int
+    expected_state_version: int
+    expected_metadata_revision: str | None = None
 
 
 class SourceReloader:
@@ -387,6 +452,37 @@ class SourceAdminService:
         except Exception as error:
             raise SourceControlUnavailableError from error
 
+    async def get_mutation(self, idempotency_key: str) -> dict[str, object]:
+        try:
+            receipt = await self._store.get_mutation(idempotency_key)
+        except Exception as error:
+            raise SourceControlUnavailableError from error
+        if receipt is None:
+            raise MutationNotFoundError
+        return _mutation_receipt_response(receipt)
+
+    async def source_mutations(
+        self,
+        source_id: str,
+        limit: int = 50,
+        before_event_id: int | None = None,
+    ) -> dict[str, object]:
+        try:
+            page = await self._store.list_mutations(
+                source_id,
+                before_event_id=before_event_id,
+                limit=limit,
+            )
+        except Exception as error:
+            raise SourceControlUnavailableError from error
+        if page is None:
+            raise SourceNotFoundError
+        return {
+            "source_id": source_id,
+            "mutations": [_mutation_receipt_response(item) for item in page.items],
+            "next_before_event_id": page.next_before_event_id,
+        }
+
     def _effective_budget_limits(self, profile_name: str) -> dict[str, object]:
         budget = self._budgets.get(profile_name)
         if budget is None:
@@ -423,12 +519,89 @@ class SourceAdminService:
         source_id: str,
         manifest: object,
         credential: str,
+        mutation: MutationContext | None = None,
     ) -> dict[str, object]:
+        return await self._publish(
+            source_id,
+            manifest,
+            credential,
+            mutation=mutation,
+            operation="publish_source",
+            canonical_payload={"manifest": manifest, "credential": credential},
+        )
+
+    async def rotate_credential(
+        self,
+        source_id: str,
+        credential: str,
+        mutation: MutationContext | None = None,
+    ) -> dict[str, object]:
+        request = self._mutation_request(
+            mutation,
+            operation="rotate_credential",
+            source_id=source_id,
+            payload={"credential": credential},
+        )
+        if request is not None:
+            replay = await self._preflight_mutation(request)
+            if replay is not None:
+                return replay
+        try:
+            current = await self._store.get_active(source_id)
+            if current is None or not current.enabled:
+                raise StoredSourceNotFoundError
+            self._require_expected_state(current, mutation)
+        except StoredSourceNotFoundError as error:
+            if request is not None:
+                return await self._reject_or_replay(request, SourceValidationError())
+            raise SourceValidationError from error
+        except SourceGenerationConflictError as error:
+            if request is not None:
+                return await self._reject_or_replay(
+                    request,
+                    SourceGenerationConflictAppError(),
+                )
+            raise SourceGenerationConflictAppError from error
+        except Exception as error:
+            raise SourceControlUnavailableError from error
+        return await self._publish(
+            source_id,
+            current.manifest,
+            credential,
+            mutation=mutation,
+            operation="rotate_credential",
+            canonical_payload={"credential": credential},
+            request=request,
+        )
+
+    async def _publish(
+        self,
+        source_id: str,
+        manifest: object,
+        credential: str,
+        *,
+        mutation: MutationContext | None,
+        operation: str,
+        canonical_payload: dict[str, object],
+        request: MutationRequest | None = None,
+    ) -> dict[str, object]:
+        request_was_preflighted = request is not None
+        request = request or self._mutation_request(
+            mutation,
+            operation=operation,
+            source_id=source_id,
+            payload=canonical_payload,
+        )
+        if request is not None and not request_was_preflighted:
+            replay = await self._preflight_mutation(request)
+            if replay is not None:
+                return replay
         try:
             validated = validate_source_manifest(manifest, self._budgets, credential)
             if validated.profile.source_id != source_id:
                 raise RegistryConfigurationError("Path source_id does not match manifest")
             current = await self._store.get_active(source_id)
+            self._require_expected_state(current, mutation)
             current_identity = (
                 _connection_identity(current.manifest)
                 if current is not None
@@ -443,62 +616,108 @@ class SourceAdminService:
             expected_generation = 0 if current is None else current.generation
             generation = await self._store.next_generation(source_id)
             metadata = await self._stage(validated.profile)
+            quality = assess_quality_level(
+                validated.profile,
+                metadata.snapshot,
+                metadata.revision,
+                self._verified_revisions,
+            )
+            result: dict[str, object] = {
+                "status": "published",
+                "source_id": source_id,
+                "generation": generation,
+                "metadata_revision": metadata.revision,
+                "quality_level": quality.level,
+            }
             encrypted = self._cipher.encrypt(
                 source_id,
                 generation,
                 credential,
             )
-            record = await self._store.publish(
-                source_id,
-                expected_generation,
-                generation,
-                validated.document,
-                encrypted,
-                metadata,
-                expected_state_version=0 if current is None else current.state_version,
-            )
-            await self._reloader.apply(record)
+            expected_state_version = 0 if current is None else current.state_version
+            if request is None:
+                record = await self._store.publish(
+                    source_id,
+                    expected_generation,
+                    generation,
+                    validated.document,
+                    encrypted,
+                    metadata,
+                    expected_state_version=expected_state_version,
+                )
+            else:
+                record = await self._store.publish(
+                    source_id,
+                    expected_generation,
+                    generation,
+                    validated.document,
+                    encrypted,
+                    metadata,
+                    expected_state_version=expected_state_version,
+                    mutation=request,
+                    mutation_result=result,
+                )
+        except MutationReplay as replay:
+            return self._receipt_or_error(replay.receipt)
+        except MutationIdempotencyConflictError as error:
+            raise MutationIdempotencyConflictAppError from error
         except SourceGenerationConflictError as error:
+            if request is not None:
+                return await self._reject_or_replay(
+                    request,
+                    SourceGenerationConflictAppError(),
+                )
             raise SourceGenerationConflictAppError from error
         except (SourcePublishPinnedError, RegistryConfigurationError, SecretDecryptionError) as error:
+            if request is not None:
+                return await self._reject_or_replay(request, SourceValidationError())
             raise SourceValidationError from error
-        except SourceValidationError:
+        except SourceValidationError as error:
+            if request is not None:
+                return await self._reject_or_replay(request, error)
             raise
         except Exception as error:
             raise SourceControlUnavailableError from error
-        quality = assess_quality_level(
-            validated.profile,
-            metadata.snapshot,
-            metadata.revision,
-            self._verified_revisions,
+        await self._apply_after_commit(record)
+        if request is not None:
+            return await self._completed_mutation(request)
+        return result
+
+    async def deactivate(
+        self,
+        source_id: str,
+        mutation: MutationContext | None = None,
+    ) -> dict[str, object]:
+        request = self._mutation_request(
+            mutation,
+            operation="deactivate_source",
+            source_id=source_id,
+            payload={},
         )
-        return {
-            "status": "published",
-            "source_id": source_id,
-            "generation": record.generation,
-            "metadata_revision": record.metadata_revision,
-            "quality_level": quality.level,
-        }
-
-    async def rotate_credential(self, source_id: str, credential: str) -> dict[str, object]:
-        try:
-            current = await self._store.get_active(source_id)
-        except Exception as error:
-            raise SourceControlUnavailableError from error
-        if current is None or not current.enabled:
-            raise SourceValidationError
-        return await self.publish(source_id, current.manifest, credential)
-
-    async def deactivate(self, source_id: str) -> dict[str, object]:
+        if request is not None:
+            replay = await self._preflight_mutation(request)
+            if replay is not None:
+                return replay
+        result: dict[str, object] = {"status": "deactivated", "source_id": source_id}
         try:
             current = await self._store.get_active(source_id)
             if current is None:
                 raise StoredSourceNotFoundError
-            state_version = await self._store.deactivate(
-                source_id,
-                current.generation,
-                expected_state_version=current.state_version,
-            )
+            self._require_expected_state(current, mutation)
+            if request is None:
+                state_version = await self._store.deactivate(
+                    source_id,
+                    current.generation,
+                    expected_state_version=current.state_version,
+                )
+            else:
+                state_version = await self._store.deactivate(
+                    source_id,
+                    current.generation,
+                    expected_state_version=current.state_version,
+                    mutation=request,
+                    mutation_result=result,
+                )
             inactive = StoredSource(
                 current.source_id,
                 current.generation,
@@ -508,21 +727,69 @@ class SourceAdminService:
                 False,
                 state_version,
             )
-            await self._reloader.apply(inactive)
+        except MutationReplay as replay:
+            return self._receipt_or_error(replay.receipt)
+        except MutationIdempotencyConflictError as error:
+            raise MutationIdempotencyConflictAppError from error
         except SourceGenerationConflictError as error:
+            if request is not None:
+                return await self._reject_or_replay(
+                    request,
+                    SourceGenerationConflictAppError(),
+                )
             raise SourceGenerationConflictAppError from error
         except StoredSourceNotFoundError as error:
+            if request is not None:
+                return await self._reject_or_replay(request, SourceValidationError())
             raise SourceValidationError from error
         except Exception as error:
             raise SourceControlUnavailableError from error
-        return {"status": "deactivated", "source_id": source_id}
+        await self._apply_after_commit(inactive)
+        if request is not None:
+            return await self._completed_mutation(request)
+        return result
 
     async def publish_verified_query(
         self,
         query: VerifiedQuery,
         tenant_id: str,
+        mutation: MutationContext | None = None,
     ) -> dict[str, object]:
+        request = self._mutation_request(
+            mutation,
+            operation="publish_verified_query",
+            source_id=query.source_id,
+            payload={
+                "query_id": query.query_id,
+                "question": query.question,
+                "sql": query.sql,
+                "metadata_revision": query.metadata_revision,
+                "relations": list(query.relations),
+                "expected": {
+                    "columns": list(query.expected.columns),
+                    "row_count": query.expected.row_count,
+                    "result_hash": query.expected.result_hash,
+                },
+            },
+        )
+        if request is not None:
+            replay = await self._preflight_mutation(request)
+            if replay is not None:
+                return replay
+        result: dict[str, object] = {
+            "status": "verified",
+            "query_id": query.query_id,
+            "source_id": query.source_id,
+            "metadata_revision": query.metadata_revision,
+            "row_count": query.expected.row_count,
+            "result_hash": query.expected.result_hash,
+        }
         try:
+            if mutation is not None:
+                current_source = await self._store.get_active(query.source_id)
+                if current_source is None or not current_source.enabled:
+                    raise StoredSourceNotFoundError
+                self._require_expected_state(current_source, mutation)
             metadata = await self._metadata.get_published(query.source_id)
             if metadata.revision != query.metadata_revision:
                 raise SourceValidationError
@@ -553,29 +820,74 @@ class SourceAdminService:
                 or create_result_hash(tuple(columns), rows) != query.expected.result_hash
             ):
                 raise SourceValidationError
-            await self._store.publish_verified_query(query)
+            if request is None:
+                await self._store.publish_verified_query(query)
+            else:
+                await self._store.publish_verified_query(
+                    query,
+                    mutation=request,
+                    mutation_result=result,
+                )
             current = self._verified_revisions.get(query.source_id, frozenset())
             self._verified_revisions[query.source_id] = current | {query.metadata_revision}
-        except SourceValidationError:
+        except MutationReplay as replay:
+            return self._receipt_or_error(replay.receipt)
+        except MutationIdempotencyConflictError as error:
+            raise MutationIdempotencyConflictAppError from error
+        except SourceGenerationConflictError as error:
+            if request is not None:
+                return await self._reject_or_replay(
+                    request,
+                    SourceGenerationConflictAppError(),
+                )
+            raise SourceValidationError from error
+        except StoredSourceNotFoundError as error:
+            if request is not None:
+                return await self._reject_or_replay(request, SourceValidationError())
+            raise SourceValidationError from error
+        except SourceValidationError as error:
+            if request is not None:
+                return await self._reject_or_replay(request, error)
             raise
-        except (SqlValidationError, SourceGenerationConflictError) as error:
+        except SqlValidationError as error:
+            if request is not None:
+                return await self._reject_or_replay(request, SourceValidationError())
+            raise SourceValidationError from error
+        except (
+            MetadataRevisionMismatchError,
+            QueryInvalidError,
+            QueryRejectedError,
+        ) as error:
+            if request is not None:
+                return await self._reject_or_replay(request, SourceValidationError())
             raise SourceValidationError from error
         except Exception as error:
             raise SourceControlUnavailableError from error
-        return {
-            "status": "verified",
-            "query_id": query.query_id,
-            "source_id": query.source_id,
-            "metadata_revision": query.metadata_revision,
-            "row_count": query.expected.row_count,
-            "result_hash": query.expected.result_hash,
-        }
+        if request is not None:
+            return await self._completed_mutation(request)
+        return result
 
-    async def rollback(self, source_id: str, generation: int) -> dict[str, object]:
+    async def rollback(
+        self,
+        source_id: str,
+        generation: int,
+        mutation: MutationContext | None = None,
+    ) -> dict[str, object]:
+        request = self._mutation_request(
+            mutation,
+            operation="rollback_source",
+            source_id=source_id,
+            payload={"target_generation": generation},
+        )
+        if request is not None:
+            replay = await self._preflight_mutation(request)
+            if replay is not None:
+                return replay
         try:
             current = await self._store.get_active(source_id)
             if current is None:
                 raise StoredSourceNotFoundError
+            self._require_expected_state(current, mutation)
             candidate = await self._store.get_revision(source_id, generation)
             if _connection_identity(current.manifest) != _connection_identity(
                 candidate.manifest
@@ -584,37 +896,262 @@ class SourceAdminService:
                     "A source_id cannot be rebound to a different connection identity"
                 )
             await self._reloader.validate(candidate)
-            record = await self._store.rollback(
-                source_id,
-                generation,
-                current.generation,
-                expected_state_version=current.state_version,
-            )
-            await self._reloader.apply(record)
+            result: dict[str, object] = {
+                "status": "rolled_back",
+                "source_id": source_id,
+                "generation": candidate.generation,
+                "metadata_revision": candidate.metadata_revision,
+            }
+            if request is None:
+                record = await self._store.rollback(
+                    source_id,
+                    generation,
+                    current.generation,
+                    expected_state_version=current.state_version,
+                )
+            else:
+                record = await self._store.rollback(
+                    source_id,
+                    generation,
+                    current.generation,
+                    expected_state_version=current.state_version,
+                    mutation=request,
+                    mutation_result=result,
+                )
+        except MutationReplay as replay:
+            return self._receipt_or_error(replay.receipt)
+        except MutationIdempotencyConflictError as error:
+            raise MutationIdempotencyConflictAppError from error
         except SourceGenerationConflictError as error:
+            if request is not None:
+                return await self._reject_or_replay(
+                    request,
+                    SourceGenerationConflictAppError(),
+                )
             raise SourceGenerationConflictAppError from error
         except (StoredSourceNotFoundError, RegistryConfigurationError, SecretDecryptionError) as error:
+            if request is not None:
+                return await self._reject_or_replay(request, SourceValidationError())
             raise SourceValidationError from error
         except Exception as error:
             raise SourceControlUnavailableError from error
-        return {
-            "status": "rolled_back",
-            "source_id": source_id,
-            "generation": record.generation,
-            "metadata_revision": record.metadata_revision,
-        }
+        await self._apply_after_commit(record)
+        if request is not None:
+            return await self._completed_mutation(request)
+        return result
 
-    async def resume_automatic_publish(self, source_id: str) -> dict[str, object]:
+    async def resume_automatic_publish(
+        self,
+        source_id: str,
+        mutation: MutationContext | None = None,
+    ) -> dict[str, object]:
+        if mutation is not None and mutation.expected_metadata_revision is None:
+            raise SourceValidationError
+        request = self._mutation_request(
+            mutation,
+            operation="resume_metadata_publish",
+            source_id=source_id,
+            payload={
+                "expected_metadata_revision": (
+                    None if mutation is None else mutation.expected_metadata_revision
+                )
+            },
+        )
+        if request is not None:
+            replay = await self._preflight_mutation(request)
+            if replay is not None:
+                return replay
+        result: dict[str, object] = {"status": "resumed", "source_id": source_id}
         try:
             current = await self._store.get_active(source_id)
             if current is None or not current.enabled:
                 raise StoredSourceNotFoundError
-            await self._metadata.resume_automatic_publish(source_id)
-        except StoredSourceNotFoundError as error:
+            self._require_expected_state(current, mutation)
+            if request is None:
+                await self._metadata.resume_automatic_publish(source_id)
+            else:
+                if mutation is None:
+                    raise SourceValidationError
+                expected_revision = mutation.expected_metadata_revision
+                if expected_revision is None:
+                    raise SourceValidationError
+                await self._store.resume_metadata_publish(
+                    source_id,
+                    expected_revision,
+                    mutation=request,
+                    mutation_result=result,
+                )
+                self._metadata.invalidate(source_id)
+        except MutationReplay as replay:
+            return self._receipt_or_error(replay.receipt)
+        except MutationIdempotencyConflictError as error:
+            raise MutationIdempotencyConflictAppError from error
+        except SourceGenerationConflictError as error:
+            if request is not None:
+                return await self._reject_or_replay(
+                    request,
+                    SourceGenerationConflictAppError(),
+                )
             raise SourceValidationError from error
+        except StoredSourceNotFoundError as error:
+            if request is not None:
+                return await self._reject_or_replay(request, SourceValidationError())
+            raise SourceValidationError from error
+        except SourceValidationError as error:
+            if request is not None:
+                return await self._reject_or_replay(request, error)
+            raise
         except Exception as error:
             raise SourceControlUnavailableError from error
-        return {"status": "resumed", "source_id": source_id}
+        if request is not None:
+            return await self._completed_mutation(request)
+        return result
+
+    def _mutation_request(
+        self,
+        context: MutationContext | None,
+        *,
+        operation: str,
+        source_id: str,
+        payload: dict[str, object],
+    ) -> MutationRequest | None:
+        if context is None:
+            return None
+        envelope: dict[str, object] = {
+            "version": 1,
+            "idempotency_key": context.idempotency_key,
+            "operation": operation,
+            "source_id": source_id,
+            "actor": context.actor,
+            "reason": context.reason,
+            "expected_state": {
+                "generation": context.expected_generation,
+                "state_version": context.expected_state_version,
+            },
+            "payload": payload,
+        }
+        if context.expected_metadata_revision is not None:
+            envelope["expected_metadata_revision"] = context.expected_metadata_revision
+        try:
+            canonical = json.dumps(
+                envelope,
+                ensure_ascii=False,
+                allow_nan=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        except (TypeError, ValueError) as error:
+            raise SourceValidationError from error
+        return MutationRequest(
+            idempotency_key=context.idempotency_key,
+            request_hash=self._cipher.mutation_request_hash(canonical),
+            operation=operation,
+            source_id=source_id,
+            actor=context.actor,
+            reason=context.reason,
+            expected_generation=context.expected_generation,
+            expected_state_version=context.expected_state_version,
+        )
+
+    async def _preflight_mutation(
+        self,
+        request: MutationRequest,
+    ) -> dict[str, object] | None:
+        try:
+            receipt = await self._store.get_mutation(request.idempotency_key)
+        except Exception as error:
+            raise SourceControlUnavailableError from error
+        if receipt is None:
+            return None
+        self._require_same_receipt(receipt, request)
+        return self._receipt_or_error(receipt)
+
+    async def _completed_mutation(self, request: MutationRequest) -> dict[str, object]:
+        try:
+            receipt = await self._store.get_mutation(request.idempotency_key)
+        except Exception as error:
+            raise SourceControlUnavailableError from error
+        if receipt is None:
+            raise SourceControlUnavailableError
+        self._require_same_receipt(receipt, request)
+        return self._receipt_or_error(receipt)
+
+    async def _reject_or_replay(
+        self,
+        request: MutationRequest,
+        error: AppError,
+    ) -> dict[str, object]:
+        try:
+            receipt = await self._store.record_mutation_rejection(
+                request,
+                http_status=error.status_code,
+                error_code=error.code,
+            )
+        except MutationIdempotencyConflictError as conflict:
+            raise MutationIdempotencyConflictAppError from conflict
+        except Exception as store_error:
+            raise SourceControlUnavailableError from store_error
+        return self._receipt_or_error(receipt)
+
+    @staticmethod
+    def _require_same_receipt(
+        receipt: MutationReceipt,
+        request: MutationRequest,
+    ) -> None:
+        if (
+            receipt.request_hash != request.request_hash
+            or receipt.operation != request.operation
+            or receipt.source_id != request.source_id
+            or receipt.actor != request.actor
+            or receipt.reason != request.reason
+            or receipt.expected_generation != request.expected_generation
+            or receipt.expected_state_version != request.expected_state_version
+        ):
+            raise MutationIdempotencyConflictAppError
+
+    def _receipt_or_error(self, receipt: MutationReceipt) -> dict[str, object]:
+        if receipt.outcome == "succeeded":
+            if receipt.operation == "publish_verified_query":
+                metadata_revision = receipt.result.get("metadata_revision")
+                if not isinstance(metadata_revision, str):
+                    raise SourceControlUnavailableError
+                current = self._verified_revisions.get(receipt.source_id, frozenset())
+                self._verified_revisions[receipt.source_id] = current | {
+                    metadata_revision
+                }
+            return _mutation_receipt_response(receipt)
+        if receipt.error_code == "SOURCE_VALIDATION_FAILED":
+            raise SourceValidationError
+        if receipt.error_code == "SOURCE_GENERATION_CONFLICT":
+            raise SourceGenerationConflictAppError
+        raise SourceControlUnavailableError
+
+    @staticmethod
+    def _require_expected_state(
+        current: StoredSource | None,
+        context: MutationContext | None,
+    ) -> None:
+        if context is None:
+            return
+        generation = 0 if current is None else current.generation
+        state_version = 0 if current is None else current.state_version
+        if (
+            generation != context.expected_generation
+            or state_version != context.expected_state_version
+        ):
+            raise SourceGenerationConflictError
+
+    async def _apply_after_commit(self, record: StoredSource) -> None:
+        try:
+            await self._reloader.apply(record)
+        except Exception:
+            operations.increment("source_admin_apply_failed", record.source_id)
+            operations.set_component_health("source_reload", "unavailable")
+            logger.exception(
+                "source_admin_apply_failed source_id=%s generation=%s",
+                record.source_id,
+                record.generation,
+            )
 
     async def _stage(self, source: SourceProfile) -> PreparedMetadata:
         catalog = self._catalog_factory()
@@ -626,8 +1163,16 @@ class SourceAdminService:
         with operations.suppress_source_health_updates():
             try:
                 return await service.get_published(source.source_id)
+            except MetadataUnavailableError as error:
+                details = error.details
+                if (
+                    isinstance(details, dict)
+                    and isinstance(details.get("contract_violations"), list)
+                ) or isinstance(error.__cause__, ReaderSessionPolicyError):
+                    raise SourceValidationError from error
+                raise SourceControlUnavailableError from error
             except Exception as error:
-                raise SourceValidationError from error
+                raise SourceControlUnavailableError from error
             finally:
                 await catalog.close()
 
@@ -687,4 +1232,35 @@ def _generation_summary(record: SourceCatalogRecord) -> dict[str, object]:
         "published_metadata_revision": record.published_metadata_revision,
         "minimum_quality_level": record.minimum_quality_level,
         "is_current": record.is_current,
+    }
+
+
+def _mutation_receipt_response(receipt: MutationReceipt) -> dict[str, object]:
+    resulting_state: dict[str, int] | None = None
+    if (
+        receipt.resulting_generation is not None
+        and receipt.resulting_state_version is not None
+    ):
+        resulting_state = {
+            "generation": receipt.resulting_generation,
+            "state_version": receipt.resulting_state_version,
+        }
+    return {
+        "event_id": receipt.event_id,
+        "idempotency_key": receipt.idempotency_key,
+        "request_hash": receipt.request_hash,
+        "operation": receipt.operation,
+        "source_id": receipt.source_id,
+        "actor": receipt.actor,
+        "reason": receipt.reason,
+        "outcome": receipt.outcome,
+        "expected_state": {
+            "generation": receipt.expected_generation,
+            "state_version": receipt.expected_state_version,
+        },
+        "resulting_state": resulting_state,
+        "http_status": receipt.http_status,
+        "error_code": receipt.error_code,
+        "result": dict(receipt.result),
+        "recorded_at": receipt.recorded_at.isoformat(),
     }

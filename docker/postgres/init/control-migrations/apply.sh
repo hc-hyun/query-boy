@@ -27,6 +27,7 @@ fi
 
 declare -A expected_names=()
 declare -A expected_checksums=()
+expected_ledger_values=""
 expected_version=1
 for migration_path in "${migration_paths[@]}"; do
   migration_name="$(basename "$migration_path")"
@@ -41,6 +42,10 @@ for migration_path in "${migration_paths[@]}"; do
   fi
   expected_names[$migration_version]="$migration_name"
   expected_checksums[$migration_version]="sha256:$(sha256sum "$migration_path" | cut -d ' ' -f 1)"
+  if [[ -n "$expected_ledger_values" ]]; then
+    expected_ledger_values+=", "
+  fi
+  expected_ledger_values+="($migration_version::bigint, '$migration_name'::text, '${expected_checksums[$migration_version]}'::text)"
   ((expected_version += 1))
 done
 latest_version=$((expected_version - 1))
@@ -105,9 +110,9 @@ SELECT EXISTS (
     AND (filename <> :'migration_name' OR checksum <> :'migration_checksum')
 ) AS migration_mismatch \gset
 \if :migration_mismatch
-  \echo 'Applied control migration differs from the repository.'
+  \warn 'Applied control migration differs from the repository.'
   ROLLBACK;
-  \quit 3
+  SELECT 1 / 0;
 \endif
 SELECT NOT EXISTS (
   SELECT 1 FROM control.schema_migrations WHERE version = :migration_version
@@ -133,12 +138,41 @@ SQL
     --set=migration_checksum="$migration_checksum" >/dev/null
 done
 
-psql \
+# The final ledger check and security reconciliation must share this transaction and lock.
+{
+  cat <<SQL
+BEGIN;
+SET LOCAL lock_timeout = '5s';
+SELECT pg_catalog.pg_advisory_xact_lock(
+  pg_catalog.hashtextextended('query-man-control-migrations', 0)
+);
+WITH expected(version, filename, checksum) AS (
+  VALUES $expected_ledger_values
+)
+SELECT EXISTS (
+  SELECT 1
+  FROM expected
+  FULL OUTER JOIN control.schema_migrations AS applied
+    ON applied.version = expected.version
+  WHERE expected.version IS NULL
+    OR applied.version IS NULL
+    OR applied.filename IS DISTINCT FROM expected.filename
+    OR applied.checksum IS DISTINCT FROM expected.checksum
+) AS ledger_mismatch \gset
+\if :ledger_mismatch
+  \warn 'Control migration ledger changed before security reconciliation.'
+  ROLLBACK;
+  SELECT 1 / 0;
+\endif
+SQL
+  cat "$migration_dir/reconcile-security.sql"
+  cat <<'SQL'
+COMMIT;
+SQL
+} | psql \
   --no-psqlrc \
   --quiet \
-  --set=ON_ERROR_STOP=1 \
-  --single-transaction \
-  --file="$migration_dir/reconcile-security.sql" >/dev/null
+  --set=ON_ERROR_STOP=1 >/dev/null
 
 applied_count="$(psql \
   --no-psqlrc \

@@ -85,6 +85,41 @@ _QUERY_B_TOKEN = "integration-query-b-token-with-at-least-32-characters"
 _ADMIN_TOKEN = "integration-admin-token-with-at-least-32-characters"
 
 
+def _mutation_headers(
+    reason: str,
+    generation: int,
+    state_version: int,
+    *,
+    metadata_revision: str | None = None,
+) -> dict[str, str]:
+    headers = {
+        "Idempotency-Key": str(uuid.uuid4()),
+        "X-Query-Man-Reason": reason,
+        "X-Expected-Generation": str(generation),
+        "X-Expected-State-Version": str(state_version),
+    }
+    if metadata_revision is not None:
+        headers["X-Expected-Metadata-Revision"] = metadata_revision
+    return headers
+
+
+def _successful_mutation(
+    response: httpx.Response,
+) -> tuple[dict[str, Any], int, int]:
+    body = response.json()
+    assert body["outcome"] == "succeeded"
+    assert body["http_status"] == 200
+    result = body["result"]
+    resulting_state = body["resulting_state"]
+    assert isinstance(result, dict)
+    assert isinstance(resulting_state, dict)
+    generation = resulting_state["generation"]
+    state_version = resulting_state["state_version"]
+    assert isinstance(generation, int)
+    assert isinstance(state_version, int)
+    return result, generation, state_version
+
+
 def _shared_access_policy(path: Path) -> AccessPolicy:
     path.write_text(
         """
@@ -782,11 +817,12 @@ async def test_onboards_third_source_without_runtime_restart(
             published = await admin_session.put(
                 "/admin/sources/support-tickets",
                 json={"manifest": manifest, "credential": credential},
+                headers=_mutation_headers("acceptance/support-l0", 0, 0),
             )
             assert published.status_code == 200
-            publish_body = published.json()
-            assert publish_body["status"] == "published"
-            assert publish_body["quality_level"] == "L0"
+            publish_result, generation, state_version = _successful_mutation(published)
+            assert publish_result["status"] == "published"
+            assert publish_result["quality_level"] == "L0"
             assert credential not in published.text
 
             listed = await query_session.get("/sources")
@@ -810,9 +846,17 @@ async def test_onboards_third_source_without_runtime_restart(
             semantic_published = await admin_session.put(
                 "/admin/sources/support-tickets",
                 json={"manifest": l2_manifest, "credential": credential},
+                headers=_mutation_headers(
+                    "acceptance/support-l1",
+                    generation,
+                    state_version,
+                ),
             )
             assert semantic_published.status_code == 200
-            assert semantic_published.json()["quality_level"] in {"L1", "L2"}
+            semantic_result, generation, state_version = _successful_mutation(
+                semantic_published
+            )
+            assert semantic_result["quality_level"] in {"L1", "L2"}
             semantic_context = await query_session.post(
                 "/meta",
                 json={
@@ -828,17 +872,35 @@ async def test_onboards_third_source_without_runtime_restart(
             verified = await admin_session.post(
                 "/admin/sources/support-tickets/verified-queries",
                 json=verified_contract,
+                headers=_mutation_headers(
+                    "acceptance/support-contract",
+                    generation,
+                    state_version,
+                ),
             )
             assert verified.status_code == 200
-            assert verified.json()["status"] == "verified"
+            verified_result, verified_generation, verified_state_version = (
+                _successful_mutation(verified)
+            )
+            assert verified_result["status"] == "verified"
+            assert (verified_generation, verified_state_version) == (
+                generation,
+                state_version,
+            )
 
             l2_manifest["minimum_quality_level"] = "L2"
             l2_published = await admin_session.put(
                 "/admin/sources/support-tickets",
                 json={"manifest": l2_manifest, "credential": credential},
+                headers=_mutation_headers(
+                    "acceptance/support-l2",
+                    generation,
+                    state_version,
+                ),
             )
             assert l2_published.status_code == 200
-            assert l2_published.json()["quality_level"] == "L2"
+            l2_result, generation, state_version = _successful_mutation(l2_published)
+            assert l2_result["quality_level"] == "L2"
             context = await query_session.post(
                 "/meta",
                 json={
@@ -920,9 +982,17 @@ async def test_onboards_third_source_without_runtime_restart(
                 rotated = await admin_session.post(
                     "/admin/sources/support-tickets/credential",
                     json={"credential": rotated_credential},
+                    headers=_mutation_headers(
+                        "acceptance/support-rotate",
+                        generation,
+                        state_version,
+                    ),
                 )
                 assert rotated.status_code == 200
-                assert rotated.json()["generation"] > publish_body["generation"]
+                rotated_result, generation, state_version = _successful_mutation(
+                    rotated
+                )
+                assert rotated_result["generation"] > publish_result["generation"]
                 assert rotated_credential not in rotated.text
                 after_rotation = await query_session.post(
                     "/query",
@@ -946,11 +1016,26 @@ async def test_onboards_third_source_without_runtime_restart(
                 restored = await admin_session.post(
                     "/admin/sources/support-tickets/credential",
                     json={"credential": credential},
+                    headers=_mutation_headers(
+                        "acceptance/support-restore",
+                        generation,
+                        state_version,
+                    ),
                 )
                 assert restored.status_code == 200
+                _restored_result, generation, state_version = _successful_mutation(
+                    restored
+                )
                 await admin_connection.close()
 
-            deactivated = await admin_session.delete("/admin/sources/support-tickets")
+            deactivated = await admin_session.delete(
+                "/admin/sources/support-tickets",
+                headers=_mutation_headers(
+                    "acceptance/support-deactivate",
+                    generation,
+                    state_version,
+                ),
+            )
             assert deactivated.status_code == 200
             listed_after = await query_session.get("/sources")
             assert "support-tickets" not in {
@@ -1087,6 +1172,8 @@ async def test_onboards_commerce_edges_across_authenticated_mcp_replicas(
     admin_connection = await AsyncConnection.connect(control_dsn)
     source_active = False
     reader_restricted = True
+    expected_generation = 0
+    expected_state_version = 0
     try:
         async with (
             _serve_test_app(replica_a) as replica_a_url,
@@ -1133,10 +1220,26 @@ async def test_onboards_commerce_edges_across_authenticated_mcp_replicas(
                             source["source_id"]
                             for source in initial_sources.json()["sources"]
                         }:
-                            initial_deactivate = await admin_session.delete(
+                            current = await admin_session.get(
                                 "/admin/sources/commerce-edges"
                             )
+                            assert current.status_code == 200, current.text
+                            expected_generation = current.json()["generation"]
+                            expected_state_version = current.json()["state_version"]
+                            initial_deactivate = await admin_session.delete(
+                                "/admin/sources/commerce-edges",
+                                headers=_mutation_headers(
+                                    "acceptance/commerce-initial-deactivate",
+                                    expected_generation,
+                                    expected_state_version,
+                                ),
+                            )
                             assert initial_deactivate.status_code == 200
+                            (
+                                _initial_result,
+                                expected_generation,
+                                expected_state_version,
+                            ) = _successful_mutation(initial_deactivate)
                             for _ in range(100):
                                 listed = await query_a_mcp.call_tool("list_sources", {})
                                 listed_body = listed.structured_content
@@ -1157,6 +1260,11 @@ async def test_onboards_commerce_edges_across_authenticated_mcp_replicas(
                             rejected = await admin_session.put(
                                 "/admin/sources/commerce-edges",
                                 json={"manifest": l0_manifest, "credential": credential},
+                                headers=_mutation_headers(
+                                    "acceptance/commerce-reader-check",
+                                    expected_generation,
+                                    expected_state_version,
+                                ),
                             )
                             assert rejected.status_code == 400, rejected.text
                             assert rejected.json()["error"]["code"] == (
@@ -1173,13 +1281,22 @@ async def test_onboards_commerce_edges_across_authenticated_mcp_replicas(
                         published = await admin_session.put(
                             "/admin/sources/commerce-edges",
                             json={"manifest": l0_manifest, "credential": credential},
+                            headers=_mutation_headers(
+                                "acceptance/commerce-l0",
+                                expected_generation,
+                                expected_state_version,
+                            ),
                         )
                         assert published.status_code == 200, published.text
                         source_active = True
-                        published_body = published.json()
-                        assert published_body["quality_level"] == "L0"
-                        old_revision = published_body["metadata_revision"]
-                        l0_generation = published_body["generation"]
+                        (
+                            published_result,
+                            expected_generation,
+                            expected_state_version,
+                        ) = _successful_mutation(published)
+                        assert published_result["quality_level"] == "L0"
+                        old_revision = published_result["metadata_revision"]
+                        l0_generation = published_result["generation"]
 
                         l0_context_body: dict[str, object] | None = None
                         for _ in range(100):
@@ -1238,10 +1355,20 @@ async def test_onboards_commerce_edges_across_authenticated_mcp_replicas(
                                 "manifest": semantic_manifest,
                                 "credential": credential,
                             },
+                            headers=_mutation_headers(
+                                "acceptance/commerce-l1",
+                                expected_generation,
+                                expected_state_version,
+                            ),
                         )
                         assert semantic_published.status_code == 200, semantic_published.text
-                        semantic_revision = semantic_published.json()["metadata_revision"]
-                        semantic_generation = semantic_published.json()["generation"]
+                        (
+                            semantic_result,
+                            expected_generation,
+                            expected_state_version,
+                        ) = _successful_mutation(semantic_published)
+                        semantic_revision = semantic_result["metadata_revision"]
+                        semantic_generation = semantic_result["generation"]
                         assert semantic_revision != old_revision
 
                         semantic_context_body: dict[str, object] | None = None
@@ -1290,11 +1417,23 @@ async def test_onboards_commerce_edges_across_authenticated_mcp_replicas(
                         verified = await admin_session.post(
                             "/admin/sources/commerce-edges/verified-queries",
                             json=verified_contract,
+                            headers=_mutation_headers(
+                                "acceptance/commerce-contract",
+                                expected_generation,
+                                expected_state_version,
+                            ),
                         )
                         assert verified.status_code == 200, verified.text
-                        assert verified.json()["result_hash"] == verified_contract[
+                        verified_result, verified_generation, verified_state_version = (
+                            _successful_mutation(verified)
+                        )
+                        assert verified_result["result_hash"] == verified_contract[
                             "expected"
                         ]["result_hash"]
+                        assert (verified_generation, verified_state_version) == (
+                            expected_generation,
+                            expected_state_version,
+                        )
 
                         semantic_manifest["minimum_quality_level"] = "L2"
                         l2_published = await admin_session.put(
@@ -1303,11 +1442,21 @@ async def test_onboards_commerce_edges_across_authenticated_mcp_replicas(
                                 "manifest": semantic_manifest,
                                 "credential": credential,
                             },
+                            headers=_mutation_headers(
+                                "acceptance/commerce-l2",
+                                expected_generation,
+                                expected_state_version,
+                            ),
                         )
                         assert l2_published.status_code == 200, l2_published.text
-                        assert l2_published.json()["metadata_revision"] == semantic_revision
-                        assert l2_published.json()["quality_level"] == "L2"
-                        l2_generation = l2_published.json()["generation"]
+                        (
+                            l2_result,
+                            expected_generation,
+                            expected_state_version,
+                        ) = _successful_mutation(l2_published)
+                        assert l2_result["metadata_revision"] == semantic_revision
+                        assert l2_result["quality_level"] == "L2"
+                        l2_generation = l2_result["generation"]
 
                         final_context_body: dict[str, object] | None = None
                         for _ in range(100):
@@ -1497,9 +1646,19 @@ async def test_onboards_commerce_edges_across_authenticated_mcp_replicas(
                         }
 
                         deactivated = await admin_session.delete(
-                            "/admin/sources/commerce-edges"
+                            "/admin/sources/commerce-edges",
+                            headers=_mutation_headers(
+                                "acceptance/commerce-deactivate",
+                                expected_generation,
+                                expected_state_version,
+                            ),
                         )
                         assert deactivated.status_code == 200, deactivated.text
+                        (
+                            _deactivated_result,
+                            expected_generation,
+                            expected_state_version,
+                        ) = _successful_mutation(deactivated)
                         source_active = False
                         for _ in range(100):
                             listed_a = await query_a_mcp.call_tool("list_sources", {})
@@ -1546,7 +1705,12 @@ async def test_onboards_commerce_edges_across_authenticated_mcp_replicas(
                     finally:
                         if source_active:
                             cleanup = await admin_session.delete(
-                                "/admin/sources/commerce-edges"
+                                "/admin/sources/commerce-edges",
+                                headers=_mutation_headers(
+                                    "acceptance/commerce-cleanup",
+                                    expected_generation,
+                                    expected_state_version,
+                                ),
                             )
                             assert cleanup.status_code == 200, cleanup.text
                             source_active = False
