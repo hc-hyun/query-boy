@@ -19,7 +19,7 @@ jobs:
     env:
       QUERY_MAN_CODEX_MCP_TOKEN: ci-only-not-a-secret-soak-token-0001
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
