@@ -102,6 +102,10 @@ collector schema나 통화 단위 비용을 추정해서 구현하지 않는다.
 목표: 한 transport 요청에서 여러 tool call과 retry로 이어지는 사용자 workflow를 민감 입력
 없이 추적한다.
 
+현재 server-generated MCP HTTP request ID는 하나의 POST lifecycle과 그 안의 tool/query만
+연결한다. Client가 여러 POST와 model reasoning을 잇는 workflow trace는 아니므로 아래 항목을
+대체하지 않는다.
+
 - [ ] `TRACE-01` client 제공 trace ID의 문자 집합, 길이, 생성·신뢰 경계와 충돌 정책을
   decision record로 확정한다.
 - [ ] `TRACE-02` 검증된 trace ID를 HTTP/MCP context, tool lifecycle과 query audit에

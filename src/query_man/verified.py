@@ -16,7 +16,7 @@ from query_man.catalog import PostgresCatalog
 from query_man.metadata import MetadataService
 from query_man.query import PostgresQueryExecutor, QueryService
 from query_man.registry import SourceRegistry
-from query_man.sql_validation import validate_sql
+from query_man.sql_validation import SQL_POLICY_REVISION, validate_sql
 
 Identifier = Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,99}$")]
 RelationName = Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_$]*\.[A-Za-z_][A-Za-z0-9_$]*$")]
@@ -156,6 +156,7 @@ class VerifiedQueryRegistry:
                 query.source_id,
                 query.sql,
                 query.metadata_revision,
+                SQL_POLICY_REVISION,
             )
             columns_value = response["columns"]
             rows_value = response["rows"]

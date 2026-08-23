@@ -45,9 +45,13 @@ def test_safe_json_formatter_emits_bounded_audit_fields_as_top_level_json() -> N
     )
     record.query_id = "query-1"
     record.source_id = "development-issues"
+    record.mcp_http_request_id = "mcp-http-request-1"
     record.mcp_call_id = "mcp-call-1"
     record.tool_name = "query"
     record.duration_ms = 13
+    record.response_started_ms = 11
+    record.response_bytes = 128
+    record.status_code = 200
     record.outcome = "success"
     record.fingerprint = "pg_query:abc"
     record.elapsed_ms = 12
@@ -57,9 +61,13 @@ def test_safe_json_formatter_emits_bounded_audit_fields_as_top_level_json() -> N
 
     assert payload["query_id"] == "query-1"
     assert payload["source_id"] == "development-issues"
+    assert payload["mcp_http_request_id"] == "mcp-http-request-1"
     assert payload["mcp_call_id"] == "mcp-call-1"
     assert payload["tool_name"] == "query"
     assert payload["duration_ms"] == 13
+    assert payload["response_started_ms"] == 11
+    assert payload["response_bytes"] == 128
+    assert payload["status_code"] == 200
     assert payload["outcome"] == "success"
     assert payload["fingerprint"] == "pg_query:abc"
     assert payload["elapsed_ms"] == 12

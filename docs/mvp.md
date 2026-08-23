@@ -97,14 +97,18 @@ list_sources()
   -> source_id, description
 
 get_context(source_id, question)
-  -> source metadata, question, metadata_revision, snapshot_status, quality_level,
+  -> source metadata, question, metadata_revision, sql_policy_revision,
+     snapshot_status, quality_level,
+     sql_capabilities{functions, cast_types, unqualified_cast_types},
      answerability, relations[{columns, measures, grain, keys, indexes}], joins,
      business_terms, composition_hints, ambiguities, truncated
 
-query(source_id, sql, metadata_revision)
-  -> success: status, query_id, metadata_revision, fingerprint, columns, rows,
+query(source_id, sql, metadata_revision, sql_policy_revision)
+  -> success: status, query_id, metadata_revision, sql_policy_revision,
+              fingerprint, columns, rows,
               row_count, result_bytes, truncated, queue_ms, elapsed_ms, plan_summary
-  -> failure: error.code, error.message, error.details?.reason_code
+  -> failure: error.code, error.message,
+              error.details?{reason_code, rejected_construct?}
 ```
 
 MVP의 source registry는 다음 두 항목을 정적으로 등록하는 것으로 시작한다.
@@ -137,7 +141,7 @@ HTTP와 MCP 구현은 위 계약을 공통 application service로 제공한다. 
 }
 ```
 
-응답은 `metadata_revision`, `answerability`, 선택된 relation과 전체 column, grain,
+응답은 `metadata_revision`, `sql_policy_revision`, `answerability`, 선택된 relation과 전체 column, grain,
 기본 시간 column, measure, value hint, source별 business predicate, 승인된 join과
 composition/fanout 경고를 포함한다. PostgreSQL view의 nullability는 catalog에서
 정확히 전파되지 않으므로 추측하지 않고 `"unknown"`으로 반환한다.

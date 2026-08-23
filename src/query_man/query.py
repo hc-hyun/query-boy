@@ -16,6 +16,7 @@ from psycopg_pool import AsyncConnectionPool, PoolTimeout
 from query_man.errors import (
     AppError,
     MetadataRevisionMismatchError,
+    QueryInvalidError,
     QueryOverloadedError,
     QueryRejectedError,
     QueryTimeoutError,
@@ -32,11 +33,27 @@ from query_man.reader_policy import (
 )
 from query_man.registry import SourceRegistry
 from query_man.result_encoding import encode_result_value
-from query_man.sql_validation import SqlValidationError, ValidatedSql, validate_sql
+from query_man.sql_validation import (
+    SQL_POLICY_REVISION,
+    SqlValidationError,
+    ValidatedSql,
+    validate_sql,
+)
 
 audit_logger = logging.getLogger("query_man.audit")
 _RESULT_CURSOR_NAME = "query_man_result"
 _RESULT_FETCH_BATCH_ROWS = 16
+
+_QUERY_INVALID_REASON_BY_SQLSTATE = {
+    "22007": "QUERY_INVALID_CAST",  # invalid_datetime_format
+    "22008": "QUERY_INVALID_CAST",  # datetime_field_overflow
+    "22012": "QUERY_DIVISION_BY_ZERO",
+    "2201W": "QUERY_INVALID_LIMIT",
+    "2201X": "QUERY_INVALID_LIMIT",  # invalid_row_count_in_result_offset_clause
+    "22P02": "QUERY_INVALID_CAST",  # invalid_text_representation
+    "42703": "QUERY_UNDEFINED_COLUMN",
+    "42846": "QUERY_INVALID_CAST",  # cannot_coerce
+}
 
 _QUERY_SESSION_SETTINGS = (
     "SELECT pg_catalog.set_config('statement_timeout', %s, true), "
@@ -140,6 +157,7 @@ class QueryService:
         source_id: str,
         sql: str,
         metadata_revision: str,
+        sql_policy_revision: str,
         *,
         query_id: str | None = None,
         tenant_id: str | None = None,
@@ -150,7 +168,10 @@ class QueryService:
         if source.tenant_isolation == "rls" and tenant_id is None:
             raise QueryRejectedError("TENANT_CONTEXT_REQUIRED")
         published = await self._metadata.get_published(source_id)
-        if metadata_revision != published.revision:
+        if (
+            metadata_revision != published.revision
+            or sql_policy_revision != SQL_POLICY_REVISION
+        ):
             operations.increment("query_revision_rejected", source.source_id)
             raise MetadataRevisionMismatchError
         try:
@@ -161,8 +182,11 @@ class QueryService:
             )
         except SqlValidationError as error:
             operations.increment("query_rejected", source.source_id)
-            raise QueryRejectedError(error.code) from error
-        return await self._executor.execute(
+            raise QueryRejectedError(
+                error.code,
+                rejected_construct=error.rejected_construct,
+            ) from error
+        result = await self._executor.execute(
             source,
             sql,
             published.revision,
@@ -170,6 +194,8 @@ class QueryService:
             query_id=query_id,
             tenant_id=tenant_id,
         )
+        result["sql_policy_revision"] = SQL_POLICY_REVISION
+        return result
 
     async def cancel(self, query_id: str, allowed_sources: frozenset[str]) -> bool:
         return await self._executor.cancel(query_id, allowed_sources)
@@ -342,6 +368,13 @@ class PostgresQueryExecutor:
                 raise
             except (QueryOverloadedError, QueryTimeoutError):
                 raise
+            except errors.DatabaseError as error:
+                reason_code = _QUERY_INVALID_REASON_BY_SQLSTATE.get(error.sqlstate or "")
+                if reason_code is not None:
+                    operations.increment("query_invalid", source.source_id)
+                    raise QueryInvalidError(reason_code) from error
+                operations.increment("query_failed", source.source_id)
+                raise QueryUnavailableError from error
             except Exception as error:
                 operations.increment("query_failed", source.source_id)
                 raise QueryUnavailableError from error

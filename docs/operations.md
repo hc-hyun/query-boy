@@ -14,8 +14,11 @@ replica identity를 추가해야 한다.
 
 Audit event는 다음 bounded field만 사용한다.
 
-- MCP tool 시작/완료(DEBUG): server-generated `mcp_call_id`, 고정 tool name, protocol,
-  caller/tenant, 허가된 source, duration, outcome과 공개 error/reason code
+- MCP HTTP 완료(INFO): server-generated `mcp_http_request_id`, response-start/final-body duration,
+  response byte, HTTP status와 outcome
+- MCP tool 시작(DEBUG)/완료(INFO): 같은 `mcp_http_request_id`, server-generated `mcp_call_id`,
+  고정 tool name, protocol, caller/tenant, 허가된 source, duration, outcome과 공개
+  error/reason code
 - Query 시작: `query_id`, caller ID, tenant ID, source ID
 - Query 성공: 위 식별자, fingerprint, queue/elapsed ms, row/result byte, truncation과 plan cost
 - Query 실패/중단: 위 식별자와 공개 가능한 application error code 또는 interrupted 상태
@@ -23,11 +26,18 @@ Audit event는 다음 bounded field만 사용한다.
 - 인증 실패: HTTP method만 기록하고 bearer token과 path는 기록하지 않음
 - 인가 실패: caller ID, tenant ID와 operation만 기록하고 requested source는 기록하지 않음
 
-MCP 로그는 question, SQL, 전체 arguments, body, token 또는 비인가 source를 기록하지 않는다.
-성공한 MCP `query` 완료 event의 `query_id`로 같은 query audit와 연결할 수 있다. 로컬에서
-호출 순서와 병렬 결과를 조사할 때만 `.env`의 `QUERY_MAN_LOG_LEVEL=debug`를 설정해 application
+MCP 로그는 question, SQL, 전체 arguments, header, body, token 또는 비인가 source를 기록하지
+않는다. HTTP request ID로 request lifecycle과 tool completion을, 성공한 MCP `query` 완료
+event의 `query_id`로 같은 query audit를 연결할 수 있다. INFO의 HTTP/tool 완료 duration은 각각
+final ASGI body 전달과 tool 내부 반환까지이며 client 수신·decode나 model 재개 시각은 아니다.
+Tool 시작 순서까지 필요할 때만 `.env`의 `QUERY_MAN_LOG_LEVEL=debug`를 설정해 application
 container를 재생성하고 `docker compose logs -f query-man`으로 본다. 장기 운영의 기본 INFO
 수준을 debug로 올린 채 두지 않는다.
+
+분 단위 지연을 조사할 때는 같은 request ID의 HTTP duration과 tool duration, 같은 query ID의
+`queue_ms`/`elapsed_ms`를 순서대로 비교한다. HTTP와 tool이 모두 짧은데 다음 request arrival
+전 공백이 길면 Query Man timeout, pool 또는 concurrency를 조정하지 않고 client/tool scheduler와
+model-side trace를 확인한다.
 
 Executor는 PostgreSQL transaction-local `application_name=query-man:<query_id>`를 설정하므로
 동일 query ID로 application audit와 `pg_stat_activity`를 연결할 수 있다.
@@ -73,10 +83,13 @@ health를 변경하지 않는다.
   `metadata_refresh_failed`, `metadata_validation_rejected`, `metadata_stale_served`
 - Queue/execution: `query_queue_ms_count/sum`, `query_execution_started/succeeded`,
   `query_elapsed_ms_count/sum`, `query_queue_rejected`, `query_pool_exhausted`,
-  `query_rejected`, `query_revision_rejected`, `query_timeout`, `query_failed`
+  `query_rejected`, `query_invalid`, `query_revision_rejected`, `query_timeout`, `query_failed`
 - Result/cancel: `query_truncated`, `query_cancel_requested`, `query_cancelled`,
   `query_interrupted`, `query_shutdown_cancelled`
-- MCP: `mcp_tool_started`, source별 `mcp_tool_completed`, `mcp_tool_failed`,
+- MCP HTTP: `mcp_http_request_started/completed/failed/cancelled`,
+  `mcp_http_request_duration_ms_count/sum`, `mcp_http_response_started_ms_count/sum`,
+  `mcp_http_response_bytes_count/sum`
+- MCP tool: `mcp_tool_started`, source별 `mcp_tool_completed`, `mcp_tool_failed`,
   `mcp_tool_cancelled`, `mcp_tool_duration_ms_count/sum`
 - Startup/reload: `startup_metadata_probe_failed`, `source_reload_scan_failed`,
   `source_reload_apply_failed`, `source_reload_metadata_probe_failed`

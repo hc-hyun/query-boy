@@ -12,6 +12,7 @@ from mcp.types import CallToolResult
 from psycopg import AsyncConnection
 from psycopg.conninfo import make_conninfo
 
+from query_man.sql_validation import SQL_POLICY_REVISION
 from tests.test_mcp_server import (
     McpServerSettings,
     _mcp_client,
@@ -63,6 +64,7 @@ async def _measured_query(
             "source_id": source_id,
             "sql": sql,
             "metadata_revision": metadata_revision,
+            "sql_policy_revision": SQL_POLICY_REVISION,
         },
     )
     return result, round((time.monotonic() - started) * 1_000)

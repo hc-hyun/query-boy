@@ -37,22 +37,36 @@ Tool은 다음 세 개로 고정한다.
 ```text
 list_sources()
 get_context(source_id, question, max_objects=2)
-query(source_id, sql, metadata_revision)
+query(source_id, sql, metadata_revision, sql_policy_revision)
 ```
 
 입력 schema는 HTTP와 같은 길이, revision 형식과 `max_objects` 1~4 범위를 갖고 host,
 database, role 또는 credential field를 노출하지 않는다. Metadata와 result payload 크기는
 source budget으로 제한하며 MCP protocol serialization overhead는 그 payload budget에
-포함하지 않는다.
+포함하지 않는다. `get_context`의 자연어 tool description도 `max_objects`가 정수 1~4이고
+기본값이 2임을 명시한다. 응답의 `sql_capabilities`는 validator의 단일 allowlist에서 직접
+생성한 정렬된 `functions`, `cast_types`, `unqualified_cast_types`를 포함한다. 전역 validator
+정책은 source metadata revision과 분리된 `sql_policy_revision`으로 digest하고 query 시 함께
+검사한다. Capability도 metadata response byte 상한과 MCP output schema에 포함한다.
+
+Parent application의 바깥쪽 ASGI middleware는 각 `/mcp` 요청에 server-generated request ID를
+부여하고 request arrival부터 response start와 final response body 전달까지의 시간, response
+byte, HTTP status와 outcome만 INFO event와 aggregate metric으로 기록한다. Request ID는 같은
+tool completion event로 전달해 `mcp_call_id`와 성공 query의 `query_id`에 연결한다. Header,
+body, token, question과 SQL은 기록하지 않으며 final-body 시간은 ASGI server에 넘긴 시점이지
+client 수신이나 model 재개 시각이 아니다.
 
 공통 [`query-man-text-to-sql` Skill](../../skills/query-man-text-to-sql/SKILL.md)은 다음
 workflow를 담당한다.
 
 - `unsupported`와 `needs_clarification`에서는 `query`를 호출하지 않는다.
 - Returned grain, business predicate, approved join과 composition hint만 사용한다.
-- Exact `metadata_revision`을 전달한다.
+- Returned SQL capability 안의 함수와 cast form만 사용한다.
+- 같은 context의 exact `metadata_revision`과 `sql_policy_revision`을 함께 전달한다.
 - `METADATA_REVISION_MISMATCH`이면 context를 다시 받고 새 metadata로 SQL을 재생성해 한
   번만 재시도한다.
+- `QUERY_INVALID`이면 bounded reason으로 사용자 의미를 보존하는 수정이 명확할 때만 한 번
+  교정하고, 두 번째 실패에서는 중단한다.
 
 안전 정책은 Skill에 맡기지 않는다. Skill이 잘못된 SQL이나 stale revision을 보내도
 gateway와 PostgreSQL hard limit이 거부한다.
@@ -60,7 +74,7 @@ gateway와 PostgreSQL hard limit이 거부한다.
 ## Consequences
 
 - MCP와 HTTP가 하나의 source inventory, caller policy와 execution budget을 사용한다.
-- Stateless transport이므로 대화나 source 선택 상태는 client가 관리하고 매 query마다
+- Stateless transport이므로 대화나 source 선택 상태는 client가 관리하고 매 query마다 두
   revision을 명시한다.
 - SDK 2.0의 modern JSON response 경로는 ASGI disconnect를 감시하지 않으므로 Query Man의
   `query` tool이 request disconnect와 gateway 실행을 경쟁시켜 PostgreSQL cancel/rollback을
@@ -68,6 +82,9 @@ gateway와 PostgreSQL hard limit이 거부한다.
 - 이전 handshake와 protocol version은 지원 대상이 아니므로 legacy cancellation이나
   stateful compatibility session도 제공하지 않는다. 지원 version의 POST disconnect와
   database timeout이 각각 조기 취소와 최종 실행 상한이다.
+- HTTP lifecycle과 tool duration의 차이는 SDK pre-dispatch/serialization 구간을 좁히지만,
+  client scheduling·network receive·JSON decode와 model reasoning은 client-side trace 없이는
+  귀속할 수 없다.
 - Protocol version을 바꿀 때는 parent header gate, 공식 client mode, raw transport 회귀,
   container verification과 운영 문서를 한 변경에서 함께 갱신한다.
 - 현재 인증은 기존 bearer policy를 재사용한다. OAuth discovery나 별도 MCP identity

@@ -196,7 +196,11 @@ version의 충돌 payload는 적용하지 않는다.
 1. Semantic overlay가 없는 manifest를 `minimum_quality_level: L0`로 publish한다. `/meta`에서
    reader-visible relation과 column이 의도한 범위인지 확인한다.
 2. 모든 공개 relation에 description, grain과 event/comment/population의 default time을
-   작성한다. Minimum을 L1으로 설정해 publish하고 새 `metadata_revision`을 기록한다.
+   작성한다. Timestamp가 business calendar 경계에 쓰이면 timezone도 명시한다. Verified SQL은
+   timestamp 범위를 `>= start AND < next_boundary`로 만든다. 현재 별도 timezone 필드는 없으므로
+   `timestamptz`의 business timezone은 선택되는 relation 또는 column description에 검토된 IANA
+   이름으로 명시하고, 없으면 query 생성기가 추측하지 않게 한다. Calendar bucket에도 같은
+   timezone을 적용한다. Minimum을 L1으로 설정해 publish하고 새 `metadata_revision`을 기록한다.
 3. 실제 사용자 질문과 deterministic SQL을 준비한다. SQL의 expected relation, ordered
    columns, row count와 canonical result hash를 별도 review한다.
 4. 현재 L1 revision을 포함한 contract를 verified-query admin endpoint에 제출한다. Gateway

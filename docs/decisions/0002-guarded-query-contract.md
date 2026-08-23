@@ -19,7 +19,8 @@ POST /query
 {
   "source_id": "development-issues",
   "sql": "SELECT ... FROM ai.issue_overview",
-  "metadata_revision": "sha256:..."
+  "metadata_revision": "sha256:...",
+  "sql_policy_revision": "sha256:..."
 }
 ```
 
@@ -33,7 +34,7 @@ DELETE /queries/{query_id}
 성공 응답은 원본 SQL을 반복하지 않고 다음 정보를 반환한다.
 
 ```text
-status, query_id, metadata_revision, fingerprint
+status, query_id, metadata_revision, sql_policy_revision, fingerprint
 columns, rows, row_count, result_bytes, truncated
 queue_ms, elapsed_ms, plan_summary
 ```
@@ -41,7 +42,8 @@ queue_ms, elapsed_ms, plan_summary
 실행 순서는 고정한다.
 
 1. Source와 현재 published metadata를 확인한다.
-2. 요청 revision이 현재 revision과 다르면 `409 METADATA_REVISION_MISMATCH`로 거부한다.
+2. 요청 metadata 또는 SQL policy revision이 현재 revision과 다르면
+   `409 METADATA_REVISION_MISMATCH`로 거부한다.
 3. ADR 0001의 AST validation으로 현재 snapshot relation allowlist를 검사한다.
 4. Source별 concurrency slot을 제한 시간 안에 획득한다.
 5. Reader connection에서 명시적인 `REPEATABLE READ READ ONLY` transaction과
@@ -82,17 +84,40 @@ HTTP와 MCP 계약이 모순되므로 fetch 전에 fail-closed한다.
 | HTTP | Code | Meaning |
 |---:|---|---|
 | 400 | `QUERY_REJECTED` | AST 또는 plan policy가 query를 허용하지 않음 |
+| 400 | `QUERY_INVALID` | PostgreSQL이 식별한 수정 가능한 query 의미 오류 |
 | 403 | `OPERATOR_REQUIRED` | Query cancel에 operator 권한이 없음 |
 | 404 | `SOURCE_NOT_FOUND` | Source를 공개하지 않는 기존 오류 |
 | 404 | `QUERY_NOT_FOUND` | Operator의 허용 source 안에 활성 query가 없음 |
 | 408 | `QUERY_TIMEOUT` | 실행 deadline 초과 또는 취소 |
-| 409 | `METADATA_REVISION_MISMATCH` | SQL 생성에 사용한 revision이 현재 revision과 다름 |
+| 409 | `METADATA_REVISION_MISMATCH` | SQL 생성에 사용한 metadata 또는 SQL policy revision이 현재 값과 다름 |
 | 429 | `QUERY_OVERLOADED` | Source concurrency/connection queue 상한 초과 |
 | 503 | `QUERY_UNAVAILABLE` | 비공개 database 또는 infrastructure 오류 |
 
+AST가 승인하지 않은 operator construct를 식별할 수 있을 때 `QUERY_REJECTED`의 details에는
+기존 `reason_code`와 함께 bounded `rejected_construct`를 선택적으로 반환한다. 값은
+`BETWEEN`, `NOT BETWEEN`, `BETWEEN SYMMETRIC`, `NOT BETWEEN SYMMETRIC`, `OPERATOR`의 고정
+집합이며 raw SQL token, snippet, literal과 parser location은 반환하지 않는다. Reason code와
+로그 label은 construct별로 늘리지 않는다.
+
+PostgreSQL이 반환한 오류 중 사용자가 SQL만 수정해 해결할 수 있고 안전하게 분류 가능한
+SQLSTATE만 `QUERY_INVALID`로 반환한다. `details.reason_code`는 다음 고정 집합이며 database
+message, identifier, SQL snippet, literal과 위치는 반환하지 않는다.
+
+| Reason | Internal SQLSTATE category |
+|---|---|
+| `QUERY_UNDEFINED_COLUMN` | `42703` |
+| `QUERY_INVALID_CAST` | `22P02`, `22007`, `22008`, `42846` |
+| `QUERY_DIVISION_BY_ZERO` | `22012` |
+| `QUERY_INVALID_LIMIT` | `2201W`, `2201X` |
+
+Privilege, connection, server shutdown, 알 수 없는 SQLSTATE와 driver/serialization 오류는
+계속 details 없는 `QUERY_UNAVAILABLE`로 숨긴다. Timeout과 cancel은 기존 전용 분기를 먼저
+적용한다.
+
 ## Consequences
 
-- Client는 revision mismatch 시 `/meta`를 다시 호출해 SQL을 재생성해야 한다.
+- Client는 revision mismatch 시 `/meta`를 다시 호출해 SQL을 재생성하고 두 revision을 함께
+  갱신해야 한다.
 - 응답은 bounded list로 반환한다. Database fetch는 streaming하지만 HTTP chunk streaming은
   현재 범위에 포함하지 않는다.
 - 초기 plan threshold는 보수적인 운영 기본값이며 부하 테스트 전에는 최종 비용 정책으로

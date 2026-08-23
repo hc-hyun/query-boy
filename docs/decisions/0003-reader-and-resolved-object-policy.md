@@ -31,6 +31,9 @@ overload가 선택될 가능성을 독립적으로 차단하지 못한다. Curat
   실행 가능한 경우에만 SQL planning을 진행한다.
 - `EXPLAIN`이 PostgreSQL의 실제 type/overload resolution을 수행한다. 고정된 search
   path와 안전한 전체 candidate 집합 때문에 선택된 OID도 같은 정책 안에 있다.
+- `rank`, `lag`, `lead`, `extract`처럼 승인한 분석 함수도 예외 없이 같은 candidate 검증을
+  거친다. Window/aggregate 실행 비용은 statement·transaction timeout, `work_mem`, temp file과
+  plan admission으로 제한한다.
 
 이 정책은 PostgreSQL의
 [function security](https://www.postgresql.org/docs/18/perm-functions.html),

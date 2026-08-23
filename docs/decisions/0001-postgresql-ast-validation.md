@@ -27,6 +27,16 @@ source에서 추출한 parser를 사용하는 `libpg_query`의 Python interface�
 - Physical relation은 schema-qualified name만 허용하고 현재 published catalog와 대조한다.
 - CTE 이름만 unqualified relation으로 허용한다.
 - Function, operator와 cast type은 보수적인 built-in allowlist를 사용한다.
+- 일반 `BETWEEN`은 catalog operator 이름이 아닌 grammar construct로 판별하고 실제 비교
+  operator `>=`, `<=`로 정규화해 syntax와 resolved-object 경계에서 같은 allowlist를 적용한다.
+  `NOT BETWEEN`과 `SYMMETRIC` 변형은 별도 사용 사례가 검증될 때까지 거부한다.
+- Unqualified cast type은 흔한 `date`와 `text`만 허용한다. 나머지 승인 type은
+  `pg_catalog.<type>`으로 명시해야 한다. 실행 전에 reader의 TEMP 권한 부재와
+  `search_path=pg_catalog`을 재검증하므로 두 unqualified type이 user-defined type으로
+  해석되지 않는다.
+- `rank`, `lag`, `lead`, `extract`는 일반 분석 사용 사례로 승인하되 다른 함수와 동일하게
+  AST 이름 allowlist와 실행 시점의 `pg_proc` namespace·volatility·privilege 검증을 모두
+  통과해야 한다.
 - `SELECT INTO`, row locking, recursive CTE, table function, `TABLESAMPLE`, parameter와
   identity를 노출하는 SQL value function을 거부한다.
 - 알 수 없거나 아직 정책이 없는 문법은 fail-closed로 거부한다.
@@ -51,6 +61,8 @@ view security 속성, 권한과 query plan은 PostgreSQL parse analysis 이후�
   테스트가 필요하다.
 - 보수적인 allowlist 때문에 읽기 전용이지만 아직 승인하지 않은 query도 거부될 수 있다.
   사용 사례와 공격 corpus를 함께 추가한 뒤 allowlist를 확장한다.
+- Grammar construct를 허용할 때는 raw AST label을 `pg_operator` 이름으로 추가하지 않고
+  PostgreSQL parse analysis가 사용하는 effective operator를 검증해야 한다.
 - Fingerprint는 literal을 의도적으로 구분하지 않으므로 원본 SQL을 복원하거나 서로 다른
   query의 실행 권한을 공유하는 용도로 사용할 수 없다.
 

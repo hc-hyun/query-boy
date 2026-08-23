@@ -1,5 +1,24 @@
 from typing import Any
 
+_PUBLIC_REJECTED_CONSTRUCTS = frozenset(
+    {
+        "BETWEEN",
+        "BETWEEN SYMMETRIC",
+        "NOT BETWEEN",
+        "NOT BETWEEN SYMMETRIC",
+        "OPERATOR",
+    }
+)
+
+_PUBLIC_QUERY_INVALID_REASONS = frozenset(
+    {
+        "QUERY_DIVISION_BY_ZERO",
+        "QUERY_INVALID_CAST",
+        "QUERY_INVALID_LIMIT",
+        "QUERY_UNDEFINED_COLUMN",
+    }
+)
+
 
 class AppError(Exception):
     def __init__(
@@ -36,16 +55,31 @@ class MetadataRevisionMismatchError(AppError):
         super().__init__(
             409,
             "METADATA_REVISION_MISMATCH",
-            "Metadata changed after this SQL was generated. Fetch context and try again.",
+            "Metadata or SQL policy changed after this SQL was generated. Fetch context and try again.",
         )
 
 
 class QueryRejectedError(AppError):
-    def __init__(self, reason_code: str) -> None:
+    def __init__(self, reason_code: str, *, rejected_construct: str | None = None) -> None:
+        details = {"reason_code": reason_code}
+        if rejected_construct in _PUBLIC_REJECTED_CONSTRUCTS:
+            details["rejected_construct"] = rejected_construct
         super().__init__(
             400,
             "QUERY_REJECTED",
             "The query is not allowed by the source policy.",
+            details,
+        )
+
+
+class QueryInvalidError(AppError):
+    def __init__(self, reason_code: str) -> None:
+        if reason_code not in _PUBLIC_QUERY_INVALID_REASONS:
+            raise ValueError("Query invalid reason is not public.")
+        super().__init__(
+            400,
+            "QUERY_INVALID",
+            "The query must be corrected before it can run.",
             {"reason_code": reason_code},
         )
 

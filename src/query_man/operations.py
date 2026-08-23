@@ -21,10 +21,14 @@ _source_health_updates_suppressed: ContextVar[bool] = ContextVar(
     default=False,
 )
 _STRUCTURED_LOG_FIELDS = (
+    "mcp_http_request_id",
     "mcp_call_id",
     "tool_name",
     "protocol_version",
     "duration_ms",
+    "response_started_ms",
+    "response_bytes",
+    "status_code",
     "outcome",
     "query_id",
     "caller_id",
