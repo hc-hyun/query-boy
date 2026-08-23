@@ -224,6 +224,7 @@ async def test_two_replicas_serve_exact_queries_with_unique_ids(
                             "source_id": contract.source_id,
                             "sql": contract.sql,
                             "metadata_revision": contract.metadata_revision,
+                            "sql_policy_revision": context["sql_policy_revision"],
                         },
                     )
                     for _ in range(8)

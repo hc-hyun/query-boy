@@ -51,6 +51,7 @@ class GatewayService:
         source_id: str,
         sql: str,
         metadata_revision: str,
+        sql_policy_revision: str,
     ) -> dict[str, object]:
         self._require_source(caller, source_id, "query")
         query_id = str(uuid.uuid4())
@@ -72,6 +73,7 @@ class GatewayService:
                 source_id,
                 sql,
                 metadata_revision,
+                sql_policy_revision,
                 query_id=query_id,
                 tenant_id=caller.tenant_id,
             )

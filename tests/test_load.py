@@ -12,6 +12,7 @@ from query_man.catalog import PostgresCatalog
 from query_man.metadata import MetadataService
 from query_man.query import PostgresQueryExecutor, QueryService
 from query_man.registry import SourceRegistry
+from query_man.sql_validation import SQL_POLICY_REVISION
 from tests.helpers import ROOT_DIRECTORY
 
 
@@ -50,7 +51,12 @@ async def test_interactive_budget_under_representative_local_load() -> None:
 
         async def measured_query(source_id: str, sql: str) -> tuple[str, int, dict[str, object]]:
             started = time.monotonic()
-            result = await service.query(source_id, sql, revisions[source_id])
+            result = await service.query(
+                source_id,
+                sql,
+                revisions[source_id],
+                SQL_POLICY_REVISION,
+            )
             return source_id, round((time.monotonic() - started) * 1000), result
 
         queries = [

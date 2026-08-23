@@ -8,13 +8,19 @@ import pytest
 from mcp.client import Client
 
 from query_man.access import AccessPolicy, CallerContext
+from query_man.errors import QueryInvalidError
 from query_man.gateway import GatewayService
 from query_man.mcp_server import create_mcp_server
 from query_man.metadata import MetadataService
 from query_man.models import CatalogSnapshot, SourceProfile
 from query_man.operations import operations
 from query_man.query import QueryService
-from query_man.sql_validation import ValidatedSql
+from query_man.sql_validation import (
+    DEFAULT_ALLOWED_FUNCTIONS,
+    DEFAULT_ALLOWED_TYPES,
+    DEFAULT_ALLOWED_UNQUALIFIED_TYPES,
+    ValidatedSql,
+)
 from tests.helpers import load_test_registry, minimal_development_snapshot
 
 
@@ -80,6 +86,7 @@ class ExplodingGateway:
         _source_id: str,
         _sql: str,
         _metadata_revision: str,
+        _sql_policy_revision: str,
     ) -> dict[str, object]:
         raise RuntimeError(self.detail)
 
@@ -87,6 +94,18 @@ class ExplodingGateway:
 class InvalidResultGateway(ExplodingGateway):
     def list_sources(self, _caller: CallerContext) -> dict[str, object]:
         return {"invalid": object()}
+
+
+class InvalidQueryGateway(ExplodingGateway):
+    async def query(
+        self,
+        _caller: CallerContext,
+        _source_id: str,
+        _sql: str,
+        _metadata_revision: str,
+        _sql_policy_revision: str,
+    ) -> dict[str, object]:
+        raise QueryInvalidError("QUERY_UNDEFINED_COLUMN")
 
 
 def mcp_fixture(
@@ -115,13 +134,56 @@ async def test_mcp_exposes_fixed_tools_and_reuses_gateway_policy() -> None:
             "get_context",
             "query",
         ]
-        assert all("host" not in tool.input_schema.get("properties", {}) for tool in listed_tools.tools)
-        assert all(
-            tool.output_schema is not None
-            and tool.output_schema.get("type") == "object"
-            and tool.output_schema.get("additionalProperties") is True
-            for tool in listed_tools.tools
+        descriptions = {tool.name: tool.description for tool in listed_tools.tools}
+        assert descriptions["get_context"] == (
+            "Get question-scoped metadata and the revision required by query. "
+            "The response includes allowed SQL functions, cast types, and unqualified cast forms. "
+            "max_objects must be an integer from 1 through 4 and defaults to 2."
         )
+        assert all("host" not in tool.input_schema.get("properties", {}) for tool in listed_tools.tools)
+        tools = {tool.name: tool for tool in listed_tools.tools}
+        assert all(
+            tools[name].output_schema is not None
+            and tools[name].output_schema.get("type") == "object"
+            and tools[name].output_schema.get("additionalProperties") is True
+            for name in ("list_sources", "query")
+        )
+        context_output = tools["get_context"].output_schema
+        assert context_output is not None
+        success_output = context_output["$defs"]["GetContextSuccessOutput"]
+        assert success_output["required"] == [
+            "metadata_revision",
+            "sql_policy_revision",
+            "sql_capabilities",
+        ]
+        assert success_output["properties"]["metadata_revision"]["pattern"] == (
+            r"^sha256:[a-f0-9]{64}$"
+        )
+        assert success_output["properties"]["sql_policy_revision"]["pattern"] == (
+            r"^sha256:[a-f0-9]{64}$"
+        )
+        capabilities_output = context_output["$defs"]["SqlCapabilitiesOutput"]
+        assert capabilities_output["required"] == [
+            "functions",
+            "cast_types",
+            "unqualified_cast_types",
+        ]
+        assert all(
+            capabilities_output["properties"][name] == {
+                "items": {"type": "string"},
+                "title": title,
+                "type": "array",
+            }
+            for name, title in (
+                ("functions", "Functions"),
+                ("cast_types", "Cast Types"),
+                ("unqualified_cast_types", "Unqualified Cast Types"),
+            )
+        )
+        assert {item["$ref"] for item in context_output["anyOf"]} == {
+            "#/$defs/GetContextSuccessOutput",
+            "#/$defs/_ToolErrorOutput",
+        }
         schemas = {tool.name: tool.input_schema for tool in listed_tools.tools}
         assert all(schema["additionalProperties"] is False for schema in schemas.values())
         assert schemas["list_sources"]["properties"] == {}
@@ -137,8 +199,12 @@ async def test_mcp_exposes_fixed_tools_and_reuses_gateway_policy() -> None:
             "source_id",
             "sql",
             "metadata_revision",
+            "sql_policy_revision",
         ]
         assert schemas["query"]["properties"]["metadata_revision"]["pattern"] == (r"^sha256:[a-f0-9]{64}$")
+        assert schemas["query"]["properties"]["sql_policy_revision"]["pattern"] == (
+            r"^sha256:[a-f0-9]{64}$"
+        )
 
         sources = await client.call_tool("list_sources")
         assert len(json.dumps(sources.structured_content).encode()) < 1_024
@@ -174,6 +240,7 @@ async def test_mcp_exposes_fixed_tools_and_reuses_gateway_policy() -> None:
                     "source_id": "development-issues",
                     "sql": "SELECT count(*) FROM ai.issue_overview",
                     "metadata_revision": f"sha256:{'0' * 64}",
+                    "sql_policy_revision": f"sha256:{'0' * 64}",
                     "tenant_id": "caller-selected-tenant",
                 },
             ),
@@ -190,13 +257,20 @@ async def test_mcp_context_revision_and_query_contract() -> None:
             "get_context",
             {"source_id": "development-issues", "question": "문제 수"},
         )
+        assert context.structured_content["sql_capabilities"] == {  # type: ignore[index]
+            "functions": sorted(DEFAULT_ALLOWED_FUNCTIONS),
+            "cast_types": sorted(DEFAULT_ALLOWED_TYPES),
+            "unqualified_cast_types": sorted(DEFAULT_ALLOWED_UNQUALIFIED_TYPES),
+        }
         revision = str(context.structured_content["metadata_revision"])  # type: ignore[index]
+        policy_revision = str(context.structured_content["sql_policy_revision"])  # type: ignore[index]
         result = await client.call_tool(
             "query",
             {
                 "source_id": "development-issues",
                 "sql": "SELECT count(*) AS issue_count FROM ai.issue_overview",
                 "metadata_revision": revision,
+                "sql_policy_revision": policy_revision,
             },
         )
         assert result.structured_content["rows"] == [{"issue_count": 600}]  # type: ignore[index]
@@ -208,12 +282,83 @@ async def test_mcp_context_revision_and_query_contract() -> None:
                 "source_id": "development-issues",
                 "sql": "SELECT count(*) FROM ai.issue_overview",
                 "metadata_revision": f"sha256:{'0' * 64}",
+                "sql_policy_revision": policy_revision,
             },
         )
         assert mismatch.structured_content["error"]["code"] == (  # type: ignore[index]
             "METADATA_REVISION_MISMATCH"
         )
         assert mismatch.is_error is True
+
+
+async def test_mcp_query_rejection_reports_bounded_construct_without_echoing_sql() -> None:
+    sensitive_literal = "SENSITIVE_SQL_LITERAL_DO_NOT_ECHO"
+    server, _metadata = mcp_fixture()
+    async with Client(server) as client:  # type: ignore[arg-type]
+        context = await client.call_tool(
+            "get_context",
+            {"source_id": "development-issues", "question": "제조일별 시험기 수"},
+        )
+        result = await client.call_tool(
+            "query",
+            {
+                "source_id": "development-issues",
+                "sql": (
+                    "SELECT count(*) FROM ai.test_unit_overview "
+                    "WHERE manufactured_at NOT BETWEEN DATE '2026-05-01' "
+                    "AND DATE '2026-05-31' "
+                    f"AND serial_number <> '{sensitive_literal}'"
+                ),
+                "metadata_revision": context.structured_content["metadata_revision"],  # type: ignore[index]
+                "sql_policy_revision": context.structured_content["sql_policy_revision"],  # type: ignore[index]
+            },
+        )
+
+    assert result.is_error is True
+    assert result.structured_content == {
+        "error": {
+            "code": "QUERY_REJECTED",
+            "message": "The query is not allowed by the source policy.",
+            "details": {
+                "reason_code": "SQL_OPERATOR_NOT_ALLOWED",
+                "rejected_construct": "NOT BETWEEN",
+            },
+        }
+    }
+    assert sensitive_literal not in str(result.content)
+    assert len(str(result.content).encode()) < 512
+
+
+async def test_mcp_query_invalid_reports_only_bounded_correction_reason() -> None:
+    sensitive_sql = "SELECT private_missing_column FROM ai.private_relation"
+    caller = CallerContext(
+        caller_id="test-analyst",
+        tenant_id="engineering",
+        allowed_sources=frozenset({"development-issues"}),
+    )
+    server = create_mcp_server(InvalidQueryGateway(), lambda: caller)  # type: ignore[arg-type]
+
+    async with Client(server) as client:  # type: ignore[arg-type]
+        result = await client.call_tool(
+            "query",
+            {
+                "source_id": "development-issues",
+                "sql": sensitive_sql,
+                "metadata_revision": f"sha256:{'0' * 64}",
+                "sql_policy_revision": f"sha256:{'0' * 64}",
+            },
+        )
+
+    assert result.is_error is True
+    assert result.structured_content == {
+        "error": {
+            "code": "QUERY_INVALID",
+            "message": "The query must be corrected before it can run.",
+            "details": {"reason_code": "QUERY_UNDEFINED_COLUMN"},
+        }
+    }
+    assert sensitive_sql not in str(result.content)
+    assert len(str(result.content).encode()) < 512
 
 
 async def test_mcp_normalizes_strings_and_rejects_implicit_integer_coercion() -> None:
@@ -229,12 +374,14 @@ async def test_mcp_normalizes_strings_and_rejects_implicit_integer_coercion() ->
         )
         assert context.is_error is False
         revision = str(context.structured_content["metadata_revision"])  # type: ignore[index]
+        policy_revision = str(context.structured_content["sql_policy_revision"])  # type: ignore[index]
         queried = await client.call_tool(
             "query",
             {
                 "source_id": " development-issues ",
                 "sql": " SELECT count(*) AS issue_count FROM ai.issue_overview ",
                 "metadata_revision": f" {revision} ",
+                "sql_policy_revision": f" {policy_revision} ",
             },
         )
         assert queried.is_error is False
@@ -269,6 +416,7 @@ async def test_mcp_validation_does_not_echo_oversized_sensitive_input() -> None:
                 "source_id": "development-issues",
                 "sql": marker + ("x" * 100_000),
                 "metadata_revision": f"sha256:{'0' * 64}",
+                "sql_policy_revision": f"sha256:{'0' * 64}",
             },
         )
 
@@ -304,6 +452,7 @@ async def test_mcp_debug_logs_correlate_calls_without_recording_inputs(
                 "source_id": "development-issues",
                 "sql": f"SELECT count(*) AS issue_count FROM ai.issue_overview /* {sql_marker} */",
                 "metadata_revision": context.structured_content["metadata_revision"],  # type: ignore[index]
+                "sql_policy_revision": context.structured_content["sql_policy_revision"],  # type: ignore[index]
             },
         )
 
@@ -354,6 +503,7 @@ async def test_mcp_unknown_source_is_not_logged_or_used_as_metric_label(
                 "source_id": unknown_source,
                 "sql": "SELECT 1",
                 "metadata_revision": f"sha256:{'0' * 64}",
+                "sql_policy_revision": f"sha256:{'0' * 64}",
             },
         )
 
@@ -397,6 +547,7 @@ async def test_mcp_sanitizes_unexpected_tool_errors(
                     "source_id": "development-issues",
                     "sql": "SELECT count(*) FROM ai.issue_overview",
                     "metadata_revision": f"sha256:{'0' * 64}",
+                    "sql_policy_revision": f"sha256:{'0' * 64}",
                 },
             ),
         ]
@@ -480,6 +631,7 @@ async def test_mcp_sanitizes_unexpected_caller_provider_errors(
                     "source_id": "development-issues",
                     "sql": "SELECT count(*) FROM ai.issue_overview",
                     "metadata_revision": f"sha256:{'0' * 64}",
+                    "sql_policy_revision": f"sha256:{'0' * 64}",
                 },
             ),
         ]

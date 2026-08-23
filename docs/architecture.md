@@ -164,15 +164,19 @@ tool을 생성하지 않는다.
 ```text
 list_sources()
 
-get_context(source_id, question, max_objects?)
-  -> source metadata, question, metadata_revision, snapshot_status, quality_level,
+get_context(source_id, question, max_objects=2)  # integer 1..4
+  -> source metadata, question, metadata_revision, sql_policy_revision,
+     snapshot_status, quality_level,
+     sql_capabilities{functions, cast_types, unqualified_cast_types},
      answerability, relations[{columns, measures, grain, keys, indexes}], joins,
      business_terms, composition_hints, ambiguities, truncated
 
-query(source_id, sql, metadata_revision)
-  -> success: status, query_id, metadata_revision, fingerprint, columns, rows,
+query(source_id, sql, metadata_revision, sql_policy_revision)
+  -> success: status, query_id, metadata_revision, sql_policy_revision,
+              fingerprint, columns, rows,
               row_count, result_bytes, truncated, queue_ms, elapsed_ms, plan_summary
-  -> failure: error.code, error.message, error.details?.reason_code
+  -> failure: error.code, error.message,
+              error.details?{reason_code, rejected_construct?}
 ```
 
 Source가 사용자 session에 고정되는 환경에서는 `list_sources`를 생략할 수 있다.
@@ -184,7 +188,7 @@ MCP를 붙이기 전 동일한 application contract를 HTTP로 먼저 검증한�
 ```text
 GET  /sources
 POST /meta { source_id, question, max_objects? }
-POST /query { source_id, sql, metadata_revision }
+POST /query { source_id, sql, metadata_revision, sql_policy_revision }
 ```
 
 `/meta`는 reader가 실제로 조회할 수 있는 allowed schema/relation kind만 catalog에서
@@ -192,8 +196,10 @@ POST /query { source_id, sql, metadata_revision }
 comment 문장을 파싱하지 않고 manifest에 승인된 edge만 반환한다. Schema, view
 definition, comment, overlay, source execution budget 또는 revision-scoped source policy가
 바뀌면 `metadata_revision`도 바뀐다. 이 revision에 묶인 L2 verified SQL은 현재 실행
-경계에서 다시 통과해야 한다. Application 전역 SQL parser/function policy의 code 변경은
-별도 release 회귀 대상이며 자동으로 metadata revision을 바꾸지는 않는다.
+경계에서 다시 통과해야 한다. Application 전역 SQL parser/function/operator/type 정책은
+별도 `sql_policy_revision`으로 digest하며 query는 context에서 받은 두 revision이 모두 현재
+값과 일치할 때만 실행한다. 이로써 서로 다른 release의 replica 사이 policy drift를
+metadata snapshot을 다시 쓰지 않고 fail-closed한다.
 
 ## Onboarding Levels
 

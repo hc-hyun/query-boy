@@ -10,6 +10,7 @@ from psycopg import errors
 from query_man.app import _until_disconnect
 from query_man.errors import (
     MetadataRevisionMismatchError,
+    QueryInvalidError,
     QueryRejectedError,
     QueryTimeoutError,
     QueryUnavailableError,
@@ -19,7 +20,7 @@ from query_man.models import CatalogSnapshot, SourceProfile
 from query_man.operations import operations
 from query_man.query import PlanSummary, PostgresQueryExecutor, QueryService, _summarize_plan
 from query_man.registry import SourceRegistry
-from query_man.sql_validation import ValidatedSql
+from query_man.sql_validation import SQL_POLICY_REVISION, ValidatedSql
 from tests.helpers import load_test_registry, minimal_development_snapshot
 
 
@@ -84,6 +85,7 @@ async def test_validates_revision_and_sql_before_execution() -> None:
         "development-issues",
         "SELECT count(*) AS issue_count FROM ai.issue_overview",
         published.revision,
+        SQL_POLICY_REVISION,
     )
 
     assert response["status"] == "ok"
@@ -96,7 +98,28 @@ async def test_rejects_stale_revision_before_execution() -> None:
     service, _metadata, executor = query_service()
 
     with pytest.raises(MetadataRevisionMismatchError):
-        await service.query("development-issues", "SELECT 1", f"sha256:{'0' * 64}")
+        await service.query(
+            "development-issues",
+            "SELECT 1",
+            f"sha256:{'0' * 64}",
+            SQL_POLICY_REVISION,
+        )
+
+    assert executor.calls == []
+
+
+@pytest.mark.asyncio
+async def test_rejects_stale_sql_policy_revision_before_execution() -> None:
+    service, metadata, executor = query_service()
+    published = await metadata.get_published("development-issues")
+
+    with pytest.raises(MetadataRevisionMismatchError):
+        await service.query(
+            "development-issues",
+            "SELECT 1",
+            published.revision,
+            f"sha256:{'0' * 64}",
+        )
 
     assert executor.calls == []
 
@@ -107,10 +130,44 @@ async def test_maps_ast_rejection_to_stable_query_error() -> None:
     published = await metadata.get_published("development-issues")
 
     with pytest.raises(QueryRejectedError) as caught:
-        await service.query("development-issues", "DELETE FROM ai.issue_overview", published.revision)
+        await service.query(
+            "development-issues",
+            "DELETE FROM ai.issue_overview",
+            published.revision,
+            SQL_POLICY_REVISION,
+        )
 
     assert caught.value.details == {"reason_code": "SQL_STATEMENT_NOT_ALLOWED"}
     assert executor.calls == []
+
+
+@pytest.mark.asyncio
+async def test_maps_forbidden_between_variant_to_bounded_query_details() -> None:
+    service, metadata, executor = query_service()
+    published = await metadata.get_published("development-issues")
+
+    with pytest.raises(QueryRejectedError) as caught:
+        await service.query(
+            "development-issues",
+            "SELECT issue_id FROM ai.issue_overview WHERE issue_id NOT BETWEEN 1 AND 2",
+            published.revision,
+            SQL_POLICY_REVISION,
+        )
+
+    assert caught.value.details == {
+        "reason_code": "SQL_OPERATOR_NOT_ALLOWED",
+        "rejected_construct": "NOT BETWEEN",
+    }
+    assert executor.calls == []
+
+
+def test_query_rejection_details_do_not_reflect_unknown_construct() -> None:
+    error = QueryRejectedError(
+        "SQL_OPERATOR_NOT_ALLOWED",
+        rejected_construct="OPERATOR <= DATE 'private-literal' AT LOCATION 42",
+    )
+
+    assert error.details == {"reason_code": "SQL_OPERATOR_NOT_ALLOWED"}
 
 
 @pytest.mark.asyncio
@@ -128,6 +185,7 @@ async def test_rls_source_requires_server_supplied_tenant_context() -> None:
             source.source_id,
             "SELECT count(*) FROM ai.issue_overview",
             f"sha256:{'0' * 64}",
+            SQL_POLICY_REVISION,
         )
 
     assert captured.value.details == {"reason_code": "TENANT_CONTEXT_REQUIRED"}
@@ -150,6 +208,147 @@ def test_summarizes_nested_explain_plan() -> None:
 def test_rejects_plan_without_required_estimates() -> None:
     with pytest.raises(RuntimeError):
         _summarize_plan({"Plan Rows": 1})
+
+
+def test_query_invalid_error_rejects_nonpublic_reason() -> None:
+    with pytest.raises(ValueError, match="Query invalid reason is not public"):
+        QueryInvalidError("private_column DATE 'private-literal' AT LOCATION 42")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("database_error", "reason_code"),
+    [
+        (errors.UndefinedColumn("private_column at character 42"), "QUERY_UNDEFINED_COLUMN"),
+        (
+            errors.InvalidTextRepresentation("invalid input syntax for private type"),
+            "QUERY_INVALID_CAST",
+        ),
+        (errors.InvalidDatetimeFormat("private date literal"), "QUERY_INVALID_CAST"),
+        (errors.DatetimeFieldOverflow("private timestamp literal"), "QUERY_INVALID_CAST"),
+        (errors.CannotCoerce("private source and target types"), "QUERY_INVALID_CAST"),
+        (errors.DivisionByZero("private expression at character 42"), "QUERY_DIVISION_BY_ZERO"),
+        (
+            errors.InvalidRowCountInLimitClause("private negative limit"),
+            "QUERY_INVALID_LIMIT",
+        ),
+        (
+            errors.InvalidRowCountInResultOffsetClause("private negative offset"),
+            "QUERY_INVALID_LIMIT",
+        ),
+    ],
+)
+async def test_executor_maps_correctable_database_errors_to_bounded_query_invalid(
+    database_error: errors.DatabaseError,
+    reason_code: str,
+) -> None:
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+    executor = PostgresQueryExecutor()
+
+    class ConnectionContext:
+        async def __aenter__(self) -> object:
+            return object()
+
+        async def __aexit__(self, *_args: object) -> None:
+            pass
+
+    class FakePool:
+        def connection(self, *, timeout: float) -> ConnectionContext:
+            assert timeout > 0
+            return ConnectionContext()
+
+    async def get_pool(_source: SourceProfile) -> FakePool:
+        return FakePool()
+
+    async def execute_connection(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise database_error
+
+    executor._get_pool = get_pool  # type: ignore[method-assign]
+    executor._execute_connection = execute_connection  # type: ignore[method-assign]
+    operations.reset()
+    try:
+        with pytest.raises(QueryInvalidError) as caught:
+            await executor.execute(
+                source,
+                "SELECT private_sql_literal",
+                "test-revision",
+                ValidatedSql("private-fingerprint", (), (), ()),
+            )
+
+        assert caught.value.status_code == 400
+        assert caught.value.code == "QUERY_INVALID"
+        assert caught.value.message == "The query must be corrected before it can run."
+        assert caught.value.details == {"reason_code": reason_code}
+        assert "private" not in str(caught.value)
+        assert any(
+            metric["name"] == "query_invalid"
+            and metric.get("source_id") == source.source_id
+            and metric["value"] == 1
+            for metric in operations.snapshot()["metrics"]
+        )
+    finally:
+        await executor.close()
+        operations.reset()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "database_error",
+    [
+        errors.InsufficientPrivilege("private relation"),
+        errors.AdminShutdown("private server details"),
+        errors.DatabaseError("private unknown database failure"),
+    ],
+)
+async def test_executor_keeps_noncorrectable_database_errors_unavailable(
+    database_error: errors.DatabaseError,
+) -> None:
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+    executor = PostgresQueryExecutor()
+
+    class ConnectionContext:
+        async def __aenter__(self) -> object:
+            return object()
+
+        async def __aexit__(self, *_args: object) -> None:
+            pass
+
+    class FakePool:
+        def connection(self, *, timeout: float) -> ConnectionContext:
+            assert timeout > 0
+            return ConnectionContext()
+
+    async def get_pool(_source: SourceProfile) -> FakePool:
+        return FakePool()
+
+    async def execute_connection(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise database_error
+
+    executor._get_pool = get_pool  # type: ignore[method-assign]
+    executor._execute_connection = execute_connection  # type: ignore[method-assign]
+    operations.reset()
+    try:
+        with pytest.raises(QueryUnavailableError) as caught:
+            await executor.execute(
+                source,
+                "SELECT private_sql_literal",
+                "test-revision",
+                ValidatedSql("private-fingerprint", (), (), ()),
+            )
+
+        assert caught.value.status_code == 503
+        assert caught.value.code == "QUERY_UNAVAILABLE"
+        assert caught.value.details is None
+        assert "private" not in str(caught.value)
+        assert not any(
+            metric["name"] == "query_invalid"
+            for metric in operations.snapshot()["metrics"]
+        )
+    finally:
+        await executor.close()
+        operations.reset()
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -30,6 +32,7 @@ DEFAULT_ALLOWED_FUNCTIONS = frozenset(
         "date_part",
         "date_trunc",
         "every",
+        "extract",
         "floor",
         "json_agg",
         "json_array_length",
@@ -39,6 +42,8 @@ DEFAULT_ALLOWED_FUNCTIONS = frozenset(
         "jsonb_array_length",
         "jsonb_extract_path_text",
         "jsonb_object_agg",
+        "lag",
+        "lead",
         "left",
         "length",
         "lower",
@@ -48,6 +53,7 @@ DEFAULT_ALLOWED_FUNCTIONS = frozenset(
         "mod",
         "octet_length",
         "power",
+        "rank",
         "regr_avgx",
         "regr_avgy",
         "regr_count",
@@ -148,6 +154,8 @@ DEFAULT_ALLOWED_TYPES = frozenset(
     }
 )
 
+DEFAULT_ALLOWED_UNQUALIFIED_TYPES = frozenset({"date", "text"})
+
 _ALLOWED_SQL_VALUE_FUNCTIONS = frozenset(
     {
         "SVFOP_CURRENT_DATE",
@@ -167,6 +175,12 @@ _FORBIDDEN_NODE_CODES = {
     "RangeFunction": "SQL_TABLE_FUNCTION_NOT_ALLOWED",
     "RangeTableFunc": "SQL_TABLE_FUNCTION_NOT_ALLOWED",
     "RangeTableSample": "SQL_TABLESAMPLE_NOT_ALLOWED",
+}
+
+_REJECTED_A_EXPR_CONSTRUCTS = {
+    "AEXPR_NOT_BETWEEN": "NOT BETWEEN",
+    "AEXPR_BETWEEN_SYM": "BETWEEN SYMMETRIC",
+    "AEXPR_NOT_BETWEEN_SYM": "NOT BETWEEN SYMMETRIC",
 }
 
 _ALLOWED_NODE_TAGS = frozenset(
@@ -218,6 +232,27 @@ _ALLOWED_NODE_TAGS = frozenset(
     }
 )
 
+_SQL_POLICY_VERSION = 1
+
+
+def _create_sql_policy_revision() -> str:
+    policy = {
+        "version": _SQL_POLICY_VERSION,
+        "functions": sorted(DEFAULT_ALLOWED_FUNCTIONS),
+        "operators": sorted(DEFAULT_ALLOWED_OPERATORS),
+        "types": sorted(DEFAULT_ALLOWED_TYPES),
+        "unqualified_types": sorted(DEFAULT_ALLOWED_UNQUALIFIED_TYPES),
+        "sql_value_functions": sorted(_ALLOWED_SQL_VALUE_FUNCTIONS),
+        "forbidden_nodes": sorted(_FORBIDDEN_NODE_CODES.items()),
+        "rejected_expressions": sorted(_REJECTED_A_EXPR_CONSTRUCTS.items()),
+        "allowed_nodes": sorted(_ALLOWED_NODE_TAGS),
+    }
+    encoded = json.dumps(policy, separators=(",", ":"), sort_keys=True).encode()
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+
+
+SQL_POLICY_REVISION = _create_sql_policy_revision()
+
 
 @dataclass(frozen=True)
 class ValidatedSql:
@@ -228,10 +263,17 @@ class ValidatedSql:
 
 
 class SqlValidationError(ValueError):
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        rejected_construct: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
+        self.rejected_construct = rejected_construct
 
 
 def validate_sql(
@@ -401,7 +443,7 @@ class _ValidationPolicy:
             raise SqlValidationError("SQL_FUNCTION_NOT_ALLOWED", "The SQL function is not allowed.")
         if len(parts) == 1:
             function = parts[0].casefold()
-        elif len(parts) == 2 and parts[0].casefold() == "pg_catalog":
+        elif len(parts) == 2 and parts[0] == "pg_catalog":
             function = parts[1].casefold()
         else:
             raise SqlValidationError(
@@ -416,6 +458,31 @@ class _ValidationPolicy:
         self.functions.add(f"pg_catalog.{function}")
 
     def _validate_A_Expr(self, node: Mapping[str, Any]) -> None:
+        kind = node.get("kind")
+        kind_name = str(kind.get("name", "")) if isinstance(kind, Mapping) else ""
+        if kind_name == "AEXPR_BETWEEN":
+            bounds = node.get("rexpr")
+            if (
+                not isinstance(node.get("lexpr"), Mapping)
+                or not isinstance(bounds, (tuple, list))
+                or len(bounds) != 2
+                or not all(isinstance(bound, Mapping) for bound in bounds)
+                or not {">=", "<="}.issubset(self.allowed_operators)
+            ):
+                raise SqlValidationError(
+                    "SQL_OPERATOR_NOT_ALLOWED",
+                    "The SQL operator is not approved.",
+                    rejected_construct="BETWEEN",
+                )
+            self.operators.update({">=", "<="})
+            return
+        rejected_construct = _REJECTED_A_EXPR_CONSTRUCTS.get(kind_name)
+        if rejected_construct is not None:
+            raise SqlValidationError(
+                "SQL_OPERATOR_NOT_ALLOWED",
+                "The SQL operator is not approved.",
+                rejected_construct=rejected_construct,
+            )
         parts = _string_parts(node.get("name"))
         if not parts:
             return
@@ -423,6 +490,7 @@ class _ValidationPolicy:
             raise SqlValidationError(
                 "SQL_OPERATOR_NOT_ALLOWED",
                 "The SQL operator is not approved.",
+                rejected_construct="OPERATOR",
             )
         self.operators.add(parts[0])
 
@@ -430,12 +498,20 @@ class _ValidationPolicy:
         parts = _string_parts(node.get("names"))
         if not parts:
             return
-        if len(parts) != 2 or parts[0].casefold() != "pg_catalog":
+        type_name = parts[-1].casefold()
+        if len(parts) == 1 and type_name in DEFAULT_ALLOWED_UNQUALIFIED_TYPES:
+            if type_name not in self.allowed_types:
+                raise SqlValidationError(
+                    "SQL_TYPE_NOT_ALLOWED",
+                    "The cast type is not approved.",
+                )
+            return
+        if len(parts) != 2 or parts[0] != "pg_catalog":
             raise SqlValidationError(
                 "SQL_TYPE_NOT_ALLOWED",
                 "Only approved built-in cast types are allowed.",
             )
-        if parts[1].casefold() not in self.allowed_types:
+        if type_name not in self.allowed_types:
             raise SqlValidationError(
                 "SQL_TYPE_NOT_ALLOWED",
                 "The cast type is not approved.",

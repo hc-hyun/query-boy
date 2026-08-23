@@ -196,19 +196,20 @@ async def test_metadata_publish_rejects_superseded_control_generation() -> None:
     cipher = SourceSecretCipher(b"m" * 32)
     try:
         current = await source_store.get_active(validated.profile.source_id)
-        unpin_source = (
-            validated.profile
-            if current is None
-            else replace(
-                validated.profile,
-                control_generation=current.generation,
-                control_state_version=current.state_version,
+        if current is None or current.enabled:
+            unpin_source = (
+                validated.profile
+                if current is None
+                else replace(
+                    validated.profile,
+                    control_generation=current.generation,
+                    control_state_version=current.state_version,
+                )
             )
-        )
-        try:
-            await metadata_store.unpin(unpin_source)
-        except StoredMetadataNotFoundError:
-            pass
+            try:
+                await metadata_store.unpin(unpin_source)
+            except StoredMetadataNotFoundError:
+                pass
         expected_generation = 0 if current is None else current.generation
 
         first_generation = await source_store.next_generation(validated.profile.source_id)
@@ -317,5 +318,12 @@ async def test_metadata_publish_rejects_superseded_control_generation() -> None:
 
         await metadata_store.unpin(rolled_back_source)
     finally:
+        active = await source_store.get_active(validated.profile.source_id)
+        if active is not None and active.enabled:
+            await source_store.deactivate(
+                active.source_id,
+                active.generation,
+                expected_state_version=active.state_version,
+            )
         await metadata_store.close()
         await source_store.close()

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import logging
+import time
 import uuid
 from collections.abc import AsyncIterator, Coroutine
 from contextlib import asynccontextmanager, suppress
@@ -14,6 +15,7 @@ from fastapi.responses import JSONResponse, Response
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import UNSUPPORTED_PROTOCOL_VERSION
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from query_man.access import AccessPolicy, CallerContext
 from query_man.catalog import PostgresCatalog
@@ -24,7 +26,11 @@ from query_man.errors import (
     SourceControlUnavailableError,
 )
 from query_man.gateway import GatewayService
-from query_man.mcp_server import MCP_PROTOCOL_VERSION, create_mcp_server
+from query_man.mcp_server import (
+    MCP_PROTOCOL_VERSION,
+    GetContextSuccessOutput,
+    create_mcp_server,
+)
 from query_man.metadata import MetadataService
 from query_man.metadata_store import PostgresMetadataStore
 from query_man.models import CatalogProvider
@@ -39,10 +45,94 @@ from query_man.verified import ExpectedResult, VerifiedQuery, VerifiedQueryRegis
 
 logger = logging.getLogger("query_man")
 audit_logger = logging.getLogger("query_man.audit")
+mcp_logger = logging.getLogger("query_man.mcp")
 _current_caller: contextvars.ContextVar[CallerContext | None] = contextvars.ContextVar(
     "query_man_current_caller",
     default=None,
 )
+
+
+def _unexpected_error_response() -> JSONResponse:
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": {
+                "code": "INTERNAL_ERROR",
+                "message": "An internal error occurred.",
+            }
+        },
+    )
+
+
+class _MCPRequestLifecycleMiddleware:
+    def __init__(self, app: ASGIApp) -> None:
+        self._app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope.get("path") != "/mcp":
+            await self._app(scope, receive, send)
+            return
+
+        request_id = str(uuid.uuid4())
+        state = scope.setdefault("state", {})
+        state["mcp_http_request_id"] = request_id
+        started = time.monotonic()
+        response_started_ms: int | None = None
+        response_bytes = 0
+        status_code: int | None = None
+        response_finished = False
+        outcome = "error"
+        operations.increment("mcp_http_request_started")
+
+        async def send_with_timing(message: Message) -> None:
+            nonlocal response_bytes, response_finished, response_started_ms, status_code
+            if message["type"] == "http.response.start":
+                status_code = message["status"]
+                response_started_ms = round((time.monotonic() - started) * 1_000)
+            elif message["type"] == "http.response.body":
+                response_bytes += len(message.get("body", b""))
+            await send(message)
+            if message["type"] == "http.response.body" and not message.get("more_body", False):
+                response_finished = True
+
+        try:
+            await self._app(scope, receive, send_with_timing)
+            if response_finished and status_code is not None:
+                outcome = "success" if status_code < 400 else "error"
+        except asyncio.CancelledError:
+            outcome = "cancelled"
+            raise
+        except Exception as error:
+            if response_started_ms is not None:
+                raise
+            logger.exception("Unhandled request error", exc_info=error)
+            try:
+                await _unexpected_error_response()(scope, receive, send_with_timing)
+            except asyncio.CancelledError:
+                outcome = "cancelled"
+                raise
+        finally:
+            duration_ms = round((time.monotonic() - started) * 1_000)
+            extra: dict[str, object] = {
+                "mcp_http_request_id": request_id,
+                "duration_ms": duration_ms,
+                "response_bytes": response_bytes,
+                "outcome": outcome,
+            }
+            if response_started_ms is not None:
+                extra["response_started_ms"] = response_started_ms
+            if status_code is not None:
+                extra["status_code"] = status_code
+            mcp_logger.info("mcp_http_request_completed", extra=extra)
+            operations.increment("mcp_http_request_completed")
+            operations.observe("mcp_http_request_duration_ms", duration_ms)
+            operations.observe("mcp_http_response_bytes", response_bytes)
+            if response_started_ms is not None:
+                operations.observe("mcp_http_response_started_ms", response_started_ms)
+            if outcome == "cancelled":
+                operations.increment("mcp_http_request_cancelled")
+            elif outcome != "success":
+                operations.increment("mcp_http_request_failed")
 
 
 class MetadataRequest(BaseModel):
@@ -59,6 +149,7 @@ class QueryRequest(BaseModel):
     source_id: str = Field(min_length=1, max_length=80)
     sql: str = Field(min_length=1, max_length=100_000)
     metadata_revision: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
+    sql_policy_revision: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
 
 
 class SourcePublishRequest(BaseModel):
@@ -345,15 +436,7 @@ def build_app(
     @app.exception_handler(Exception)
     async def unexpected_error(_request: Request, error: Exception) -> JSONResponse:
         logger.exception("Unhandled request error", exc_info=error)
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error": {
-                    "code": "INTERNAL_ERROR",
-                    "message": "An internal error occurred.",
-                }
-            },
-        )
+        return _unexpected_error_response()
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -388,12 +471,17 @@ def build_app(
         return gateway.list_sources(_caller(request))
 
     @app.post("/meta")
-    async def meta(payload: MetadataRequest, request: Request) -> dict[str, object]:
-        return await gateway.get_context(
-            _caller(request),
-            payload.source_id,
-            payload.question,
-            payload.max_objects,
+    async def meta(
+        payload: MetadataRequest,
+        request: Request,
+    ) -> GetContextSuccessOutput:
+        return GetContextSuccessOutput.model_validate(
+            await gateway.get_context(
+                _caller(request),
+                payload.source_id,
+                payload.question,
+                payload.max_objects,
+            )
         )
 
     @app.post("/query")
@@ -403,6 +491,7 @@ def build_app(
             payload.source_id,
             payload.sql,
             payload.metadata_revision,
+            payload.sql_policy_revision,
         )
         return await _until_disconnect(request, pending)
 
@@ -493,6 +582,7 @@ def build_app(
             raise SourceControlUnavailableError
         return await source_admin.deactivate(source_id)
 
+    app.add_middleware(_MCPRequestLifecycleMiddleware)
     app.mount("/", mcp_app)
 
     return app

@@ -30,6 +30,7 @@ from query_man.access import AccessPolicy
 from query_man.app import build_app
 from query_man.catalog import PostgresCatalog
 from query_man.errors import (
+    QueryInvalidError,
     QueryOverloadedError,
     QueryRejectedError,
     QueryTimeoutError,
@@ -45,7 +46,12 @@ from query_man.reader_policy import (
 )
 from query_man.registry import SourceRegistry
 from query_man.runtime_config import RuntimeConfig
-from query_man.sql_validation import DEFAULT_ALLOWED_FUNCTIONS, ValidatedSql, validate_sql
+from query_man.sql_validation import (
+    DEFAULT_ALLOWED_FUNCTIONS,
+    SQL_POLICY_REVISION,
+    ValidatedSql,
+    validate_sql,
+)
 from query_man.verified import VerifiedQueryRegistry, create_result_hash
 from tests.helpers import ROOT_DIRECTORY, load_test_registry, minimal_development_snapshot
 
@@ -413,6 +419,8 @@ async def test_cached_rls_reader_privilege_drift_fails_closed_over_http() -> Non
             assert metadata_context.status_code == 200, metadata_context.text
             revision = query_context.json()["metadata_revision"]
             assert metadata_context.json()["metadata_revision"] == revision
+            policy_revision = query_context.json()["sql_policy_revision"]
+            assert metadata_context.json()["sql_policy_revision"] == policy_revision
 
             query_request = {
                 "source_id": source.source_id,
@@ -421,6 +429,7 @@ async def test_cached_rls_reader_privilege_drift_fails_closed_over_http() -> Non
                     "FROM tenant_ai.record_overview ORDER BY label"
                 ),
                 "metadata_revision": revision,
+                "sql_policy_revision": policy_revision,
             }
             warm = await query_client.post("/query", json=query_request)
             assert warm.status_code == 200, warm.text
@@ -806,6 +815,7 @@ async def test_onboards_third_source_without_runtime_restart() -> None:
                 json={
                     "source_id": "support-tickets",
                     "metadata_revision": context.json()["metadata_revision"],
+                    "sql_policy_revision": context.json()["sql_policy_revision"],
                     "sql": (
                         "SELECT queue_name, count(*) AS ticket_count "
                         "FROM ai.ticket_overview GROUP BY queue_name ORDER BY queue_name"
@@ -845,6 +855,9 @@ async def test_onboards_third_source_without_runtime_restart() -> None:
                         "metadata_revision": mcp_context.structured_content[  # type: ignore[index,union-attr]
                             "metadata_revision"
                         ],
+                        "sql_policy_revision": mcp_context.structured_content[  # type: ignore[index,union-attr]
+                            "sql_policy_revision"
+                        ],
                         "sql": (
                             "SELECT queue_name, count(*) AS ticket_count "
                             "FROM ai.ticket_overview "
@@ -875,6 +888,7 @@ async def test_onboards_third_source_without_runtime_restart() -> None:
                     json={
                         "source_id": "support-tickets",
                         "metadata_revision": context.json()["metadata_revision"],
+                        "sql_policy_revision": context.json()["sql_policy_revision"],
                         "sql": "SELECT count(*) AS ticket_count FROM ai.ticket_overview",
                     },
                 )
@@ -1236,6 +1250,9 @@ callers:
                                 "source_id": "commerce-edges",
                                 "sql": verified_contract["sql"],
                                 "metadata_revision": old_revision,
+                                "sql_policy_revision": semantic_context_body[
+                                    "sql_policy_revision"
+                                ],
                             },
                         )
                         assert stale_query.structured_content is not None
@@ -1361,6 +1378,9 @@ callers:
                                 "metadata_revision": final_context_body[
                                     "metadata_revision"
                                 ],
+                                "sql_policy_revision": final_context_body[
+                                    "sql_policy_revision"
+                                ],
                             },
                         )
                         result_body = result.structured_content
@@ -1392,6 +1412,9 @@ callers:
                                 "source_id": "commerce-edges",
                                 "sql": verified_contract["sql"],
                                 "metadata_revision": semantic_revision,
+                                "sql_policy_revision": final_context_body[
+                                    "sql_policy_revision"
+                                ],
                             },
                         )
                         assert http_result.status_code == 200, http_result.text
@@ -1416,6 +1439,9 @@ callers:
                                     '"Status" AS duplicate FROM ai."Order" LIMIT 1'
                                 ),
                                 "metadata_revision": semantic_revision,
+                                "sql_policy_revision": final_context_body[
+                                    "sql_policy_revision"
+                                ],
                             },
                         )
                         assert duplicate.structured_content is not None
@@ -1497,10 +1523,77 @@ async def test_live_guarded_query_enforces_plan_and_result_limits() -> None:
             "development-issues",
             "SELECT count(*) AS issue_count FROM ai.issue_overview",
             published.revision,
+            SQL_POLICY_REVISION,
         )
         assert counted["rows"] == [{"issue_count": 600}]
         assert counted["truncated"] is False
         assert counted["plan_summary"]["node_count"] > 0  # type: ignore[index]
+
+        date_between = await service.query(
+            "development-issues",
+            "SELECT count(*) AS issue_count FROM ai.issue_overview "
+            "WHERE discovered_on BETWEEN DATE '2026-05-01' AND DATE '2026-05-31'",
+            published.revision,
+            SQL_POLICY_REVISION,
+        )
+        explicit_comparisons = await service.query(
+            "development-issues",
+            "SELECT count(*) AS issue_count FROM ai.issue_overview "
+            "WHERE discovered_on >= DATE '2026-05-01' "
+            "AND discovered_on <= DATE '2026-05-31'",
+            published.revision,
+            SQL_POLICY_REVISION,
+        )
+        assert date_between["rows"] == explicit_comparisons["rows"]
+
+        analytics = await service.query(
+            "development-issues",
+            "SELECT issue_id, issue_id::text AS issue_id_text, "
+            "CAST(discovered_at AS date) AS discovered_on, "
+            "extract(year FROM discovered_at) AS discovered_year, "
+            "rank() OVER (ORDER BY discovered_at, issue_id) AS discovered_rank, "
+            "lag(issue_id) OVER (ORDER BY issue_id) AS previous_issue_id, "
+            "lead(issue_id) OVER (ORDER BY issue_id) AS next_issue_id "
+            "FROM ai.issue_overview ORDER BY issue_id LIMIT 3",
+            published.revision,
+            SQL_POLICY_REVISION,
+        )
+        analytics_rows = analytics["rows"]
+        assert isinstance(analytics_rows, list)
+        assert len(analytics_rows) == 3
+        for index, row in enumerate(analytics_rows):
+            assert isinstance(row, dict)
+            assert row["issue_id_text"] == str(row["issue_id"])
+            assert row["discovered_year"] == row["discovered_on"][:4]
+            assert row["discovered_rank"] >= 1
+            if index == 0:
+                assert row["previous_issue_id"] is None
+            else:
+                assert row["previous_issue_id"] == analytics_rows[index - 1]["issue_id"]
+            if index < len(analytics_rows) - 1:
+                assert row["next_issue_id"] == analytics_rows[index + 1]["issue_id"]
+
+        for invalid_sql, reason_code in [
+            (
+                "SELECT missing_column FROM ai.issue_overview",
+                "QUERY_UNDEFINED_COLUMN",
+            ),
+            ("SELECT 'not-a-date'::date", "QUERY_INVALID_CAST"),
+            ("SELECT 1 / 0", "QUERY_DIVISION_BY_ZERO"),
+            (
+                "SELECT issue_id FROM ai.issue_overview LIMIT -1",
+                "QUERY_INVALID_LIMIT",
+            ),
+        ]:
+            with pytest.raises(QueryInvalidError) as invalid:
+                await service.query(
+                    "development-issues",
+                    invalid_sql,
+                    published.revision,
+                    SQL_POLICY_REVISION,
+                )
+            assert invalid.value.details == {"reason_code": reason_code}
+            assert invalid_sql not in str(invalid.value)
 
         exact_scalars = await service.query(
             "development-issues",
@@ -1508,6 +1601,7 @@ async def test_live_guarded_query_enforces_plan_and_result_limits() -> None:
             "AS exact_numeric, '\\xff00'::pg_catalog.bytea AS binary_payload "
             "FROM ai.issue_overview LIMIT 1",
             published.revision,
+            SQL_POLICY_REVISION,
         )
         assert exact_scalars["rows"] == [
             {
@@ -1528,6 +1622,7 @@ async def test_live_guarded_query_enforces_plan_and_result_limits() -> None:
             "development-issues",
             "SELECT * FROM ai.issue_comments ORDER BY comment_id",
             published.revision,
+            SQL_POLICY_REVISION,
         )
         assert limited["row_count"] == 1000
         assert limited["truncated"] is True
@@ -1539,6 +1634,7 @@ async def test_live_guarded_query_enforces_plan_and_result_limits() -> None:
                 "SELECT issue_id AS value, status AS value "
                 "FROM ai.issue_overview LIMIT 1",
                 published.revision,
+                SQL_POLICY_REVISION,
             )
         assert duplicate_columns.value.details == {
             "reason_code": "QUERY_DUPLICATE_RESULT_COLUMN"
@@ -1550,6 +1646,7 @@ async def test_live_guarded_query_enforces_plan_and_result_limits() -> None:
                 "SELECT count(*) FROM ai.issue_overview AS a "
                 "CROSS JOIN ai.issue_overview AS b CROSS JOIN ai.issue_overview AS c",
                 published.revision,
+                SQL_POLICY_REVISION,
             )
         assert caught.value.details["reason_code"] in {  # type: ignore[index]
             "QUERY_PLAN_COST_EXCEEDED",
@@ -1582,6 +1679,7 @@ async def test_live_guarded_query_enforces_plan_and_result_limits() -> None:
             "development-issues",
             "SELECT count(*) AS issue_count FROM ai.issue_overview",
             published.revision,
+            SQL_POLICY_REVISION,
         )
         assert recovered["rows"] == [{"issue_count": 600}]
 
@@ -1595,6 +1693,7 @@ async def test_live_guarded_query_enforces_plan_and_result_limits() -> None:
                     "development-issues",
                     forbidden_sql,
                     published.revision,
+                    SQL_POLICY_REVISION,
                 )
             assert forbidden.value.details == {"reason_code": reason_code}
 
@@ -1668,6 +1767,7 @@ async def test_socket_disconnect_cancels_http_query() -> None:
                 "source_id": "development-issues",
                 "sql": "SELECT count(*) FROM ai.issue_overview",
                 "metadata_revision": context.json()["metadata_revision"],
+                "sql_policy_revision": context.json()["sql_policy_revision"],
             }
         ).encode()
         _reader, writer = await asyncio.open_connection("127.0.0.1", port)
@@ -1749,6 +1849,9 @@ async def test_modern_mcp_disconnect_cancels_query_before_client_session_closes(
                         "metadata_revision": context.structured_content[  # type: ignore[index]
                             "metadata_revision"
                         ],
+                        "sql_policy_revision": context.structured_content[  # type: ignore[index]
+                            "sql_policy_revision"
+                        ],
                     },
                 )
             )
@@ -1768,6 +1871,12 @@ async def test_modern_mcp_disconnect_cancels_query_before_client_session_closes(
     ]
     assert len(cancelled) == 1
     assert cancelled[0].cancel_reason == "client_disconnected"
+    request_ids = {
+        record.mcp_http_request_id
+        for record in caplog.records
+        if record.getMessage() == "mcp_http_request_completed"
+    }
+    assert cancelled[0].mcp_http_request_id in request_ids
     assert not any(
         record.getMessage() == "Unhandled request error" for record in caplog.records
     )
@@ -1861,6 +1970,9 @@ async def test_streamable_http_mcp_runs_all_golden_queries() -> None:
                 context_body = context.structured_content
                 assert context_body is not None
                 assert context_body["quality_level"] == "L2"
+                assert {"extract", "lag", "lead", "rank"} <= set(
+                    context_body["sql_capabilities"]["functions"]  # type: ignore[index]
+                )
                 assert len(json.dumps(context_body, default=str).encode()) <= (
                     source.budget.max_metadata_response_bytes
                 )
@@ -1874,6 +1986,7 @@ async def test_streamable_http_mcp_runs_all_golden_queries() -> None:
                         "source_id": contract.source_id,
                         "sql": contract.sql,
                         "metadata_revision": contract.metadata_revision,
+                        "sql_policy_revision": context_body["sql_policy_revision"],
                     },
                 )
                 result_body = result.structured_content
@@ -1907,6 +2020,7 @@ async def test_streamable_http_mcp_runs_all_golden_queries() -> None:
                     "source_id": verified.queries[0].source_id,
                     "sql": verified.queries[0].sql,
                     "metadata_revision": f"sha256:{'0' * 64}",
+                    "sql_policy_revision": SQL_POLICY_REVISION,
                 },
             )
             assert mismatch.structured_content["error"]["code"] == (  # type: ignore[index]
@@ -1928,6 +2042,7 @@ async def test_streamable_http_mcp_runs_all_golden_queries() -> None:
                     "source_id": verified.queries[0].source_id,
                     "sql": verified.queries[0].sql,
                     "metadata_revision": refreshed.structured_content["metadata_revision"],  # type: ignore[index]
+                    "sql_policy_revision": refreshed.structured_content["sql_policy_revision"],  # type: ignore[index]
                 },
             )
             assert retried.structured_content["row_count"] == (  # type: ignore[index]

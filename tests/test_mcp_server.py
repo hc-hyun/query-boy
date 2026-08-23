@@ -21,6 +21,7 @@ from mcp.types import CallToolResult
 
 from query_man.mcp_server import MCP_PROTOCOL_VERSION
 from query_man.quality import QualityEvaluation
+from query_man.sql_validation import SQL_POLICY_REVISION
 from query_man.verified import VerifiedQuery, VerifiedQueryRegistry, create_result_hash
 from tests.helpers import ROOT_DIRECTORY
 
@@ -229,6 +230,7 @@ async def test_tools_and_revision_refresh_workflow(
                 "source_id": contract.source_id,
                 "sql": contract.sql,
                 "metadata_revision": f"sha256:{'0' * 64}",
+                "sql_policy_revision": context["sql_policy_revision"],
             },
         )
         assert mismatched.is_error is True
@@ -247,6 +249,7 @@ async def test_tools_and_revision_refresh_workflow(
                 "source_id": contract.source_id,
                 "sql": contract.sql,
                 "metadata_revision": refreshed["metadata_revision"],
+                "sql_policy_revision": refreshed["sql_policy_revision"],
             },
         )
         _assert_verified_result(retried, contract)
@@ -331,6 +334,7 @@ async def test_all_verified_query_contracts_through_mcp(
                     "source_id": contract.source_id,
                     "sql": contract.sql,
                     "metadata_revision": contract.metadata_revision,
+                    "sql_policy_revision": context["sql_policy_revision"],
                 },
             )
             observed_query_ids.add(_assert_verified_result(result, contract))
@@ -572,6 +576,7 @@ async def test_tool_validation_does_not_disclose_input(
                     "source_id": "development-issues",
                     "sql": marker + ("x" * 100_000),
                     "metadata_revision": f"sha256:{'0' * 64}",
+                    "sql_policy_revision": SQL_POLICY_REVISION,
                 },
             ),
             await client.call_tool("list_sources", {"host": marker}),
@@ -610,6 +615,7 @@ async def test_query_policy_rejections_are_structured_and_bounded(
                         "source_id": "development-issues",
                         "sql": sql,
                         "metadata_revision": revision,
+                        "sql_policy_revision": SQL_POLICY_REVISION,
                     },
                 ),
                 reason_code,
@@ -657,6 +663,7 @@ async def test_same_client_handles_bounded_concurrent_query_batch(
         "source_id": contract.source_id,
         "sql": contract.sql,
         "metadata_revision": contract.metadata_revision,
+        "sql_policy_revision": SQL_POLICY_REVISION,
     }
     started = time.monotonic()
     async with _mcp_client(mcp_server_settings) as client:
@@ -701,6 +708,7 @@ async def _run_independent_session(
                 "source_id": contract.source_id,
                 "sql": contract.sql,
                 "metadata_revision": contract.metadata_revision,
+                "sql_policy_revision": context["sql_policy_revision"],
             },
         )
         return _assert_verified_result(result, contract)

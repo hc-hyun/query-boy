@@ -35,6 +35,12 @@ from query_man.relevance import (
     select_ranked_relations,
 )
 from query_man.revision import create_metadata_revision
+from query_man.sql_validation import (
+    DEFAULT_ALLOWED_FUNCTIONS,
+    DEFAULT_ALLOWED_TYPES,
+    DEFAULT_ALLOWED_UNQUALIFIED_TYPES,
+    SQL_POLICY_REVISION,
+)
 
 
 @dataclass
@@ -121,8 +127,14 @@ class MetadataService:
             "source_description": source.description,
             "question": question,
             "metadata_revision": prepared.revision,
+            "sql_policy_revision": SQL_POLICY_REVISION,
             "snapshot_status": "stale" if stale else "fresh",
             "quality_level": quality.level,
+            "sql_capabilities": {
+                "functions": sorted(DEFAULT_ALLOWED_FUNCTIONS),
+                "cast_types": sorted(DEFAULT_ALLOWED_TYPES),
+                "unqualified_cast_types": sorted(DEFAULT_ALLOWED_UNQUALIFIED_TYPES),
+            },
             "answerability": _build_answerability(question, source.semantic_overlay.question_rules, ambiguities),
             "relations": relation_responses,
             "joins": [_to_join_response(join) for join in joins],

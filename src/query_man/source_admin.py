@@ -29,7 +29,7 @@ from query_man.source_store import (
     StoredSource,
     StoredSourceNotFoundError,
 )
-from query_man.sql_validation import SqlValidationError, validate_sql
+from query_man.sql_validation import SQL_POLICY_REVISION, SqlValidationError, validate_sql
 from query_man.verified import VerifiedQuery, create_result_hash
 
 logger = logging.getLogger("query_man.source_control")
@@ -379,6 +379,7 @@ class SourceAdminService:
                 query.source_id,
                 query.sql,
                 query.metadata_revision,
+                SQL_POLICY_REVISION,
                 tenant_id=tenant_id,
             )
             columns = response.get("columns")

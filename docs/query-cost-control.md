@@ -60,7 +60,9 @@ CPU/memory quota와 일·월 통화 budget을 제공하지 않는다.
 기록한다. AST 검증 전에는 fingerprint가 없을 수 있고, executor에 진입한 실패는 같은
 `query_id`의 `query_execution_failed` event가 fingerprint를 연결한다. Plan reject는 observed
 cost/rows/nodes와 적용 threshold도 별도 event로 남긴다. SQL text, literal과 database error
-detail은 기록하지 않는다. `/admin/metrics`는 replica-local
+detail은 기록하지 않는다. 수정 가능한 고정 SQLSTATE는 `QUERY_INVALID`와 `query_invalid`
+metric으로 분리하고 알 수 없거나 권한·인프라 관련 오류는 계속 `QUERY_UNAVAILABLE`로 숨긴다.
+`/admin/metrics`는 replica-local
 counter와 `queue_ms`/`elapsed_ms`의 count·sum만 제공한다. 따라서 평균은 `sum / count`로
 계산할 수 있지만 percentile, active pool gauge, stale age와 monetary cost는 이 endpoint에
 존재하지 않는다. P95/P99가 필요하면 audit event를 histogram collector로 보내거나 별도
@@ -69,8 +71,10 @@ instrumentation을 추가해야 한다.
 Audit는 process JSON log에 기록될 뿐 repository가 durable store를 제공하지 않는다. Query별
 history를 운영 근거로 쓸 때는 top-level JSON field를 보존하는 collector, retention과 접근
 통제를 먼저 구성한다. `elapsed_ms`는 DB connection을 얻은 뒤 transaction 실행 구간이고
-`queue_ms`는 source semaphore 대기다. Pool/connect wait와 전체 HTTP latency를 합친 값은 현재
-제공하지 않는다.
+`queue_ms`는 source semaphore 대기다. MCP는 별도의 HTTP lifecycle event/metric으로 request
+arrival부터 response start와 final ASGI body 전달까지를 측정해 pool/connect, SDK dispatch와
+serialization을 포함한다. 이 값도 client 수신, decode, tool scheduling과 model 응답 시간은
+포함하지 않는다.
 
 통화 단위 chargeback은 같은 기간의 source database/cluster billing을 gateway의 source별
 성공 수, elapsed 합계와 database-native I/O/CPU 지표에 결합한다. 공유 cluster에서는 이

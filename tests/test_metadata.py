@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import replace
 
 import pytest
@@ -16,6 +17,12 @@ from query_man.models import (
 )
 from query_man.registry import SourceRegistry
 from query_man.revision import create_metadata_revision
+from query_man.sql_validation import (
+    DEFAULT_ALLOWED_FUNCTIONS,
+    DEFAULT_ALLOWED_TYPES,
+    DEFAULT_ALLOWED_UNQUALIFIED_TYPES,
+    SQL_POLICY_REVISION,
+)
 from tests.helpers import column, load_test_registry, minimal_development_snapshot
 
 
@@ -254,6 +261,31 @@ async def test_generic_identifier_question_is_low_confidence() -> None:
     service = MetadataService(load_test_registry(), StaticCatalog(minimal_development_snapshot()))
     response = await service.get_context("development-issues", "ID를 보여줘")
     assert response["answerability"]["status"] == "low_confidence"
+
+
+@pytest.mark.asyncio
+async def test_exposes_deterministic_sql_capabilities_from_validation_policy() -> None:
+    registry = load_test_registry()
+    source = registry.get("development-issues")
+    assert source is not None
+    service = MetadataService(registry, StaticCatalog(minimal_development_snapshot()))
+
+    response = await service.get_context(source.source_id, "최근 문제")
+
+    capabilities = response["sql_capabilities"]
+    assert isinstance(capabilities, dict)
+    assert capabilities == {
+        "functions": sorted(DEFAULT_ALLOWED_FUNCTIONS),
+        "cast_types": sorted(DEFAULT_ALLOWED_TYPES),
+        "unqualified_cast_types": sorted(DEFAULT_ALLOWED_UNQUALIFIED_TYPES),
+    }
+    assert response["sql_policy_revision"] == SQL_POLICY_REVISION
+    assert {"date_part", "extract", "lag", "lead", "rank"} <= set(
+        capabilities["functions"]
+    )
+    assert len(json.dumps(response, ensure_ascii=False).encode()) <= (
+        source.budget.max_metadata_response_bytes
+    )
 
 
 @pytest.mark.asyncio

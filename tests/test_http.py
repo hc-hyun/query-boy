@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import uuid
 from dataclasses import replace
 from pathlib import Path
 
@@ -11,13 +12,14 @@ import pytest
 
 from query_man.access import AccessPolicy
 from query_man.app import build_app
+from query_man.errors import QueryInvalidError
 from query_man.mcp_server import MCP_PROTOCOL_VERSION
 from query_man.models import CatalogSnapshot, SourceProfile
 from query_man.operations import operations
 from query_man.query import QueryExecutor
 from query_man.registry import SourceRegistry
 from query_man.runtime_config import RuntimeConfig
-from query_man.sql_validation import ValidatedSql
+from query_man.sql_validation import SQL_POLICY_REVISION, ValidatedSql
 from tests.helpers import ROOT_DIRECTORY, load_test_registry, minimal_development_snapshot
 
 
@@ -48,6 +50,11 @@ class PartiallyHangingCatalog(ReturningCatalog):
             return self.snapshot
         await asyncio.Event().wait()
         raise AssertionError("unreachable")
+
+
+class FailingAccessPolicy:
+    def authenticate(self, _token: str | None) -> None:
+        raise RuntimeError("authentication dependency failed")
 
 
 class RecordingQueryExecutor:
@@ -85,6 +92,36 @@ class RecordingQueryExecutor:
 
     async def cancel(self, _query_id: str, _allowed_sources: frozenset[str]) -> bool:
         return False
+
+
+def test_meta_openapi_declares_revisions_and_sql_capabilities() -> None:
+    app = build_app(
+        runtime_config(),
+        registry=load_test_registry(),
+        catalog=NeverCalledCatalog(),
+    )
+
+    schema = app.openapi()
+    response_schema = schema["paths"]["/meta"]["post"]["responses"]["200"]["content"][
+        "application/json"
+    ]["schema"]
+    assert response_schema == {"$ref": "#/components/schemas/GetContextSuccessOutput"}
+    success = schema["components"]["schemas"]["GetContextSuccessOutput"]
+    assert success["required"] == [
+        "metadata_revision",
+        "sql_policy_revision",
+        "sql_capabilities",
+    ]
+    capabilities = schema["components"]["schemas"]["SqlCapabilitiesOutput"]
+    assert capabilities["required"] == [
+        "functions",
+        "cast_types",
+        "unqualified_cast_types",
+    ]
+    assert all(
+        capabilities["properties"][name]["items"] == {"type": "string"}
+        for name in capabilities["required"]
+    )
 
 
 def runtime_config(api_token: str | None = None) -> RuntimeConfig:
@@ -227,6 +264,130 @@ async def test_mcp_transport_requires_exact_json_media_type() -> None:
     assert rejected.text == "Invalid Content-Type header"
     assert duplicated.status_code == 400
     assert duplicated.text == "Invalid Content-Type header"
+
+
+@pytest.mark.asyncio
+async def test_mcp_http_lifecycle_records_bounded_timing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    marker = "SENSITIVE_MCP_BODY_MARKER_DO_NOT_LOG"
+    app = build_app(
+        runtime_config(),
+        registry=load_test_registry(),
+        catalog=NeverCalledCatalog(),
+    )
+    discover = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "server/discover",
+        "params": {
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": MCP_PROTOCOL_VERSION,
+                "io.modelcontextprotocol/clientInfo": {"name": marker, "version": "1"},
+                "io.modelcontextprotocol/clientCapabilities": {},
+            }
+        },
+    }
+    caplog.set_level(logging.INFO, logger="query_man.mcp")
+
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+            base_url="http://127.0.0.1:3000",
+        ) as session:
+            response = await session.post(
+                "/mcp",
+                headers={
+                    "mcp-protocol-version": MCP_PROTOCOL_VERSION,
+                    "mcp-method": "server/discover",
+                },
+                json=discover,
+            )
+            rejected = await session.post(
+                "/mcp",
+                headers={
+                    "mcp-protocol-version": MCP_PROTOCOL_VERSION,
+                    "mcp-method": "server/discover",
+                    "content-type": "text/plain",
+                },
+                content=marker,
+            )
+            await session.get("/ready")
+
+    assert response.status_code == 200
+    assert rejected.status_code == 400
+    completed = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "mcp_http_request_completed"
+    ]
+    assert len(completed) == 2
+    record = next(record for record in completed if record.status_code == 200)
+    rejected_record = next(record for record in completed if record.status_code == 400)
+    assert uuid.UUID(record.mcp_http_request_id).version == 4
+    assert record.status_code == 200
+    assert 0 <= record.response_started_ms <= record.duration_ms
+    assert record.response_bytes == len(response.content)
+    assert record.outcome == "success"
+    assert rejected_record.outcome == "error"
+    assert rejected_record.response_bytes == len(rejected.content)
+    assert marker not in caplog.text
+    metrics = {
+        metric["name"]: metric["value"] for metric in operations.snapshot()["metrics"]
+    }
+    assert metrics["mcp_http_request_started"] == 2
+    assert metrics["mcp_http_request_completed"] == 2
+    assert metrics["mcp_http_request_failed"] == 1
+    assert metrics["mcp_http_request_duration_ms_count"] == 2
+    assert metrics["mcp_http_response_started_ms_count"] == 2
+    assert metrics["mcp_http_response_bytes_sum"] == len(response.content) + len(rejected.content)
+
+
+@pytest.mark.asyncio
+async def test_mcp_http_lifecycle_includes_generated_internal_error_response(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    app = build_app(
+        runtime_config(),
+        registry=load_test_registry(),
+        catalog=NeverCalledCatalog(),
+        access_policy=FailingAccessPolicy(),  # type: ignore[arg-type]
+    )
+    caplog.set_level(logging.INFO, logger="query_man.mcp")
+
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+            base_url="http://127.0.0.1:3000",
+        ) as session:
+            response = await session.post(
+                "/mcp",
+                headers={"mcp-protocol-version": MCP_PROTOCOL_VERSION},
+                json={},
+            )
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "error": {
+            "code": "INTERNAL_ERROR",
+            "message": "An internal error occurred.",
+        }
+    }
+    record = next(
+        record
+        for record in caplog.records
+        if record.getMessage() == "mcp_http_request_completed"
+    )
+    assert record.status_code == 500
+    assert 0 <= record.response_started_ms <= record.duration_ms
+    assert record.response_bytes == len(response.content)
+    assert record.outcome == "error"
+    metrics = {
+        metric["name"]: metric["value"] for metric in operations.snapshot()["metrics"]
+    }
+    assert metrics["mcp_http_request_failed"] == 1
+    assert metrics["mcp_http_response_started_ms_count"] == 1
+    assert metrics["mcp_http_response_bytes_sum"] == len(response.content)
 
 
 @pytest.mark.asyncio
@@ -459,6 +620,7 @@ async def test_rejects_client_supplied_tenant_context() -> None:
                 "source_id": "development-issues",
                 "sql": "SELECT 1",
                 "metadata_revision": f"sha256:{'0' * 64}",
+                "sql_policy_revision": SQL_POLICY_REVISION,
                 "tenant_id": "attacker-selected-tenant",
             },
         )
@@ -551,6 +713,7 @@ async def test_executes_query_with_current_metadata_revision(
                 "source_id": "development-issues",
                 "sql": "SELECT count(*) AS issue_count FROM ai.issue_overview",
                 "metadata_revision": context.json()["metadata_revision"],
+                "sql_policy_revision": context.json()["sql_policy_revision"],
             },
         )
 
@@ -579,6 +742,7 @@ async def test_query_rejects_stale_revision_without_echoing_sql(
                 "source_id": "development-issues",
                 "sql": f"SELECT '{secret_literal}' FROM ai.issue_overview",
                 "metadata_revision": f"sha256:{'0' * 64}",
+                "sql_policy_revision": SQL_POLICY_REVISION,
             },
         )
 
@@ -588,6 +752,90 @@ async def test_query_rejects_stale_revision_without_echoing_sql(
     assert "query_failed query_id=" in caplog.text
     assert "error_code=METADATA_REVISION_MISMATCH" in caplog.text
     assert secret_literal not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_query_rejection_returns_only_bounded_construct_detail() -> None:
+    sensitive_literal = "SENSITIVE_HTTP_SQL_LITERAL_DO_NOT_ECHO"
+    async with client(ReturningCatalog(minimal_development_snapshot())) as session:
+        context = await session.post(
+            "/meta",
+            json={"source_id": "development-issues", "question": "문제 번호 범위"},
+        )
+        response = await session.post(
+            "/query",
+            json={
+                "source_id": "development-issues",
+                "sql": (
+                    "SELECT issue_id FROM ai.issue_overview "
+                    "WHERE issue_id NOT BETWEEN 1 AND 2 "
+                    f"AND status <> '{sensitive_literal}'"
+                ),
+                "metadata_revision": context.json()["metadata_revision"],
+                "sql_policy_revision": context.json()["sql_policy_revision"],
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["details"] == {
+        "reason_code": "SQL_OPERATOR_NOT_ALLOWED",
+        "rejected_construct": "NOT BETWEEN",
+    }
+    assert sensitive_literal not in response.text
+
+
+@pytest.mark.asyncio
+async def test_query_invalid_returns_only_bounded_correction_reason() -> None:
+    sensitive_literal = "SENSITIVE_HTTP_SQL_LITERAL_DO_NOT_ECHO"
+    private_database_detail = "private_column at character 42"
+
+    class InvalidQueryExecutor(RecordingQueryExecutor):
+        async def execute(
+            self,
+            source: SourceProfile,
+            _sql: str,
+            _metadata_revision: str,
+            validated: ValidatedSql,
+            *,
+            query_id: str | None = None,
+            tenant_id: str | None = None,
+        ) -> dict[str, object]:
+            self.calls.append((source.source_id, validated.fingerprint, tenant_id))
+            raise QueryInvalidError("QUERY_UNDEFINED_COLUMN") from RuntimeError(
+                private_database_detail
+            )
+
+    async with client(
+        ReturningCatalog(minimal_development_snapshot()),
+        query_executor=InvalidQueryExecutor(),
+    ) as session:
+        context = await session.post(
+            "/meta",
+            json={"source_id": "development-issues", "question": "문제 컬럼"},
+        )
+        response = await session.post(
+            "/query",
+            json={
+                "source_id": "development-issues",
+                "sql": (
+                    "SELECT missing_column FROM ai.issue_overview "
+                    f"WHERE status <> '{sensitive_literal}'"
+                ),
+                "metadata_revision": context.json()["metadata_revision"],
+                "sql_policy_revision": context.json()["sql_policy_revision"],
+            },
+        )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "error": {
+            "code": "QUERY_INVALID",
+            "message": "The query must be corrected before it can run.",
+            "details": {"reason_code": "QUERY_UNDEFINED_COLUMN"},
+        }
+    }
+    assert sensitive_literal not in response.text
+    assert private_database_detail not in response.text
 
 
 @pytest.mark.asyncio
@@ -640,6 +888,7 @@ callers:
                 "source_id": "market-voc",
                 "sql": "SELECT 1",
                 "metadata_revision": f"sha256:{'0' * 64}",
+                "sql_policy_revision": SQL_POLICY_REVISION,
             },
         )
         unauthenticated = await session.get("/sources")

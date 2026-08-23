@@ -5,7 +5,14 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from pglast.parser import get_postgresql_version
 
-from query_man.sql_validation import SqlValidationError, validate_sql
+from query_man.sql_validation import (
+    DEFAULT_ALLOWED_FUNCTIONS,
+    DEFAULT_ALLOWED_TYPES,
+    DEFAULT_ALLOWED_UNQUALIFIED_TYPES,
+    SQL_POLICY_REVISION,
+    SqlValidationError,
+    validate_sql,
+)
 
 ALLOWED_RELATIONS = {
     "ai.issue_comments",
@@ -16,6 +23,11 @@ ALLOWED_RELATIONS = {
 
 def test_parser_matches_postgresql_18_grammar() -> None:
     assert get_postgresql_version()[0] == 18
+
+
+def test_sql_policy_revision_is_a_stable_digest() -> None:
+    assert len(SQL_POLICY_REVISION) == len("sha256:") + 64
+    assert SQL_POLICY_REVISION.removeprefix("sha256:").isalnum()
 
 
 def test_accepts_question_answering_select_and_extracts_dependencies() -> None:
@@ -58,6 +70,165 @@ def test_accepts_non_recursive_read_only_cte() -> None:
     )
 
     assert result.relations == ("ai.issue_overview",)
+
+
+def test_accepts_date_between_and_records_effective_comparison_operators() -> None:
+    result = validate_sql(
+        """
+        SELECT *
+        FROM ai.issue_overview
+        WHERE discovered_on BETWEEN DATE '2026-05-01' AND DATE '2026-05-31'
+        """,
+        allowed_relations=ALLOWED_RELATIONS,
+    )
+
+    assert result.relations == ("ai.issue_overview",)
+    assert result.operators == ("<=", ">=")
+
+
+def test_between_requires_both_effective_comparison_operators() -> None:
+    with pytest.raises(SqlValidationError) as captured:
+        validate_sql(
+            "SELECT 2 BETWEEN 1 AND 3",
+            allowed_relations=ALLOWED_RELATIONS,
+            allowed_operators={">="},
+        )
+
+    assert captured.value.code == "SQL_OPERATOR_NOT_ALLOWED"
+    assert captured.value.rejected_construct == "BETWEEN"
+
+
+@pytest.mark.parametrize(
+    ("expression", "rejected_construct"),
+    [
+        ("2 NOT BETWEEN 1 AND 3", "NOT BETWEEN"),
+        ("2 BETWEEN SYMMETRIC 1 AND 3", "BETWEEN SYMMETRIC"),
+        ("2 NOT BETWEEN SYMMETRIC 1 AND 3", "NOT BETWEEN SYMMETRIC"),
+    ],
+)
+def test_rejects_unapproved_between_variants(
+    expression: str,
+    rejected_construct: str,
+) -> None:
+    with pytest.raises(SqlValidationError) as captured:
+        validate_sql(f"SELECT {expression}", allowed_relations=ALLOWED_RELATIONS)
+
+    assert captured.value.code == "SQL_OPERATOR_NOT_ALLOWED"
+    assert captured.value.rejected_construct == rejected_construct
+
+
+@pytest.mark.parametrize(
+    ("sql", "type_name"),
+    [
+        ("SELECT DATE '2026-05-01'", "date"),
+        ("SELECT 'comment'::text", "text"),
+    ],
+)
+def test_unqualified_date_and_text_casts_honor_the_type_allowlist(
+    sql: str,
+    type_name: str,
+) -> None:
+    with pytest.raises(SqlValidationError) as captured:
+        validate_sql(
+            sql,
+            allowed_relations=ALLOWED_RELATIONS,
+            allowed_types=DEFAULT_ALLOWED_TYPES - {type_name},
+        )
+
+    assert captured.value.code == "SQL_TYPE_NOT_ALLOWED"
+
+
+def test_accepts_unqualified_date_and_text_casts() -> None:
+    result = validate_sql(
+        """
+        SELECT
+          CAST(discovered_at AS date) AS discovered_on,
+          issue_id::text AS issue_id_text
+        FROM ai.issue_overview
+        """,
+        allowed_relations=ALLOWED_RELATIONS,
+    )
+
+    assert DEFAULT_ALLOWED_UNQUALIFIED_TYPES == frozenset({"date", "text"})
+    assert result.relations == ("ai.issue_overview",)
+
+
+@pytest.mark.parametrize(
+    "type_name",
+    ["ai.date", "ai.text", "pg_temp.text", '"PG_CATALOG".date', '"PG_CATALOG".text'],
+)
+def test_rejects_untrusted_schema_qualified_date_and_text_casts(type_name: str) -> None:
+    with pytest.raises(SqlValidationError) as captured:
+        validate_sql(
+            f"SELECT '2026-05-01'::{type_name}",
+            allowed_relations=ALLOWED_RELATIONS,
+        )
+
+    assert captured.value.code == "SQL_TYPE_NOT_ALLOWED"
+
+
+@pytest.mark.parametrize(
+    ("expression", "function"),
+    [
+        ("rank() OVER (ORDER BY issue_id)", "rank"),
+        ("lag(status) OVER (ORDER BY discovered_at)", "lag"),
+        ("lead(status) OVER (ORDER BY discovered_at)", "lead"),
+        ("extract(year FROM discovered_at)", "extract"),
+    ],
+)
+def test_accepts_common_analytic_functions_and_records_resolved_dependency(
+    expression: str,
+    function: str,
+) -> None:
+    result = validate_sql(
+        f"SELECT {expression} FROM ai.issue_overview",
+        allowed_relations=ALLOWED_RELATIONS,
+    )
+
+    assert result.functions == (f"pg_catalog.{function}",)
+
+
+@pytest.mark.parametrize(
+    ("expression", "function"),
+    [
+        ("rank() OVER (ORDER BY issue_id)", "rank"),
+        ("lag(status) OVER (ORDER BY discovered_at)", "lag"),
+        ("lead(status) OVER (ORDER BY discovered_at)", "lead"),
+        ("extract(year FROM discovered_at)", "extract"),
+    ],
+)
+def test_common_analytic_functions_honor_the_function_allowlist(
+    expression: str,
+    function: str,
+) -> None:
+    with pytest.raises(SqlValidationError) as captured:
+        validate_sql(
+            f"SELECT {expression} FROM ai.issue_overview",
+            allowed_relations=ALLOWED_RELATIONS,
+            allowed_functions=DEFAULT_ALLOWED_FUNCTIONS - {function},
+        )
+
+    assert captured.value.code == "SQL_FUNCTION_NOT_ALLOWED"
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "ai.rank() OVER (ORDER BY issue_id)",
+        "ai.lag(status) OVER (ORDER BY discovered_at)",
+        "ai.lead(status) OVER (ORDER BY discovered_at)",
+        "ai.extract('year', discovered_at)",
+        '"PG_CATALOG".extract(\'year\', discovered_at)',
+    ],
+)
+def test_rejects_untrusted_schema_qualified_analytic_functions(expression: str) -> None:
+    with pytest.raises(SqlValidationError) as captured:
+        validate_sql(
+            f"SELECT {expression} FROM ai.issue_overview",
+            allowed_relations=ALLOWED_RELATIONS,
+        )
+
+    assert captured.value.code == "SQL_FUNCTION_SCHEMA_NOT_ALLOWED"
 
 
 def test_cte_visibility_follows_nested_query_scope() -> None:
@@ -172,6 +343,8 @@ def test_single_statement_with_comments_and_trailing_semicolon_is_allowed() -> N
             "SQL_PARAMETER_NOT_ALLOWED",
         ),
         ("SELECT 1::custom.type", "SQL_TYPE_NOT_ALLOWED"),
+        ("SELECT 1::int4", "SQL_TYPE_NOT_ALLOWED"),
+        ("SELECT CAST('x' AS)", "SQL_PARSE_ERROR"),
         ("SELECT 'x' COLLATE \"C\"", "SQL_COLLATION_NOT_ALLOWED"),
         ("SELECT 1 OPERATOR(ai.+) 2", "SQL_OPERATOR_NOT_ALLOWED"),
         ("SELECT XMLPARSE(DOCUMENT '<root/>')", "SQL_CONSTRUCT_NOT_ALLOWED"),
