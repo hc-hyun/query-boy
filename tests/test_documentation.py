@@ -46,7 +46,7 @@ EXPECTED_ID_COUNTS = {
     "DEP": 8,
     "MCPX": 8,
 }
-EXPECTED_ACTIVE_ID_COUNTS = {"SOAK": 7, "COST": 5, "TRACE": 4}
+EXPECTED_ACTIVE_ID_COUNTS = {"SOAK": 7, "SKILL": 10, "COST": 5, "TRACE": 4}
 
 
 def test_roadmap_has_one_completed_checkbox_for_every_expected_id() -> None:
@@ -111,7 +111,7 @@ def test_active_todo_has_prioritized_unique_checklists_and_soak_evidence() -> No
     matches = re.findall(r"^- \[([ x])\] `([A-Z]+)-(\d{2})`", todo, re.MULTILINE)
     ids = [f"{prefix}-{number}" for _checked, prefix, number in matches]
 
-    assert len(ids) == sum(EXPECTED_ACTIVE_ID_COUNTS.values()) == 16
+    assert len(ids) == sum(EXPECTED_ACTIVE_ID_COUNTS.values()) == 26
     assert len(ids) == len(set(ids))
     for prefix, count in EXPECTED_ACTIVE_ID_COUNTS.items():
         prefix_matches = [

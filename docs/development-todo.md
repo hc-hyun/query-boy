@@ -40,7 +40,43 @@ Status: Active
 실행 증거와 threshold는
 [multi-replica soak audit](verification/2026-08-23-mcp-multi-replica-soak.md)에 기록한다.
 
-## P1 — Database-Native Cost Attribution
+## P1 — Source Onboarding Skill
+
+목표: 기존 no-restart source onboarding 계약을 Codex가 반복 가능하게 orchestration하되,
+Skill을 security boundary로 사용하거나 조회용 MCP token을 operator로 승격하지 않는다. 상세
+설계와 단계별 gate는 [source onboarding Skill plan](source-onboarding-skill-plan.md)에서
+관리한다.
+
+- [ ] `SKILL-01` Skill scope, repository 위치, request/trigger 경계와 manual runbook·query
+  Skill의 책임 분리를 설계 review로 확정한다.
+- [ ] `SKILL-02` DB owner, source operator, reader credential과 조회 caller의 권한 분리,
+  secret 전달, mutation 승인과 stop condition을 threat review한다.
+- [ ] `SKILL-03` 신규 L0 evidence review/plan/handoff와 조건부 apply/verify 상태,
+  PostgreSQL 18·RLS·TLS 검증, artifact retention과 instruction-only 대 deterministic helper
+  결정을 승인한다.
+- [ ] `SKILL-04` Release mode를 확정한다. Executor면 non-mutating validation/state/plan과
+  idempotent reconciliation 계약을 구현하고, plan-only면 mutation 0건 경계와 handoff를
+  decision 및 test로 고정한다.
+- [ ] `SKILL-05` 승인된 최소 구조로 repository Skill을 구현하고 기존 onboarding 문서를
+  progressive disclosure reference로 연결한다.
+- [ ] `SKILL-06` 선택한 mode의 실행 경계를 구현한다. Executor면 helper-owned target/secret,
+  plan-ID-only apply, bounded output과 자동 retry 금지를 구현하고, plan-only면 admin/helper
+  호출 0건을 검증한다.
+- [ ] `SKILL-07` Positive/negative/adversarial trigger와 mutation approval을 realistic prompt 및
+  독립 forward test로 검증한다.
+- [ ] `SKILL-08` `support-tickets` fixture에서 선택한 mode를 검증한다. Plan-only면 reviewed
+  plan/handoff와 mutation 0건, executor면 plan→approval→publish→HTTP/MCP query를 재현하고
+  조회용 token이 non-operator로 유지되는지 확인한다.
+- [ ] `SKILL-09` 선택한 mode에서 관측 가능한 replica revision/quality, caller isolation, 비용
+  경계와 secret/question/SQL 비노출 acceptance를 통과한다. Plan-only는 publish 성공을
+  주장하지 않는다.
+- [ ] `SKILL-10` Skill validation, 전체 관련 회귀, 운영 문서와 재현 증거를 완료한 뒤 기본
+  onboarding workflow 채택 여부를 기록한다.
+
+현재 다음 작업은 `SKILL-01`이다. `SKILL-01`부터 `SKILL-03`까지 승인되기 전에는 scaffold,
+helper 또는 production mutation을 구현하지 않는다.
+
+## P2 — Database-Native Cost Attribution
 
 목표: 이미 적용 중인 timeout, concurrency, result, memory/temp/JIT hard limit에 더해 완료된
 query의 실제 DB 자원 사용을 fingerprint 단위로 측정한다. 통화 단위 청구액은 provider billing
@@ -58,10 +94,10 @@ query의 실제 DB 자원 사용을 fingerprint 단위로 측정한다. 통화 �
 - [ ] `COST-05` 실제 fixture에서 저비용·CPU·I/O·temp 사용 query를 구분하는 acceptance와
   chargeback 불가 시의 운영 판단 절차를 문서화한다.
 
-현재 다음 작업은 `COST-01`이다. 이 항목의 결정 전에는 collector schema나 통화 단위 비용을
-추정해서 구현하지 않는다.
+이 track의 다음 작업은 `COST-01`이다. 더 높은 우선순위의 Skill design gate가 열린 동안에는
+collector schema나 통화 단위 비용을 추정해서 구현하지 않는다.
 
-## P2 — End-to-End Workflow Trace
+## P3 — End-to-End Workflow Trace
 
 목표: 한 transport 요청에서 여러 tool call과 retry로 이어지는 사용자 workflow를 민감 입력
 없이 추적한다.
@@ -79,6 +115,10 @@ query의 실제 DB 자원 사용을 fingerprint 단위로 측정한다. 통화 �
 
 - 이전 MCP handshake 또는 protocol version 지원, legacy cancellation, stateful compatibility
   session은 backlog에 두지 않는다.
+- Source onboarding Skill이나 prompt를 reader privilege, authorization, SQL validation 또는
+  query budget의 enforcement boundary로 사용하지 않는다.
+- 조회용 MCP에 source publish, credential rotation, rollback 또는 deactivate tool을 추가하지
+  않는다. 필요성이 검증되면 별도 threat model과 API decision부터 작성한다.
 - 두 replica를 합친 distributed global query quota나 load balancer 선택은 현재 soak가
   보장하지 않는다. 필요하면 connection budget과 routing decision을 먼저 추가한다.
 - Planner cost, gateway latency 또는 cloud vCPU 가격만으로 query별 통화 비용을 가장하지
