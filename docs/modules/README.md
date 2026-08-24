@@ -72,9 +72,9 @@ owner는 주의점에 기록하며 primary owner와 같은 뜻으로 해석하�
 
 | 현재 파일 또는 영역 | 논리적 owner | 전환상 주의점 |
 |---|---|---|
-| `models.py` source/budget/semantic/provenance types | Source Catalog | Catalog/metadata types도 같은 파일에 있으므로 type 변경은 Metadata 계약도 확인한다. |
+| `models.py` source/budget/semantic/provenance types | Source Catalog | Catalog/metadata types도 같은 파일에 있으므로 type 변경은 Metadata 계약도 확인한다. Delivery admin validation은 `SourceEnvironment`를 소비한다. |
 | `models.py` catalog/prepared metadata/provider types | Metadata | `SourceProfile`을 소비하므로 Source Catalog 계약을 변경하지 않는다. |
-| `registry.py` | Source Catalog | Control Plane은 validator와 projection writer를 소비한다. |
+| `registry.py` | Source Catalog | Control Plane은 validator와 projection writer를 소비한다. Delivery admin validation은 공개 `Identifier`와 `StableSlug` type을 소비하므로 validation 의미 변경 시 Delivery도 확인한다. |
 | `catalog.py`, `metadata.py`, `relevance.py`, `revision.py`, `quality_level.py` | Metadata | `reader_policy.py`와 SQL capability는 cross-module 계약이다. |
 | `query.py`, `sql_validation.py`, `result_encoding.py` | Guarded Query | `query.py`의 result dictionary와 lifecycle capability는 아직 암묵 계약이다. |
 | `reader_policy.py` | Source Catalog | Metadata와 Guarded Query가 소비하며 두 DB 경로가 같은 safety policy를 사용해야 한다. |
@@ -82,13 +82,31 @@ owner는 주의점에 기록하며 primary owner와 같은 뜻으로 해석하�
 | `metadata_store.py` Protocol/codec | Metadata contract | PostgreSQL store와 Control DB transaction ownership은 Control Plane이다. |
 | `metadata_store.py` PostgreSQL implementation | Control Plane | Metadata가 implementation을 알지 않도록 한다. |
 | `gateway.py`, `access.py`, `mcp_server.py`, `http_validation.py` | Delivery | Public caller/application/transport와 bounded validation contract다. |
-| `source_admin_routes.py` | Delivery | Control Plane administration use case를 소비하는 public admin HTTP/validation contract다. |
-| `errors.py` | Producing domain module의 오류 의미; Delivery의 public envelope/rendering | 해당 error producer와 Delivery 문서를 모두 읽는다. |
+| `source_admin_routes.py` | Delivery | Control Plane administration use case와 Source Catalog의 `SourceEnvironment`, `Identifier`, `StableSlug` validation type을 소비하는 public admin HTTP/validation contract다. |
+| `errors.py`의 `AppError` carrier field | Delivery | Delivery가 HTTP/MCP public envelope와 `status_code/code/message/details` rendering compatibility를 소유한다. Domain subclass를 생성하는 module은 자신의 오류 발생 조건과 의미를 소유하며 file은 coordinating agent가 single-writer로 편집한다. |
+| `errors.py`의 `SourceNotFoundError` | Source Catalog | Source 존재 의미는 Source Catalog 계약이다. Metadata, Guarded Query와 Delivery가 생산·소비하고 public status/code/message rendering은 Delivery가 소유한다. |
+| `errors.py`의 `MetadataUnavailableError`, `MetadataRevisionMismatchError` | Metadata | Metadata availability와 published revision 의미를 Metadata가 소유한다. Guarded Query와 Control Plane이 소비하고 public envelope는 Delivery가 소유한다. |
+| `errors.py`의 `QueryRejectedError`, `QueryInvalidError`, `QueryOverloadedError`, `QueryTimeoutError`, `QueryUnavailableError` 및 query public message/rejected-construct mapping | Guarded Query | SQL policy, execution과 bounded reason 의미를 Guarded Query가 소유한다. Control Plane/Delivery가 소비하고 public envelope는 Delivery가 소유한다. |
+| `errors.py`의 `OperatorRequiredError`, `QueryNotFoundError` | Delivery | Delivery가 operator authorization을 강제하고 Guarded Query의 `cancel(query_id) -> found boolean`을 public cancel-not-found 오류로 매핑한다. Guarded Query는 active query ID 존재 의미를 소유한다. |
+| `errors.py`의 `SourceValidationError`, `SourceGenerationConflictError`, `SourceControlUnavailableError`, `MutationNotFoundError`, `MutationIdempotencyConflictError` | Control Plane | Source administration state/error 의미는 Control Plane이 소유하고 Delivery는 status/code/message envelope를 rendering한다. 같은 이름의 persistence-private exception과 혼동하지 않는다. |
 | `app.py` request/middleware/routes/MCP mount | Delivery | `build_app`와 lifespan 부분은 Runtime 책임이다. |
 | `app.py` composition/lifespan/probe | Runtime | Delivery route 동작을 함께 바꾸지 않는다. |
 | `server.py`, `runtime_config.py`, `operations.py` | Runtime | Domain module은 operations reporting 계약만 소비하며 lifecycle/redaction/health 의미는 Runtime이 소유한다. |
 | `__init__.py` | Runtime | Package identity/version만 소유하며 domain contract export를 모으지 않는다. |
 | `verified.py`, `quality.py` | Assurance | Verified DTO/hash는 Control Plane이 소비하고 hash는 Guarded Query encoding에 의존한다. |
+| `tests/helpers.py` | Assurance test infrastructure | Source Catalog registry와 Metadata catalog fixture를 여러 module test가 공유한다. Fixture shape 변경은 해당 provider와 직접 consumer를 확인하고 coordinating agent가 single-writer로 편집한다. |
+| `tests/conftest.py` | Assurance test infrastructure | Repository-wide pytest fixture composition이다. Control DB fixture 의미는 Control Plane이 제공하며 coordinating agent가 consumer 실행 순서를 확인하고 single-writer로 편집한다. |
+| `tests/control_database.py` | Control Plane | Disposable Control DB, migration apply, authority fingerprint와 leak-free cleanup test contract다. 여러 integration test가 소비하므로 Control Plane owner와 coordinating agent가 한 writer를 지정한다. |
+| `tests/test_documentation.py` | Assurance | 모든 module의 문서 link, owner mapping, immutable ledger와 governance guard를 조립한다. 각 module이 자신의 사실을 검토하되 coordinating agent만 이 shared gate를 편집한다. |
+| `tests/test_http.py` | Delivery | HTTP/MCP parent surface가 primary 범위이며 Runtime lifespan과 Control Plane admin use case도 검증한다. Symbol별 owner review 뒤 coordinating agent가 file single-writer를 맡는다. |
+| `tests/test_managed_mode.py`, `tests/test_control_startup.py` | Runtime | Managed composition/startup가 primary 범위이며 Delivery access, Control Plane authority와 Assurance verified membership을 함께 검증한다. Coordinating agent가 두 provider/consumer 변경 순서를 정한다. |
+| `tests/test_runtime_config.py` | Runtime | Environment/source authority 조립이 primary 범위이며 Source Catalog의 source directory와 budget configuration 입력을 함께 검증한다. 두 owner가 같은 fixture/config assertion을 병렬 편집하지 않도록 coordinating agent가 single-writer를 지정한다. |
+| `tests/test_source_admin.py` | Control Plane | Source Catalog validation, Metadata publish, Guarded Query execution과 Assurance verified contract를 함께 검증한다. Control Plane owner가 primary writer이고 cross-module contract 변경 시 coordinating single-writer로 전환한다. |
+| `tests/test_metadata_store.py` | Metadata contract; Control Plane implementation | Persisted metadata port/codec과 Control DB implementation을 함께 검증하는 transition test다. 두 owner가 병렬 편집하지 않고 coordinating agent가 test-case 단위 변경 순서를 지정한다. |
+| `tests/test_quality_level.py` | Metadata | Publish quality 판정이 primary 범위이고 Assurance verified membership을 소비한다. 두 계약을 함께 바꾸면 coordinating agent가 single-writer를 지정한다. |
+| `tests/test_result_encoding.py` | Guarded Query | Canonical result scalar encoding이 primary 범위이며 Assurance verified result hash가 직접 소비한다. Encoding/hash 경계를 함께 바꿀 때 두 owner가 병렬 편집하지 않고 coordinating agent가 single-writer를 지정한다. |
+| `tests/test_mcp.py`, `tests/test_mcp_server*.py` | Delivery contract; Assurance acceptance | Delivery의 MCP wire/workflow 의미를 Assurance가 실제 SDK/load/soak로 검증한다. Protocol fixture와 공통 helper는 coordinating single-writer로 다룬다. |
+| `tests/test_integration.py`, `tests/test_load.py`, `tests/test_security_evaluation.py` | Assurance | Source Catalog, Metadata, Guarded Query, Delivery와 Runtime의 end-to-end acceptance를 조립한다. Provider 의미는 각 module이 검토하고 coordinating agent만 cross-module test file을 편집한다. |
 | `docker/postgres/init/05-control-plane.sh`, `docker/postgres/init/control-migrations/` | Control Plane | Migration ledger/checksum, 번호, FK, lock, CAS와 privilege는 하나의 owner가 관리한다. |
 | `config/sources/`, `config/budget-profiles.yaml` | Source Catalog | Bootstrap/fixture definition과 versioned resource tier다. Managed production authority로 해석하지 않는다. |
 | `config/access-policies*.yaml` | Delivery | Caller identity/capability 입력이며 source visibility와 tier 의미는 ADR 0017을 함께 따른다. |
@@ -109,13 +127,27 @@ owner는 주의점에 기록하며 primary owner와 같은 뜻으로 해석하�
 | `.gitleaksignore`, `.trivyignore.yaml` | Assurance | Secret/vulnerability scan의 bounded exception이다. 변경 시 근거·scope를 검토하고 vulnerability exception의 expiry를 유지한다. |
 | `.github/dependabot.yml` | Runtime | Dependency update automation이다. Assurance gate와 lockfile single-writer 절차를 따른다. |
 | `.gitignore` | Coordinating agent | Repository hygiene artifact다. Secret/runtime file 포함 여부를 바꾸면 Runtime과 Assurance 경계를 확인한다. |
+| Root `README.md`, `docs/architecture.md`, `docs/mvp.md` | Coordinating agent | 전체 system navigation과 current/target 범위를 여러 module에 handoff한다. 각 사실의 module owner가 검토하고 coordinating agent가 single-writer로 편집한다. |
+| `docs/development-todo.md` | Coordinating agent | Repository 전체 priority, approval/start gate와 single-writer handoff를 소유한다. TODO 추가는 계약 승인이 아니며 병렬 agent가 직접 priority를 재배열하지 않는다. |
+| `docs/implementation-roadmap.md` | Coordinating agent | 완료 ID와 evidence를 보존하는 immutable completion ledger다. Primary module 결과와 Assurance evidence를 확인한 뒤 한 writer가 갱신한다. |
+| `docs/module-contract-decision-guide.md` | Coordinating agent | 승인 전 proposal과 선택 범위를 전달하는 공통 handoff 문서다. 선택 전 current contract나 accepted ADR로 해석하지 않고 한 writer만 초안을 갱신한다. |
+| `docs/verification/`의 cross-module evidence | Assurance | 실행 시점의 provider/consumer evidence를 보존한다. 새 evidence는 coordinating writer가 작성하고 과거 evidence를 현재 보장처럼 소급 수정하지 않는다. |
+| Root `AGENTS.md`, 이 module index와 cross-module accepted ADR | Coordinating agent | Repository governance와 공통 contract authority다. 영향 module owner review 뒤 coordinating agent만 편집한다. |
 
 명시적 shared transition artifact는 `models.py`, `reader_policy.py`, `metadata_store.py`,
 `errors.py`, `app.py`, `scripts/verify-container.sh`, `scripts/apply-db.sh`, CI workflow,
-`pyproject.toml`, `uv.lock`, root `AGENTS.md`, 이 index와 공통 contract 문서다. 이 목록은
-coordinating agent가 single-writer로 직렬화한다. 나머지는 primary owner가 쓰고 소비자는 계약
-영향만 검토한다. Test code는 계속 root `tests/`에 두되 해당 test가 검증하는 provider와 직접
-consumer module을 owner로 판단한다.
+`pyproject.toml`, `uv.lock`이다. Test 영역에서는 `tests/helpers.py`, `tests/conftest.py`,
+`tests/control_database.py`, `tests/test_documentation.py`와 위 표의 cross-module focused/acceptance
+test가 shared transition artifact다. 문서 영역에서는 root `README.md`, `AGENTS.md`, 이 index,
+`docs/architecture.md`, `docs/mvp.md`, `docs/development-todo.md`,
+`docs/implementation-roadmap.md`, `docs/module-contract-decision-guide.md`, cross-module accepted ADR과
+`docs/verification/` evidence가 공통 handoff artifact다.
+
+이 목록은 coordinating agent가 single-writer로 직렬화한다. 나머지는 primary owner가 쓰고
+소비자는 계약 영향만 검토한다. Test code는 계속 root `tests/`에 두되 해당 test가 검증하는
+provider와 직접 consumer module을 owner로 판단한다. 하나의 focused test file이 여러 module의
+symbol을 함께 검증하면 test function이 다르다는 이유로 병렬 편집하지 않고 coordinating agent가
+primary writer와 변경 순서를 지정한다.
 
 ## 새 데이터베이스 추가 시 영향
 

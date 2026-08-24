@@ -29,6 +29,12 @@ Query Man은 하나의 deployable process를 유지하는 modular monolith다. �
   편집하지 않고 coordinating agent가 owner와 변경 순서를 지정한다.
 - Agent 한 명은 기본적으로 primary module 하나를 맡는다. 계약이 고정된 서로 다른 module의
   implementation은 병렬로 개발할 수 있다.
+- Coordinating agent는 병렬 작업을 시작하기 전에 각 agent에게 primary module, 승인된 contract
+  ID와 baseline commit, 수정 가능한 file allowlist, 읽기 전용 provider/consumer file, 수정 금지
+  shared file, 필수 test와 contract 변경 발견 시 중단 조건을 지정한다. 할당되지 않은 file까지
+  정리하거나 공통 문서를 함께 갱신하지 않는다.
+- 여러 agent가 같은 worktree를 공유하면 `git add`, commit, rebase, merge와 push는 coordinating
+  agent만 수행한다. 별도 worktree/branch와 Git 권한을 명시적으로 할당받은 경우만 예외로 한다.
 - Module별 focused test는 빠른 feedback용이며 root 전체 gate를 대체하지 않는다. Provider contract를
   사용하는 코드를 바꾸면 provider와 직접 consumer test를 함께 실행한다.
 

@@ -5,7 +5,8 @@ Status: Logical boundary; physical package split pending
 ## 목적
 
 Metadata는 reader가 실제로 볼 수 있는 PostgreSQL physical catalog와 versioned semantic overlay를
-검증된 immutable metadata revision으로 만들고, 사용자 질문에 필요한 bounded context를 제공한다.
+검증된 persisted immutable metadata revision으로 만들고, 사용자 질문에 필요한 bounded context를
+제공한다.
 
 Metadata는 SQL 실행기가 아니다. 질문에 어떤 relation, column, grain, join과 business rule을
 사용해야 하는지 설명하고 Guarded Query가 확인할 published revision을 제공한다.
@@ -16,7 +17,7 @@ Metadata는 SQL 실행기가 아니다. 질문에 어떤 relation, column, grain
 - Catalog snapshot shape, validation, serialization contract와 compatibility 확인
 - Source definition과 physical snapshot으로부터 `metadata_revision` 계산
 - Metadata refresh coalescing, cache TTL, stale window, retry와 source epoch
-- Immutable revision publish/active/pin을 소비하는 MetadataStore port
+- Persisted immutable revision publish/active/pin을 소비하는 MetadataStore port
 - L0/L1/L2 publish quality gate
 - Revision-scoped relevance index와 question-scoped relation/column disclosure
 - Grain, measure, join, business term, ambiguity와 answerability response projection
@@ -57,6 +58,12 @@ codec/compatibility contract만 소유한다.
 현재 `CatalogProvider` Protocol은 `load/close`만 선언하지만 production reloader는 concrete
 `PostgresCatalog.invalidate(source_id)`도 사용한다. 이는 실제 lifecycle에는 필요하지만 type에
 완전히 표현되지 않은 contract debt다. 물리 분리나 대체 adapter 작업에서 누락하지 않는다.
+
+Control DB의 persisted snapshot/revision history는 immutable하지만 현재 process 안의 published
+Python object graph는 deep immutable이 아니다. `PreparedMetadata`의 바깥 dataclass는 frozen이어도
+안쪽 `CatalogSnapshot`, relation, column과 list는 mutable하고 cache consumer가 같은 graph를 볼 수
+있다. [결정 가이드의 D3](../../module-contract-decision-guide.md#d3-공유-data의-deep-immutability)는
+미승인 제안이므로 deep immutability를 현재 보장으로 가정하지 않는다.
 
 ## 제공 계약
 
@@ -118,7 +125,7 @@ persisted snapshot 및 rolling replica compatibility contract다.
 ### Metadata lifecycle contract
 
 - Fresh candidate를 validate하고 source definition과 함께 revision을 계산한다.
-- Store가 있으면 immutable snapshot을 publish하고 committed active value만 cache한다.
+- Store가 있으면 append-only persisted snapshot을 publish하고 committed active value만 cache한다.
 - Rollback pin, resume와 stale activation provenance를 보존한다.
 - Source generation 교체 시 epoch와 current profile을 함께 확인하여 지연 refresh를 거부한다.
 - Transient catalog failure는 bounded stale window 안에서만 마지막 정상 revision을 제공한다.
@@ -164,7 +171,7 @@ policy descriptor다. 이 dependency를 바꾸는 refactoring은 외부 context 
 - Reader가 실제로 조회할 수 없는 schema/relation을 metadata에 발행하지 않는다.
 - DB comment와 semantic text를 명령으로 실행하거나 join 규칙으로 해석하지 않는다.
 - Allowed schema/kind, tenant policy, budget, overlay와 revision material drift를 fail-closed한다.
-- Immutable snapshot payload와 revision이 다르면 저장값을 사용하지 않는다.
+- Persisted snapshot payload와 revision이 다르면 저장값을 사용하지 않는다.
 - Process restart가 persisted activation freshness를 초기화하지 않는다.
 - Cache나 process health state를 Control DB authority로 사용하지 않는다.
 - Metadata response와 retrieval은 source별 budget의 relation/column/byte 상한을 지킨다.
@@ -193,6 +200,7 @@ policy descriptor다. 이 dependency를 바꾸는 refactoring은 외부 context 
 - Wide relation의 필수 column 우선순위, 필수 수의 target 초과, index hiding과 truncation 의미 변경
 - Retrieval threshold, default relation fallback, selection reason 또는 deterministic ordering 변경
 - SQL capability를 context에 포함하는 방법이나 SQL policy revision coupling 변경
+- Published runtime object graph의 mutability, aliasing 또는 public collection type 변경
 
 승인 요청에는 Source Catalog, Guarded Query, Control Plane, Delivery와 Assurance 영향 및 기존
 immutable history/rolling replica compatibility를 포함한다.

@@ -11,6 +11,10 @@ Status: Active
 
 - 전역 순서는 위에서 아래다. 더 높은 priority의 항목이 열려 있으면 낮은 track은 설계와
   조사만 할 수 있고 구현을 먼저 시작하지 않는다.
+- Lower-track의 `read-only prework`는 현재 code/test/운영 근거 조사, 선택지 비교와
+  초안 작성까지만 뜻한다. Start gate 전에는 해당 item을 공식적으로 시작하거나
+  완료했다고 기록하지 않고, accepted baseline을 바꾸거나 code/schema/config/
+  contract 의미를 변경하지 않는다.
 - 항목을 완료하면 같은 변경에서 이 문서에서 제거하고 roadmap의 post-baseline completion
   ledger에 결과와 실행 증거를 기록한다. 완료 ID는 재사용하지 않는다.
 - 각 track은 `Primary module`, `Direct consumers`, `Affected providers/verifiers`,
@@ -21,6 +25,9 @@ Status: Active
 - TODO에 항목을 적는 것은 module contract 변경 승인이 아니다. Public Python/wire/persisted
   schema, lifecycle 또는 정책 의미가 바뀌면 정확한 제안과 영향을 사용자에게 제시하고 별도
   승인을 받은 뒤 시작한다.
+- 이 TODO, 실행 wave 또는 결정 guide를 포함한 **plan 승인은 contract 선택
+  승인이 아니다**. 사용자가 implementation-ready 선택 ID와 영향 범위를 명시해야
+  해당 contract 변경을 시작할 수 있다.
 - 공통 contract, shared transition file과 migration은 coordinating agent가 single-writer로
   직렬화한다. 고정된 계약을 소비하는 서로 다른 module implementation만 병렬화한다.
 - 비밀, 질문 원문, SQL text와 parameter는 비용·trace 수집에도 저장하지 않는다.
@@ -48,6 +55,39 @@ resource를 역순으로 정리해 connection pool이나 background task를 남�
   정확히 한 번 역순 정리하며 원래 startup error를 보존하는 계약·회귀 테스트와 구현을
   완료한다. Child의 partial-enter cleanup은 child lifespan 자체의 책임으로 유지한다.
 
+## P0.5 — Module Contract Hardening
+
+목표: 문서로만 막고 있는 hidden dependency, read/write capability, Runtime lifecycle,
+shared snapshot과 offline composition 경계를 승인된 공개 contract로 강제한다. 선택지와
+정확한 영향은 [module contract decision guide](module-contract-decision-guide.md)를 따른다.
+
+| 작업 경계 | 내용 |
+|---|---|
+| Primary module | 권장 A choice의 ID별 contract provider: `MOD-04` Control Plane, `MOD-05` Source Catalog, `MOD-06` Guarded Query/Metadata, `MOD-07` Source Catalog/Metadata, `MOD-08` Assurance |
+| Direct consumers | `MOD-04` Delivery, `MOD-05` ordinary source readers/Control projector, `MOD-06` Runtime/Control reloader, `MOD-07` source/metadata snapshot consumers, `MOD-08` offline CLI entrypoint |
+| Affected providers/verifiers | Delivery, Runtime, Control Plane, Metadata, Guarded Query, Source Catalog과 Assurance의 각 focused/contract test |
+| Contract baseline | ADR 0018, 현재 module index/README와 decision guide에 적은 현재 동작·공통 불변조건 |
+| Approval gate | `D1-A`, `D2-A`, `D4-A`, `D3-A`, `D5-A`는 모두 권장 초안이며 미승인이다. 각 exact A choice를 사용자가 명시적으로 승인하기 전에는 해당 ID를 구현하지 않는다. `D1`/`D5`의 B/C와 `D2`/`D3`/`D4`의 B는 구현 전 exact follow-up contract를 다시 승인받아야 한다. `D2-C`/`D3-C`/`D4-C`는 현재 상태와 debt를 유지해 구현할 내용이 없다. 이를 선택하면 사용자가 해당 P0.5 ID의 bypass/deferral과 P1 Start gate를 별도로 재결정해야 한다. |
+| Single writer | Coordinating agent가 `MOD-04` → `MOD-05` → `MOD-06` → `MOD-07` → `MOD-08` 순서로 contract/provider를 직렬화한다. Provider baseline 확정 뒤 서로 다른 consumer implementation만 병렬화한다. |
+| Start gate | `RTSAFE-01` 완료 후, 각 exact choice 승인을 받은 ID만 위 순서로 시작한다. Lower-track read-only prework는 지금 가능하지만 item 시작이나 baseline 변경은 아니다. |
+| Verification | Decision guide의 각 exact contract test, provider와 모든 직접 consumer focused test, `ruff`, `mypy`, root `pytest`, DB 경계의 integration test |
+
+- [ ] `MOD-04` 사용자가 `D1-A` 또는 후속 exact contract를 승인한 뒤 Delivery의
+  Control Plane persistence/Assurance DTO hidden import를 승인된 public contract/dependency 방향으로
+  회수하고 external wire/storage 의미 불변을 검증한다.
+- [ ] `MOD-05` 사용자가 `D2-A` 또는 후속 exact contract를 승인한 뒤 ordinary source
+  consumer와 Control projector의 read/write capability를 승인된 type 경계로 분리하고 runtime
+  output 불변을 검증한다.
+- [ ] `MOD-06` 사용자가 `D4-A` 또는 후속 exact contract를 승인한 뒤 Guarded Query와
+  Metadata가 Runtime에 필요한 lifecycle capability를 승인된 Protocol로 제공하고 누락 adapter가
+  ready 전 fail-closed하는지 검증한다.
+- [ ] `MOD-07` 사용자가 `D3-A` 또는 후속 exact contract를 승인한 뒤 Source Catalog과
+  Metadata의 public snapshot을 승인된 immutability 경계로 전환하고 serialized JSON, revision과
+  verified hash 불변을 검증한다.
+- [ ] `MOD-08` 사용자가 `D5-A` 또는 후속 exact contract를 승인한 뒤 Assurance
+  offline CLI concrete composition을 승인된 owner/경계로 격리하고 command/output/exit와 Guarded Query
+  safety path 불변을 검증한다.
+
 ## P1 — Centralized Source Management Plane
 
 목표: Production managed source의 authority, replica 상태, 규모와 비용 projection을 Control DB와
@@ -65,7 +105,7 @@ resource를 역순으로 정리해 connection pool이나 background task를 남�
 | Contract baseline | `CTRL-01`~`CTRL-05` ledger와 ADR 0016/0017, 현재 Control Plane/Delivery/Runtime module contract |
 | Approval gate | `CTRL-06`~`CTRL-08`의 새 Control DB schema, observation shape, freshness와 admin response 의미는 구현 전 정확한 계약 승인이 필요하다. `CTRL-09`가 기존 backup/restore 절차만 재현하면 새 승인이 없지만 schema·retention·key recovery 의미를 바꾸면 승인받는다. |
 | Single writer | Control Plane owner가 schema/contract를 직렬화하고 baseline 확정 뒤 Runtime reporter와 Delivery projection을 병렬화한다. |
-| Start gate | `RTSAFE-01` 완료 뒤 `CTRL-06`부터 순서대로 진행 |
+| Start gate | `RTSAFE-01`과 `MOD-04`~`MOD-08` 완료 뒤 `CTRL-06`부터 순서대로 진행 |
 | Verification | Provider와 직접 consumer contract test, root gate, Control DB integration, migration/rollback/recovery와 scoped verification record |
 
 - [ ] `CTRL-06` Replica별 applied generation/state version/metadata revision/health heartbeat를
@@ -100,7 +140,7 @@ Status: Accepted planning baseline; `SKILL-01`/`SKILL-02` release reviews pendin
 | Contract baseline | Source onboarding/runbook, ADR 0016/0017과 accepted plan-only Skill boundary |
 | Approval gate | 현재 accepted plan의 구현은 가능하다. Output schema, trigger/scope, secret·mutation 경계 또는 production authority를 바꾸면 사용자 승인을 먼저 받는다. |
 | Single writer | Source Catalog owner가 Skill과 plan을 쓰고 shared onboarding/config 문서는 coordinating agent가 직렬화한다. |
-| Start gate | `RTSAFE-*`와 `CTRL-*`가 닫힌 뒤 `SKILL-01`부터 진행; 아래의 “다음”은 track-local 순서다. |
+| Start gate | `RTSAFE-*`, `MOD-04`~`MOD-08`과 `CTRL-*`가 닫힌 뒤 `SKILL-01`부터 진행; 아래의 “다음”은 track-local 순서다. |
 | Verification | Positive/negative/adversarial Skill eval, mutation 0 증거, 관련 onboarding/Delivery/Assurance 회귀와 root gate |
 
 - [ ] `SKILL-01` Skill scope, repository 위치, request/trigger 경계와 manual runbook·query
@@ -179,13 +219,14 @@ Production mutation executor는 이 track에 없다. 필요해지면 credential 
 - [ ] `TRACE-04` 병렬 tool call, revision retry, disconnect와 multi-replica 호출에서 correlation
   누락·혼선이 없는지 end-to-end로 검증한다.
 
-## Approval-Gated Contract Debts
+## Approval-Gated Contract Work
 
-현재 확인된 hidden dependency, Source Catalog read/write capability, deep immutability, Runtime
-lifecycle Protocol과 Assurance offline composition 경계는
-[module contract decision guide](module-contract-decision-guide.md)의 조사된 계약 후보일 뿐
-active implementation checklist가 아니다. Startup cleanup을 포함해 선택 ID를 승인받기 전에는
-관련 code/schema/config/contract 문서를 의미상 변경하지 않는다.
+Startup cleanup은 `RTSAFE-01`, hidden dependency/read-write/lifecycle/immutability/offline composition은
+`MOD-04`~`MOD-08`이 순서와 완료 조건만 추적한다. 이 scheduling 또는 Wave 0
+prework에 대한 승인은 [module contract decision guide](module-contract-decision-guide.md)의
+`D0-A`~`D5-A` 계약 선택 승인이 아니다. 사용자가 각 exact choice와 공통 불변조건
+범위를 명시적으로 승인하기 전에는 관련 code/schema/config/contract 문서의
+의미를 변경하지 않는다.
 
 ## Explicit Non-Goals
 

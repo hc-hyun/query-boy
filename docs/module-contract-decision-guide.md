@@ -111,6 +111,44 @@ module의 서랍을 직접 열지 않고 공식 창구만 사용하게 만드는
 초안을 만든 뒤 다시 승인받는다. `D0-C`/`D2-C`/`D3-C`/`D4-C`는 현재 상태를 유지하고 debt를
 보류하는 선택이라 구현 승인이 필요하지 않다.
 
+## Wave 0: 미승인 계약의 read-only prework
+
+현재 가능한 Wave 0는 계약을 구현하는 단계가 아니다. 다음 read-only prework만
+더 낮은 priority의 Start gate 전에도 병렬로 할 수 있다.
+
+- 현재 code, type, import, test, schema와 운영 근거 조사
+- Provider/direct consumer 범위와 compatibility, rollback, safety 영향 확인
+- 이 문서의 기존 선택지 비교와 구현·검증 계획 초안 작성
+- 추가 승인이 필요한 범위를 찾았을 때 의미상 변경을 멈추고 보고
+
+Wave 0는 아래 행위를 허용하지 않는다.
+
+- Active TODO item을 공식적으로 시작·완료했다고 표시하는 것
+- Accepted ADR/module contract baseline의 의미를 바꾸는 것
+- Code, schema, configuration, public type/Protocol 또는 contract 문서의 의미를 변경하는 것
+- 권장안이나 TODO 순서를 사용자의 contract 선택으로 간주하는 것
+
+계약 선택과 실행 순서는 Active TODO에서 다음 ID로 추적한다.
+
+| 계약 결정 | Active ID | 공식 시작 gate |
+|---|---|---|
+| D0 startup cleanup | `RTSAFE-01` | Exact D0 choice 승인 |
+| D1 hidden dependency | `MOD-04` | `RTSAFE-01` 완료와 exact D1 choice 승인 |
+| D2 read/write capability | `MOD-05` | `MOD-04` 완료와 exact D2 choice 승인 |
+| D4 lifecycle Protocol | `MOD-06` | `MOD-05` 완료와 exact D4 choice 승인 |
+| D3 deep immutability | `MOD-07` | `MOD-06` 완료와 exact D3 choice 승인 |
+| D5 offline composition | `MOD-08` | `MOD-07` 완료와 exact D5 choice 승인 |
+
+이 plan, Wave 0 또는 Active TODO 순서를 승인하는 것은 `D0-A`~`D5-A` 선택을
+승인하는 것이 아니다. Contract 구현은 [승인 회신 방법](#승인-회신-방법)처럼
+implementation-ready 선택 ID와 공통 불변조건 범위를 사용자가 명시한 후에만 시작한다.
+
+`D1`/`D5`의 B/C와 `D2`/`D3`/`D4`의 B는 implementation-ready A choice가 아니므로
+구현 전 exact follow-up contract를 다시 승인받는다. 반면 `D2-C`/`D3-C`/`D4-C`는
+현재 상태와 debt를 유지해 구현할 내용이 없다. 이 C choice를 선택해도 Active TODO의
+해당 P0.5 ID가 자동으로 완료되거나 P1 gate가 자동으로 열리지 않는다. 사용자가
+해당 ID를 bypass/defer할지와 남은 debt를 받아들이고 P1을 시작할지를 별도로 재결정한다.
+
 ## D0. Startup 진입 실패 cleanup
 
 ### 현재 사실
@@ -464,12 +502,12 @@ type, 성능 상한, consumer와 rollback 범위를 후속 승인안으로 작�
 
 계약 변경은 coordinating workstream 하나가 다음 순서로 직렬화한다.
 
-1. D0 startup failure cleanup
-2. D1 숨은 dependency 제거
-3. D2 read/write capability 분리
-4. D4 lifecycle Protocol 명시
-5. D3 immutable snapshot 전환
-6. D5 offline CLI composition 격리
+1. D0 startup failure cleanup (`RTSAFE-01`)
+2. D1 숨은 dependency 제거 (`MOD-04`)
+3. D2 read/write capability 분리 (`MOD-05`)
+4. D4 lifecycle Protocol 명시 (`MOD-06`)
+5. D3 immutable snapshot 전환 (`MOD-07`)
+6. D5 offline CLI composition 격리 (`MOD-08`)
 7. 전체 dependency/contract audit
 
 각 단계는 provider contract, 직접 consumer, module 문서와 runnable contract test가 함께

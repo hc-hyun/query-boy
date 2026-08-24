@@ -114,6 +114,11 @@ EXPECTED_ID_COUNTS = {
 }
 EXPECTED_OPEN_TODO_IDS = (
     "RTSAFE-01",
+    "MOD-04",
+    "MOD-05",
+    "MOD-06",
+    "MOD-07",
+    "MOD-08",
     "CTRL-06",
     "CTRL-07",
     "CTRL-08",
@@ -174,6 +179,20 @@ CRITICAL_NON_PYTHON_MODULE_MAPPINGS = (
     "| `.python-version`, `.dockerignore` | Runtime |",
     "| `.gitleaksignore`, `.trivyignore.yaml` | Assurance |",
     "| `.github/dependabot.yml` | Runtime |",
+)
+CRITICAL_SHARED_WRITER_REFERENCES = (
+    "tests/helpers.py",
+    "tests/conftest.py",
+    "tests/control_database.py",
+    "tests/test_documentation.py",
+    "tests/test_http.py",
+    "tests/test_runtime_config.py",
+    "tests/test_metadata_store.py",
+    "tests/test_quality_level.py",
+    "tests/test_result_encoding.py",
+    "docs/development-todo.md",
+    "docs/implementation-roadmap.md",
+    "docs/module-contract-decision-guide.md",
 )
 LOCKED_BASELINE_DESCRIPTIONS = {
     "SQL-04": (
@@ -342,7 +361,15 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
         "Start gate",
         "Verification",
     ):
-        assert todo.count(f"| {field} |") == 5
+        assert todo.count(f"| {field} |") == 6
+
+    assert "Lower-track의 `read-only prework`" in todo
+    assert "**plan 승인은 contract 선택" in todo
+    assert "승인이 아니다**" in todo
+    assert "`MOD-04` → `MOD-05` → `MOD-06` → `MOD-07` → `MOD-08`" in todo
+    assert "`D2-C`/`D3-C`/`D4-C`는 현재 상태와 debt를 유지" in todo
+    assert "`RTSAFE-*`, `MOD-04`~`MOD-08`과 `CTRL-*`" in todo
+    assert "`RTSAFE-*`, `MOD-*`" not in todo
 
     for item_id in EXPECTED_POST_BASELINE_COMPLETED_IDS:
         assert f"`{item_id}`" in roadmap
@@ -416,6 +443,8 @@ def test_module_boundary_docs_cover_owners_contracts_and_current_python_files() 
     assert "## 새 데이터베이스 추가 시 영향" in index
     assert "docs/modules/README.md" in agents
     assert "Module contract는 사용자의 명시적 승인 없이 변경하지 않는다." in agents
+    assert "수정 가능한 file allowlist" in agents
+    assert "여러 agent가 같은 worktree를 공유하면" in agents
     assert "docs/modules/README.md" in readme
     assert "modules/README.md" in architecture
 
@@ -436,6 +465,18 @@ def test_module_boundary_docs_cover_owners_contracts_and_current_python_files() 
     for mapping in CRITICAL_NON_PYTHON_MODULE_MAPPINGS:
         assert mapping in index, f"Missing or changed module mapping: {mapping}"
 
+    for reference in CRITICAL_SHARED_WRITER_REFERENCES:
+        assert f"`{reference}`" in index, f"Missing shared-writer mapping: {reference}"
+
+    errors = (ROOT_DIRECTORY / "src" / "query_man" / "errors.py").read_text(
+        encoding="utf-8"
+    )
+    for class_name in re.findall(r"^class (\w+Error)\(", errors, re.MULTILINE):
+        assert f"`{class_name}`" in index, f"Missing error owner: {class_name}"
+
+    assert "test function이 다르다는 이유로 병렬 편집하지 않고" in index
+    assert "병렬 agent가 직접 priority를 재배열하지 않는다" in index
+
 
 def test_module_contract_decision_guide_is_explicitly_unapproved_and_discoverable() -> None:
     guide = MODULE_CONTRACT_DECISION_GUIDE.read_text(encoding="utf-8")
@@ -446,12 +487,27 @@ def test_module_contract_decision_guide_is_explicitly_unapproved_and_discoverabl
 
     assert "Status: Proposal — 사용자 선택 전에는 승인된 계약이 아님" in guide
     assert "## 용어사전" in guide
+    assert "## Wave 0: 미승인 계약의 read-only prework" in guide
     assert "## 승인 회신 방법" in guide
     for decision in range(6):
         assert f"## D{decision}." in guide
         for option in "ABC":
             assert f"D{decision}-{option}" in guide
     assert "D0-A, D1-A, D2-A, D3-A, D4-A, D5-A" in guide
+    for decision, item_id in (
+        ("D0", "RTSAFE-01"),
+        ("D1", "MOD-04"),
+        ("D2", "MOD-05"),
+        ("D4", "MOD-06"),
+        ("D3", "MOD-07"),
+        ("D5", "MOD-08"),
+    ):
+        assert f"| {decision} " in guide
+        assert f"`{item_id}`" in guide
+    assert "Wave 0는 아래 행위를 허용하지 않는다" in guide
+    assert "이 plan, Wave 0 또는 Active TODO 순서를 승인하는 것은" in guide
+    assert "`D1`/`D5`의 B/C와 `D2`/`D3`/`D4`의 B" in guide
+    assert "P0.5 ID가 자동으로 완료되거나 P1 gate가 자동으로 열리지 않는다" in guide
     for document in (readme, index, todo, roadmap):
         assert MODULE_CONTRACT_DECISION_GUIDE.name in document
 

@@ -19,8 +19,8 @@ metadata revision/context 생성은 [Metadata](../metadata/README.md)가 담당�
 - Source-scoped credential environment naming과 host/port resolution 검증
 - Owner, environment와 source DB migration reference의 bounded provenance definition
 - System schema 거부, overlay referential integrity와 source identity 검증
-- Runtime `SourceRegistry`의 read projection
-- Control Plane만 사용하는 registry upsert/remove projection capability
+- Runtime `SourceRegistry`의 논리적 read projection
+- 논리적으로 Control Plane만 사용하는 registry upsert/remove projection capability
 - Public source summary에서 credential과 internal state를 제거하는 규칙
 
 ## 소유하지 않는 책임
@@ -48,6 +48,12 @@ metadata revision/context 생성은 [Metadata](../metadata/README.md)가 담당�
 `models.py`에는 Metadata type도 함께 있으므로 현재는 type별 소유권을 구분한다. Source 관련
 type 이동은 동작 변경과 섞지 않는 별도 mechanical refactoring으로 수행한다.
 
+현재 concrete `SourceRegistry`는 `list/get/source_ids`와 `upsert/remove`를 한 type에서 모두
+제공한다. Delivery, Metadata, Guarded Query와 Assurance는 논리 계약상 read method만 사용하지만
+Python type/capability는 아직 분리되지 않았다. 이는
+[결정 가이드의 D2](../../module-contract-decision-guide.md#d2-source-조회와-수정-capability)에
+기록된 미승인 contract debt이며, 목표 `SourceReader`를 현재 구현으로 가정하지 않는다.
+
 ## 제공 계약
 
 ### Source definition contract
@@ -68,9 +74,21 @@ type 이동은 동작 변경과 섞지 않는 별도 mechanical refactoring으�
 object다. Profile 자체를 wire response, persisted JSON, log 또는 metric에 serialize하지 않는다.
 다른 module은 필요한 field만 memory 안에서 소비한다.
 
+### Shared source validation type contract
+
+Delivery의 admin path/query wire validation은 현재 Source Catalog가 정의한 다음 type을 소비한다.
+
+- `SourceEnvironment`: `production|staging|development|test`
+- `Identifier`: PostgreSQL identifier pattern과 최대 63자
+- `StableSlug`: lowercase alphanumeric hyphen slug pattern과 최대 80자
+
+이 type은 manifest validation과 admin wire acceptance가 공유하는 cross-module 계약이다. Pattern,
+허용값 또는 길이를 바꾸면 Source Catalog와 Delivery 영향을 함께 검토한다.
+
 ### Source read contract
 
-Delivery, Metadata, Guarded Query와 Assurance는 source 조회 capability만 소비한다.
+Delivery, Metadata, Guarded Query와 Assurance는 논리 계약상 source 조회 method만 소비한다. 현재
+concrete registry가 mutation method도 함께 노출한다는 사실은 위 transition debt와 같이 해석한다.
 
 ```text
 list() -> [{"source_id": str, "name": str, "description": str}]
@@ -115,7 +133,8 @@ Source Catalog는 Control DB table이나 HTTP/MCP type을 직접 알지 않는�
   `source_id`의 host/port/database/user/TLS/environment 재지정 거부는 Control Plane과의 필수 cross-module
   invariant이며 그 경로를 우회해 registry를 갱신하지 않는다.
 - Budget, overlay와 tenant policy 변경이 metadata revision에 미치는 영향을 숨기지 않는다.
-- Runtime projection writer는 하나이며 ordinary reader가 mutation capability를 얻지 않는다.
+- Runtime projection writer는 하나다. Ordinary reader는 현재 concrete registry가 mutation method를
+  노출하더라도 이를 호출하지 않는다. Type 수준 capability 분리는 아직 구현되지 않았다.
 
 ## 모듈 내부 변경
 
@@ -130,6 +149,7 @@ Source Catalog는 Control DB table이나 HTTP/MCP type을 직접 알지 않는�
 ## 사용자 승인이 필요한 계약 변경
 
 - Source manifest v2, provenance, budget profile 또는 access-related source field의 shape/version 변경
+- Delivery가 소비하는 `SourceEnvironment`, `Identifier`, `StableSlug`의 허용값, pattern 또는 길이 변경
 - `SourceProfile` 필드 의미나 public source summary 변경
 - Allowed schema/relation kind, tenant isolation 또는 reader policy의 완화/확대
 - Metadata revision에 참여하는 source/budget/overlay 의미 변경

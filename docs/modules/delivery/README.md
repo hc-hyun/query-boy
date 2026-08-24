@@ -41,7 +41,8 @@ HTTP와 MCP parity는 모든 endpoint가 같다는 뜻이 아니다. 공통 data
 - [`http_validation.py`](../../../src/query_man/http_validation.py): HTTP/MCP/admin이 공유하는 bounded
   JSON Content-Type validator
 - [`source_admin_routes.py`](../../../src/query_man/source_admin_routes.py): admin catalog/mutation routes,
-  operator-first parsing, request limits와 Control Plane use-case 호출
+  operator-first parsing, request limits와 Control Plane use-case 호출. Admin path/query wire validation은
+  Source Catalog의 `SourceEnvironment`, `Identifier`, `StableSlug` type을 소비한다.
 - [`app.py`](../../../src/query_man/app.py): HTTP request DTO, parent auth middleware, routes, handlers와
   disconnect; composition/lifespan 부분은 Runtime 소유
 - [`errors.py`](../../../src/query_man/errors.py): public `AppError` envelope/rendering contract;
@@ -139,7 +140,8 @@ bounded header/query/path parsing을 적용한다. MCP와 admin의 더 강한 �
 
 ## 소비 계약
 
-- [Source Catalog](../source-catalog/README.md)의 sanitized source summaries와 read capability
+- [Source Catalog](../source-catalog/README.md)의 sanitized source summaries, 논리적 read method와 admin
+  wire validation에 사용하는 `SourceEnvironment`, `Identifier`, `StableSlug`
 - [Metadata](../metadata/README.md)의 context application result
 - [Guarded Query](../guarded-query/README.md)의 query/cancel result와 safe domain errors
 - [Control Plane](../control-plane/README.md)의 management projection, mutation receipt/use cases와
@@ -147,6 +149,8 @@ bounded header/query/path parsing을 적용한다. MCP와 admin의 더 강한 �
 - [Runtime](../runtime/README.md)의 aggregate health/operations state와 lifecycle context
 
 Delivery는 domain module의 concrete PostgreSQL adapter나 Control DB table을 직접 호출하지 않는다.
+위 Source Catalog validation type의 pattern/range를 바꾸면 admin path/query wire acceptance도 바뀌므로
+두 module의 계약과 기존 client compatibility를 함께 확인한다.
 
 ## 불변조건
 
