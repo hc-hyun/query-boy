@@ -17,7 +17,7 @@ Query Man은 현재 하나의 deployable process인 modular monolith다. Runtime
 - Environment를 `RuntimeConfig`로 검증하고 안전한 기본값을 적용
 - Process 전체 source authority를 mutually exclusive `bootstrap|managed` mode로 선택
 - Registry, Metadata, Query, Control, Delivery와 Assurance dependency 조립
-- Application/MCP child lifespan과 정상 진입 뒤 cleanup
+- Application/MCP child lifespan, 정상 진입 뒤 cleanup과 child 진입 실패 시 parent cleanup
 - Initial Control DB sync, source inventory reconciliation과 bounded metadata probe
 - Background source reload polling task
 - Shutdown admission close, task cancel, bounded drain과 resource close 순서
@@ -51,7 +51,8 @@ Query Man은 현재 하나의 deployable process인 modular monolith다. Runtime
 - Focused tests: [`test_runtime_config.py`](../../../tests/test_runtime_config.py),
   [`test_operations.py`](../../../tests/test_operations.py),
   [`test_server.py`](../../../tests/test_server.py),
-  [`test_http.py`](../../../tests/test_http.py)
+  [`test_http.py`](../../../tests/test_http.py),
+  [`test_runtime_startup_cleanup.py`](../../../tests/test_runtime_startup_cleanup.py)
 
 `app.py`는 Delivery와 Runtime의 transition hot spot이다. Composition/lifespan symbol만 Runtime
 소유이며 route 또는 wire schema를 함께 정리하지 않는다. `operations.py`의 상태를 다른 module이
@@ -90,11 +91,25 @@ Managed cold-start scan이 실패하면 empty inventory로 unavailable이며 fil
 않는다. Bootstrap은 Control DSN/encryption key를 거부하고 managed는 둘과 version 2 access policy를
 요구한다.
 
-필수 configuration 또는 dependency 초기화가 실패하면 ready로 전환하지 않는다. 현재는 Control
-sync/probe와 reload task 생성 뒤 MCP child lifespan `enter` 자체가 실패하면 application cleanup
-`finally`에 도달하지 않아 이미 연 pool/task의 역순 close를 보장하지 못하는 contract debt가 있다.
-Startup failure cleanup을 보장한 것으로 가정하지 않으며 이 gap을 고치는 작업은 lifecycle test와
-문서 갱신을 함께 한다.
+필수 configuration 또는 dependency 초기화가 실패하면 ready로 전환하지 않는다. Control
+sync/probe와 reload task 생성 뒤 MCP child lifespan `enter` 자체가 실패하면 Runtime은 진입 전에
+parent가 만든 resource를 다음 고정 순서로 정리한다.
+
+```text
+reload task cancel/await
+-> query executor immediate close
+-> catalog close
+-> metadata close (소유한 metadata store 포함)
+-> source store close
+```
+
+진입하지 못한 child에는 `exit`를 호출하지 않는다. Child가 `enter` 도중 만든 partial resource의
+정리는 child lifespan 구현의 책임이고, Runtime은 parent가 소유한 위 최상위 resource만 같은
+identity당 정확히 한 번 close/cancel을 시도한다. 한 단계가 실패해도 나머지 정리를 계속하고
+고정된 step 이름만 경고로 남긴 뒤 최초 startup exception을 그대로 다시 발생시킨다. Startup은
+아직 ready가 아니므로 configured graceful drain을 기다리지 않으며 production query executor의
+immediate close가 `stop_accepting`과 `drain(0)`을 수행한다. 정상 startup/shutdown 순서는 바뀌지
+않는다.
 
 ### Shutdown contract
 
@@ -151,8 +166,9 @@ debt다. Type에 없다는 이유로 제거하지 않으며 정식 interface 변
 
 - Production concrete dependency 조립은 Runtime에 두고 Control staging/Assurance CLI 예외를 해당
   bounded workflow 밖으로 확대하지 않는다.
-- MCP child lifespan에 정상 진입한 뒤 shutdown은 resource/task/pool을 누출하지 않는다. 위 startup
-  enter failure gap을 현재 보장으로 오해하지 않는다.
+- MCP child lifespan에 정상 진입한 뒤 shutdown은 resource/task/pool을 누출하지 않는다. Child
+  `enter` 실패 때는 child `exit`를 호출하지 않고 parent 최상위 resource를 고정 순서로 정확히 한 번씩
+  정리 시도하며, cleanup 실패와 무관하게 최초 startup error를 보존한다.
 - Shutdown에서는 readiness와 새 query admission을 먼저 닫고 active work를 bounded drain한다.
 - Source metadata probe/staging은 source budget/time limit을 우회하지 않는다. Control scan/poll
   자체는 query budget이 아니라 configured reload interval과 Control DB pool 경계를 따른다.
@@ -193,7 +209,8 @@ debt다. Type에 없다는 이유로 제거하지 않으며 정식 interface 변
 
 ```text
 uv run pytest tests/test_runtime_config.py tests/test_operations.py \
-  tests/test_server.py tests/test_http.py tests/test_managed_mode.py
+  tests/test_server.py tests/test_http.py tests/test_managed_mode.py \
+  tests/test_runtime_startup_cleanup.py
 ```
 
 Lifecycle/disconnect 변경은 query/MCP/integration tests를, reload 변경은 source-admin tests를,

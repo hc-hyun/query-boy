@@ -22,16 +22,16 @@ Query Man은 하나의 process로 배포되지만, 개발할 때는 일곱 개 �
 6. Offline 품질 CLI의 예외적인 조립 권한을 어디에 둘 것인가
 
 이 문서는 선택지의 상세 범위와 구현 순서를 설명하고 ADR 0018의 승인 기록을 보조한다. 위
-Approved 조합은 명시적으로 승인됐지만, 각 Active TODO가 완료되기 전까지 해당 목표를 현재 구현
-계약으로 오해하지 않는다. 승인 범위를 넘어서는 code, schema, configuration 또는 module contract
-변경은 다시 승인받는다.
+Approved 조합은 명시적으로 승인됐다. `RTSAFE-01`은 구현이 끝나 완료 ledger로 이동했고, 나머지
+추적 ID가 완료되기 전까지 그 목표를 현재 구현 계약으로 오해하지 않는다. 승인 범위를 넘어서는
+code, schema, configuration 또는 module contract 변경은 다시 승인받는다.
 
 ## 한눈에 보는 현재 상태
 
 ```text
 현재
 
-Runtime ──> MCP child lifespan 진입 실패 시 parent resource cleanup 보장 없음
+Runtime ──> MCP child lifespan 진입 실패 시 parent 최상위 resource를 고정 순서로 cleanup
 
 Delivery ──> Control Plane 저장소 내부 상수
     └──────> Assurance DTO 직접 생성
@@ -43,7 +43,7 @@ Runtime ──> getattr로 Python Protocol에 없는 drain/invalidate capability
 Assurance core type/hash + offline CLI concrete wiring이 같은 파일에 공존
 ```
 
-권장 조합을 적용하면 다음처럼 된다.
+승인된 전체 조합이 완료되면 다음처럼 된다. Runtime 행은 `RTSAFE-01`로 이미 반영됐다.
 
 ```text
 권장 목표
@@ -133,12 +133,12 @@ Wave 0는 아래 행위를 허용하지 않는다.
 - Code, schema, configuration, public type/Protocol 또는 contract 문서의 의미를 변경하는 것
 - 권장안이나 TODO 순서를 사용자의 contract 선택으로 간주하는 것
 
-계약 선택과 실행 순서는 Active TODO에서 다음 ID로 추적한다.
+계약 선택과 실행 순서는 Active TODO와 completion ledger에서 다음 ID로 추적한다.
 
-| 계약 결정 | Active ID | 공식 시작 gate |
+| 계약 결정 | 추적 ID | 상태/공식 시작 gate |
 |---|---|---|
-| D0 startup cleanup | `RTSAFE-01` | Exact D0 choice 승인 |
-| D1 hidden dependency | `MOD-04` | `RTSAFE-01` 완료와 exact D1 choice 승인 |
+| D0 startup cleanup | `RTSAFE-01` | 구현·검증 완료; roadmap ledger로 이동 |
+| D1 hidden dependency | `MOD-04` | `RTSAFE-01` 완료와 exact D1 choice 승인 완료; 다음 구현 작업 |
 | D2 read/write capability | `MOD-05` | `MOD-04` 완료와 exact D2 choice 승인 |
 | D4 lifecycle Protocol | `MOD-06` | `MOD-05` 완료와 exact D4 choice 승인 |
 | D3 deep immutability | `MOD-07` | `MOD-06` 완료와 exact D3 choice 승인 |
@@ -146,7 +146,7 @@ Wave 0는 아래 행위를 허용하지 않는다.
 
 이 plan, Wave 0 또는 Active TODO 순서만 승인하는 것은 `D0-A`~`D5-A` 선택 승인이 아니었다.
 2026-08-24 사용자가 [승인 회신 방법](#승인-회신-방법)의 권장 조합과 공통 불변조건을 명시적으로
-승인했으므로 이제 각 Active ID를 정해진 순서로 구현할 수 있다.
+승인했으므로 남은 ID를 정해진 순서로 구현할 수 있다.
 
 `D1`/`D5`의 B/C와 `D2`/`D3`/`D4`의 B는 implementation-ready A choice가 아니므로
 구현 전 exact follow-up contract를 다시 승인받는다. 반면 `D2-C`/`D3-C`/`D4-C`는
@@ -159,9 +159,11 @@ Wave 0는 아래 행위를 허용하지 않는다.
 ### 현재 사실
 
 Managed Runtime은 Control sync, metadata probe와 reload task 생성 뒤 MCP child lifespan에 진입한다.
-Child의 `__aenter__`가 실패하면 현재 `finally`에 도달하지 않아 parent가 먼저 연 pool, task와
-service resource의 역순 cleanup을 보장하지 못한다. [Runtime contract](modules/runtime/README.md#startup-contract)도
-이를 완료된 보장이 아니라 debt로 기록한다.
+`RTSAFE-01` 구현 뒤 child의 `__aenter__`가 실패하면 parent가 먼저 연 reload task와
+query/catalog/metadata/source-store 최상위 resource를 승인된 고정 순서로 정리한다. 각 resource
+identity에는 close/cancel을 한 번만 시도하고 한 단계가 실패해도 나머지를 계속 정리하며 최초
+startup exception을 보존한다. [Runtime contract](modules/runtime/README.md#startup-contract)과
+[`test_runtime_startup_cleanup.py`](../tests/test_runtime_startup_cleanup.py)가 이 보장을 고정한다.
 
 중요한 구분이 있다. 진입에 실패한 child context에 parent가 `__aexit__`를 호출하면 안 된다.
 Child가 `__aenter__` 안에서 일부 resource를 열었다면 그 partial-enter cleanup은 child
@@ -176,7 +178,7 @@ lifespan 구현의 책임이다. Runtime이 책임질 범위는 **child 진입�
 | D0-B | MCP child lifespan을 reload task/pool 같은 장기 parent resource보다 먼저 진입시킨다. 이후 단계 실패 시 정상 진입한 child를 종료한다. | Child enter 실패 때 정리할 parent resource가 줄어든다. | 현재 startup 순서가 바뀌며 child background 동작과 control sync/probe의 관계를 다시 검증해야 한다. |
 | D0-C | 현재 동작을 유지하고 process restart와 운영 감시로 대응한다. | Code 변경이 없다. | Startup 반복 실패 때 resource가 남을 수 있고 현재 P0 debt가 계속 열린다. |
 
-### D0-A를 승인하면 바뀌는 정확한 범위
+### D0-A 승인 범위와 구현 결과
 
 - 정상 startup/shutdown 순서, readiness와 public response는 바꾸지 않는다.
 - Child enter를 시도하기 전에 parent가 만든 reload task, query/catalog/metadata/store resource를
@@ -385,7 +387,8 @@ RuntimeCatalogProvider extends CatalogProvider:
 - Production/test/custom adapter가 필수 capability를 제공하지 않으면 composition이 ready 전에
   fail-closed한다.
 - 현재 drain grace, reload invalidation과 정상 startup/shutdown 순서는 바꾸지 않는다.
-- D0의 startup enter-failure cleanup은 별도 결정이며 D4 승인만으로 구현하지 않는다.
+- D0의 startup enter-failure cleanup은 별도 결정으로 `RTSAFE-01`에서 완료됐으며 D4 범위에
+  포함하지 않는다.
 
 Wire/DB contract와 data migration은 없다. Python adapter compatibility만 바뀐다.
 
@@ -471,8 +474,8 @@ D5-A  기존 offline workflow는 유지하면서 composition 예외 위치를 �
 ```
 
 변경량을 줄이는 것이 최우선이면 D3만 `D3-B`를 선택할 수 있다. 다만 large metadata를
-조회할 때마다 복사하는 CPU/memory 비용을 먼저 측정해야 한다. D0은 현재 P0 debt이므로 D0-C를
-선택하면 남은 위험과 운영 대응을 active TODO에 명시적으로 유지한다.
+조회할 때마다 복사하는 CPU/memory 비용을 먼저 측정해야 한다. D0-A는 `RTSAFE-01`에서 완료되어
+D0-C의 startup leak debt는 더 이상 현재 상태가 아니다.
 
 ## 승인 회신 방법
 
@@ -507,8 +510,8 @@ type, 성능 상한, consumer와 rollback 범위를 후속 승인안으로 작�
 
 계약 변경은 coordinating workstream 하나가 다음 순서로 직렬화한다.
 
-1. D0 startup failure cleanup (`RTSAFE-01`)
-2. D1 숨은 dependency 제거 (`MOD-04`)
+1. D0 startup failure cleanup (`RTSAFE-01`) — 완료
+2. D1 숨은 dependency 제거 (`MOD-04`) — 다음
 3. D2 read/write capability 분리 (`MOD-05`)
 4. D4 lifecycle Protocol 명시 (`MOD-06`)
 5. D3 immutable snapshot 전환 (`MOD-07`)
@@ -542,7 +545,7 @@ uv run pytest -m integration
 
 | 관찰 | 현재 위치 |
 |---|---|
-| Startup enter-failure cleanup gap | `src/query_man/app.py` lifespan, [Runtime startup contract](modules/runtime/README.md#startup-contract) |
+| Startup enter-failure cleanup 보장 | `src/query_man/app.py` lifespan, [`test_runtime_startup_cleanup.py`](../tests/test_runtime_startup_cleanup.py), [Runtime startup contract](modules/runtime/README.md#startup-contract) |
 | Delivery의 private/foreign import | `src/query_man/source_admin_routes.py` import와 verified publish route |
 | 혼합 Source capability | `src/query_man/registry.py`의 `SourceRegistry` |
 | Shallow immutable graph | `src/query_man/models.py`의 source/semantic/catalog/prepared types |

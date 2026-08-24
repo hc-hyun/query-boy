@@ -113,7 +113,6 @@ EXPECTED_ID_COUNTS = {
     "MCPX": 8,
 }
 EXPECTED_OPEN_TODO_IDS = (
-    "RTSAFE-01",
     "MOD-04",
     "MOD-05",
     "MOD-06",
@@ -157,6 +156,7 @@ EXPECTED_POST_BASELINE_COMPLETED_IDS = (
     "MOD-01",
     "MOD-02",
     "MOD-03",
+    "RTSAFE-01",
 )
 CRITICAL_NON_PYTHON_MODULE_MAPPINGS = (
     "| `config/sources/`, `config/budget-profiles.yaml` | Source Catalog |",
@@ -361,15 +361,15 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
         "Start gate",
         "Verification",
     ):
-        assert todo.count(f"| {field} |") == 6
+        assert todo.count(f"| {field} |") == 5
 
     assert "Lower-track의 `read-only prework`" in todo
     assert "**plan 승인은 contract 선택" in todo
     assert "승인이 아니다**" in todo
     assert "`MOD-04` → `MOD-05` → `MOD-06` → `MOD-07` → `MOD-08`" in todo
-    assert "2026-08-24 사용자가 `D0-A`" in todo
     assert "2026-08-24 사용자가 `D1-A`, `D2-A`, `D4-A`, `D3-A`, `D5-A`" in todo
-    assert "`RTSAFE-*`, `MOD-04`~`MOD-08`과 `CTRL-*`" in todo
+    assert "Startup cleanup `RTSAFE-01`은 완료되어 roadmap ledger로 이동했다" in todo
+    assert "Ledger의 `RTSAFE-01` 완료 및 `MOD-04`~`MOD-08`과 `CTRL-*` 완료" in todo
     assert "`RTSAFE-*`, `MOD-*`" not in todo
 
     for item_id in EXPECTED_POST_BASELINE_COMPLETED_IDS:
@@ -510,7 +510,9 @@ def test_module_contract_decision_guide_records_approval_and_pending_implementat
     assert "이 plan, Wave 0 또는 Active TODO 순서만 승인하는 것은" in guide
     assert "`D1`/`D5`의 B/C와 `D2`/`D3`/`D4`의 B" in guide
     assert "P0.5 ID가 자동으로 완료되거나 P1 gate가 자동으로 열리지 않는다" in guide
-    assert "`D0-A`와 decision guide의 공통 불변조건을 승인했다" in todo
+    assert "D0 startup failure cleanup (`RTSAFE-01`) — 완료" in guide
+    assert "Startup enter-failure cleanup 보장" in guide
+    assert "`RTSAFE-01`" in roadmap
     assert "`D1-A`, `D2-A`, `D4-A`, `D3-A`, `D5-A`" in todo
     for document in (readme, index, todo, roadmap):
         assert MODULE_CONTRACT_DECISION_GUIDE.name in document

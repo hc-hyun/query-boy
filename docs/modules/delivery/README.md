@@ -138,6 +138,15 @@ bounded header/query/path parsing을 적용한다. MCP와 admin의 더 강한 �
 - MCP POST에 1 MiB body limit, single JSON Content-Type/protocol-version header, Host/Origin policy와
   DNS rebinding protection을 적용한다.
 
+### Child lifespan ownership contract
+
+- Delivery가 제공하는 MCP child lifespan은 자신의 `enter` 도중 만든 partial resource를 정리할
+  책임을 가진다. Runtime parent의 cleanup에 그 책임을 넘기지 않는다.
+- Child `enter`가 실패하면 Runtime parent는 진입하지 못한 child의 `exit`를 호출하지 않는다.
+- Runtime은 child 진입을 시도하기 전에 parent composition이 만든 최상위 resource만 자신의
+  startup-failure 계약에 따라 정리한다. 이 경계는 HTTP/MCP wire와 정상 shutdown 순서를 바꾸지
+  않는다.
+
 ## 소비 계약
 
 - [Source Catalog](../source-catalog/README.md)의 sanitized source summaries, 논리적 read method와 admin
@@ -199,7 +208,8 @@ module은 자신이 생성하는 audit field의 비노출을 책임진다.
 최소 focused gate:
 
 ```text
-uv run pytest tests/test_access.py tests/test_http.py tests/test_mcp.py
+uv run pytest tests/test_access.py tests/test_http.py tests/test_mcp.py \
+  tests/test_runtime_startup_cleanup.py
 ```
 
 실제 MCP server tests는 기본 pytest marker에서 제외되므로 다음을 별도로 실행한다.

@@ -334,6 +334,7 @@ client와 실제 PostgreSQL fixture를 사용해야 한다. 실행 결과와 남
 | `MOD-01` | 논리 module owner, 허용 dependency, 계약 승인과 module-scoped agent 절차를 문서·테스트로 고정했다. | Commit `de2b364`; [ADR 0018](decisions/0018-module-ownership-and-contract-governance.md), [module index](modules/README.md), [`test_documentation.py`](../tests/test_documentation.py) |
 | `MOD-02` | Active-only TODO, module별 작업 gate, non-Python artifact primary owner/single-writer와 immutable baseline description 검사를 추가했다. | [active TODO](development-todo.md), [module index](modules/README.md), [`test_documentation.py`](../tests/test_documentation.py) |
 | `MOD-03` | Startup cleanup과 다섯 contract debt의 용어, 객관식 선택지, 영향·불변조건·승인 형식을 이해 문서로 고정했다. | [module contract decision guide](module-contract-decision-guide.md), [`test_documentation.py`](../tests/test_documentation.py) |
+| `RTSAFE-01` | MCP child lifespan 진입 실패 시 child exit를 호출하지 않고 parent 최상위 resource를 고정 순서로 정확히 한 번씩 정리 시도하며 최초 startup error를 보존한다. | [Runtime contract](modules/runtime/README.md#startup-contract), [Delivery child lifespan contract](modules/delivery/README.md#child-lifespan-ownership-contract), [`test_runtime_startup_cleanup.py`](../tests/test_runtime_startup_cleanup.py) |
 
 Ledger의 완료 결과 column은 찾기 쉬운 요약일 뿐 acceptance를 축소하지 않는다. 각 ID에 연결된
 evidence가 해당 완료 작업의 상세 경계와 실행 증거를 보존한다. Audit가 연결된 row에서 각 audit는

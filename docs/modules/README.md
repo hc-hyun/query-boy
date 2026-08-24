@@ -99,6 +99,7 @@ owner는 주의점에 기록하며 primary owner와 같은 뜻으로 해석하�
 | `tests/control_database.py` | Control Plane | Disposable Control DB, migration apply, authority fingerprint와 leak-free cleanup test contract다. 여러 integration test가 소비하므로 Control Plane owner와 coordinating agent가 한 writer를 지정한다. |
 | `tests/test_documentation.py` | Assurance | 모든 module의 문서 link, owner mapping, immutable ledger와 governance guard를 조립한다. 각 module이 자신의 사실을 검토하되 coordinating agent만 이 shared gate를 편집한다. |
 | `tests/test_http.py` | Delivery | HTTP/MCP parent surface가 primary 범위이며 Runtime lifespan과 Control Plane admin use case도 검증한다. Symbol별 owner review 뒤 coordinating agent가 file single-writer를 맡는다. |
+| `tests/test_runtime_startup_cleanup.py` | Runtime | MCP child `enter` 실패 시 Runtime parent cleanup 순서·exactly-once 시도·최초 오류 보존과 failed child `exit` 비호출을 검증한다. Runtime owner가 primary writer이고 Delivery는 child partial-enter 책임 경계만 검토한다. |
 | `tests/test_managed_mode.py`, `tests/test_control_startup.py` | Runtime | Managed composition/startup가 primary 범위이며 Delivery access, Control Plane authority와 Assurance verified membership을 함께 검증한다. Coordinating agent가 두 provider/consumer 변경 순서를 정한다. |
 | `tests/test_runtime_config.py` | Runtime | Environment/source authority 조립이 primary 범위이며 Source Catalog의 source directory와 budget configuration 입력을 함께 검증한다. 두 owner가 같은 fixture/config assertion을 병렬 편집하지 않도록 coordinating agent가 single-writer를 지정한다. |
 | `tests/test_source_admin.py` | Control Plane | Source Catalog validation, Metadata publish, Guarded Query execution과 Assurance verified contract를 함께 검증한다. Control Plane owner가 primary writer이고 cross-module contract 변경 시 coordinating single-writer로 전환한다. |
@@ -130,7 +131,7 @@ owner는 주의점에 기록하며 primary owner와 같은 뜻으로 해석하�
 | Root `README.md`, `docs/architecture.md`, `docs/mvp.md` | Coordinating agent | 전체 system navigation과 current/target 범위를 여러 module에 handoff한다. 각 사실의 module owner가 검토하고 coordinating agent가 single-writer로 편집한다. |
 | `docs/development-todo.md` | Coordinating agent | Repository 전체 priority, approval/start gate와 single-writer handoff를 소유한다. TODO 추가는 계약 승인이 아니며 병렬 agent가 직접 priority를 재배열하지 않는다. |
 | `docs/implementation-roadmap.md` | Coordinating agent | 완료 ID와 evidence를 보존하는 immutable completion ledger다. Primary module 결과와 Assurance evidence를 확인한 뒤 한 writer가 갱신한다. |
-| `docs/module-contract-decision-guide.md` | Coordinating agent | 승인된 D0-A~D5-A의 exact 범위, 구현 순서와 아직 완료되지 않은 current/target 차이를 전달하는 공통 handoff 문서다. 한 writer만 갱신한다. |
+| `docs/module-contract-decision-guide.md` | Coordinating agent | 승인된 D0-A~D5-A의 exact 범위, 구현 순서와 ID별 완료/미완료 current/target 차이를 전달하는 공통 handoff 문서다. 한 writer만 갱신한다. |
 | `docs/verification/`의 cross-module evidence | Assurance | 실행 시점의 provider/consumer evidence를 보존한다. 새 evidence는 coordinating writer가 작성하고 과거 evidence를 현재 보장처럼 소급 수정하지 않는다. |
 | Root `AGENTS.md`, 이 module index와 cross-module accepted ADR | Coordinating agent | Repository governance와 공통 contract authority다. 영향 module owner review 뒤 coordinating agent만 편집한다. |
 
@@ -210,9 +211,9 @@ Module contract는 사용자 명시적 승인 없이 변경하지 않는다. 일
 현재 조사된 startup cleanup, hidden dependency, read/write capability, deep immutability,
 lifecycle Protocol과 offline composition 선택지는
 [module contract decision guide](../module-contract-decision-guide.md)에 설명한다. 사용자는
-2026-08-24 `D0-A`~`D5-A`와 공통 불변조건을 승인했다. 각 Active TODO가 완료되기 전에는 승인된
-target을 현재 구현 contract로 해석하지 않으며, contract/provider를 순서대로 확정한 뒤에만
-consumer implementation을 병렬화한다.
+2026-08-24 `D0-A`~`D5-A`와 공통 불변조건을 승인했다. `D0-A`/`RTSAFE-01`은 구현 완료됐고,
+나머지 Active TODO가 완료되기 전에는 승인된 target을 현재 구현 contract로 해석하지 않는다.
+Contract/provider를 순서대로 확정한 뒤에만 consumer implementation을 병렬화한다.
 
 ## Agent 작업 절차
 

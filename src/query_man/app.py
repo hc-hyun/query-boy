@@ -5,7 +5,7 @@ import contextvars
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator, Coroutine
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from contextlib import asynccontextmanager, suppress
 from typing import cast
 
@@ -296,6 +296,42 @@ def build_app(
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         reload_task: asyncio.Task[None] | None = None
+
+        async def cleanup_step(
+            step: str,
+            cleanup: Callable[[], Awaitable[None]],
+        ) -> None:
+            try:
+                await cleanup()
+            except BaseException:
+                logger.warning("startup_cleanup_step_failed step=%s", step)
+
+        async def cleanup_failed_startup() -> None:
+            if reload_task is not None:
+                task = reload_task
+
+                async def cancel_reload_task() -> None:
+                    task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await task
+
+                await cleanup_step("reload_task", cancel_reload_task)
+
+            cleanup_steps: list[tuple[str, object, Callable[[], Awaitable[None]]]] = [
+                ("query_executor", query_executor, query_executor.close),
+                ("catalog", catalog, catalog.close),
+                ("metadata", metadata, metadata.close),
+            ]
+            if source_store is not None:
+                cleanup_steps.append(("source_store", source_store, source_store.close))
+            attempted_resources: set[int] = set()
+            for step, resource, cleanup in cleanup_steps:
+                resource_id = id(resource)
+                if resource_id in attempted_resources:
+                    continue
+                attempted_resources.add(resource_id)
+                await cleanup_step(step, cleanup)
+
         if source_reloader is not None:
             operations.set_component_health("source_reload", "initializing")
             await source_reloader.sync()
@@ -305,29 +341,36 @@ def build_app(
             reload_task = asyncio.create_task(
                 _reload_sources(source_reloader, runtime_config.source_reload_interval_ms)
             )
-        async with mcp_app.router.lifespan_context(mcp_app):
-            try:
-                yield
-            finally:
-                operations.set_accepting(False)
-                if reload_task is not None:
-                    reload_task.cancel()
-                    with suppress(asyncio.CancelledError):
-                        await reload_task
-                drain = getattr(query_executor, "drain", None)
-                if callable(drain):
-                    await drain(runtime_config.shutdown_grace_ms)
+        child_entered = False
+        try:
+            async with mcp_app.router.lifespan_context(mcp_app):
+                child_entered = True
                 try:
-                    await query_executor.close()
+                    yield
                 finally:
+                    operations.set_accepting(False)
+                    if reload_task is not None:
+                        reload_task.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await reload_task
+                    drain = getattr(query_executor, "drain", None)
+                    if callable(drain):
+                        await drain(runtime_config.shutdown_grace_ms)
                     try:
-                        await catalog.close()
+                        await query_executor.close()
                     finally:
                         try:
-                            await metadata.close()
+                            await catalog.close()
                         finally:
-                            if source_store is not None:
-                                await source_store.close()
+                            try:
+                                await metadata.close()
+                            finally:
+                                if source_store is not None:
+                                    await source_store.close()
+        except BaseException:
+            if not child_entered:
+                await cleanup_failed_startup()
+            raise
 
     app = FastAPI(title="query-man", lifespan=lifespan)
     app.state.registry = registry

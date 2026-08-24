@@ -34,27 +34,6 @@ Status: Active
 - MCP는 현재 지원 버전 `2026-07-28`만 받는다. 이전 handshake와 protocol version을 위한
   compatibility branch는 만들지 않으며 version 변경은 명시적인 upgrade 작업으로 처리한다.
 
-## P0 — Runtime Startup Failure Cleanup
-
-목표: MCP child application의 lifespan 진입 중 실패해도 parent composition이 그 전에 만든
-resource를 역순으로 정리해 connection pool이나 background task를 남기지 않게 한다.
-
-| 작업 경계 | 내용 |
-|---|---|
-| Primary module | Runtime |
-| Direct consumers | Runtime server/process lifecycle과 readiness; 새 cross-module consumer는 없음 |
-| Affected providers/verifiers | Delivery MCP child lifespan과 이미 조립된 Control Plane/Metadata/Guarded Query resource의 cleanup capability; Runtime/Delivery failure-path tests |
-| Contract baseline | [Runtime startup contract](modules/runtime/README.md#startup-contract)은 child `enter` 실패 시 역순 cleanup을 현재 보장하지 않는 debt로 명시한다. |
-| Approval gate | 2026-08-24 사용자가 `D0-A`와 decision guide의 공통 불변조건을 승인했다. Method, grace, 그 밖의 startup/shutdown 순서나 public health 의미까지 바뀌면 그 범위는 별도 승인받는다. |
-| Single writer | Runtime owner가 `app.py` lifespan symbol을 수정하고 Delivery owner는 route/wire 부분을 동시 편집하지 않는다. |
-| Start gate | `D0-A` 승인 완료; repository 전체의 다음 구현 작업 |
-| Verification | Runtime/Delivery focused failure-path test, `ruff`, `mypy`, root `pytest`; DB resource 경계를 건드리면 integration test |
-
-- [ ] `RTSAFE-01` MCP child lifespan의 `__aenter__`가 실패하면 진입하지 못한 child에
-  `__aexit__`를 호출하지 않고, parent가 그 전에 만든 reload task/pool/service resource만
-  정확히 한 번 역순 정리하며 원래 startup error를 보존하는 계약·회귀 테스트와 구현을
-  완료한다. Child의 partial-enter cleanup은 child lifespan 자체의 책임으로 유지한다.
-
 ## P0.5 — Module Contract Hardening
 
 목표: 문서로만 막고 있는 hidden dependency, read/write capability, Runtime lifecycle,
@@ -69,7 +48,7 @@ shared snapshot과 offline composition 경계를 승인된 공개 contract로 �
 | Contract baseline | ADR 0018, 현재 module index/README와 decision guide에 적은 현재 동작·공통 불변조건 |
 | Approval gate | 2026-08-24 사용자가 `D1-A`, `D2-A`, `D4-A`, `D3-A`, `D5-A`와 decision guide의 공통 불변조건을 승인했다. 승인된 exact 범위를 넘어서는 변경이나 대안 전환은 다시 승인받는다. |
 | Single writer | Coordinating agent가 `MOD-04` → `MOD-05` → `MOD-06` → `MOD-07` → `MOD-08` 순서로 contract/provider를 직렬화한다. Provider baseline 확정 뒤 서로 다른 consumer implementation만 병렬화한다. |
-| Start gate | `RTSAFE-01` 완료 후 `MOD-04`부터 위 순서로 시작한다. Lower-track read-only prework는 지금 가능하지만 item 시작이나 baseline 변경은 아니다. |
+| Start gate | `RTSAFE-01` 완료; repository 전체의 다음 구현 작업은 `MOD-04`다. 이후 항목은 위 순서를 따른다. Lower-track read-only prework는 가능하지만 item 시작이나 baseline 변경은 아니다. |
 | Verification | Decision guide의 각 exact contract test, provider와 모든 직접 consumer focused test, `ruff`, `mypy`, root `pytest`, DB 경계의 integration test |
 
 - [ ] `MOD-04` 승인된 `D1-A`에 따라 Delivery의
@@ -105,7 +84,7 @@ shared snapshot과 offline composition 경계를 승인된 공개 contract로 �
 | Contract baseline | `CTRL-01`~`CTRL-05` ledger와 ADR 0016/0017, 현재 Control Plane/Delivery/Runtime module contract |
 | Approval gate | `CTRL-06`~`CTRL-08`의 새 Control DB schema, observation shape, freshness와 admin response 의미는 구현 전 정확한 계약 승인이 필요하다. `CTRL-09`가 기존 backup/restore 절차만 재현하면 새 승인이 없지만 schema·retention·key recovery 의미를 바꾸면 승인받는다. |
 | Single writer | Control Plane owner가 schema/contract를 직렬화하고 baseline 확정 뒤 Runtime reporter와 Delivery projection을 병렬화한다. |
-| Start gate | `RTSAFE-01`과 `MOD-04`~`MOD-08` 완료 뒤 `CTRL-06`부터 순서대로 진행 |
+| Start gate | 완료 ledger의 `RTSAFE-01`과 `MOD-04`~`MOD-08` 완료 뒤 `CTRL-06`부터 순서대로 진행 |
 | Verification | Provider와 직접 consumer contract test, root gate, Control DB integration, migration/rollback/recovery와 scoped verification record |
 
 - [ ] `CTRL-06` Replica별 applied generation/state version/metadata revision/health heartbeat를
@@ -140,7 +119,7 @@ Status: Accepted planning baseline; `SKILL-01`/`SKILL-02` release reviews pendin
 | Contract baseline | Source onboarding/runbook, ADR 0016/0017과 accepted plan-only Skill boundary |
 | Approval gate | 현재 accepted plan의 구현은 가능하다. Output schema, trigger/scope, secret·mutation 경계 또는 production authority를 바꾸면 사용자 승인을 먼저 받는다. |
 | Single writer | Source Catalog owner가 Skill과 plan을 쓰고 shared onboarding/config 문서는 coordinating agent가 직렬화한다. |
-| Start gate | `RTSAFE-*`, `MOD-04`~`MOD-08`과 `CTRL-*`가 닫힌 뒤 `SKILL-01`부터 진행; 아래의 “다음”은 track-local 순서다. |
+| Start gate | Ledger의 `RTSAFE-01` 완료 및 `MOD-04`~`MOD-08`과 `CTRL-*` 완료 뒤 `SKILL-01`부터 진행; 아래의 “다음”은 track-local 순서다. |
 | Verification | Positive/negative/adversarial Skill eval, mutation 0 증거, 관련 onboarding/Delivery/Assurance 회귀와 root gate |
 
 - [ ] `SKILL-01` Skill scope, repository 위치, request/trigger 경계와 manual runbook·query
@@ -221,10 +200,11 @@ Production mutation executor는 이 track에 없다. 필요해지면 credential 
 
 ## Approval-Gated Contract Work
 
-Startup cleanup은 `RTSAFE-01`, hidden dependency/read-write/lifecycle/immutability/offline composition은
-`MOD-04`~`MOD-08`이 순서와 완료 조건을 추적한다. 2026-08-24 사용자는
+Startup cleanup `RTSAFE-01`은 완료되어 roadmap ledger로 이동했다.
+Hidden dependency/read-write/lifecycle/immutability/offline composition은 `MOD-04`~`MOD-08`이
+순서와 완료 조건을 추적한다. 2026-08-24 사용자는
 [module contract decision guide](module-contract-decision-guide.md)의 `D0-A`~`D5-A`와 공통
-불변조건을 명시적으로 승인했다. 각 ID가 완료되기 전에는 승인된 목표를 현재 구현 계약으로
+불변조건을 명시적으로 승인했다. 남은 각 ID가 완료되기 전에는 승인된 목표를 현재 구현 계약으로
 오해하지 않으며, 승인 범위를 넘어서는 의미 변경은 다시 승인받는다.
 
 ## Explicit Non-Goals
