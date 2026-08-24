@@ -2,7 +2,7 @@
 
 Status: Accepted choices — implementation complete
 
-Last reviewed: 2026-08-24
+Last reviewed: 2026-08-25
 
 Approved: 2026-08-24 — `D0-A`, `D1-A`, `D2-A`, `D3-A`, `D4-A`, `D5-A`와
 [모든 권장 선택에 공통으로 유지할 불변조건](#모든-권장-선택에-공통으로-유지할-불변조건)
@@ -557,7 +557,11 @@ type, 성능 상한, consumer와 rollback 범위를 후속 승인안으로 작�
 4. D4 lifecycle Protocol 명시 (`MOD-06`) — 완료
 5. D3 immutable snapshot 전환 (`MOD-07`) — 완료
 6. D5 offline CLI composition 격리 (`MOD-08`) — 완료
-7. 전체 dependency/contract audit
+7. 전체 dependency/contract audit — 완료 (2026-08-25)
+
+최종 audit에서 현재 contract 위반이나 migration 필요성은 발견되지 않았다. Active TODO의 다음
+순서는 `CTRL-06`이지만 새 Control DB schema, replica observation, freshness와 admin response 의미는
+이 승인 범위에 포함되지 않으므로 정확한 후속 계약을 다시 승인받기 전에는 구현하지 않는다.
 
 각 단계는 provider contract, 직접 consumer, module 문서와 runnable contract test가 함께
 통과하는 독립 커밋으로 끝낸다. Shared contract file은 single-writer로 편집한다. Provider

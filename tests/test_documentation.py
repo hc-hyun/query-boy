@@ -371,6 +371,8 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
     assert "## P0.5 — Module Contract Hardening" not in todo
     assert "offline composition `MOD-08`은 모두" in todo
     assert "Ledger의 `RTSAFE-01` 완료 및 `MOD-04`~`MOD-08`과 `CTRL-*` 완료" in todo
+    assert "`CTRL-06`~`CTRL-08`의 새 Control DB schema" in todo
+    assert "구현 전 정확한 계약 승인이 필요하다" in todo
     assert "`RTSAFE-*`, `MOD-*`" not in todo
 
     for item_id in EXPECTED_POST_BASELINE_COMPLETED_IDS:
@@ -559,6 +561,7 @@ def test_module_contract_decision_guide_records_approval_and_implementation_stat
     assert "D3 immutable snapshot 전환 (`MOD-07`) — 완료" in guide
     assert "D5 offline CLI composition 격리 (`MOD-08`) — 완료" in guide
     assert "### D5-A 구현 결과 (`MOD-08` 완료)" in guide
+    assert "7. 전체 dependency/contract audit — 완료 (2026-08-25)" in guide
     assert (
         guide.count(
             "Source/Metadata ──> 외부 JSON은 유지하면서 published graph를 deep immutable로 제공"
