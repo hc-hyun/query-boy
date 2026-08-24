@@ -2,7 +2,7 @@
 
 Status: Active implementation
 
-Last updated: 2026-08-23
+Last updated: 2026-08-25
 
 ## Purpose
 
@@ -46,9 +46,10 @@ tier를 정한다. 이 문서는 현재 공백과 `CTRL-*` 구현 순서를 관�
 - 여섯 direct admin mutation의 공통 idempotency/state precondition과 immutable terminal receipt
 - Operator-only receipt lookup과 source별 lifecycle event keyset history
 
-아직 구현할 공백:
+현재 구현 중이거나 남은 공백:
 
-- Replica별 desired/applied state와 freshness
+- `CTRL-06`: Control DB provider/schema는 구현됐고 Runtime reporter, Delivery route와 end-to-end
+  acceptance는 진행 중
 - Bounded record/storage/growth observation과 source/profile별 usage/cost projection
 - Authority table backup/restore, retention과 encryption-key recovery 검증
 
@@ -120,13 +121,28 @@ Host/database/user는 mutation 검토에 필요한 admin에게만 제한적으�
 bearer, master key, provider secret path, raw database error, ad-hoc question과 SQL은 response와
 audit에서 제외한다.
 
-아래 replica, data-size와 usage/cost 투영은 `CTRL-06`~`CTRL-08`에서 추가할 목표다.
+아래 replica contract는 승인돼 구현 중이고, data-size와 usage/cost 투영은 `CTRL-07`~`CTRL-08`의
+후속 목표다.
 
-### Planned Replica State (`CTRL-06`)
+### Accepted Replica State (`CTRL-06`, implementation in progress)
 
-- Replica ID별 applied generation/state version/metadata revision
-- Last observed time, health, stale age와 desired/applied drift
-- Control-plane 장애와 runtime validation 거부를 구분한 bounded reason
+- Managed-only `QUERY_MAN_REPLICA_ID`: 1~80자 lowercase stable slug. Bootstrap은 값이 있어도
+  무시하고 검증하지 않는다.
+- Target set은 ever-registered stable slot이다. 자동 expiry/delete/retirement와 shutdown
+  deregistration은 없으므로 scale-down slot은 stale로 남고 never-started planned target은 외부
+  deployment inventory가 관리한다.
+- Runtime은 한 번 registration해 받은 incarnation으로만 report하고 fencing/report 실패 뒤
+  재등록하지 않는다. 실제 cadence는 `max(source reload interval, 5_000ms)`, freshness는 Control DB
+  clock의 `observed_at + 3 * cadence`다.
+- Replica ID별 applied enabled/generation/state version/metadata revision, source health, observed/fresh
+  time, stale age와 fixed-order desired/applied drift를 latest-only로 저장한다.
+- Failure reason은 `CONTROL_SCAN_FAILED`, `RUNTIME_VALIDATION_REJECTED`, `RUNTIME_APPLY_FAILED`,
+  `METADATA_PROBE_FAILED`만 report하고 public projection은 `NOT_OBSERVED`, `HEARTBEAT_EXPIRED`를
+  추가할 수 있다. Raw error, manifest, connection, credential, question/SQL은 저장하지 않는다.
+- `GET /admin/sources/{source_id}/replicas?limit&after_replica_id`만 추가한다. Status는
+  `pending|available|stale|unavailable`; disabled desired는 metadata/source-health drift를 계산하지
+  않는다. 기존 list/detail/health/metrics/MCP는 그대로다.
+- Observation failure는 data plane, readiness, mutation receipt와 shutdown lifecycle을 바꾸지 않는다.
 
 ### Planned Data Size And Growth (`CTRL-07`)
 
@@ -187,6 +203,7 @@ idempotency/audit 계약을 적용한 현재 관리 표면이다.
 | `GET /admin/sources/{source_id}` | Implemented: effective source/resource tier와 published/active metadata revision을 구분한 detail |
 | `GET /admin/sources/{source_id}/history` | Implemented: generation-descending immutable manifest history |
 | `GET /admin/sources/{source_id}/mutations` | Implemented: event-ID keyset pagination의 sanitized lifecycle receipt history |
+| `GET /admin/sources/{source_id}/replicas` | In progress: Control provider/projection 구현 완료, Runtime report와 Delivery HTTP wiring 진행 중 |
 | Existing `PUT/POST/DELETE /admin/...` | Implemented: admin-only staged validation, expected-state CAS와 atomic success receipt |
 | `GET /admin/mutations/{idempotency_key}` | Implemented: timeout 뒤 terminal result/rejection reconciliation 조회 |
 
@@ -263,7 +280,8 @@ managed authority를 모두 표현한다. 따라서 mode, origin 또는 bootstra
 - **Implemented:** migration ledger의 version, immutable filename/checksum, applied time과 migration identity
 - **Implemented:** minimal catalog의 owner, environment와 DB migration provenance
 - **Implemented:** mutation event/receipt의 idempotency, actor, reason, request hash와 outcome
-- **Planned (`CTRL-06`):** runtime observation의 replica별 desired/applied state와 freshness
+- **In progress (`CTRL-06`):** migration 3과 Control provider의 replica별 latest desired/applied
+  state, DB-clock freshness 및 bounded projection 구현 완료; Runtime/Delivery integration pending
 - **Planned (`CTRL-07`):** source observation의 record/storage/growth method, definition revision과 snapshot
 - **Planned (`CTRL-07`, `CTRL-08`):** usage/cost rollup의 bounded source/profile time bucket,
   availability와 provider provenance
@@ -283,7 +301,7 @@ managed authority를 모두 표현한다. 따라서 mode, origin 또는 bootstra
 3. **Complete:** shared query access와 explicit admin/query credential separation
 4. **Complete:** immutable provenance, minimal catalog와 admin list/detail/history
 5. **Complete:** existing mutations의 idempotency, receipt와 durable audit
-6. Replica convergence/drift observation
+6. **In progress:** Replica convergence/drift observation
 7. Bounded record/storage/usage/cost observation
 8. Usage/cost availability와 cardinality/retention
 9. Backup/restore, encryption-key recovery와 multi-replica end-to-end acceptance

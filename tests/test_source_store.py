@@ -5,7 +5,7 @@ import inspect
 import re
 import uuid
 from dataclasses import asdict, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import cast
 
 import pytest
@@ -31,10 +31,14 @@ from query_man.source_store import (
     MutationReplay,
     MutationRequest,
     PostgresSourceStore,
+    ReplicaObservationConflictError,
     SourceGenerationConflictError,
     SourcePublishPinnedError,
     _decode_catalog,
+    _decode_desired_replica_state,
     _decode_mutation,
+    _decode_replica_observation,
+    _ReplicaSourceObservationWrite,
 )
 from query_man.verified import ExpectedResult, VerifiedQuery, create_result_hash
 from tests.helpers import ROOT_DIRECTORY, minimal_development_snapshot
@@ -1088,6 +1092,217 @@ async def test_verified_and_resume_receipts_use_commit_time_authority_state(
         await store.close()
 
 
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_replica_observations_are_latest_fenced_and_use_active_metadata(
+    disposable_control_dsn: str,
+) -> None:
+    validated, metadata = _source_fixture("replica-observation-source")
+    source = validated.profile
+    store = PostgresSourceStore(disposable_control_dsn)
+    metadata_store = PostgresMetadataStore(disposable_control_dsn)
+    cipher = SourceSecretCipher(b"r" * 32)
+    try:
+        generation = await store.next_generation(source.source_id)
+        published = await store.publish(
+            source.source_id,
+            0,
+            generation,
+            validated.document,
+            cipher.encrypt(source.source_id, generation, "reader-secret"),
+            metadata,
+            expected_state_version=0,
+        )
+
+        alpha_incarnation = await store.register_replica("replica-alpha", 5_000)
+        assert alpha_incarnation == 1
+        initial = await store.list_replica_observations(source.source_id)
+        assert initial is not None
+        assert (
+            initial.desired_generation,
+            initial.desired_state_version,
+            initial.desired_enabled,
+            initial.desired_metadata_revision,
+        ) == (published.generation, published.state_version, True, metadata.revision)
+        assert len(initial.items) == 1
+        initial_alpha = initial.items[0]
+        assert initial_alpha.replica_id == "replica-alpha"
+        assert initial_alpha.applied_generation is None
+        assert initial_alpha.source_health is None
+        assert initial_alpha.fresh_until - initial_alpha.observed_at == timedelta(
+            seconds=15
+        )
+        assert initial_alpha.read_at >= initial_alpha.observed_at
+
+        applied = _ReplicaSourceObservationWrite(
+            source_id=source.source_id,
+            applied_generation=published.generation,
+            applied_state_version=published.state_version,
+            applied_enabled=True,
+            applied_metadata_revision=metadata.revision,
+            source_health="healthy",
+            reason_code=None,
+        )
+        await store.report_replica(
+            "replica-alpha",
+            alpha_incarnation,
+            reason_code=None,
+            sources=(applied,),
+        )
+        observed = await store.list_replica_observations(source.source_id)
+        assert observed is not None
+        observed_alpha = observed.items[0]
+        assert (
+            observed_alpha.applied_generation,
+            observed_alpha.applied_state_version,
+            observed_alpha.applied_enabled,
+            observed_alpha.applied_metadata_revision,
+            observed_alpha.source_health,
+        ) == (
+            published.generation,
+            published.state_version,
+            True,
+            metadata.revision,
+            "healthy",
+        )
+
+        await store.report_replica(
+            "replica-alpha",
+            alpha_incarnation,
+            reason_code="CONTROL_SCAN_FAILED",
+            sources=(),
+        )
+        failed_scan = await store.list_replica_observations(source.source_id)
+        assert failed_scan is not None
+        assert failed_scan.items[0].report_reason_code == "CONTROL_SCAN_FAILED"
+        assert failed_scan.items[0].applied_generation == published.generation
+
+        await store.report_replica(
+            "replica-alpha",
+            alpha_incarnation,
+            reason_code=None,
+            sources=(applied,),
+        )
+        before_failed_report = await _replica_rows(disposable_control_dsn)
+        invalid_generation = replace(
+            applied,
+            applied_generation=published.generation + 100,
+        )
+        with pytest.raises(Error):
+            await store.report_replica(
+                "replica-alpha",
+                alpha_incarnation,
+                reason_code=None,
+                sources=(invalid_generation,),
+            )
+        assert await _replica_rows(disposable_control_dsn) == before_failed_report
+
+        refreshed_snapshot = replace(
+            metadata.snapshot,
+            relations=(
+                replace(
+                    metadata.snapshot.relations[0],
+                    comment="replica observation active metadata",
+                ),
+                *metadata.snapshot.relations[1:],
+            ),
+        )
+        refreshed_metadata = PreparedMetadata(
+            refreshed_snapshot,
+            create_metadata_revision(source, refreshed_snapshot),
+        )
+        await metadata_store.publish(
+            replace(
+                source,
+                control_generation=published.generation,
+                control_state_version=published.state_version,
+            ),
+            refreshed_metadata,
+        )
+        refreshed = await store.list_replica_observations(source.source_id)
+        assert refreshed is not None
+        assert refreshed.desired_metadata_revision == refreshed_metadata.revision
+        assert refreshed.items[0].applied_metadata_revision == metadata.revision
+
+        assert await store.register_replica("replica-beta", 300_000) == 1
+        first_page = await store.list_replica_observations(source.source_id, limit=1)
+        assert first_page is not None
+        assert [item.replica_id for item in first_page.items] == ["replica-alpha"]
+        assert first_page.next_after_replica_id == "replica-alpha"
+        second_page = await store.list_replica_observations(
+            source.source_id,
+            after_replica_id=first_page.next_after_replica_id,
+            limit=1,
+        )
+        assert second_page is not None
+        assert [item.replica_id for item in second_page.items] == ["replica-beta"]
+        assert second_page.next_after_replica_id is None
+        assert second_page.items[0].fresh_until - second_page.items[0].observed_at == (
+            timedelta(minutes=15)
+        )
+
+        new_incarnation = await store.register_replica("replica-alpha", 5_000)
+        assert new_incarnation == alpha_incarnation + 1
+        with pytest.raises(ReplicaObservationConflictError):
+            await store.report_replica(
+                "replica-alpha",
+                alpha_incarnation,
+                reason_code=None,
+                sources=(applied,),
+            )
+        fenced = await store.list_replica_observations(source.source_id)
+        assert fenced is not None
+        fenced_alpha = next(
+            item for item in fenced.items if item.replica_id == "replica-alpha"
+        )
+        assert fenced_alpha.applied_generation is None
+        assert fenced_alpha.source_health is None
+
+        state_version = await store.deactivate(
+            source.source_id,
+            published.generation,
+            expected_state_version=published.state_version,
+        )
+        disabled = await store.list_replica_observations(source.source_id)
+        assert disabled is not None
+        assert disabled.desired_enabled is False
+        assert disabled.desired_state_version == state_version
+        assert disabled.desired_metadata_revision is None
+
+        connection = await AsyncConnection.connect(disposable_control_dsn)
+        try:
+            cursor = await connection.execute(
+                "SELECT "
+                "(SELECT count(*) FROM control.runtime_replicas), "
+                "(SELECT count(*) FROM control.runtime_source_observations)"
+            )
+            assert await cursor.fetchone() == (2, 1)
+        finally:
+            await connection.close()
+    finally:
+        await metadata_store.close()
+        await store.close()
+
+
+async def _replica_rows(dsn: str) -> tuple[list[tuple[object, ...]], list[tuple[object, ...]]]:
+    connection = await AsyncConnection.connect(dsn)
+    try:
+        replicas = await connection.execute(
+            "SELECT replica_id, incarnation, heartbeat_interval_ms, "
+            "report_reason_code, observed_at FROM control.runtime_replicas "
+            "ORDER BY replica_id"
+        )
+        observations = await connection.execute(
+            "SELECT replica_id, incarnation, source_id, applied_generation, "
+            "applied_state_version, applied_enabled, applied_metadata_revision, "
+            "source_health, reason_code FROM control.runtime_source_observations "
+            "ORDER BY replica_id, source_id"
+        )
+        return await replicas.fetchall(), await observations.fetchall()
+    finally:
+        await connection.close()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("limit", [0, 101, True])
 async def test_source_catalog_rejects_unbounded_page_limits(limit: int) -> None:
@@ -1097,6 +1312,107 @@ async def test_source_catalog_rejects_unbounded_page_limits(limit: int) -> None:
         await store.list_catalog(limit=limit)
     with pytest.raises(ValueError, match="page limit"):
         await store.list_generation_history("source", limit=limit)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("replica_id", "heartbeat_interval_ms"),
+    [
+        ("", 5_000),
+        ("UPPERCASE", 5_000),
+        ("unsafe/replica", 5_000),
+        ("a" * 81, 5_000),
+        ("safe-replica", 4_999),
+        ("safe-replica", 300_001),
+        ("safe-replica", True),
+    ],
+)
+async def test_replica_registration_rejects_invalid_identity_and_interval_before_io(
+    replica_id: str,
+    heartbeat_interval_ms: int,
+) -> None:
+    store = PostgresSourceStore("postgresql://unused")
+
+    with pytest.raises(ValueError, match=r"Replica ID|heartbeat interval"):
+        await store.register_replica(replica_id, heartbeat_interval_ms)
+
+
+@pytest.mark.asyncio
+async def test_replica_reporting_rejects_invalid_bounded_state_before_io() -> None:
+    store = PostgresSourceStore("postgresql://unused")
+    revision = f"sha256:{'0' * 64}"
+    valid = _ReplicaSourceObservationWrite(
+        source_id="safe-source",
+        applied_generation=1,
+        applied_state_version=1,
+        applied_enabled=True,
+        applied_metadata_revision=revision,
+        source_health="healthy",
+        reason_code=None,
+    )
+
+    invalid_reports = (
+        {"incarnation": 0, "reason_code": None, "sources": ()},
+        {"incarnation": 1, "reason_code": "UNKNOWN", "sources": ()},
+        {
+            "incarnation": 1,
+            "reason_code": "CONTROL_SCAN_FAILED",
+            "sources": (valid,),
+        },
+        {"incarnation": 1, "reason_code": None, "sources": (valid, valid)},
+        {
+            "incarnation": 1,
+            "reason_code": None,
+            "sources": (replace(valid, applied_state_version=None),),
+        },
+        {
+            "incarnation": 1,
+            "reason_code": None,
+            "sources": (replace(valid, applied_enabled=False),),
+        },
+        {
+            "incarnation": 1,
+            "reason_code": None,
+            "sources": (replace(valid, source_health="unknown"),),
+        },
+        {
+            "incarnation": 1,
+            "reason_code": None,
+            "sources": (replace(valid, reason_code="UNKNOWN"),),
+        },
+    )
+    for report in invalid_reports:
+        with pytest.raises(ValueError):
+            await store.report_replica(
+                "safe-replica",
+                cast(int, report["incarnation"]),
+                reason_code=cast(str | None, report["reason_code"]),
+                sources=cast(
+                    tuple[_ReplicaSourceObservationWrite, ...],
+                    report["sources"],
+                ),
+            )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit", [0, 101, True])
+async def test_replica_projection_rejects_unbounded_page_limits(limit: int) -> None:
+    store = PostgresSourceStore("postgresql://unused")
+
+    with pytest.raises(ValueError, match="page limit"):
+        await store.list_replica_observations("safe-source", limit=limit)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cursor", ["", "UPPERCASE", "unsafe/cursor", "a" * 81])
+async def test_replica_projection_rejects_invalid_keyset_cursor(cursor: str) -> None:
+    store = PostgresSourceStore("postgresql://unused")
+
+    with pytest.raises(ValueError, match="Replica ID"):
+        await store.list_replica_observations(
+            "safe-source",
+            after_replica_id=cursor,
+        )
 
 
 @pytest.mark.asyncio
@@ -1258,6 +1574,74 @@ def test_source_mutation_queries_project_only_bounded_receipt_fields() -> None:
         assert required in _MUTATION_PROJECTION
 
 
+def test_replica_observation_decoders_enforce_desired_and_report_shapes() -> None:
+    row = _replica_observation_row()
+    desired = _decode_desired_replica_state(row)
+    observation = _decode_replica_observation(row)
+
+    assert desired == (
+        "safe-source",
+        2,
+        3,
+        True,
+        f"sha256:{'1' * 64}",
+    )
+    assert observation.replica_id == "safe-replica"
+    assert observation.applied_generation == 2
+    assert observation.applied_metadata_revision == f"sha256:{'1' * 64}"
+    assert observation.source_health == "healthy"
+
+    for invalid_desired in (
+        {**row, "desired_metadata_revision": None},
+        {
+            **row,
+            "desired_enabled": False,
+            "desired_metadata_revision": f"sha256:{'1' * 64}",
+        },
+    ):
+        with pytest.raises(ValueError, match="desired metadata"):
+            _decode_desired_replica_state(invalid_desired)
+
+    for field, value in (
+        ("report_reason_code", "UNKNOWN"),
+        ("applied_state_version", None),
+        ("applied_enabled", False),
+        ("source_health", "unknown"),
+        ("reason_code", "UNKNOWN"),
+        ("observed_at", datetime(2026, 8, 25)),
+    ):
+        invalid_observation = {**row, field: value}
+        with pytest.raises(
+            ValueError,
+            match=r"replica|Replica|Stored source catalog",
+        ):
+            _decode_replica_observation(invalid_observation)
+
+
+def test_replica_observation_query_is_one_bounded_secret_free_snapshot() -> None:
+    projection_source = inspect.getsource(
+        PostgresSourceStore.list_replica_observations
+    )
+
+    assert projection_source.count("await connection.execute(") == 1
+    assert "clock_timestamp()" in projection_source
+    assert "active_metadata_revisions" in projection_source
+    assert (
+        "ORDER BY replica_id COLLATE \"C\" ASC LIMIT %s"
+        in projection_source.replace("\\\"", '"')
+    )
+    assert "SELECT *" not in projection_source.upper()
+    for forbidden in (
+        "secret_nonce",
+        "secret_ciphertext",
+        "manifest",
+        "snapshot",
+        "credential",
+        "password_env",
+    ):
+        assert forbidden not in projection_source
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -1354,6 +1738,29 @@ def _mutation_row() -> dict[str, object]:
             "quality_level": "L0",
         },
         "recorded_at": datetime(2026, 8, 23, tzinfo=UTC),
+    }
+
+
+def _replica_observation_row() -> dict[str, object]:
+    observed_at = datetime(2026, 8, 25, tzinfo=UTC)
+    revision = f"sha256:{'1' * 64}"
+    return {
+        "source_id": "safe-source",
+        "desired_generation": 2,
+        "desired_state_version": 3,
+        "desired_enabled": True,
+        "desired_metadata_revision": revision,
+        "replica_id": "safe-replica",
+        "report_reason_code": None,
+        "observed_at": observed_at,
+        "fresh_until": observed_at + timedelta(seconds=15),
+        "read_at": observed_at + timedelta(seconds=1),
+        "applied_generation": 2,
+        "applied_state_version": 3,
+        "applied_enabled": True,
+        "applied_metadata_revision": revision,
+        "source_health": "healthy",
+        "reason_code": None,
     }
 
 

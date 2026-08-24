@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
-from typing import Final, Protocol
+from typing import Final, Literal, Protocol
 
 from query_man.errors import (
     AppError,
@@ -44,6 +45,8 @@ from query_man.source_store import (
     MutationReceipt,
     MutationReplay,
     MutationRequest,
+    ReplicaObservationPage,
+    ReplicaObservationRecord,
     SourceCatalogPage,
     SourceCatalogRecord,
     SourceGenerationConflictError,
@@ -51,12 +54,23 @@ from query_man.source_store import (
     SourcePublishPinnedError,
     StoredSource,
     StoredSourceNotFoundError,
+    _ReplicaSourceObservationWrite,
 )
 from query_man.sql_validation import SQL_POLICY_REVISION, SqlValidationError, validate_sql
 from query_man.verified import ExpectedResult, VerifiedQuery, create_result_hash
 
 logger = logging.getLogger("query_man.source_control")
 CONTROL_SEQUENCE_MAX: Final[int] = POSTGRES_BIGINT_MAX
+REPLICA_HEARTBEAT_INTERVAL_MIN_MS: Final[int] = 5_000
+REPLICA_HEARTBEAT_INTERVAL_MAX_MS: Final[int] = 300_000
+
+ReplicaSourceHealth = Literal["initializing", "healthy", "stale", "unavailable"]
+ReplicaReportReason = Literal["CONTROL_SCAN_FAILED"]
+ReplicaSourceReason = Literal[
+    "RUNTIME_VALIDATION_REJECTED",
+    "RUNTIME_APPLY_FAILED",
+    "METADATA_PROBE_FAILED",
+]
 
 
 @dataclass(frozen=True)
@@ -75,6 +89,34 @@ class PublishVerifiedQueryInput:
     metadata_revision: str
     relations: tuple[str, ...]
     expected: VerifiedExpectedInput
+
+
+@dataclass(frozen=True)
+class ReplicaSourceObservation:
+    source_id: str
+    applied_generation: int | None
+    applied_state_version: int | None
+    applied_enabled: bool | None
+    applied_metadata_revision: str | None
+    source_health: ReplicaSourceHealth | None
+    reason_code: ReplicaSourceReason | None
+
+
+class ReplicaObservationWriter(Protocol):
+    async def register_replica(
+        self,
+        replica_id: str,
+        heartbeat_interval_ms: int,
+    ) -> int: ...
+
+    async def report_replica(
+        self,
+        replica_id: str,
+        incarnation: int,
+        *,
+        reason_code: ReplicaReportReason | None,
+        sources: tuple[ReplicaSourceObservation, ...],
+    ) -> None: ...
 
 
 class SourceStore(Protocol):
@@ -96,6 +138,29 @@ class SourceStore(Protocol):
     ) -> SourceCatalogPage: ...
 
     async def get_catalog(self, source_id: str) -> SourceCatalogRecord | None: ...
+
+    async def register_replica(
+        self,
+        replica_id: str,
+        heartbeat_interval_ms: int,
+    ) -> int: ...
+
+    async def report_replica(
+        self,
+        replica_id: str,
+        incarnation: int,
+        *,
+        reason_code: str | None,
+        sources: tuple[_ReplicaSourceObservationWrite, ...],
+    ) -> None: ...
+
+    async def list_replica_observations(
+        self,
+        source_id: str,
+        *,
+        after_replica_id: str | None = None,
+        limit: int = 50,
+    ) -> ReplicaObservationPage | None: ...
 
     async def list_generation_history(
         self,
@@ -180,6 +245,44 @@ class SourceStore(Protocol):
     ) -> None: ...
 
     async def verified_revision_map(self) -> dict[str, frozenset[str]]: ...
+
+
+class ControlReplicaObservationWriter:
+    def __init__(self, store: SourceStore) -> None:
+        self._store = store
+
+    async def register_replica(
+        self,
+        replica_id: str,
+        heartbeat_interval_ms: int,
+    ) -> int:
+        return await self._store.register_replica(replica_id, heartbeat_interval_ms)
+
+    async def report_replica(
+        self,
+        replica_id: str,
+        incarnation: int,
+        *,
+        reason_code: ReplicaReportReason | None,
+        sources: tuple[ReplicaSourceObservation, ...],
+    ) -> None:
+        await self._store.report_replica(
+            replica_id,
+            incarnation,
+            reason_code=reason_code,
+            sources=tuple(
+                _ReplicaSourceObservationWrite(
+                    source_id=source.source_id,
+                    applied_generation=source.applied_generation,
+                    applied_state_version=source.applied_state_version,
+                    applied_enabled=source.applied_enabled,
+                    applied_metadata_revision=source.applied_metadata_revision,
+                    source_health=source.source_health,
+                    reason_code=source.reason_code,
+                )
+                for source in sources
+            ),
+        )
 
 
 class SourcePoolInvalidator(Protocol):
@@ -433,6 +536,39 @@ class SourceAdminService:
             }
         except SourceControlUnavailableError:
             raise
+        except Exception as error:
+            raise SourceControlUnavailableError from error
+
+    async def source_replicas(
+        self,
+        source_id: str,
+        limit: int = 50,
+        after_replica_id: str | None = None,
+    ) -> dict[str, object]:
+        try:
+            page = await self._store.list_replica_observations(
+                source_id,
+                after_replica_id=after_replica_id,
+                limit=limit,
+            )
+        except Exception as error:
+            raise SourceControlUnavailableError from error
+        if page is None:
+            raise SourceNotFoundError
+        try:
+            return {
+                "source_id": page.source_id,
+                "desired": {
+                    "enabled": page.desired_enabled,
+                    "generation": page.desired_generation,
+                    "state_version": page.desired_state_version,
+                    "metadata_revision": page.desired_metadata_revision,
+                },
+                "replicas": [
+                    _replica_observation_response(page, item) for item in page.items
+                ],
+                "next_after_replica_id": page.next_after_replica_id,
+            }
         except Exception as error:
             raise SourceControlUnavailableError from error
 
@@ -1268,6 +1404,78 @@ def _generation_summary(record: SourceCatalogRecord) -> dict[str, object]:
         "published_metadata_revision": record.published_metadata_revision,
         "minimum_quality_level": record.minimum_quality_level,
         "is_current": record.is_current,
+    }
+
+
+def _replica_observation_response(
+    page: ReplicaObservationPage,
+    observation: ReplicaObservationRecord,
+) -> dict[str, object]:
+    stale_age_ms = math.ceil(
+        max(0.0, (observation.read_at - observation.fresh_until).total_seconds())
+        * 1_000
+    )
+    applied: dict[str, object] | None = None
+    if observation.applied_generation is not None:
+        applied = {
+            "enabled": observation.applied_enabled,
+            "generation": observation.applied_generation,
+            "state_version": observation.applied_state_version,
+            "metadata_revision": observation.applied_metadata_revision,
+        }
+
+    if stale_age_ms > 0:
+        status = "stale"
+        reason_code = "HEARTBEAT_EXPIRED"
+    elif observation.report_reason_code is not None:
+        status = "unavailable"
+        reason_code = observation.report_reason_code
+    elif observation.reason_code is not None:
+        status = "unavailable"
+        reason_code = observation.reason_code
+    elif applied is None or (
+        page.desired_enabled and observation.applied_metadata_revision is None
+    ):
+        status = "pending"
+        reason_code = "NOT_OBSERVED"
+    else:
+        status = "available"
+        reason_code = None
+
+    drift: list[str] = []
+    if applied is None:
+        drift.append("not_applied")
+    else:
+        comparisons = (
+            ("enabled", observation.applied_enabled, page.desired_enabled),
+            ("generation", observation.applied_generation, page.desired_generation),
+            (
+                "state_version",
+                observation.applied_state_version,
+                page.desired_state_version,
+            ),
+        )
+        drift.extend(
+            field for field, applied_value, desired_value in comparisons
+            if applied_value != desired_value
+        )
+        if (
+            page.desired_enabled
+            and observation.applied_metadata_revision
+            != page.desired_metadata_revision
+        ):
+            drift.append("metadata_revision")
+
+    return {
+        "replica_id": observation.replica_id,
+        "status": status,
+        "source_health": observation.source_health,
+        "applied": applied,
+        "drift": drift,
+        "observed_at": observation.observed_at.isoformat(),
+        "fresh_until": observation.fresh_until.isoformat(),
+        "stale_age_ms": stale_age_ms,
+        "reason_code": reason_code,
     }
 
 

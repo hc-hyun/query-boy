@@ -32,8 +32,13 @@ from query_man.registry import (
 from query_man.secrets import EncryptedSecret, SourceSecretCipher
 from query_man.source_admin import (
     CONTROL_SEQUENCE_MAX,
+    REPLICA_HEARTBEAT_INTERVAL_MAX_MS,
+    REPLICA_HEARTBEAT_INTERVAL_MIN_MS,
+    ControlReplicaObservationWriter,
     MutationContext,
     PublishVerifiedQueryInput,
+    ReplicaObservationWriter,
+    ReplicaSourceObservation,
     SourceAdminService,
     SourceReloader,
     VerifiedExpectedInput,
@@ -44,6 +49,8 @@ from query_man.source_store import (
     MutationReceipt,
     MutationReplay,
     MutationRequest,
+    ReplicaObservationPage,
+    ReplicaObservationRecord,
     SourceCatalogConnection,
     SourceCatalogPage,
     SourceCatalogRecord,
@@ -52,6 +59,7 @@ from query_man.source_store import (
     SourcePublishPinnedError,
     StoredSource,
     StoredSourceNotFoundError,
+    _ReplicaSourceObservationWrite,
 )
 from query_man.sql_validation import ValidatedSql
 from query_man.verified import ExpectedResult, VerifiedQuery, create_result_hash
@@ -111,6 +119,32 @@ def test_verified_publish_input_is_frozen_control_contract() -> None:
             setattr(target, field_name, value)
 
 
+def test_replica_observation_input_is_frozen_control_contract() -> None:
+    observation = ReplicaSourceObservation(
+        source_id="third-source",
+        applied_generation=2,
+        applied_state_version=3,
+        applied_enabled=True,
+        applied_metadata_revision=f"sha256:{'2' * 64}",
+        source_health="healthy",
+        reason_code=None,
+    )
+
+    assert REPLICA_HEARTBEAT_INTERVAL_MIN_MS == 5_000
+    assert REPLICA_HEARTBEAT_INTERVAL_MAX_MS == 300_000
+    assert tuple(field.name for field in fields(ReplicaSourceObservation)) == (
+        "source_id",
+        "applied_generation",
+        "applied_state_version",
+        "applied_enabled",
+        "applied_metadata_revision",
+        "source_health",
+        "reason_code",
+    )
+    with pytest.raises(FrozenInstanceError):
+        observation.source_health = "stale"  # type: ignore[misc]
+
+
 class MemoryMetadataStore:
     def __init__(self) -> None:
         self.values: dict[tuple[str, str], PreparedMetadata] = {}
@@ -149,6 +183,17 @@ class MemorySourceStore:
         self.history: dict[tuple[str, int], StoredSource] = {}
         self.verified: list[VerifiedQuery] = []
         self.mutations: dict[str, MutationReceipt] = {}
+        self.replica_page: ReplicaObservationPage | None = None
+        self.replica_registrations: list[tuple[str, int]] = []
+        self.replica_reports: list[
+            tuple[
+                str,
+                int,
+                str | None,
+                tuple[_ReplicaSourceObservationWrite, ...],
+            ]
+        ] = []
+        self.replica_queries: list[tuple[str, str | None, int]] = []
 
     async def list_active(self) -> list[StoredSource]:
         return list(self.active.values())
@@ -193,6 +238,36 @@ class MemorySourceStore:
     async def get_catalog(self, source_id: str) -> SourceCatalogRecord | None:
         record = self.active.get(source_id)
         return None if record is None else self._catalog_record(record)
+
+    async def register_replica(
+        self,
+        replica_id: str,
+        heartbeat_interval_ms: int,
+    ) -> int:
+        self.replica_registrations.append((replica_id, heartbeat_interval_ms))
+        return len(self.replica_registrations)
+
+    async def report_replica(
+        self,
+        replica_id: str,
+        incarnation: int,
+        *,
+        reason_code: str | None,
+        sources: tuple[_ReplicaSourceObservationWrite, ...],
+    ) -> None:
+        self.replica_reports.append(
+            (replica_id, incarnation, reason_code, sources)
+        )
+
+    async def list_replica_observations(
+        self,
+        source_id: str,
+        *,
+        after_replica_id: str | None = None,
+        limit: int = 50,
+    ) -> ReplicaObservationPage | None:
+        self.replica_queries.append((source_id, after_replica_id, limit))
+        return self.replica_page
 
     async def list_generation_history(
         self,
@@ -701,6 +776,35 @@ def _services(
     return admin, registry, source_store, invalidator, cipher, reloader
 
 
+def _replica_record(
+    replica_id: str,
+    observed_at: datetime,
+    fresh_until: datetime,
+    read_at: datetime,
+    *,
+    report_reason_code: str | None = None,
+    applied_generation: int | None = None,
+    applied_state_version: int | None = None,
+    applied_enabled: bool | None = None,
+    applied_metadata_revision: str | None = None,
+    source_health: str | None = None,
+    reason_code: str | None = None,
+) -> ReplicaObservationRecord:
+    return ReplicaObservationRecord(
+        replica_id=replica_id,
+        observed_at=observed_at,
+        fresh_until=fresh_until,
+        read_at=read_at,
+        report_reason_code=report_reason_code,
+        applied_generation=applied_generation,
+        applied_state_version=applied_state_version,
+        applied_enabled=applied_enabled,
+        applied_metadata_revision=applied_metadata_revision,
+        source_health=source_health,
+        reason_code=reason_code,
+    )
+
+
 def _mutation_context(
     key_suffix: int,
     *,
@@ -1053,6 +1157,246 @@ async def test_environment_change_is_rejected_for_the_same_source_identity() -> 
 
 
 @pytest.mark.asyncio
+async def test_replica_writer_maps_only_public_sanitized_observations() -> None:
+    _admin, _registry, store, _invalidator, _cipher, _reloader = _services()
+    writer: ReplicaObservationWriter = ControlReplicaObservationWriter(store)
+    observation = ReplicaSourceObservation(
+        source_id="third-source",
+        applied_generation=2,
+        applied_state_version=3,
+        applied_enabled=True,
+        applied_metadata_revision=f"sha256:{'2' * 64}",
+        source_health="healthy",
+        reason_code=None,
+    )
+
+    incarnation = await writer.register_replica("runtime-a", 5_000)
+    await writer.report_replica(
+        "runtime-a",
+        incarnation,
+        reason_code=None,
+        sources=(observation,),
+    )
+
+    assert incarnation == 1
+    assert store.replica_registrations == [("runtime-a", 5_000)]
+    assert store.replica_reports == [
+        (
+            "runtime-a",
+            1,
+            None,
+            (
+                _ReplicaSourceObservationWrite(
+                    source_id="third-source",
+                    applied_generation=2,
+                    applied_state_version=3,
+                    applied_enabled=True,
+                    applied_metadata_revision=f"sha256:{'2' * 64}",
+                    source_health="healthy",
+                    reason_code=None,
+                ),
+            ),
+        )
+    ]
+    assert "secret" not in repr(store.replica_reports).lower()
+    assert "manifest" not in repr(store.replica_reports).lower()
+
+
+@pytest.mark.asyncio
+async def test_replica_admin_projection_has_ordered_drift_and_db_clock_freshness() -> None:
+    admin, _registry, store, _invalidator, _cipher, _reloader = _services()
+    observed_at = datetime(2026, 8, 25, 12, tzinfo=UTC)
+    fresh_until = observed_at + timedelta(seconds=15)
+    desired_revision = f"sha256:{'3' * 64}"
+    exact_applied = {
+        "applied_generation": 2,
+        "applied_state_version": 3,
+        "applied_enabled": True,
+        "applied_metadata_revision": desired_revision,
+    }
+    store.replica_page = ReplicaObservationPage(
+        source_id="third-source",
+        desired_generation=2,
+        desired_state_version=3,
+        desired_enabled=True,
+        desired_metadata_revision=desired_revision,
+        items=(
+            _replica_record(
+                "runtime-available",
+                observed_at,
+                fresh_until,
+                fresh_until,
+                source_health="healthy",
+                **exact_applied,
+            ),
+            _replica_record(
+                "runtime-stale",
+                observed_at,
+                fresh_until,
+                fresh_until + timedelta(milliseconds=1, microseconds=1),
+                report_reason_code="CONTROL_SCAN_FAILED",
+                applied_generation=1,
+                applied_state_version=1,
+                applied_enabled=False,
+                applied_metadata_revision=None,
+                source_health="stale",
+            ),
+            _replica_record(
+                "runtime-scan-failed",
+                observed_at,
+                fresh_until,
+                fresh_until,
+                report_reason_code="CONTROL_SCAN_FAILED",
+                source_health="healthy",
+                **exact_applied,
+            ),
+            _replica_record(
+                "runtime-apply-failed",
+                observed_at,
+                fresh_until,
+                fresh_until,
+                reason_code="RUNTIME_APPLY_FAILED",
+                source_health="unavailable",
+                **exact_applied,
+            ),
+            _replica_record(
+                "runtime-pending",
+                observed_at,
+                fresh_until,
+                fresh_until,
+                source_health="initializing",
+            ),
+        ),
+        next_after_replica_id="runtime-pending",
+    )
+
+    response = await admin.source_replicas(
+        "third-source",
+        limit=5,
+        after_replica_id="previous-runtime",
+    )
+
+    assert store.replica_queries == [("third-source", "previous-runtime", 5)]
+    assert response["desired"] == {
+        "enabled": True,
+        "generation": 2,
+        "state_version": 3,
+        "metadata_revision": desired_revision,
+    }
+    replicas = response["replicas"]
+    assert isinstance(replicas, list)
+    assert [replica["status"] for replica in replicas] == [
+        "available",
+        "stale",
+        "unavailable",
+        "unavailable",
+        "pending",
+    ]
+    assert [replica["reason_code"] for replica in replicas] == [
+        None,
+        "HEARTBEAT_EXPIRED",
+        "CONTROL_SCAN_FAILED",
+        "RUNTIME_APPLY_FAILED",
+        "NOT_OBSERVED",
+    ]
+    assert replicas[0]["drift"] == []
+    assert replicas[0]["applied"] == {
+        "enabled": True,
+        "generation": 2,
+        "state_version": 3,
+        "metadata_revision": desired_revision,
+    }
+    assert replicas[1]["drift"] == [
+        "enabled",
+        "generation",
+        "state_version",
+        "metadata_revision",
+    ]
+    assert replicas[1]["stale_age_ms"] == 2
+    assert replicas[4]["drift"] == ["not_applied"]
+    assert replicas[4]["applied"] is None
+    assert replicas[4]["source_health"] == "initializing"
+    assert replicas[0]["observed_at"] == observed_at.isoformat()
+    assert replicas[0]["fresh_until"] == fresh_until.isoformat()
+    assert response["next_after_replica_id"] == "runtime-pending"
+    rendered = repr(response).lower()
+    assert "secret" not in rendered
+    assert "manifest" not in rendered
+    assert "credential" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_disabled_replica_desired_state_has_no_metadata_drift() -> None:
+    admin, _registry, store, _invalidator, _cipher, _reloader = _services()
+    observed_at = datetime(2026, 8, 25, 12, tzinfo=UTC)
+    store.replica_page = ReplicaObservationPage(
+        source_id="third-source",
+        desired_generation=2,
+        desired_state_version=4,
+        desired_enabled=False,
+        desired_metadata_revision=None,
+        items=(
+            _replica_record(
+                "runtime-disabled",
+                observed_at,
+                observed_at + timedelta(seconds=15),
+                observed_at + timedelta(seconds=1),
+                applied_generation=2,
+                applied_state_version=4,
+                applied_enabled=False,
+                applied_metadata_revision=None,
+                source_health=None,
+            ),
+        ),
+        next_after_replica_id=None,
+    )
+
+    response = await admin.source_replicas("third-source")
+    replicas = response["replicas"]
+    assert isinstance(replicas, list)
+    assert response["desired"] == {
+        "enabled": False,
+        "generation": 2,
+        "state_version": 4,
+        "metadata_revision": None,
+    }
+    assert replicas[0]["status"] == "available"
+    assert replicas[0]["drift"] == []
+    assert replicas[0]["reason_code"] is None
+
+
+@pytest.mark.asyncio
+async def test_replica_admin_maps_malformed_projection_to_safe_unavailable() -> None:
+    admin, _registry, store, _invalidator, _cipher, _reloader = _services()
+    observed_at = datetime(2026, 8, 25, 12, tzinfo=UTC)
+    store.replica_page = ReplicaObservationPage(
+        source_id="third-source",
+        desired_generation=2,
+        desired_state_version=3,
+        desired_enabled=True,
+        desired_metadata_revision=f"sha256:{'3' * 64}",
+        items=(
+            _replica_record(
+                "runtime-malformed",
+                observed_at,
+                datetime(2026, 8, 25, 12, 0, 15),
+                observed_at + timedelta(seconds=1),
+                source_health="healthy",
+            ),
+        ),
+        next_after_replica_id=None,
+    )
+
+    with pytest.raises(SourceControlUnavailableError) as failure:
+        await admin.source_replicas("third-source")
+
+    assert failure.value.code == "SOURCE_CONTROL_UNAVAILABLE"
+    assert failure.value.message == "Source administration is unavailable."
+    assert failure.value.details is None
+    assert isinstance(failure.value.__cause__, TypeError)
+
+
+@pytest.mark.asyncio
 async def test_admin_read_models_are_paginated_and_secret_free() -> None:
     admin, _registry, _store, _invalidator, _cipher, _reloader = _services()
     first = await admin.publish("third-source", _manifest(), "first-secret")
@@ -1204,6 +1548,8 @@ async def test_admin_read_service_maps_missing_and_unavailable_store(
         await admin.get_source("unknown-source")
     with pytest.raises(SourceNotFoundError):
         await admin.source_history("unknown-source")
+    with pytest.raises(SourceNotFoundError):
+        await admin.source_replicas("unknown-source")
 
     async def fail_get(_source_id: str) -> SourceCatalogRecord | None:
         raise RuntimeError("private control database detail")
@@ -1224,6 +1570,16 @@ async def test_admin_read_service_maps_missing_and_unavailable_store(
     monkeypatch.setattr(store, "list_generation_history", fail_history)
     with pytest.raises(SourceControlUnavailableError):
         await admin.source_history("unknown-source")
+
+    async def fail_replicas(
+        _source_id: str,
+        **_page: object,
+    ) -> ReplicaObservationPage | None:
+        raise RuntimeError("private control database detail")
+
+    monkeypatch.setattr(store, "list_replica_observations", fail_replicas)
+    with pytest.raises(SourceControlUnavailableError):
+        await admin.source_replicas("unknown-source")
 
     monkeypatch.setattr(store, "list_catalog", fail_list)
     with pytest.raises(SourceControlUnavailableError):

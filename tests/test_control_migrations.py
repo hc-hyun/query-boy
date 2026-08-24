@@ -31,6 +31,12 @@ GRANT SELECT, INSERT ON control.source_mutation_receipts
 GRANT USAGE ON SEQUENCE control.source_mutation_receipts_event_id_seq
   TO query_man_control_writer;
 """
+_V3_WRITER_GRANTS = """\
+GRANT SELECT, INSERT, UPDATE ON control.runtime_replicas
+  TO query_man_control_writer;
+GRANT SELECT, INSERT, UPDATE ON control.runtime_source_observations
+  TO query_man_control_writer;
+"""
 
 
 def _copy_v1_migrations(tmp_path: Path) -> Path:
@@ -49,8 +55,33 @@ def _copy_v1_migrations(tmp_path: Path) -> Path:
     security_path = migration_directory / "reconcile-security.sql"
     security_sql = security_path.read_text(encoding="utf-8")
     assert _V2_WRITER_GRANTS in security_sql
+    assert _V3_WRITER_GRANTS in security_sql
     security_path.write_text(
-        security_sql.replace(_V2_WRITER_GRANTS, ""),
+        security_sql.replace(_V2_WRITER_GRANTS, "").replace(_V3_WRITER_GRANTS, ""),
+        encoding="utf-8",
+    )
+    return migration_directory
+
+
+def _copy_v2_migrations(tmp_path: Path) -> Path:
+    migration_directory = tmp_path / "v2-control-migrations"
+    shutil.copytree(_MIGRATION_DIRECTORY, migration_directory)
+    numbered_migrations = sorted(
+        migration_directory.glob("[0-9][0-9][0-9][0-9]_*.sql")
+    )
+    assert [path.name for path in numbered_migrations[:3]] == [
+        "0001_baseline.sql",
+        "0002_source_mutation_receipts.sql",
+        "0003_runtime_replica_observations.sql",
+    ]
+    for migration_path in numbered_migrations[2:]:
+        migration_path.unlink()
+
+    security_path = migration_directory / "reconcile-security.sql"
+    security_sql = security_path.read_text(encoding="utf-8")
+    assert _V3_WRITER_GRANTS in security_sql
+    security_path.write_text(
+        security_sql.replace(_V3_WRITER_GRANTS, ""),
         encoding="utf-8",
     )
     return migration_directory
@@ -98,6 +129,23 @@ async def v1_control_database_fixture(
     async with disposable_control_database(
         environment,
         _copy_v1_migrations(tmp_path),
+    ) as database:
+        yield database
+    assert await authority_fingerprint(development_dsn) == development_before
+
+
+@pytest.fixture
+async def v2_control_database_fixture(
+    tmp_path: Path,
+) -> AsyncIterator[DisposableControlDatabase]:
+    environment = postgres_environment()
+    if environment is None:
+        pytest.skip("local PostgreSQL control-plane credentials are not configured")
+    development_dsn = postgres_dsn(environment, environment["POSTGRES_DB"])
+    development_before = await authority_fingerprint(development_dsn)
+    async with disposable_control_database(
+        environment,
+        _copy_v2_migrations(tmp_path),
     ) as database:
         yield database
     assert await authority_fingerprint(development_dsn) == development_before
@@ -165,8 +213,8 @@ async def test_control_migrations_are_versioned_idempotent_and_fail_on_drift(
             f"{version}:{filename}:{checksum}"
             for version, filename, checksum in expected_migrations
         ]
-        assert first_contract[2:] == (4, 4, True, True, True)
-        assert len(first_contract[1]) == 7
+        assert first_contract[2:] == (8, 4, True, True, True)
+        assert len(first_contract[1]) == 9
 
         await connection.execute(
             "INSERT INTO control.metadata_snapshots (source_id, revision, snapshot) "
@@ -209,7 +257,7 @@ async def test_control_migrations_reject_a_database_ahead_of_the_checkout(
     try:
         await connection.execute(
             "INSERT INTO control.schema_migrations (version, filename, checksum) "
-            "VALUES (3, '0003_future.sql', %s)",
+            "VALUES (4, '0004_future.sql', %s)",
             (f"sha256:{'0' * 64}",),
         )
         await connection.commit()
@@ -221,7 +269,8 @@ async def test_control_migrations_reject_a_database_ahead_of_the_checkout(
         assert await cursor.fetchall() == [
             (1, "0001_baseline.sql"),
             (2, "0002_source_mutation_receipts.sql"),
-            (3, "0003_future.sql"),
+            (3, "0003_runtime_replica_observations.sql"),
+            (4, "0004_future.sql"),
         ]
     finally:
         await connection.close()
@@ -230,6 +279,7 @@ async def test_control_migrations_reject_a_database_ahead_of_the_checkout(
 @pytest.mark.integration
 async def test_v1_to_v2_upgrade_preserves_existing_authority_data(
     v1_control_database_fixture: DisposableControlDatabase,
+    tmp_path: Path,
 ) -> None:
     database = v1_control_database_fixture
     revision = f"sha256:{'1' * 64}"
@@ -277,7 +327,7 @@ async def test_v1_to_v2_upgrade_preserves_existing_authority_data(
     before = await authority_fingerprint(database.dsn)
     assert before[-1] == ("source_mutation_receipts", -1, "missing")
 
-    apply_control_migrations(database)
+    apply_control_migrations(database, _copy_v2_migrations(tmp_path))
 
     after = await authority_fingerprint(database.dsn)
     assert after[:-1] == before[:-1]
@@ -296,6 +346,135 @@ async def test_v1_to_v2_upgrade_preserves_existing_authority_data(
 
 
 @pytest.mark.integration
+async def test_v2_to_v3_upgrade_is_additive_and_observation_acl_is_mutable_only(
+    v2_control_database_fixture: DisposableControlDatabase,
+) -> None:
+    database = v2_control_database_fixture
+    revision = f"sha256:{'6' * 64}"
+    connection = await AsyncConnection.connect(database.dsn)
+    try:
+        await connection.execute(
+            "INSERT INTO control.metadata_snapshots (source_id, revision, snapshot) "
+            "VALUES ('observation-upgrade', %s, '{\"relations\": []}'::jsonb)",
+            (revision,),
+        )
+        await connection.execute(
+            "INSERT INTO control.active_metadata_revisions "
+            "(source_id, revision, pinned) VALUES ('observation-upgrade', %s, false)",
+            (revision,),
+        )
+        await connection.execute(
+            "INSERT INTO control.source_profile_revisions "
+            "(source_id, generation, manifest, secret_nonce, secret_ciphertext, "
+            "metadata_revision) VALUES "
+            "('observation-upgrade', 1, '{\"schema_version\": 2}'::jsonb, "
+            "%s, %s, %s)",
+            (b"n" * 12, b"c" * 17, revision),
+        )
+        await connection.execute(
+            "INSERT INTO control.active_source_profiles "
+            "(source_id, generation, enabled, state_version) "
+            "VALUES ('observation-upgrade', 1, true, 1)"
+        )
+        await connection.commit()
+    finally:
+        await connection.close()
+
+    authority_before = await authority_fingerprint(database.dsn)
+    apply_control_migrations(database)
+    assert await authority_fingerprint(database.dsn) == authority_before
+
+    connection = await AsyncConnection.connect(database.dsn)
+    try:
+        cursor = await connection.execute(
+            "SELECT version FROM control.schema_migrations ORDER BY version"
+        )
+        assert await cursor.fetchall() == [(1,), (2,), (3,)]
+
+        cursor = await connection.execute(
+            "SELECT table_name, column_name FROM information_schema.columns "
+            "WHERE table_schema = 'control' AND table_name IN "
+            "('runtime_replicas', 'runtime_source_observations') "
+            "ORDER BY table_name, ordinal_position"
+        )
+        assert await cursor.fetchall() == [
+            ("runtime_replicas", "replica_id"),
+            ("runtime_replicas", "incarnation"),
+            ("runtime_replicas", "heartbeat_interval_ms"),
+            ("runtime_replicas", "report_reason_code"),
+            ("runtime_replicas", "observed_at"),
+            ("runtime_source_observations", "replica_id"),
+            ("runtime_source_observations", "incarnation"),
+            ("runtime_source_observations", "source_id"),
+            ("runtime_source_observations", "applied_generation"),
+            ("runtime_source_observations", "applied_state_version"),
+            ("runtime_source_observations", "applied_enabled"),
+            ("runtime_source_observations", "applied_metadata_revision"),
+            ("runtime_source_observations", "source_health"),
+            ("runtime_source_observations", "reason_code"),
+        ]
+
+        cursor = await connection.execute(
+            "SELECT indexdef FROM pg_indexes WHERE schemaname = 'control' "
+            "AND indexname = 'runtime_replicas_replica_id_c_idx'"
+        )
+        index_row = await cursor.fetchone()
+        assert index_row is not None
+        assert 'replica_id COLLATE "C"' in index_row[0]
+    finally:
+        await connection.close()
+
+    writer = await AsyncConnection.connect(database.dsn)
+    try:
+        await writer.execute("SET ROLE query_man_control_writer")
+        await writer.execute(
+            "INSERT INTO control.runtime_replicas "
+            "(replica_id, heartbeat_interval_ms) VALUES ('rolling-replica', 5000)"
+        )
+        await writer.execute(
+            "INSERT INTO control.runtime_source_observations "
+            "(replica_id, incarnation, source_id, source_health) "
+            "VALUES ('rolling-replica', 1, 'observation-upgrade', 'initializing')"
+        )
+        await writer.execute(
+            "UPDATE control.runtime_replicas "
+            "SET report_reason_code = 'CONTROL_SCAN_FAILED' "
+            "WHERE replica_id = 'rolling-replica'"
+        )
+        await writer.execute(
+            "UPDATE control.runtime_source_observations SET source_health = 'healthy' "
+            "WHERE replica_id = 'rolling-replica' "
+            "AND source_id = 'observation-upgrade'"
+        )
+        await writer.execute(
+            "INSERT INTO control.metadata_snapshots (source_id, revision, snapshot) "
+            f"VALUES ('rolling-v2-writer', 'sha256:{'7' * 64}', '{{}}'::jsonb)"
+        )
+        await writer.commit()
+
+        with pytest.raises(errors.InsufficientPrivilege):
+            await writer.execute(
+                "DELETE FROM control.runtime_source_observations "
+                "WHERE replica_id = 'rolling-replica'"
+            )
+        await writer.rollback()
+        with pytest.raises(errors.InsufficientPrivilege):
+            await writer.execute("TRUNCATE control.runtime_replicas")
+        await writer.rollback()
+
+        cursor = await writer.execute(
+            "SELECT report_reason_code, source_health "
+            "FROM control.runtime_replicas AS replica "
+            "JOIN control.runtime_source_observations AS observation "
+            "USING (replica_id, incarnation) "
+            "WHERE replica.replica_id = 'rolling-replica'"
+        )
+        assert await cursor.fetchone() == ("CONTROL_SCAN_FAILED", "healthy")
+    finally:
+        await writer.close()
+
+
+@pytest.mark.integration
 async def test_failed_pending_migration_rolls_back_ddl_data_and_ledger(
     disposable_control_database_fixture: DisposableControlDatabase,
     tmp_path: Path,
@@ -303,7 +482,7 @@ async def test_failed_pending_migration_rolls_back_ddl_data_and_ledger(
     database = disposable_control_database_fixture
     failing_directory = tmp_path / "failing-control-migrations"
     shutil.copytree(_MIGRATION_DIRECTORY, failing_directory)
-    (failing_directory / "0003_transaction_probe.sql").write_text(
+    (failing_directory / "0004_transaction_probe.sql").write_text(
         "CREATE TABLE control.failed_migration_probe (value integer NOT NULL);\n"
         "INSERT INTO control.failed_migration_probe VALUES (1);\n"
         "INSERT INTO control.metadata_snapshots (source_id, revision, snapshot)\n"
@@ -325,7 +504,7 @@ async def test_failed_pending_migration_rolls_back_ddl_data_and_ledger(
             "WHERE source_id = 'failed-migration'), "
             "array_agg(version ORDER BY version) FROM control.schema_migrations"
         )
-        assert await cursor.fetchone() == (None, False, [1, 2])
+        assert await cursor.fetchone() == (None, False, [1, 2, 3])
     finally:
         await connection.close()
 
@@ -340,7 +519,7 @@ async def test_concurrent_pending_v2_applies_serialize(
 ) -> None:
     database = v1_control_database_fixture
     concurrent_directory = tmp_path / "concurrent-control-migrations"
-    shutil.copytree(_MIGRATION_DIRECTORY, concurrent_directory)
+    shutil.copytree(_copy_v2_migrations(tmp_path), concurrent_directory)
     v2_path = concurrent_directory / "0002_source_mutation_receipts.sql"
     v2_path.write_text(
         "SELECT pg_catalog.pg_sleep(1);\n" + v2_path.read_text(encoding="utf-8"),
@@ -434,7 +613,7 @@ async def test_old_checkout_cannot_reconcile_after_newer_ledger_commit(
             "'control.source_mutation_receipts_event_id_seq', 'USAGE') "
             "FROM control.schema_migrations"
         )
-        assert await cursor.fetchone() == ([1, 2], True, True, True)
+        assert await cursor.fetchone() == ([1, 2, 3], True, True, True)
     finally:
         await connection.rollback()
         try:
@@ -828,7 +1007,7 @@ async def test_security_reconciliation_fails_closed_on_writer_owned_objects(
             "AND relation.relname = 'metadata_snapshots' "
             "GROUP BY owner.rolname"
         )
-        assert await cursor.fetchone() == ("query_man_control_writer", [1, 2])
+        assert await cursor.fetchone() == ("query_man_control_writer", [1, 2, 3])
     finally:
         await connection.close()
 

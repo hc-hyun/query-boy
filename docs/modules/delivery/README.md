@@ -127,6 +127,26 @@ Content-Type, 1 MiB body, 최대 1,024 object member, duplicate key/non-finite n
 bounded header/query/path parsing을 적용한다. MCP와 admin의 더 강한 제한을 다른 HTTP route
 보장으로 확대 해석하지 않는다.
 
+### Replica observation HTTP contract (`CTRL-06`)
+
+Delivery는 Control Plane의 `SourceAdminService.source_replicas`만 호출해 다음 operator-only read
+endpoint를 제공한다.
+
+```text
+GET /admin/sources/{source_id}/replicas?limit&after_replica_id
+```
+
+`limit` default는 50, 범위는 1~100이며 `after_replica_id`는 1~80자의 lowercase stable slug다.
+Authentication/authorization을 path/query validation보다 먼저 수행하고 duplicate/unknown query는
+bounded 400으로 거부한다. Unknown source는 404, Control Plane read/projection failure는 안전한
+`SOURCE_CONTROL_UNAVAILABLE` 503이다.
+
+성공 response는 `source_id`, `desired`, `replicas`, `next_after_replica_id`를 그대로 직렬화한다.
+Replica item은 `replica_id`, `status`, nullable `source_health`, nullable `applied`, ordered `drift`,
+`observed_at`, `fresh_until`, `stale_age_ms`, nullable bounded `reason_code`만 가진다. Stale 또는
+unavailable replica가 있어도 known source 조회는 200이다. Existing admin list/detail/history,
+`GET /sources`, `/health`, `/ready`, `/admin/metrics`와 MCP inventory/response는 변경하지 않는다.
+
 ### MCP contract
 
 - Protocol version은 현재 `2026-07-28`이다.
@@ -203,6 +223,7 @@ Metadata/Source Catalog의 runtime tuple/read-only mapping 전환은 Delivery HT
 - Public error code/message/detail/envelope 또는 unknown-vs-unauthorized 처리 변경
 - Bearer/header, Host/Origin, body size와 unauthenticated endpoint 정책 변경
 - Source summary projection과 admin/cancel surface 변경
+- Replica observation path/query/response/status/reason/pagination 또는 stale/unavailable HTTP 의미 변경
 - Admin idempotency/expected-state header, query/path/body limit, validation issue 또는 receipt/catalog
   projection 변경
 - Transport audit에 기록 가능한 request/caller/source field 또는 disconnect/cancel 의미 변경

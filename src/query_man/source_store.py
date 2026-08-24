@@ -51,6 +51,10 @@ class MutationReplay(Exception):
         self.receipt = receipt
 
 
+class ReplicaObservationConflictError(Exception):
+    pass
+
+
 @dataclass(frozen=True)
 class StoredSource:
     source_id: str
@@ -154,6 +158,43 @@ class MutationPage:
     next_before_event_id: int | None
 
 
+@dataclass(frozen=True)
+class _ReplicaSourceObservationWrite:
+    source_id: str
+    applied_generation: int | None
+    applied_state_version: int | None
+    applied_enabled: bool | None
+    applied_metadata_revision: str | None
+    source_health: str | None
+    reason_code: str | None
+
+
+@dataclass(frozen=True)
+class ReplicaObservationRecord:
+    replica_id: str
+    observed_at: datetime
+    fresh_until: datetime
+    read_at: datetime
+    report_reason_code: str | None
+    applied_generation: int | None
+    applied_state_version: int | None
+    applied_enabled: bool | None
+    applied_metadata_revision: str | None
+    source_health: str | None
+    reason_code: str | None
+
+
+@dataclass(frozen=True)
+class ReplicaObservationPage:
+    source_id: str
+    desired_generation: int
+    desired_state_version: int
+    desired_enabled: bool
+    desired_metadata_revision: str | None
+    items: tuple[ReplicaObservationRecord, ...]
+    next_after_replica_id: str | None
+
+
 _CATALOG_PROJECTION = (
     "active.source_id, revision.generation, active.enabled, active.state_version, "
     "active.activated_at, revision.created_at AS generation_created_at, "
@@ -228,6 +269,19 @@ _MUTATION_OPERATIONS = frozenset(
         "resume_metadata_publish",
         "deactivate_source",
     }
+)
+_REPLICA_HEARTBEAT_INTERVAL_MIN_MS = 5_000
+_REPLICA_HEARTBEAT_INTERVAL_MAX_MS = 300_000
+_REPLICA_REPORT_REASONS = frozenset({"CONTROL_SCAN_FAILED"})
+_REPLICA_SOURCE_REASONS = frozenset(
+    {
+        "RUNTIME_VALIDATION_REJECTED",
+        "RUNTIME_APPLY_FAILED",
+        "METADATA_PROBE_FAILED",
+    }
+)
+_SOURCE_HEALTH_VALUES = frozenset(
+    {"initializing", "healthy", "stale", "unavailable"}
 )
 
 
@@ -356,6 +410,189 @@ class PostgresSourceStore:
             )
             row = await cursor.fetchone()
         return None if row is None else _decode_catalog(row)
+
+    async def register_replica(
+        self,
+        replica_id: str,
+        heartbeat_interval_ms: int,
+    ) -> int:
+        _validate_replica_id(replica_id)
+        _validate_heartbeat_interval(heartbeat_interval_ms)
+        pool = await self._get_pool()
+        async with pool.connection() as connection, connection.transaction():
+            cursor = await connection.execute(
+                "INSERT INTO control.runtime_replicas "
+                "(replica_id, incarnation, heartbeat_interval_ms, "
+                "report_reason_code, observed_at) "
+                "VALUES (%s, 1, %s, NULL, clock_timestamp()) "
+                "ON CONFLICT (replica_id) DO UPDATE "
+                "SET incarnation = control.runtime_replicas.incarnation + 1, "
+                "heartbeat_interval_ms = EXCLUDED.heartbeat_interval_ms, "
+                "report_reason_code = NULL, observed_at = clock_timestamp() "
+                "WHERE control.runtime_replicas.incarnation < %s "
+                "RETURNING incarnation",
+                (replica_id, heartbeat_interval_ms, POSTGRES_BIGINT_MAX),
+            )
+            row = await cursor.fetchone()
+            if row is None:
+                raise ReplicaObservationConflictError
+            incarnation = int(row["incarnation"])
+            await connection.execute(
+                "UPDATE control.runtime_source_observations "
+                "SET applied_generation = NULL, applied_state_version = NULL, "
+                "applied_enabled = NULL, applied_metadata_revision = NULL, "
+                "source_health = NULL, reason_code = NULL "
+                "WHERE replica_id = %s",
+                (replica_id,),
+            )
+        return incarnation
+
+    async def report_replica(
+        self,
+        replica_id: str,
+        incarnation: int,
+        *,
+        reason_code: str | None,
+        sources: tuple[_ReplicaSourceObservationWrite, ...],
+    ) -> None:
+        _validate_replica_id(replica_id)
+        _validate_positive_bigint(incarnation, "Replica incarnation")
+        if reason_code is not None and reason_code not in _REPLICA_REPORT_REASONS:
+            raise ValueError("Replica report reason is invalid")
+        if reason_code is not None and sources:
+            raise ValueError("A failed replica scan cannot publish source observations")
+        source_ids: set[str] = set()
+        for source in sources:
+            _validate_replica_source_observation(source)
+            if source.source_id in source_ids:
+                raise ValueError("Replica source observations must be unique")
+            source_ids.add(source.source_id)
+
+        pool = await self._get_pool()
+        async with pool.connection() as connection, connection.transaction():
+            cursor = await connection.execute(
+                "UPDATE control.runtime_replicas "
+                "SET report_reason_code = %s, observed_at = clock_timestamp() "
+                "WHERE replica_id = %s AND incarnation = %s "
+                "RETURNING replica_id",
+                (reason_code, replica_id, incarnation),
+            )
+            if await cursor.fetchone() is None:
+                raise ReplicaObservationConflictError
+            if reason_code is not None:
+                return
+            await connection.execute(
+                "UPDATE control.runtime_source_observations "
+                "SET applied_generation = NULL, applied_state_version = NULL, "
+                "applied_enabled = NULL, applied_metadata_revision = NULL, "
+                "source_health = NULL, reason_code = NULL "
+                "WHERE replica_id = %s",
+                (replica_id,),
+            )
+            for source in sources:
+                await connection.execute(
+                    "INSERT INTO control.runtime_source_observations "
+                    "(replica_id, incarnation, source_id, applied_generation, "
+                    "applied_state_version, applied_enabled, "
+                    "applied_metadata_revision, source_health, reason_code) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                    "ON CONFLICT (replica_id, source_id) DO UPDATE "
+                    "SET incarnation = EXCLUDED.incarnation, "
+                    "applied_generation = EXCLUDED.applied_generation, "
+                    "applied_state_version = EXCLUDED.applied_state_version, "
+                    "applied_enabled = EXCLUDED.applied_enabled, "
+                    "applied_metadata_revision = EXCLUDED.applied_metadata_revision, "
+                    "source_health = EXCLUDED.source_health, "
+                    "reason_code = EXCLUDED.reason_code",
+                    (
+                        replica_id,
+                        incarnation,
+                        source.source_id,
+                        source.applied_generation,
+                        source.applied_state_version,
+                        source.applied_enabled,
+                        source.applied_metadata_revision,
+                        source.source_health,
+                        source.reason_code,
+                    ),
+                )
+
+    async def list_replica_observations(
+        self,
+        source_id: str,
+        *,
+        after_replica_id: str | None = None,
+        limit: int = 50,
+    ) -> ReplicaObservationPage | None:
+        _validate_replica_id(source_id)
+        if after_replica_id is not None:
+            _validate_replica_id(after_replica_id)
+        _validate_page_limit(limit)
+        pool = await self._get_pool()
+        async with pool.connection() as connection:
+            cursor = await connection.execute(
+                "WITH read_clock AS MATERIALIZED ("
+                "SELECT clock_timestamp() AS read_at"
+                "), desired AS MATERIALIZED ("
+                "SELECT active.source_id, active.generation, active.state_version, "
+                "active.enabled, CASE WHEN active.enabled THEN metadata.revision END "
+                "AS metadata_revision "
+                "FROM control.active_source_profiles AS active "
+                "LEFT JOIN control.active_metadata_revisions AS metadata "
+                "ON metadata.source_id = active.source_id "
+                "WHERE active.source_id = %s"
+                "), selected_replicas AS MATERIALIZED ("
+                "SELECT replica_id, incarnation, heartbeat_interval_ms, "
+                "report_reason_code, observed_at "
+                "FROM control.runtime_replicas "
+                "WHERE (%s::text IS NULL OR replica_id COLLATE \"C\" > "
+                "%s::text COLLATE \"C\") "
+                "ORDER BY replica_id COLLATE \"C\" ASC LIMIT %s"
+                ") SELECT desired.source_id, desired.generation AS desired_generation, "
+                "desired.state_version AS desired_state_version, "
+                "desired.enabled AS desired_enabled, "
+                "desired.metadata_revision AS desired_metadata_revision, "
+                "replica.replica_id, replica.report_reason_code, replica.observed_at, "
+                "replica.observed_at + "
+                "replica.heartbeat_interval_ms * interval '3 milliseconds' "
+                "AS fresh_until, read_clock.read_at, "
+                "observation.applied_generation, "
+                "observation.applied_state_version, observation.applied_enabled, "
+                "observation.applied_metadata_revision, observation.source_health, "
+                "observation.reason_code "
+                "FROM desired CROSS JOIN read_clock "
+                "LEFT JOIN selected_replicas AS replica ON true "
+                "LEFT JOIN control.runtime_source_observations AS observation "
+                "ON observation.replica_id = replica.replica_id "
+                "AND observation.incarnation = replica.incarnation "
+                "AND observation.source_id = desired.source_id "
+                "ORDER BY replica.replica_id COLLATE \"C\" ASC NULLS LAST",
+                (
+                    source_id,
+                    after_replica_id,
+                    after_replica_id,
+                    limit + 1,
+                ),
+            )
+            rows = await cursor.fetchall()
+        if not rows:
+            return None
+        desired = _decode_desired_replica_state(rows[0])
+        replica_rows = [row for row in rows if row.get("replica_id") is not None]
+        records = tuple(
+            _decode_replica_observation(row) for row in replica_rows[:limit]
+        )
+        return ReplicaObservationPage(
+            source_id=desired[0],
+            desired_generation=desired[1],
+            desired_state_version=desired[2],
+            desired_enabled=desired[3],
+            desired_metadata_revision=desired[4],
+            items=records,
+            next_after_replica_id=(
+                records[-1].replica_id if len(replica_rows) > limit else None
+            ),
+        )
 
     async def list_generation_history(
         self,
@@ -1302,6 +1539,146 @@ def _validate_event_cursor(before_event_id: int | None) -> None:
         raise ValueError("Mutation event cursor must be a positive PostgreSQL bigint")
 
 
+def _validate_replica_id(replica_id: str) -> None:
+    if (
+        not isinstance(replica_id, str)
+        or not 1 <= len(replica_id) <= STABLE_SLUG_MAX_LENGTH
+        or _STABLE_SLUG.fullmatch(replica_id) is None
+    ):
+        raise ValueError("Replica ID must be a stable slug")
+
+
+def _validate_heartbeat_interval(heartbeat_interval_ms: int) -> None:
+    if (
+        isinstance(heartbeat_interval_ms, bool)
+        or not isinstance(heartbeat_interval_ms, int)
+        or not _REPLICA_HEARTBEAT_INTERVAL_MIN_MS
+        <= heartbeat_interval_ms
+        <= _REPLICA_HEARTBEAT_INTERVAL_MAX_MS
+    ):
+        raise ValueError("Replica heartbeat interval is invalid")
+
+
+def _validate_positive_bigint(value: int, label: str) -> None:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not 1 <= value <= POSTGRES_BIGINT_MAX
+    ):
+        raise ValueError(f"{label} must be a positive PostgreSQL bigint")
+
+
+def _validate_replica_source_observation(
+    observation: _ReplicaSourceObservationWrite,
+) -> None:
+    _validate_replica_id(observation.source_id)
+    applied = (
+        observation.applied_generation,
+        observation.applied_state_version,
+        observation.applied_enabled,
+    )
+    if all(value is None for value in applied):
+        if observation.applied_metadata_revision is not None:
+            raise ValueError("Unapplied replica source cannot have metadata")
+    elif any(value is None for value in applied):
+        raise ValueError("Replica applied source state is incomplete")
+    else:
+        assert observation.applied_generation is not None
+        assert observation.applied_state_version is not None
+        _validate_positive_bigint(
+            observation.applied_generation,
+            "Replica applied generation",
+        )
+        _validate_positive_bigint(
+            observation.applied_state_version,
+            "Replica applied state version",
+        )
+        if not isinstance(observation.applied_enabled, bool):
+            raise ValueError("Replica applied enabled state is invalid")
+        if (
+            observation.applied_enabled is False
+            and observation.applied_metadata_revision is not None
+        ):
+            raise ValueError("A disabled replica source cannot have applied metadata")
+    if (
+        observation.applied_metadata_revision is not None
+        and not _is_revision(observation.applied_metadata_revision)
+    ):
+        raise ValueError("Replica applied metadata revision is invalid")
+    if (
+        observation.source_health is not None
+        and observation.source_health not in _SOURCE_HEALTH_VALUES
+    ):
+        raise ValueError("Replica source health is invalid")
+    if (
+        observation.reason_code is not None
+        and observation.reason_code not in _REPLICA_SOURCE_REASONS
+    ):
+        raise ValueError("Replica source reason is invalid")
+
+
+def _decode_desired_replica_state(
+    row: dict[str, Any],
+) -> tuple[str, int, int, bool, str | None]:
+    source_id = _stable_slug(row, "source_id")
+    generation = _bounded_int(row, "desired_generation", 1, POSTGRES_BIGINT_MAX)
+    state_version = _bounded_int(
+        row,
+        "desired_state_version",
+        1,
+        POSTGRES_BIGINT_MAX,
+    )
+    enabled = _required_bool(row, "desired_enabled")
+    metadata_revision = _optional_revision(row, "desired_metadata_revision")
+    if enabled and metadata_revision is None:
+        raise ValueError("Stored desired metadata state is invalid")
+    if not enabled and metadata_revision is not None:
+        raise ValueError("Stored disabled desired metadata state is invalid")
+    return source_id, generation, state_version, enabled, metadata_revision
+
+
+def _decode_replica_observation(row: dict[str, Any]) -> ReplicaObservationRecord:
+    report_reason_code = row.get("report_reason_code")
+    if report_reason_code is not None and report_reason_code not in _REPLICA_REPORT_REASONS:
+        raise ValueError("Stored replica report reason is invalid")
+    source = _ReplicaSourceObservationWrite(
+        source_id=_stable_slug(row, "source_id"),
+        applied_generation=_optional_bounded_int(
+            row,
+            "applied_generation",
+            1,
+            POSTGRES_BIGINT_MAX,
+        ),
+        applied_state_version=_optional_bounded_int(
+            row,
+            "applied_state_version",
+            1,
+            POSTGRES_BIGINT_MAX,
+        ),
+        applied_enabled=_optional_bool(row, "applied_enabled"),
+        applied_metadata_revision=_optional_revision(
+            row,
+            "applied_metadata_revision",
+        ),
+        source_health=_optional_text(row, "source_health", 13),
+        reason_code=_optional_text(row, "reason_code", 64),
+    )
+    _validate_replica_source_observation(source)
+    return ReplicaObservationRecord(
+        replica_id=_stable_slug(row, "replica_id"),
+        observed_at=_required_timestamp(row, "observed_at"),
+        fresh_until=_required_timestamp(row, "fresh_until"),
+        read_at=_required_timestamp(row, "read_at"),
+        report_reason_code=report_reason_code,
+        applied_generation=source.applied_generation,
+        applied_state_version=source.applied_state_version,
+        applied_enabled=source.applied_enabled,
+        applied_metadata_revision=source.applied_metadata_revision,
+        source_health=source.source_health,
+        reason_code=source.reason_code,
+    )
+
+
 def _decode(row: dict[str, Any]) -> StoredSource:
     manifest = row["manifest"]
     if not isinstance(manifest, dict):
@@ -1618,6 +1995,17 @@ def _bounded_int(row: dict[str, Any], key: str, minimum: int, maximum: int) -> i
     if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
         raise ValueError(f"Stored source catalog {key} is invalid")
     return value
+
+
+def _optional_bounded_int(
+    row: dict[str, Any],
+    key: str,
+    minimum: int,
+    maximum: int,
+) -> int | None:
+    if row.get(key) is None:
+        return None
+    return _bounded_int(row, key, minimum, maximum)
 
 
 def _required_bool(row: dict[str, Any], key: str) -> bool:

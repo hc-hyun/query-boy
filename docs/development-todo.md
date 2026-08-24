@@ -49,13 +49,14 @@ Status: Active
 | Direct consumers | Delivery admin API와 Runtime authority/recovery composition |
 | Affected providers/verifiers | Runtime replica heartbeat/reloader, Source Catalog/Metadata/Guarded Query observation signal과 Assurance integration/recovery acceptance |
 | Contract baseline | `CTRL-01`~`CTRL-05` ledger와 ADR 0016/0017, 현재 Control Plane/Delivery/Runtime module contract |
-| Approval gate | `CTRL-06`~`CTRL-08`의 새 Control DB schema, observation shape, freshness와 admin response 의미는 구현 전 정확한 계약 승인이 필요하다. `CTRL-09`가 기존 backup/restore 절차만 재현하면 새 승인이 없지만 schema·retention·key recovery 의미를 바꾸면 승인받는다. |
+| Approval gate | `CTRL-06`~`CTRL-08`의 새 Control DB schema, observation shape, freshness와 admin response 의미는 구현 전 정확한 계약 승인이 필요하다. 그중 `CTRL-06A`의 stable managed replica ID, ever-registered target set, additive migration 3, DB-clock 3-cadence freshness, latest observation과 dedicated admin response 계약은 2026-08-25 사용자 승인을 받았다. 이 exact 범위를 넘거나 `CTRL-07`~`CTRL-08`을 구현하기 전에는 다시 승인받는다. `CTRL-09`가 기존 backup/restore 절차만 재현하면 새 승인이 없지만 schema·retention·key recovery 의미를 바꾸면 승인받는다. |
 | Single writer | Control Plane owner가 schema/contract를 직렬화하고 baseline 확정 뒤 Runtime reporter와 Delivery projection을 병렬화한다. |
 | Start gate | 완료 ledger의 `RTSAFE-01`과 `MOD-04`~`MOD-08` 완료 뒤 `CTRL-06`부터 순서대로 진행 |
 | Verification | Provider와 직접 consumer contract test, root gate, Control DB integration, migration/rollback/recovery와 scoped verification record |
 
 - [ ] `CTRL-06` Replica별 applied generation/state version/metadata revision/health heartbeat를
-  수집해 desired/applied drift와 freshness를 management API에서 조회한다.
+  수집해 desired/applied drift와 freshness를 management API에서 조회한다. 승인된 `CTRL-06A`
+  provider/schema는 구현됐고 Runtime reporter, Delivery endpoint와 end-to-end acceptance가 남아 있다.
 - [ ] `CTRL-07` Representative record-volume metric, estimated rows, table/index/storage bytes와
   gateway usage를 `source_id + budget_profile + metadata_revision + time bucket` 기준으로 bounded
   수집한다. Method/definition revision/time/freshness를 남기고 일반 view의 무제한 `COUNT(*)`,

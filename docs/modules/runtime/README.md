@@ -20,6 +20,7 @@ Query Man은 현재 하나의 deployable process인 modular monolith다. Runtime
 - Application/MCP child lifespan, 정상 진입 뒤 cleanup과 child 진입 실패 시 parent cleanup
 - Initial Control DB sync, source inventory reconciliation과 bounded metadata probe
 - Background source reload polling task
+- Managed replica identity, fenced registration과 best-effort latest observation reporting
 - Shutdown admission close, task cancel, bounded drain과 resource close 순서
 - Uvicorn signal/graceful shutdown integration
 - Aggregate liveness/readiness, component/source health와 replica-local operational counters
@@ -155,6 +156,35 @@ catalog와 query executor를 같은 순서의 두 `SourcePoolInvalidator`로 빠
   liveness 보장은 아니다.
 - Counter/health는 replica-local이고 restart 후 초기화된다. Control DB authority로 사용하지 않는다.
 
+### Managed replica reporting contract (`CTRL-06`)
+
+- Managed mode는 `QUERY_MAN_REPLICA_ID`를 필수로 요구한다. 값은 1~80자의 lowercase stable
+  slug(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)다. Bootstrap mode는 이 환경변수가 있어도 읽거나 검증하지
+  않으므로 잘못된 값이 bootstrap startup을 막지 않는다.
+- Existing reload task가 시작 직후 observation writer에 한 번 registration하고 incarnation을
+  보관한다. Report 실패나 fencing 뒤 다시 registration하지 않으며 정상 shutdown에도
+  deregistration하지 않는다.
+- 실제 report cadence는 `max(source_reload_interval_ms, 5_000)`ms다. Control Plane에는 같은 값을
+  heartbeat interval로 등록하고 Runtime timestamp를 보내지 않는다.
+- Initial managed sync, inventory reconcile과 bounded metadata probe의 기존 startup 순서는 유지한다.
+  Registration/first report와 이후 report는 reload task 안의 best-effort work이며 실패해도 startup,
+  data plane, readiness, component/source health, mutation receipt 또는 shutdown 순서를 바꾸지 않는다.
+  Cancellation은 삼키지 않는다.
+- Report payload는 operations의 별도 internal snapshot에서 만든다. Existing public
+  `operations.snapshot()`, `/health`, `/ready`, `/admin/metrics`, source list/detail와 MCP projection에는
+  field나 status를 추가하지 않는다.
+- Successful Control scan은 global `CONTROL_SCAN_FAILED`를 지우지만 source별 apply/probe failure를
+  지우지 않는다. Enabled apply는 old metadata observation을 먼저 지운 뒤 새
+  generation/state/enabled를 기록한다. Disabled apply는 applied generation/state/enabled=false만
+  유지하고 metadata revision과 source health는 null로 보고한다.
+- Candidate staging처럼 `suppress_source_health_updates()`가 활성화된 흐름은 production replica의
+  observation도 갱신하지 않는다. 실제 metadata cache publish/restore 성공만 applied metadata
+  revision을 기록하고, invalidate는 이를 제거한다.
+
+Runtime이 공개 `ReplicaObservationWriter`와 `ReplicaSourceObservation`을 소비하는 것까지가 허용된
+Control Plane dependency다. `source_store.py`, observation table 또는 persistence-private type을
+직접 import하지 않는다.
+
 ### Runtime authentication configuration contract
 
 - Bootstrap loopback에서 token/access-policy 설정이 없으면 Delivery의 anonymous query-only local
@@ -212,6 +242,8 @@ catalog와 query executor를 같은 순서의 두 `SourcePoolInvalidator`로 빠
 
 - Module 의존 방향, concrete adapter wiring 위치 또는 composition root 분산
 - Environment variable, required/optional/default와 secure-mode validation 변경
+- Managed replica ID validation/ignore, registration 횟수, report cadence/failure 격리 또는
+  shutdown deregistration 의미 변경
 - Bootstrap/managed authority, filesystem non-read/fallback와 access-policy requirement 변경
 - Startup, reloader sync/probe와 shutdown admission/drain/close 순서 변경
 - `RuntimeQueryExecutor`/`RuntimeCatalogProvider` required capability, callable validation 시점,

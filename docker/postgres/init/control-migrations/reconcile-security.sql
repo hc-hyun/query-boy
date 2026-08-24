@@ -85,6 +85,10 @@ GRANT SELECT, INSERT ON control.source_mutation_receipts
   TO query_man_control_writer;
 GRANT USAGE ON SEQUENCE control.source_mutation_receipts_event_id_seq
   TO query_man_control_writer;
+GRANT SELECT, INSERT, UPDATE ON control.runtime_replicas
+  TO query_man_control_writer;
+GRANT SELECT, INSERT, UPDATE ON control.runtime_source_observations
+  TO query_man_control_writer;
 
 DO $$
 DECLARE
@@ -293,7 +297,9 @@ BEGIN
             'source_profile_revisions',
             'active_source_profiles',
             'verified_query_contracts',
-            'source_mutation_receipts'
+            'source_mutation_receipts',
+            'runtime_replicas',
+            'runtime_source_observations'
           )
           WHEN 'INSERT' THEN relation_row.relname IN (
             'metadata_snapshots',
@@ -301,11 +307,15 @@ BEGIN
             'source_profile_revisions',
             'active_source_profiles',
             'verified_query_contracts',
-            'source_mutation_receipts'
+            'source_mutation_receipts',
+            'runtime_replicas',
+            'runtime_source_observations'
           )
           WHEN 'UPDATE' THEN relation_row.relname IN (
             'active_metadata_revisions',
-            'active_source_profiles'
+            'active_source_profiles',
+            'runtime_replicas',
+            'runtime_source_observations'
           )
           ELSE false
         END;
@@ -334,7 +344,9 @@ BEGIN
               'source_profile_revisions',
               'active_source_profiles',
               'verified_query_contracts',
-              'source_mutation_receipts'
+              'source_mutation_receipts',
+              'runtime_replicas',
+              'runtime_source_observations'
             )
             WHEN 'INSERT' THEN relation_row.relname IN (
               'metadata_snapshots',
@@ -342,11 +354,15 @@ BEGIN
               'source_profile_revisions',
               'active_source_profiles',
               'verified_query_contracts',
-              'source_mutation_receipts'
+              'source_mutation_receipts',
+              'runtime_replicas',
+              'runtime_source_observations'
             )
             WHEN 'UPDATE' THEN relation_row.relname IN (
               'active_metadata_revisions',
-              'active_source_profiles'
+              'active_source_profiles',
+              'runtime_replicas',
+              'runtime_source_observations'
             )
             ELSE false
           END;

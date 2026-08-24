@@ -23,6 +23,8 @@ Control Plane은 “어떤 source 정의와 metadata/verified revision이 현재
 - Secret-free source list/detail/generation history와 mutation lookup/history projection
 - Candidate source의 manifest, connection, catalog, quality와 verified result staging
 - Committed desired state를 runtime registry/cache/pool에 적용하는 `SourceReloader`
+- Stable managed replica slot의 fenced registration, latest source observation과 DB-clock freshness
+- Desired/applied drift의 secret-free admin projection
 - Control DB 장애, conflict와 validation failure를 비공개 application 오류로 변환하는 의미
 
 ## 소유하지 않는 책임
@@ -37,7 +39,7 @@ Control Plane은 “어떤 source 정의와 metadata/verified revision이 현재
 ## 현재 코드 위치
 
 - [`source_admin.py`](../../../src/query_man/source_admin.py): `SourceAdminService`, `SourceReloader`,
-  public administration input/sequence 계약과 persistence/invalidator ports
+  public administration input/sequence, `ReplicaObservationWriter`와 persistence/invalidator ports
 - [`source_store.py`](../../../src/query_man/source_store.py): `PostgresSourceStore`와 state transition
   transactions
 - [`metadata_store.py`](../../../src/query_man/metadata_store.py): `PostgresMetadataStore` implementation
@@ -141,6 +143,65 @@ effective budget, published/active metadata revision과 lifecycle state처럼 �
 business value를 반환하지 않는다. Pagination/filter/order와 published-vs-active revision 의미는
 public Delivery contract와 persisted projection contract다.
 
+### Replica observation contract (`CTRL-06`)
+
+Control Plane은 Runtime에 persistence-private row가 아니라 다음 public capability만 제공한다.
+
+```text
+ReplicaSourceObservation(
+  source_id,
+  applied_generation | null, applied_state_version | null, applied_enabled | null,
+  applied_metadata_revision | null, source_health | null, reason_code | null
+)
+
+ReplicaObservationWriter.register_replica(replica_id, heartbeat_interval_ms) -> incarnation
+ReplicaObservationWriter.report_replica(
+  replica_id, incarnation, reason_code?, sources
+)
+```
+
+`replica_id`는 1~80자의 lowercase stable slug이고 heartbeat interval은 5,000~300,000ms다. 같은
+slot을 새 process가 등록하면 incarnation이 증가하며 이전 incarnation report는 거부된다. 한
+process는 registration을 한 번만 수행하고 실패/fencing 뒤 재등록하지 않는다. Ever-registered
+slot이 target set이며 이 단계에는 자동 expiry/delete/retirement와 shutdown deregistration이 없다.
+
+Migration 3의 `runtime_replicas`와 `runtime_source_observations`는 replica 및 replica/source별
+latest-only observation이다. Report는 DB clock으로 parent heartbeat와 source observation을 한
+transaction에서 갱신한다. Global reason은 `CONTROL_SCAN_FAILED`, source reason은
+`RUNTIME_VALIDATION_REJECTED|RUNTIME_APPLY_FAILED|METADATA_PROBE_FAILED`뿐이다. Global scan failure
+report는 source tuple과 함께 저장하지 않는다. Writer role은 두 table의 select/insert/update만
+가능하고 delete/truncate나 다른 authority table mutation 권한을 얻지 않는다.
+
+Desired는 active source의 enabled/generation/state version과 active metadata revision에서 읽는다.
+Disabled desired에는 metadata revision이 없고 metadata/source-health drift를 계산하지 않는다.
+Freshness는 같은 query의 DB read clock과 `observed_at + 3 * heartbeat_interval_ms`로 계산한다.
+`read_at == fresh_until`은 fresh이고 그 이후 `stale_age_ms`는 millisecond ceil이다.
+
+`SourceAdminService.source_replicas(source_id, limit=50, after_replica_id=None)`는
+`replica_id` C-collation 오름차순 exclusive keyset page를 제공한다. `limit`은 1~100이고 응답은
+다음 exact shape다.
+
+```text
+source_id
+desired: enabled, generation, state_version, metadata_revision | null
+replicas[]:
+  replica_id
+  status: pending | available | stale | unavailable
+  source_health: initializing | healthy | stale | unavailable | null
+  applied: null | {enabled, generation, state_version, metadata_revision | null}
+  drift: not_applied | enabled | generation | state_version | metadata_revision
+  observed_at, fresh_until, stale_age_ms
+  reason_code: NOT_OBSERVED | HEARTBEAT_EXPIRED | CONTROL_SCAN_FAILED |
+               RUNTIME_VALIDATION_REJECTED | RUNTIME_APPLY_FAILED |
+               METADATA_PROBE_FAILED | null
+next_after_replica_id: replica_id | null
+```
+
+`drift`는 표시한 순서로만 조립한다. Heartbeat expiry가 다른 reason보다 우선하며 known source의
+stale/unavailable observation은 조회 자체의 실패가 아니다. Unknown source는 404, Control read나
+projection 실패는 내부 정보를 숨긴 503으로 매핑한다. Existing source list/detail/history,
+health/metrics와 MCP response는 바꾸지 않는다.
+
 ### Runtime projection contract
 
 Control DB commit은 desired-state 원자성을 보장하지만 모든 process의 in-memory 적용까지 하나의
@@ -222,6 +283,10 @@ Plane이 Delivery/Runtime private implementation에 의존한다는 뜻이 아�
   update/delete하지 않는다.
 - Idempotency hash, receipt와 management projection에 credential, raw manifest, question/SQL 또는
   expected business literal을 남기지 않는다.
+- Replica report/projection에 manifest, credential, connection, question/SQL, raw 오류 또는
+  Runtime timestamp를 남기지 않는다.
+- Ever-registered replica slot을 TTL, report failure 또는 shutdown으로 자동 삭제하거나
+  재등록 loop로 incarnation ownership을 경합시키지 않는다.
 - Credential, SQL, question, expected literal과 내부 Control DB 오류를 일반 log/response에 노출하지 않는다.
 - Control writer는 최소 권한 role이며 application owner나 reader role을 재사용하지 않는다.
 - Runtime apply가 실패하면 desired state를 성공한 것처럼 process-local health에 표시하지 않는다.
@@ -246,6 +311,8 @@ Plane이 Delivery/Runtime private implementation에 의존한다는 뜻이 아�
 - Idempotency key, canonical request hash, actor/reason, expected/resulting state, terminal receipt,
   replay/conflict와 timeout reconciliation 의미 변경
 - Management list/detail/history/receipt field, pagination/filter/order 또는 redaction 변경
+- Replica identity/target set, registration fencing, observation field/reason, freshness, status/drift,
+  pagination, retention 또는 writer privilege 변경
 - Credential algorithm, key source, nonce/ciphertext format, associated data와 redaction 경계 변경
 - Source connection/environment identity 재지정 또는 기존 generation mutation 허용
 - Mutually exclusive bootstrap/managed authority, managed filesystem non-read/fallback와 replica

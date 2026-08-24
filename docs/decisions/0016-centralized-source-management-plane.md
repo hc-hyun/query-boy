@@ -85,6 +85,62 @@ Observation availability는 `not_configured`, `pending`, `available`, `stale`, `
 Provider billing이 없으면 통화 비용 대신 source/profile별 resource usage와 추세만 제공한다.
 User/organization별 allocation과 chargeback은 현재 범위가 아니다.
 
+### CTRL-06 replica observation contract
+
+`CTRL-06`의 구현 계약은 2026-08-25에 다음과 같이 확정했다. Managed process는
+`QUERY_MAN_REPLICA_ID`를 필수로 받고 `^[a-z0-9]+(?:-[a-z0-9]+)*$` 형식의 1~80자 stable slot으로
+사용한다. Bootstrap process는 이 값이 있더라도 읽거나 검증하지 않는다. 한 번 등록된 slot은
+운영자가 보는 target set에 계속 남으며 이 단계에는 TTL 기반 자동 삭제, retirement 또는 정상
+shutdown deregistration이 없다. 따라서 아직 시작하지 않은 planned replica는 외부 deployment
+inventory의 책임이고, scale-down한 slot은 stale로 남는다.
+
+Control DB의 additive migration 3은 `runtime_replicas`와
+`runtime_source_observations`의 latest-only 상태만 저장한다. 새 registration은 같은 slot의
+monotonic incarnation을 올리고 이전 process의 report를 fencing한다. Writer는 register/report에
+필요한 select/insert/update 권한만 가지며 관측 row를 삭제하거나 authoritative source/metadata history를 바꾸지
+못한다. Report는 manifest, credential, connection, 질문, SQL과 raw 오류를 포함하지 않는다.
+
+Runtime은 `max(source reload interval, 5_000ms)`를 실제 heartbeat/report 간격으로 등록하고 같은
+주기로 best-effort report한다. Freshness는 Runtime timestamp가 아니라 Control DB clock으로
+`observed_at + 3 * heartbeat interval`까지이며 그 경계를 지난 첫 millisecond부터 stale다.
+Registration/report 실패, fenced incarnation과 shutdown은 query data plane, readiness, mutation
+receipt 또는 기존 source health 의미를 바꾸지 않는다. 같은 process는 report 실패 뒤
+재등록하지 않는다.
+
+Desired는 active source pointer의 enabled/generation/state version과 active metadata pointer에서
+매 조회 시 계산한다. Desired가 disabled면 desired/applied metadata와 source health는 drift 판단에
+사용하지 않는다. Runtime은 적용한 generation/state/enabled, 실제 cache에 적용된 metadata revision,
+source health와 다음 bounded failure만 latest observation으로 보낸다.
+
+```text
+CONTROL_SCAN_FAILED
+RUNTIME_VALIDATION_REJECTED
+RUNTIME_APPLY_FAILED
+METADATA_PROBE_FAILED
+```
+
+Operator-only 조회는 기존 list/detail/health/metrics/MCP를 바꾸지 않고 다음 전용 endpoint만
+추가한다.
+
+```text
+GET /admin/sources/{source_id}/replicas?limit&after_replica_id
+```
+
+응답은 C-collation `replica_id` 오름차순 exclusive keyset page와 한 번의 DB read clock을 사용한다.
+각 replica는 `pending|available|stale|unavailable`, nullable `source_health`, nullable `applied`,
+고정 순서 `drift`(`not_applied` 또는 `enabled`, `generation`, `state_version`,
+`metadata_revision`), `observed_at`, `fresh_until`, `stale_age_ms`와 다음 bounded reason만 공개한다.
+
+```text
+NOT_OBSERVED | HEARTBEAT_EXPIRED | CONTROL_SCAN_FAILED |
+RUNTIME_VALIDATION_REJECTED | RUNTIME_APPLY_FAILED | METADATA_PROBE_FAILED | null
+```
+
+Heartbeat expiry가 다른 failure보다 우선하고, scan/source failure는 `unavailable`, 아직 충분한
+applied state가 없으면 `pending`, 나머지는 `available`이다. Stale/unavailable은 관측 결과이지
+HTTP 실패가 아니므로 알려진 source에는 200으로 반환한다. 이 identity, target-set, schema,
+freshness, status/drift/reason 또는 lifecycle 의미의 변경은 별도 사용자 승인을 받는다.
+
 기존 admin mutation endpoint를 재사용한다. 별도 change-request/approval table과 endpoint 대신
 idempotency key, canonical request hash, expected generation/state, authoritative mutation receipt와
 append-only lifecycle audit를 추가한다. Timeout 뒤에는 receipt/state를 조회해 reconcile하고

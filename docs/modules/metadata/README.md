@@ -146,6 +146,23 @@ Canonicalizer는 list와 tuple, dict와 immutable mapping을 같은 canonical ar
 - Fresh cache hit는 PostgreSQL reader policy를 다시 조회하지 않으며 drift는 다음 refresh에서
   검출한다. Cache hit를 live privilege probe로 해석하지 않는다.
 
+### Runtime observation signal (`CTRL-06`)
+
+Metadata는 public context나 persisted snapshot shape를 바꾸지 않고 Runtime operations의 internal
+reporting sink에 실제 replica-local cache 상태만 알린다.
+
+- Fresh publish, persisted restore 또는 pinned active value를 cache에 적용한 뒤 exact
+  `metadata_revision`을 기록한다.
+- Source cache invalidate와 disabled source apply는 applied metadata revision을 제거한다.
+- Probe/cache 실패는 `METADATA_PROBE_FAILED`와 unavailable health를 기록하되 credential, source
+  definition, question, SQL, raw exception 또는 Runtime timestamp를 observation에 넣지 않는다.
+- Control Plane candidate staging 등 `suppress_source_health_updates()`가 활성화된 동안은 health와
+  metadata observation을 모두 억제한다. Staging cache가 production replica의 applied revision을
+  덮어쓰지 않는다.
+- 이 signal은 best-effort latest observation이며 metadata cache, published revision, readiness 또는
+  query correctness의 authority가 아니다. Existing context response, revision digest, cache TTL/stale
+  window와 MetadataStore transaction 의미는 그대로다.
+
 ### Catalog provider capability contract
 
 ```text
@@ -228,6 +245,7 @@ policy descriptor다. 이 dependency를 바꾸는 refactoring은 외부 context 
 
 - Metadata context input/output, answerability status, truncation 또는 byte accounting 변경
 - `metadata_revision` 재료, ordering, digest format 또는 compatibility 의미 변경
+- Applied metadata observation의 기록/제거 시점, staging suppression 또는 failure reason 의미 변경
 - Catalog snapshot/persisted JSON shape나 decoder compatibility 변경
 - Allowed physical object, comment trust, schema drift 또는 stale fail-closed 정책 변경
 - L0/L1/L2 publish 조건과 verified revision 의미 변경
