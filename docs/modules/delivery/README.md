@@ -163,7 +163,8 @@ bounded header/query/path parsing을 적용한다. MCP와 admin의 더 강한 �
 Delivery는 domain module의 concrete PostgreSQL adapter나 Control DB table을 직접 호출하지 않는다.
 `GatewayService`는 concrete `SourceRegistry`가 아니라 `SourceReader`를 받아 `list/get`만 사용한다.
 Admin route는 Control Plane의 `source_store.py`와 Assurance의 `verified.py`를 import하지 않고 Control
-Plane이 공개한 administration input만 만든다.
+Plane이 공개한 administration input만 만든다. Assurance `assurance_cli.py`의 offline wiring은
+`app.py`의 production HTTP/MCP composition이나 Delivery route를 import하거나 대체하지 않는다.
 위 Source Catalog validation type의 pattern/range를 바꾸면 admin path/query wire acceptance도 바뀌므로
 두 module의 계약과 기존 client compatibility를 함께 확인한다.
 Metadata/Source Catalog의 runtime tuple/read-only mapping 전환은 Delivery HTTP/MCP array/object shape를

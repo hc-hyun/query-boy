@@ -114,7 +114,6 @@ EXPECTED_ID_COUNTS = {
     "MCPX": 8,
 }
 EXPECTED_OPEN_TODO_IDS = (
-    "MOD-08",
     "CTRL-06",
     "CTRL-07",
     "CTRL-08",
@@ -158,6 +157,7 @@ EXPECTED_POST_BASELINE_COMPLETED_IDS = (
     "MOD-05",
     "MOD-06",
     "MOD-07",
+    "MOD-08",
 )
 CRITICAL_NON_PYTHON_MODULE_MAPPINGS = (
     "| `config/sources/`, `config/budget-profiles.yaml` | Source Catalog |",
@@ -191,6 +191,7 @@ CRITICAL_SHARED_WRITER_REFERENCES = (
     "tests/test_metadata_store.py",
     "tests/test_quality_level.py",
     "tests/test_result_encoding.py",
+    "tests/test_assurance_cli.py",
     "docs/development-todo.md",
     "docs/implementation-roadmap.md",
     "docs/module-contract-decision-guide.md",
@@ -362,14 +363,13 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
         "Start gate",
         "Verification",
     ):
-        assert todo.count(f"| {field} |") == 5
+        assert todo.count(f"| {field} |") == 4
 
     assert "Lower-track의 `read-only prework`" in todo
     assert "**plan 승인은 contract 선택" in todo
     assert "승인이 아니다**" in todo
-    assert "다음 구현 작업은 `MOD-08`" in todo
-    assert "2026-08-24 사용자가 `D5-A`" in todo
-    assert "deep immutability `MOD-07`은 완료" in todo
+    assert "## P0.5 — Module Contract Hardening" not in todo
+    assert "offline composition `MOD-08`은 모두" in todo
     assert "Ledger의 `RTSAFE-01` 완료 및 `MOD-04`~`MOD-08`과 `CTRL-*` 완료" in todo
     assert "`RTSAFE-*`, `MOD-*`" not in todo
 
@@ -526,7 +526,7 @@ def test_module_contract_decision_guide_records_approval_and_implementation_stat
     todo = DEVELOPMENT_TODO.read_text(encoding="utf-8")
     roadmap = ROADMAP.read_text(encoding="utf-8")
 
-    assert "Status: Accepted choices — implementation in progress" in guide
+    assert "Status: Accepted choices — implementation complete" in guide
     assert "Approved: 2026-08-24" in guide
     assert "## 용어사전" in guide
     assert "## Wave 0: 승인 전 read-only prework (완료)" in guide
@@ -557,8 +557,8 @@ def test_module_contract_decision_guide_records_approval_and_implementation_stat
     assert "D2 read/write capability 분리 (`MOD-05`) — 완료" in guide
     assert "D4 lifecycle Protocol 명시 (`MOD-06`) — 완료" in guide
     assert "D3 immutable snapshot 전환 (`MOD-07`) — 완료" in guide
-    assert "D5 offline CLI composition 격리 (`MOD-08`) — 다음" in guide
-    assert "남은 `MOD-08`" in guide
+    assert "D5 offline CLI composition 격리 (`MOD-08`) — 완료" in guide
+    assert "### D5-A 구현 결과 (`MOD-08` 완료)" in guide
     assert (
         guide.count(
             "Source/Metadata ──> 외부 JSON은 유지하면서 published graph를 deep immutable로 제공"
@@ -572,8 +572,7 @@ def test_module_contract_decision_guide_records_approval_and_implementation_stat
     assert "`MOD-05`" in roadmap
     assert "`MOD-06`" in roadmap
     assert "`MOD-07`" in roadmap
-    assert "`D5-A`" in todo
-    assert "`D3-A`, `D5-A`" not in todo
+    assert "`MOD-08`" in roadmap
     for document in (readme, index, todo, roadmap):
         assert MODULE_CONTRACT_DECISION_GUIDE.name in document
 

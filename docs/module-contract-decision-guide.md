@@ -1,6 +1,6 @@
 # 모듈 계약 강화 결정 가이드
 
-Status: Accepted choices — implementation in progress
+Status: Accepted choices — implementation complete
 
 Last reviewed: 2026-08-24
 
@@ -22,17 +22,16 @@ ID별 구현 상태를 함께 기록한다.
 6. Offline 품질 CLI의 예외적인 조립 권한을 어디에 둘 것인가
 
 이 문서는 선택지의 상세 범위와 구현 순서를 설명하고 ADR 0018의 승인 기록을 보조한다. 위
-Approved 조합은 명시적으로 승인됐다. `RTSAFE-01`, `MOD-04`, `MOD-05`, `MOD-06`과 `MOD-07`은
-구현이 끝나 완료 ledger로 이동했다. 남은 `MOD-08`이 완료되기 전까지 D5 목표를 현재 구현 계약으로
-오해하지 않는다. 승인 범위를 넘어서는 code, schema, configuration 또는 module contract 변경은
-다시 승인받는다.
+Approved 조합은 명시적으로 승인됐고 `RTSAFE-01`, `MOD-04`~`MOD-08`의 구현·검증이 끝나 완료
+ledger로 이동했다. 여섯 선택은 모두 현재 구현 계약이다. 승인 범위를 넘어서는 code, schema,
+configuration 또는 module contract 변경은 다시 승인받는다.
 
 ## 한눈에 보는 현재 상태
 
 ```text
 현재
 
-Runtime ──> MCP child lifespan 진입 실패 시 parent 최상위 resource를 고정 순서로 cleanup
+Runtime ──> child 진입 전 parent resource를 추적하고 실패 시 역순 cleanup
 
 Delivery ──> Control Plane 공개 sequence/verified-publish input
 Control  ──> Assurance verified DTO
@@ -44,15 +43,16 @@ Source/Metadata ──> 외부 JSON은 유지하면서 published graph를 deep i
 
 Runtime ──> 필수 RuntimeQueryExecutor/RuntimeCatalogProvider를 검증하고 직접 호출
 
-Assurance core type/hash + offline CLI concrete wiring이 같은 파일에 공존
+Assurance core
+    └── 전용 offline CLI composition root
 ```
 
-승인된 전체 조합이 완료되면 다음처럼 된다. Runtime cleanup 행은 `RTSAFE-01`, Delivery/Control
+승인된 전체 조합의 현재 구조는 다음과 같다. Runtime cleanup 행은 `RTSAFE-01`, Delivery/Control
 행은 `MOD-04`, Source capability 두 행은 `MOD-05`, lifecycle 행은 `MOD-06`, published graph의
-deep immutability는 `MOD-07`로 이미 반영됐다.
+deep immutability는 `MOD-07`, Assurance CLI 분리는 `MOD-08`로 반영됐다.
 
 ```text
-권장 목표
+승인된 목표(현재)
 
 Runtime ──> child 진입 전 parent resource를 추적하고 실패 시 역순 cleanup
 
@@ -150,11 +150,11 @@ Wave 0는 아래 행위를 허용하지 않는다.
 | D2 read/write capability | `MOD-05` | 구현·검증 완료; roadmap ledger로 이동 |
 | D4 lifecycle Protocol | `MOD-06` | 구현·검증 완료; roadmap ledger로 이동 |
 | D3 deep immutability | `MOD-07` | 구현·검증 완료; roadmap ledger로 이동 |
-| D5 offline composition | `MOD-08` | `MOD-07` 완료와 exact D5 choice 승인; 다음 구현 작업 |
+| D5 offline composition | `MOD-08` | 구현·검증 완료; roadmap ledger로 이동 |
 
 이 plan, Wave 0 또는 Active TODO 순서만 승인하는 것은 `D0-A`~`D5-A` 선택 승인이 아니었다.
 2026-08-24 사용자가 [승인 회신 방법](#승인-회신-방법)의 권장 조합과 공통 불변조건을 명시적으로
-승인했으므로 남은 ID를 정해진 순서로 구현할 수 있다.
+승인했고 모든 ID를 정해진 순서로 구현했다.
 
 `D1`/`D5`의 B/C와 `D2`/`D3`/`D4`의 B는 implementation-ready A choice가 아니므로
 구현 전 exact follow-up contract를 다시 승인받는다. 반면 `D2-C`/`D3-C`/`D4-C`는
@@ -425,8 +425,9 @@ Production concrete adapter 조립은 Runtime만 수행한다. 예외적으로 A
 `query-man-evaluate`는 실제 Metadata를, `query-man-verify`는 Metadata와 Guarded Query safety
 path를 실행해야 하므로 제한된 offline composition root로 허용되어 있다.
 
-현재 `quality.py`와 `verified.py`에는 core case/DTO/hash와 CLI concrete wiring이 함께 있다.
-예외 자체는 문서화됐지만 file 경계만 읽어서는 core와 composition 권한을 구분하기 어렵다.
+`quality.py`와 `verified.py`에는 core case/DTO/comparison/hash만 남고, `assurance_cli.py`가 두
+console entrypoint와 concrete wiring을 전담한다. File 경계만 읽어도 offline composition 권한의
+owner가 드러난다.
 
 ### 선택지
 
@@ -436,7 +437,7 @@ path를 실행해야 하므로 제한된 offline composition root로 허용되�
 | D5-B | Offline CLI concrete wiring도 Runtime으로 옮기고 Assurance는 rule/case/hash만 제공한다. | Composition root라는 이름의 위치는 하나가 된다. | Runtime이 production 운영과 offline 품질 workflow를 모두 알아야 한다. |
 | D5-C | Runtime과 Assurance가 함께 쓰는 범용 composition package를 새로 만든다. | 조립 code를 공유할 여지가 있다. | 현재 실제 두 사용 사례보다 abstraction이 크고 owner가 흐려질 수 있다. |
 
-### D5-A를 승인하면 바뀌는 정확한 범위
+### 승인·구현된 D5-A의 정확한 범위
 
 - `query-man-evaluate`, `query-man-verify` command 이름, argument, output와 exit 의미는 바꾸지
   않는다.
@@ -453,6 +454,19 @@ path를 실행해야 하므로 제한된 offline composition root로 허용되�
 
 DB/wire/persisted data migration은 없다. Console script의 외부 이름은 같아서 rollback은 code
 rollback으로 끝난다.
+
+### D5-A 구현 결과 (`MOD-08` 완료)
+
+`query-man-evaluate`와 `query-man-verify`의 `pyproject.toml` command 이름은 유지하고 내부 target만
+`assurance_cli.py`의 두 entrypoint로 옮겼다. 이 파일만 `SourceRegistry`, `PostgresCatalog`,
+`PostgresQueryExecutor`, `MetadataService`와 `QueryService`를 offline workflow에 조립한다.
+Quality/verified core와 Control Plane의 DTO/hash consumer import는 그대로다.
+
+Contract test는 console target, help와 `--root` resolve, bootstrap-only config path, evaluate의 exact
+success/failure JSON·exit, verify의 success JSON·실패 예외 전파, 각 cleanup과 concrete construction
+허용 위치를 고정한다. Live evaluate/verify 결과와 help는 변경 전후 byte-for-byte 같고 verification SQL은
+계속 tenant ID 없이 `QueryService`를 지나므로 RLS fail-closed 범위도 유지된다. Dependency, lockfile,
+DB/wire/persisted migration은 없다.
 
 ## 모든 권장 선택에 공통으로 유지할 불변조건
 
@@ -499,10 +513,10 @@ D5-A  기존 offline workflow는 유지하면서 composition 예외 위치를 �
 ```
 
 변경량을 줄이는 것이 최우선이면 D3만 `D3-B`를 선택할 수 있었다. 다만 large metadata를
-조회할 때마다 복사하는 CPU/memory 비용을 먼저 측정해야 했다. 승인된 D0-A, D1-A, D2-A, D4-A와
-D3-A는 각각 `RTSAFE-01`, `MOD-04`, `MOD-05`, `MOD-06`, `MOD-07`에서 완료되어 startup leak,
-Delivery hidden-import, 혼합 consumer capability, optional lifecycle과 shallow shared-graph debt는 더
-이상 현재 상태가 아니다.
+조회할 때마다 복사하는 CPU/memory 비용을 먼저 측정해야 했다. 승인된 D0-A~D5-A는 각각
+`RTSAFE-01`, `MOD-04`~`MOD-08`에서 완료되어 startup leak, Delivery hidden-import, 혼합 consumer
+capability, optional lifecycle, shallow shared-graph와 mixed core/CLI composition debt는 더 이상 현재
+상태가 아니다.
 
 ## 승인 회신 방법
 
@@ -542,7 +556,7 @@ type, 성능 상한, consumer와 rollback 범위를 후속 승인안으로 작�
 3. D2 read/write capability 분리 (`MOD-05`) — 완료
 4. D4 lifecycle Protocol 명시 (`MOD-06`) — 완료
 5. D3 immutable snapshot 전환 (`MOD-07`) — 완료
-6. D5 offline CLI composition 격리 (`MOD-08`) — 다음
+6. D5 offline CLI composition 격리 (`MOD-08`) — 완료
 7. 전체 dependency/contract audit
 
 각 단계는 provider contract, 직접 consumer, module 문서와 runnable contract test가 함께
@@ -579,5 +593,5 @@ uv run pytest -m integration
 | D3 serialization/revision compatibility | `src/query_man/revision.py`, `src/query_man/metadata_store.py`, `src/query_man/metadata.py`, [`test_revision.py`](../tests/test_revision.py), [`test_metadata_store.py`](../tests/test_metadata_store.py) |
 | 명시된 Runtime lifecycle Protocol | `src/query_man/query.py`의 `RuntimeQueryExecutor`, `src/query_man/models.py`의 `RuntimeCatalogProvider`, [`test_query.py`](../tests/test_query.py), [`test_catalog.py`](../tests/test_catalog.py) |
 | Runtime required capability validation/direct lifecycle | `src/query_man/app.py`, [`test_managed_mode.py`](../tests/test_managed_mode.py), [`test_http.py`](../tests/test_http.py) |
-| Offline composition 예외 | `src/query_man/quality.py`, `src/query_man/verified.py`, [Assurance module](modules/assurance/README.md) |
+| Offline composition 예외 | `src/query_man/assurance_cli.py`, [`test_assurance_cli.py`](../tests/test_assurance_cli.py), [Assurance module](modules/assurance/README.md#offline-cli-composition-contract) |
 | 허용 dependency graph | [Module index](modules/README.md#허용-의존-방향) |

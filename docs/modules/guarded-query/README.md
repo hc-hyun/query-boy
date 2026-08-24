@@ -55,6 +55,9 @@ Guarded Query는 이미 선택된 source와 published metadata revision을 기�
 이를 확장한 `RuntimeQueryExecutor`를 요구하므로 application-only fake나 adapter가 운영 lifecycle
 method까지 구현할 필요는 없다. Concrete `PostgresQueryExecutor`는 두 Protocol을 구조적으로
 구현한다.
+Assurance의 `query-man-verify`는 `assurance_cli.py`에서만 concrete executor와 `QueryService`를
+조립하고 verified core에는 service를 주입한다. Verification SQL은 계속 `QueryService.query`를
+통과하며 CLI가 tenant ID를 추가하지 않는다.
 
 ## 제공 계약
 

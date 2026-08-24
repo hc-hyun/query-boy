@@ -34,27 +34,6 @@ Status: Active
 - MCP는 현재 지원 버전 `2026-07-28`만 받는다. 이전 handshake와 protocol version을 위한
   compatibility branch는 만들지 않으며 version 변경은 명시적인 upgrade 작업으로 처리한다.
 
-## P0.5 — Module Contract Hardening
-
-목표: 남은 offline composition 경계를 승인된 공개 contract로 강제한다.
-Read/write capability, Runtime lifecycle과 deep immutability는 `MOD-05`~`MOD-07`로 완료했다. 선택지와
-정확한 영향은 [module contract decision guide](module-contract-decision-guide.md)를 따른다.
-
-| 작업 경계 | 내용 |
-|---|---|
-| Primary module | `MOD-08` Assurance |
-| Direct consumers | `MOD-08` offline CLI entrypoint |
-| Affected providers/verifiers | Runtime의 shared console-script entrypoint ownership, Delivery production regression, Source Catalog, Metadata, Guarded Query와 Assurance의 focused/contract test |
-| Contract baseline | ADR 0018, 현재 module index/README와 decision guide에 적은 현재 동작·공통 불변조건 |
-| Approval gate | 2026-08-24 사용자가 `D5-A`와 decision guide의 공통 불변조건을 승인했다. 승인된 exact 범위를 넘어서는 변경이나 대안 전환은 다시 승인받는다. |
-| Single writer | Coordinating agent가 `MOD-08` contract/provider를 직렬화한다. Provider baseline 확정 뒤 서로 다른 consumer implementation만 병렬화한다. |
-| Start gate | `RTSAFE-01`과 `MOD-04`~`MOD-07` 완료; repository 전체의 다음 구현 작업은 `MOD-08`이다. Lower-track read-only prework는 가능하지만 item 시작이나 baseline 변경은 아니다. |
-| Verification | Decision guide의 각 exact contract test, provider와 모든 직접 consumer focused test, `ruff`, `mypy`, root `pytest`, DB 경계의 integration test |
-
-- [ ] `MOD-08` 승인된 `D5-A`에 따라 Assurance
-  offline CLI concrete composition을 승인된 owner/경계로 격리하고 command/output/exit와 Guarded Query
-  safety path 불변을 검증한다.
-
 ## P1 — Centralized Source Management Plane
 
 목표: Production managed source의 authority, replica 상태, 규모와 비용 projection을 Control DB와
@@ -189,11 +168,10 @@ Production mutation executor는 이 track에 없다. 필요해지면 credential 
 ## Approval-Gated Contract Work
 
 Startup cleanup `RTSAFE-01`, hidden dependency `MOD-04`, read/write capability `MOD-05`,
-lifecycle Protocol `MOD-06`과 deep immutability `MOD-07`은 완료되어 roadmap ledger로 이동했다.
-Offline composition은 `MOD-08`이 완료 조건을 추적한다. 2026-08-24 사용자는
+lifecycle Protocol `MOD-06`, deep immutability `MOD-07`과 offline composition `MOD-08`은 모두
+완료되어 roadmap ledger로 이동했다. 2026-08-24 사용자는
 [module contract decision guide](module-contract-decision-guide.md)의 `D0-A`~`D5-A`와 공통
-불변조건을 명시적으로 승인했다. 남은 ID가 완료되기 전에는 승인된 목표를 현재 구현 계약으로
-오해하지 않으며, 승인 범위를 넘어서는 의미 변경은 다시 승인받는다.
+불변조건을 명시적으로 승인했다. 이 baseline을 넘어서는 의미 변경은 다시 승인받는다.
 
 ## Explicit Non-Goals
 

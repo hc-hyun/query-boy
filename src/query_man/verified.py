@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import argparse
-import asyncio
 import hashlib
 import json
 from dataclasses import dataclass
@@ -9,13 +7,10 @@ from pathlib import Path
 from typing import Annotated
 
 import yaml
-from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from query_man.catalog import PostgresCatalog
 from query_man.metadata import MetadataService
-from query_man.query import PostgresQueryExecutor, QueryService
-from query_man.registry import SourceReader, SourceRegistry
+from query_man.query import QueryService
 from query_man.sql_validation import SQL_POLICY_REVISION, validate_sql
 
 Identifier = Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,99}$")]
@@ -197,32 +192,3 @@ def create_result_hash(columns: tuple[str, ...], rows: object) -> str:
         sort_keys=True,
     ).encode("utf-8")
     return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Verify versioned golden SQL against live sources")
-    parser.add_argument("--root", type=Path, default=Path.cwd())
-    arguments = parser.parse_args()
-    asyncio.run(_run(arguments.root.resolve()))
-
-
-async def _run(root: Path) -> None:
-    load_dotenv(root / ".env")
-    registry: SourceReader = SourceRegistry.load(
-        root / "config" / "sources",
-        root / "config" / "budget-profiles.yaml",
-    )
-    verified = VerifiedQueryRegistry.load(
-        root / "config" / "verified-queries.yaml",
-        {source["source_id"] for source in registry.list()},
-    )
-    catalog = PostgresCatalog()
-    executor = PostgresQueryExecutor()
-    metadata = MetadataService(registry, catalog)
-    service = QueryService(registry, metadata, executor)
-    try:
-        results = await verified.verify_all(metadata, service)
-        print(json.dumps({"status": "ok", "verified": results}, sort_keys=True))
-    finally:
-        await executor.close()
-        await catalog.close()

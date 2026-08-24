@@ -59,6 +59,8 @@ codec/compatibility contract만 소유한다.
 `MetadataService`와 Control Plane candidate staging은 `load/close`만 제공하는 작은
 `CatalogProvider`를 계속 소비한다. Runtime은 이를 확장한 `RuntimeCatalogProvider`를 요구하고
 concrete `PostgresCatalog`는 두 Protocol을 구조적으로 구현한다.
+Assurance의 offline workflow는 `assurance_cli.py`에서만 concrete catalog와 `MetadataService`를
+조립하며 quality/verified core는 이미 조립된 application service만 소비한다.
 
 Control DB의 persisted snapshot/revision history와 process 안의 published Python graph는 서로 다른
 경계에서 모두 immutable하다. `CatalogColumn`, key/index, `CatalogRelation`, `CatalogSnapshot`과

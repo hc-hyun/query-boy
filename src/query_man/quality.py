@@ -1,20 +1,14 @@
 from __future__ import annotations
 
-import argparse
-import asyncio
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Literal, cast
 
 import yaml
-from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from query_man.catalog import PostgresCatalog
 from query_man.metadata import MetadataService
-from query_man.registry import SourceReader, SourceRegistry
-from query_man.verified import VerifiedQueryRegistry
 
 Identifier = Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,99}$")]
 RelationName = Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_$]*\.[A-Za-z_][A-Za-z0-9_$]*$")]
@@ -170,41 +164,3 @@ class QualityEvaluation:
         if failures:
             raise QualityGateError(report)
         return report
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Evaluate metadata retrieval quality gates")
-    parser.add_argument("--root", type=Path, default=Path.cwd())
-    arguments = parser.parse_args()
-    asyncio.run(_run(arguments.root.resolve()))
-
-
-async def _run(root: Path) -> None:
-    load_dotenv(root / ".env")
-    registry: SourceReader = SourceRegistry.load(
-        root / "config" / "sources",
-        root / "config" / "budget-profiles.yaml",
-    )
-    evaluation = QualityEvaluation.load(
-        root / "config" / "quality-evaluation.yaml",
-        {source["source_id"] for source in registry.list()},
-    )
-    verified = VerifiedQueryRegistry.load(
-        root / "config" / "verified-queries.yaml",
-        {source["source_id"] for source in registry.list()},
-    )
-    catalog = PostgresCatalog()
-    metadata = MetadataService(
-        registry,
-        catalog,
-        verified_revisions=verified.revision_map(),
-    )
-    try:
-        try:
-            report = await evaluation.evaluate(metadata)
-        except QualityGateError as error:
-            print(json.dumps({"status": "failed", **asdict(error.report)}, sort_keys=True))
-            raise SystemExit(1) from error
-        print(json.dumps({"status": "ok", **asdict(report)}, sort_keys=True))
-    finally:
-        await catalog.close()

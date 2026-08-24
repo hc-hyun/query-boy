@@ -13,8 +13,7 @@ from typing import get_type_hints
 import pytest
 import yaml
 
-import query_man.quality as quality_module
-import query_man.verified as verified_module
+import query_man.assurance_cli as assurance_cli_module
 from query_man.app import _probe_registered_sources
 from query_man.gateway import GatewayService
 from query_man.metadata import MetadataService
@@ -86,8 +85,14 @@ def test_source_consumers_receive_only_the_capability_they_need() -> None:
         get_type_hints(SourceReloader.__init__)["registry"]
         is SourceProjectionWriter
     )
-    assert _local_annotation(quality_module._run, "registry") == "SourceReader"
-    assert _local_annotation(verified_module._run, "registry") == "SourceReader"
+    assert (
+        _local_annotation(assurance_cli_module._run_evaluation, "registry")
+        == "SourceReader"
+    )
+    assert (
+        _local_annotation(assurance_cli_module._run_verification, "registry")
+        == "SourceReader"
+    )
     assert _local_annotation(SourceAdminService._stage, "registry") == "SourceReader"
 
 

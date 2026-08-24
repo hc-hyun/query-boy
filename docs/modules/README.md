@@ -95,7 +95,8 @@ owner는 주의점에 기록하며 primary owner와 같은 뜻으로 해석하�
 | `app.py` composition/lifespan/probe | Runtime | Concrete `SourceRegistry`를 capability별로 주입하고 query/catalog Runtime composite의 required callable을 검증한 뒤 두 invalidator와 direct drain을 조립한다. Delivery route 동작을 함께 바꾸지 않는다. |
 | `server.py`, `runtime_config.py`, `operations.py` | Runtime | Domain module은 operations reporting 계약만 소비하며 lifecycle/redaction/health 의미는 Runtime이 소유한다. |
 | `__init__.py` | Runtime | Package identity/version만 소유하며 domain contract export를 모으지 않는다. |
-| `verified.py`, `quality.py` | Assurance | Offline entrypoint는 concrete registry를 생성할 수 있지만 application reference는 `SourceReader`로 좁힌다. Verified DTO/hash는 Control Plane만 직접 소비하고 hash는 Guarded Query encoding에 의존한다. Delivery는 Control Plane public input을 사용한다. |
+| `verified.py`, `quality.py` | Assurance | Quality/verified DTO, configuration, comparison, verification과 hash core다. Concrete registry/catalog/query adapter를 조립하지 않는다. Verified DTO/hash는 Control Plane만 직접 소비하고 hash는 Guarded Query encoding에 의존한다. Delivery는 Control Plane public input을 사용한다. |
+| `assurance_cli.py` | Assurance | `query-man-evaluate`/`query-man-verify`의 유일한 offline concrete composition root다. Bootstrap filesystem config만 읽고 registry application reference는 `SourceReader`로 좁히며 production/Control staging wiring을 소유하지 않는다. |
 | `tests/helpers.py` | Assurance test infrastructure | Source Catalog registry와 Metadata catalog fixture를 여러 module test가 공유한다. Fixture shape 변경은 해당 provider와 직접 consumer를 확인하고 coordinating agent가 single-writer로 편집한다. |
 | `tests/conftest.py` | Assurance test infrastructure | Repository-wide pytest fixture composition이다. Control DB fixture 의미는 Control Plane이 제공하며 coordinating agent가 consumer 실행 순서를 확인하고 single-writer로 편집한다. |
 | `tests/control_database.py` | Control Plane | Disposable Control DB, migration apply, authority fingerprint와 leak-free cleanup test contract다. 여러 integration test가 소비하므로 Control Plane owner와 coordinating agent가 한 writer를 지정한다. |
@@ -110,6 +111,7 @@ owner는 주의점에 기록하며 primary owner와 같은 뜻으로 해석하�
 | `tests/test_metadata_store.py` | Metadata contract; Control Plane implementation | Persisted metadata port/codec, legacy array/object round-trip와 immutable decode graph 및 Control DB implementation을 함께 검증하는 transition test다. 두 owner가 병렬 편집하지 않고 coordinating agent가 test-case 단위 변경 순서를 지정한다. |
 | `tests/test_quality_level.py` | Metadata | Publish quality 판정이 primary 범위이고 Assurance verified membership을 소비한다. 두 계약을 함께 바꾸면 coordinating agent가 single-writer를 지정한다. |
 | `tests/test_result_encoding.py` | Guarded Query | Canonical result scalar encoding이 primary 범위이며 Assurance verified result hash가 직접 소비한다. Encoding/hash 경계를 함께 바꿀 때 두 owner가 병렬 편집하지 않고 coordinating agent가 single-writer를 지정한다. |
+| `tests/test_assurance_cli.py` | Assurance contract; Runtime entrypoint verification | Offline concrete construction 허용 위치, console-script target, bootstrap path, help/output/exit와 cleanup 순서를 검증한다. `pyproject.toml`과 함께 coordinating agent가 single-writer로 편집한다. |
 | `tests/test_mcp.py`, `tests/test_mcp_server*.py` | Delivery contract; Assurance acceptance | Delivery의 MCP wire/workflow 의미를 Assurance가 실제 SDK/load/soak로 검증한다. Protocol fixture와 공통 helper는 coordinating single-writer로 다룬다. |
 | `tests/test_integration.py`, `tests/test_load.py`, `tests/test_security_evaluation.py` | Assurance | Source Catalog, Metadata, Guarded Query, Delivery와 Runtime의 end-to-end acceptance를 조립한다. Provider 의미는 각 module이 검토하고 coordinating agent만 cross-module test file을 편집한다. |
 | `docker/postgres/init/05-control-plane.sh`, `docker/postgres/init/control-migrations/` | Control Plane | Migration ledger/checksum, 번호, FK, lock, CAS와 privilege는 하나의 owner가 관리한다. |
@@ -125,7 +127,7 @@ owner는 주의점에 기록하며 primary owner와 같은 뜻으로 해석하�
 | `docker/postgres/init/00-bootstrap.sql`, `01-source-bootstrap.sh`, source fixture SQL `10`~`90` | Assurance | Production source schema authority가 아닌 fixture infrastructure다. `05-control-plane.sh`와 `control-migrations/`는 포함하지 않는다. |
 | `.github/workflows/ci.yml`, `.github/workflows/mcp-soak.yml` | Assurance | 모든 provider의 repository gate와 실행 증거를 조립하는 shared transition artifact다. |
 | `skills/query-man-text-to-sql/` | Delivery | Metadata/Guarded Query 계약을 소비하는 workflow이며 module contract나 enforcement boundary가 아니다. |
-| `pyproject.toml` package/dependency/entrypoint sections | Runtime | 모든 module이 소비하는 shared transition toolchain이다. |
+| `pyproject.toml` package/dependency/entrypoint sections | Runtime | 모든 module이 소비하는 shared transition toolchain이다. Offline command 이름은 유지하고 내부 target은 Assurance의 `assurance_cli.py`를 가리킨다. |
 | `pyproject.toml` Ruff/mypy/pytest sections | Assurance | Runtime-owned package section과 같은 file이므로 coordinating agent가 single-writer로 편집한다. |
 | `uv.lock` | Runtime | 모든 module이 소비하는 shared transition lockfile이며 dependency owner 변경과 함께 갱신한다. |
 | `.python-version`, `.dockerignore` | Runtime | Python/container build와 build-context secret boundary다. Assurance가 supply-chain gate를 검증한다. |
@@ -216,10 +218,9 @@ Module contract는 사용자 명시적 승인 없이 변경하지 않는다. 일
 lifecycle Protocol과 offline composition 선택지는
 [module contract decision guide](../module-contract-decision-guide.md)에 설명한다. 사용자는
 2026-08-24 `D0-A`~`D5-A`와 공통 불변조건을 승인했다. `D0-A`/`RTSAFE-01`,
-`D1-A`/`MOD-04`, `D2-A`/`MOD-05`, `D4-A`/`MOD-06`과 `D3-A`/`MOD-07`은 구현 완료됐고,
-남은 `D5-A`/`MOD-08`이 완료되기 전에는 그 target을 현재 구현 contract로 해석하지 않는다.
-Contract/provider를 순서대로 확정한 뒤에만 consumer
-implementation을 병렬화한다.
+`D1-A`/`MOD-04`, `D2-A`/`MOD-05`, `D4-A`/`MOD-06`, `D3-A`/`MOD-07`과
+`D5-A`/`MOD-08`은 모두 구현 완료됐다. 이후 작업은 확정된 provider contract를 기준으로 서로 다른
+module implementation을 병렬화한다.
 
 ## Agent 작업 절차
 

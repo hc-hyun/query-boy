@@ -33,9 +33,11 @@ membership과 offline 품질 증거를 제공하고 동일 기준을 회귀 검�
 
 ## 현재 코드 위치
 
-- [`quality.py`](../../../src/query_man/quality.py): `QualityEvaluation`, cases, gates, report와 CLI
+- [`quality.py`](../../../src/query_man/quality.py): `QualityEvaluation`, cases, gates와 report core
 - [`verified.py`](../../../src/query_man/verified.py): `VerifiedQuery`, `ExpectedResult`, registry,
-  verification과 `create_result_hash`
+  verification과 `create_result_hash` core
+- [`assurance_cli.py`](../../../src/query_man/assurance_cli.py): `query-man-evaluate`와
+  `query-man-verify`의 유일한 offline concrete composition root와 entrypoint
 - [`quality-evaluation.yaml`](../../../config/quality-evaluation.yaml): versioned retrieval quality cases
 - [`verified-queries.yaml`](../../../config/verified-queries.yaml): bootstrap-only verified contracts;
   managed authority가 읽거나 병합하지 않음
@@ -53,6 +55,7 @@ membership과 offline 품질 증거를 제공하고 동일 기준을 회귀 검�
   `05-control-plane.sh`와 `control-migrations/`는 Control Plane 소유라 이 범위에 포함하지 않음
 - Focused tests: [`test_quality.py`](../../../tests/test_quality.py),
   [`test_verified.py`](../../../tests/test_verified.py),
+  [`test_assurance_cli.py`](../../../tests/test_assurance_cli.py),
   [`test_quality_level.py`](../../../tests/test_quality_level.py),
   [`test_result_encoding.py`](../../../tests/test_result_encoding.py)
 
@@ -60,10 +63,10 @@ membership과 offline 품질 증거를 제공하고 동일 기준을 회귀 검�
 cross-module 계약이다. `verified.py`의 DTO/hash는 Control Plane이 직접 소비하는 shared contract이며
 Delivery는 이를 import하지 않는다. CLI 내부 정리라는 이유로 shape나 hash 의미를 바꾸지 않는다.
 
-`quality.py`와 `verified.py`의 CLI entrypoint는 offline acceptance에 한정된 bounded composition
-root다. Concrete `SourceRegistry`, Metadata, Catalog와 Query adapter를 생성할 수 있지만 registry
-local/application reference는 `SourceReader`로 좁힌다. Production HTTP/MCP runtime wiring이나 domain
-policy를 소유하지 않는다.
+`assurance_cli.py`만 offline acceptance에 한정된 bounded composition root다. Concrete
+`SourceRegistry`, Metadata, Catalog와 Query adapter를 생성할 수 있지만 registry local/application
+reference는 `SourceReader`로 좁힌다. `quality.py`와 `verified.py` core는 concrete adapter를 조립하지
+않는다. Production HTTP/MCP runtime wiring이나 domain policy를 Assurance로 옮기지 않는다.
 
 ## 제공 계약
 
@@ -112,6 +115,18 @@ date/time, mapping 또는 non-finite value encoding이 바뀌면 같은 SQL의 v
 
 이 결과는 metadata retrieval 회귀 증거이지 production query correctness 전체나 latency SLO가 아니다.
 
+### Offline CLI composition contract
+
+`query-man-evaluate`와 `query-man-verify`의 console-script target은 각각
+`query_man.assurance_cli:evaluate_main`과 `query_man.assurance_cli:verify_main`이다. 외부 command 이름,
+`--root` 인자와 기본값, JSON stdout, exit 의미는 기존 계약을 유지한다.
+
+두 entrypoint는 runtime authority selector나 Control DB를 사용하지 않고 지정한 root의 `.env`,
+`config/sources`, budget, quality와 verified file만 읽는 bootstrap-only workflow다. Evaluate는 catalog를,
+verify는 executor와 catalog를 기존 순서로 정리한다. Verify는 `VerifiedQueryRegistry.verify_all`에
+`QueryService`를 넘겨 모든 SQL이 Guarded Query validation/execution path를 지나게 하며 tenant ID를
+추가하지 않는다.
+
 ### Verified membership contract
 
 Assurance는 Metadata가 소유한 inbound shape인
@@ -147,6 +162,8 @@ Assurance는 Delivery transport나 Control DB concrete adapter를 통해 검증 
   operator tenant를 전달하는 Control verified-publish path와 지원 범위를 혼동하지 않는다.
 - Question, SQL과 expected business values를 일반 runtime log에 노출하지 않는다.
 - Quality fixture를 source별 production Python branch로 바꾸지 않는다.
+- Concrete source/catalog/metadata/query 조립을 `assurance_cli.py` 밖의 Assurance core로 되돌리지
+  않는다.
 
 ## 모듈 내부 변경
 
@@ -181,7 +198,7 @@ acceptance evidence 갱신 계획을 포함한다.
 
 ```text
 uv run pytest tests/test_registry.py tests/test_quality.py tests/test_verified.py \
-  tests/test_quality_level.py tests/test_result_encoding.py
+  tests/test_assurance_cli.py tests/test_quality_level.py tests/test_result_encoding.py
 ```
 
 Configured live sources가 필요한 acceptance는 별도로 실행한다.
@@ -201,7 +218,7 @@ Control public input에서 Verified DTO로 가는 mapping을 바꾸면 `tests/te
 Assurance 작업은 기본적으로 다음만 읽는다.
 
 1. 이 문서와 [module index](../README.md)
-2. 변경 대상 quality/verified code, config와 focused tests
+2. 변경 대상 quality/verified core 또는 Assurance CLI composition code, config와 focused tests
 3. Metadata context/quality와 Guarded Query result/hash 소비 계약
 4. [ADR 0006](../../decisions/0006-mcp-transport-and-workflow.md),
    [ADR 0007](../../decisions/0007-immutable-metadata-publishing.md),

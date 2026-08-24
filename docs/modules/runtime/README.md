@@ -47,11 +47,12 @@ Query Man은 현재 하나의 deployable process인 modular monolith다. Runtime
 - [`verify-container.sh`](../../../scripts/verify-container.sh): Assurance가 소유하고 Runtime
   container contract를 소비하는 shared transition acceptance script
 - [`pyproject.toml`](../../../pyproject.toml), [`uv.lock`](../../../uv.lock): application
-  entrypoint/dependency와 locked build; test tooling 부분은 Assurance와 공유
+  entrypoint/dependency와 locked build; offline command target과 test tooling 부분은 Assurance와 공유
 - Focused tests: [`test_runtime_config.py`](../../../tests/test_runtime_config.py),
   [`test_operations.py`](../../../tests/test_operations.py),
   [`test_server.py`](../../../tests/test_server.py),
   [`test_http.py`](../../../tests/test_http.py),
+  [`test_assurance_cli.py`](../../../tests/test_assurance_cli.py),
   [`test_runtime_startup_cleanup.py`](../../../tests/test_runtime_startup_cleanup.py)
 
 `app.py`는 Delivery와 Runtime의 transition hot spot이다. Composition/lifespan symbol만 Runtime
@@ -72,8 +73,9 @@ Query Man은 현재 하나의 deployable process인 modular monolith다. Runtime
 - Delivery는 Gateway/application service만 받고 persistence/executor internals를 직접 받지 않는다.
 - Metadata와 Guarded Query는 Control DB implementation을 직접 import하지 않는다.
 - Runtime-only dependency edge는 wiring/lifecycle 외의 업무 호출을 허용하지 않는다.
-- Control Plane의 isolated candidate staging과 Assurance의 standalone offline CLI도 bounded composition
-  root지만 production HTTP/MCP wiring을 소유하지 않는다.
+- Control Plane의 isolated candidate staging과 Assurance의 `assurance_cli.py`도 bounded composition
+  root지만 production HTTP/MCP wiring을 소유하지 않는다. Shared `pyproject.toml`은 두 offline command의
+  외부 이름을 유지하고 내부 target만 이 Assurance-owned entrypoint로 연결한다.
 
 ### Startup contract
 
@@ -180,8 +182,8 @@ catalog와 query executor를 같은 순서의 두 `SourcePoolInvalidator`로 빠
 
 ## 불변조건
 
-- Production concrete dependency 조립은 Runtime에 두고 Control staging/Assurance CLI 예외를 해당
-  bounded workflow 밖으로 확대하지 않는다.
+- Production concrete dependency 조립은 Runtime에 두고 Control staging/Assurance
+  `assurance_cli.py` 예외를 해당 bounded workflow 밖으로 확대하지 않는다.
 - MCP child lifespan에 정상 진입한 뒤 shutdown은 resource/task/pool을 누출하지 않는다. Child
   `enter` 실패 때는 child `exit`를 호출하지 않고 parent 최상위 resource를 고정 순서로 정확히 한 번씩
   정리 시도하며, cleanup 실패와 무관하게 최초 startup error를 보존한다.
@@ -228,7 +230,7 @@ catalog와 query executor를 같은 순서의 두 `SourcePoolInvalidator`로 빠
 
 ```text
 uv run pytest tests/test_registry.py tests/test_runtime_config.py tests/test_operations.py \
-  tests/test_server.py tests/test_http.py tests/test_managed_mode.py \
+  tests/test_server.py tests/test_http.py tests/test_managed_mode.py tests/test_assurance_cli.py \
   tests/test_runtime_startup_cleanup.py
 ```
 

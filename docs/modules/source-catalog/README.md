@@ -157,9 +157,10 @@ Source Catalog는 Control DB table이나 HTTP/MCP type을 직접 알지 않는�
   invariant이며 그 경로를 우회해 registry를 갱신하지 않는다.
 - Budget, overlay와 tenant policy 변경이 metadata revision에 미치는 영향을 숨기지 않는다.
 - Published source/semantic graph에 mutable collection이나 외부 mutable alias를 남기지 않는다.
-- Runtime projection writer는 하나다. Ordinary reader와 isolated staging/Assurance application
-  reference는 `SourceReader`로 좁히며 `upsert/remove`를 호출하지 않는다. Runtime composition은 같은
-  concrete instance를 reader consumer와 Control writer에 capability별로 주입할 수 있다.
+- Runtime projection writer는 하나다. Ordinary reader, isolated Control staging과 Assurance
+  `assurance_cli.py`의 application reference는 `SourceReader`로 좁히며 `upsert/remove`를 호출하지
+  않는다. Runtime composition은 같은 concrete instance를 reader consumer와 Control writer에
+  capability별로 주입할 수 있다.
 
 ## 모듈 내부 변경
 

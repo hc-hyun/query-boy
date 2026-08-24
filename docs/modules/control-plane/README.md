@@ -67,7 +67,8 @@ Control Plane은 PostgreSQL pool, SQL, lock과 transaction을 소유한다. 현�
 `SourceAdminService._stage`는 candidate를 active runtime과 격리해 검증하려고 일시적인
 `SourceRegistry + MetadataService + CatalogProvider`를 조립하고 registry application reference는
 `SourceReader`로 좁힌다. 이는 Control Plane에 한정된 staging composition root이며 production
-HTTP/MCP wiring이나 Metadata 업무 규칙을 소유하지 않는다.
+HTTP/MCP wiring이나 Metadata 업무 규칙을 소유하지 않는다. Assurance offline composition을
+`assurance_cli.py`로 옮겨도 이 staging root의 위치와 동작은 바뀌지 않는다.
 
 Public admin route, operator-first request parsing, bounded JSON/header/query validation과 HTTP error
 rendering은 [Delivery](../delivery/README.md)가 소유한다. Control Plane은 이미 검증된
