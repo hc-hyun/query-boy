@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Sequence
 from dataclasses import dataclass
 from math import log
 
@@ -79,8 +80,8 @@ class _IndexedRelation:
 class RelationRetrievalIndex:
     def __init__(
         self,
-        relations: list[CatalogRelation],
-        semantics: list[RelationSemantic],
+        relations: Sequence[CatalogRelation],
+        semantics: Sequence[RelationSemantic],
         default_relation: str | None = None,
     ) -> None:
         semantic_by_name = {item.relation: item for item in semantics}
@@ -159,8 +160,8 @@ class RelationRetrievalIndex:
 
 def rank_relations(
     question: str,
-    relations: list[CatalogRelation],
-    semantics: list[RelationSemantic],
+    relations: Sequence[CatalogRelation],
+    semantics: Sequence[RelationSemantic],
     default_relation: str | None = None,
 ) -> list[RankedRelation]:
     return RelationRetrievalIndex(relations, semantics, default_relation).rank(question)

@@ -1730,7 +1730,7 @@ async def test_operator_admin_source_gets_return_bounded_errors(
 @pytest.mark.asyncio
 async def test_schema_drift_details_are_not_disclosed() -> None:
     snapshot = minimal_development_snapshot()
-    snapshot.relations = snapshot.relations[:1]
+    snapshot = replace(snapshot, relations=snapshot.relations[:1])
     async with client(ReturningCatalog(snapshot)) as session:
         response = await session.post("/meta", json={"source_id": "development-issues", "question": "최근 문제"})
     assert response.status_code == 503

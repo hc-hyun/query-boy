@@ -196,8 +196,10 @@ connection 구성의 필요한 범위를 넘어 log나 response에 남지 않는
 ## 소비 계약
 
 - [Source Catalog](../source-catalog/README.md)의 strict manifest validator, budget와
-  `SourceProjectionWriter`
-- [Metadata](../metadata/README.md)의 candidate preparation, quality gate, store port와 snapshot codec
+  `SourceProjectionWriter`; 검증된 runtime profile graph는 immutable하고 projector에는 새 profile을
+  통째로 전달한다.
+- [Metadata](../metadata/README.md)의 candidate preparation, quality gate, store port와 snapshot codec.
+  Codec은 immutable Python graph와 기존 Control DB JSON array/object 사이를 변환한다.
 - [Guarded Query](../guarded-query/README.md)의 validated execution for verified publish
 - [Assurance](../assurance/README.md)의 verified DTO, exact revision/relation와 result hash contract
 - [Runtime](../runtime/README.md)의 operational state reporting contract
@@ -210,6 +212,8 @@ Plane이 Delivery/Runtime private implementation에 의존한다는 뜻이 아�
 
 - 같은 `source_id`를 다른 host/port/database/user/TLS/environment identity로 재사용하지 않는다.
 - Persisted generation/snapshot/verified history를 update 또는 delete하지 않는다.
+- Metadata snapshot JSON의 array/object shape나 revision을 Python tuple representation 변화와 함께
+  바꾸지 않는다.
 - Source-scoped lock와 generation/state-version CAS 없이 active state를 변경하지 않는다.
 - Source publish/rollback의 source와 metadata pointer를 서로 다른 transaction으로 나누지 않는다.
 - Pin된 metadata를 암묵적으로 덮어쓰거나 rollback 뒤 자동 resume하지 않는다.

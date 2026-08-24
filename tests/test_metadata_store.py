@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import replace
 
 import pytest
@@ -11,6 +13,8 @@ from query_man.metadata_store import (
     StoredMetadataInvalidError,
     StoredMetadataNotFoundError,
     StoredMetadataSupersededError,
+    _decode,
+    encode_snapshot,
 )
 from query_man.models import CatalogForeignKey, CatalogIndex, PreparedMetadata
 from query_man.registry import load_budget_profiles, validate_source_manifest
@@ -18,6 +22,81 @@ from query_man.revision import create_metadata_revision
 from query_man.secrets import SourceSecretCipher
 from query_man.source_store import PostgresSourceStore
 from tests.helpers import ROOT_DIRECTORY, load_test_registry, minimal_development_snapshot
+
+
+def test_snapshot_codec_preserves_legacy_json_and_freezes_decoded_graph() -> None:
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+    snapshot = minimal_development_snapshot()
+    snapshot = replace(
+        snapshot,
+        relations=tuple(
+            replace(
+                relation,
+                primary_key=("issue_id",)
+                if relation.qualified_name == "ai.issue_overview"
+                else relation.primary_key,
+                indexes=(
+                    CatalogIndex(
+                        ("discovered_at",), unique=False, primary=False
+                    ),
+                )
+                if relation.qualified_name == "ai.issue_overview"
+                else relation.indexes,
+                foreign_keys=(
+                    CatalogForeignKey(
+                        ("issue_id",), "ai.issue_overview", ("issue_id",)
+                    ),
+                )
+                if relation.qualified_name == "ai.issue_comments"
+                else relation.foreign_keys,
+            )
+            for relation in snapshot.relations
+        ),
+    )
+    revision = create_metadata_revision(source, snapshot)
+    encoded = encode_snapshot(snapshot)
+    legacy_json = json.loads(json.dumps(encoded))
+
+    decoded = _decode(source, revision, legacy_json)
+
+    assert encode_snapshot(decoded.snapshot) == encoded
+    assert create_metadata_revision(source, decoded.snapshot) == revision
+    relations = encoded["relations"]
+    assert isinstance(relations, list)
+    by_name = {
+        f"{relation['schema_name']}.{relation['relation_name']}": relation
+        for relation in relations
+    }
+    assert by_name["ai.issue_overview"]["primary_key"] == ["issue_id"]
+    assert by_name["ai.issue_overview"]["indexes"][0]["columns"] == [
+        "discovered_at"
+    ]
+    assert by_name["ai.issue_comments"]["foreign_keys"][0]["columns"] == [
+        "issue_id"
+    ]
+    assert by_name["ai.issue_comments"]["foreign_keys"][0][
+        "referenced_columns"
+    ] == ["issue_id"]
+    assert isinstance(decoded.snapshot.relations, tuple)
+    assert isinstance(decoded.snapshot.relations[0].columns, tuple)
+
+    legacy_json["relations"][0]["comment"] = "mutated after decode"
+    assert decoded.snapshot.relations[0].comment != "mutated after decode"
+
+
+def test_minimal_snapshot_json_matches_pre_immutability_golden() -> None:
+    encoded = json.dumps(
+        encode_snapshot(minimal_development_snapshot()),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+
+    assert len(encoded) == 2_609
+    assert hashlib.sha256(encoded).hexdigest() == (
+        "1f392b10b1b505430920e95d07549ed2dbc51e20cece984a4528e2abf406dbc7"
+    )
 
 
 @pytest.mark.integration
@@ -30,19 +109,43 @@ async def test_postgres_metadata_store_publishes_immutable_revisions_and_rolls_b
     assert source is not None
     source = replace(source, source_id="metadata-store-fixture-v2")
     first_snapshot = minimal_development_snapshot()
-    first_snapshot.relations[0].comment = "immutable revision one"
-    first_by_name = {
-        relation.qualified_name: relation for relation in first_snapshot.relations
-    }
-    first_by_name["ai.issue_overview"].primary_key = ["issue_id"]
-    first_by_name["ai.issue_overview"].indexes = [
-        CatalogIndex(["discovered_at"], unique=False, primary=False)
-    ]
-    first_by_name["ai.issue_comments"].foreign_keys = [
-        CatalogForeignKey(["issue_id"], "ai.issue_overview", ["issue_id"])
-    ]
+    first_snapshot = replace(
+        first_snapshot,
+        relations=tuple(
+            replace(
+                relation,
+                comment=(
+                    "immutable revision one" if index == 0 else relation.comment
+                ),
+                primary_key=("issue_id",)
+                if relation.qualified_name == "ai.issue_overview"
+                else relation.primary_key,
+                indexes=(
+                    CatalogIndex(
+                        ("discovered_at",), unique=False, primary=False
+                    ),
+                )
+                if relation.qualified_name == "ai.issue_overview"
+                else relation.indexes,
+                foreign_keys=(
+                    CatalogForeignKey(
+                        ("issue_id",), "ai.issue_overview", ("issue_id",)
+                    ),
+                )
+                if relation.qualified_name == "ai.issue_comments"
+                else relation.foreign_keys,
+            )
+            for index, relation in enumerate(first_snapshot.relations)
+        ),
+    )
     second_snapshot = minimal_development_snapshot()
-    second_snapshot.relations[0].comment = "immutable revision two"
+    second_snapshot = replace(
+        second_snapshot,
+        relations=(
+            replace(second_snapshot.relations[0], comment="immutable revision two"),
+            *second_snapshot.relations[1:],
+        ),
+    )
     first = PreparedMetadata(first_snapshot, create_metadata_revision(source, first_snapshot))
     second = PreparedMetadata(second_snapshot, create_metadata_revision(source, second_snapshot))
     store = PostgresMetadataStore(dsn)
@@ -193,7 +296,16 @@ async def test_metadata_publish_rejects_superseded_control_generation(
 
         first_generation = await source_store.next_generation(validated.profile.source_id)
         first_snapshot = minimal_development_snapshot()
-        first_snapshot.relations[0].comment = f"CAS generation {first_generation}"
+        first_snapshot = replace(
+            first_snapshot,
+            relations=(
+                replace(
+                    first_snapshot.relations[0],
+                    comment=f"CAS generation {first_generation}",
+                ),
+                *first_snapshot.relations[1:],
+            ),
+        )
         first_metadata = PreparedMetadata(
             first_snapshot,
             create_metadata_revision(validated.profile, first_snapshot),
@@ -214,7 +326,16 @@ async def test_metadata_publish_rejects_superseded_control_generation(
 
         second_generation = await source_store.next_generation(validated.profile.source_id)
         second_snapshot = minimal_development_snapshot()
-        second_snapshot.relations[0].comment = f"CAS generation {second_generation}"
+        second_snapshot = replace(
+            second_snapshot,
+            relations=(
+                replace(
+                    second_snapshot.relations[0],
+                    comment=f"CAS generation {second_generation}",
+                ),
+                *second_snapshot.relations[1:],
+            ),
+        )
         second_metadata = PreparedMetadata(
             second_snapshot,
             create_metadata_revision(validated.profile, second_snapshot),
@@ -243,8 +364,15 @@ async def test_metadata_publish_rejects_superseded_control_generation(
             control_state_version=second.state_version,
         )
         refreshed_snapshot = minimal_development_snapshot()
-        refreshed_snapshot.relations[0].comment = (
-            f"CAS active generation {second_generation} refresh"
+        refreshed_snapshot = replace(
+            refreshed_snapshot,
+            relations=(
+                replace(
+                    refreshed_snapshot.relations[0],
+                    comment=f"CAS active generation {second_generation} refresh",
+                ),
+                *refreshed_snapshot.relations[1:],
+            ),
         )
         refreshed_metadata = PreparedMetadata(
             refreshed_snapshot,

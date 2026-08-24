@@ -4,8 +4,8 @@ import asyncio
 import json
 import re
 import time
-from collections.abc import Callable, Mapping
-from dataclasses import asdict, dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 
 from query_man.errors import MetadataUnavailableError, SourceNotFoundError
 from query_man.metadata_store import MetadataStore, StoredMetadataSupersededError
@@ -468,8 +468,8 @@ def _validate_snapshot(source: SourceProfile, snapshot: CatalogSnapshot) -> list
 def _to_relation_response(
     candidate: RankedRelation,
     rank: int,
-    all_joins: list[JoinDefinition],
-    business_terms: list[BusinessTermDefinition],
+    all_joins: Sequence[JoinDefinition],
+    business_terms: Sequence[BusinessTermDefinition],
     question: str,
     max_columns: int,
 ) -> dict[str, object]:
@@ -499,7 +499,7 @@ def _to_relation_response(
             {
                 "name": semantic.grain.name,
                 "description": semantic.grain.description,
-                "key_columns": semantic.grain.key_columns,
+                "key_columns": list(semantic.grain.key_columns),
             }
             if semantic and semantic.grain
             else None
@@ -507,9 +507,23 @@ def _to_relation_response(
         "default_time_column": semantic.default_time_column if semantic else None,
         "selection_reasons": [_reason_dict(reason) for reason in candidate.reasons],
         "measures": [_to_measure_response(measure) for measure in semantic.measures] if semantic else [],
-        "primary_key": relation.primary_key,
-        "foreign_keys": [asdict(key) for key in relation.foreign_keys],
-        "indexes": [asdict(index) for index in indexes],
+        "primary_key": list(relation.primary_key),
+        "foreign_keys": [
+            {
+                "columns": list(key.columns),
+                "referenced_relation": key.referenced_relation,
+                "referenced_columns": list(key.referenced_columns),
+            }
+            for key in relation.foreign_keys
+        ],
+        "indexes": [
+            {
+                "columns": list(index.columns),
+                "unique": index.unique,
+                "primary": index.primary,
+            }
+            for index in indexes
+        ],
         "indexes_truncated": len(indexes) < len(relation.indexes),
         "column_count": len(relation.columns),
         "returned_column_count": len(columns),
@@ -523,14 +537,14 @@ def _to_relation_response(
 
 def _select_context_columns(
     candidate: RankedRelation,
-    all_joins: list[JoinDefinition],
-    business_terms: list[BusinessTermDefinition],
+    all_joins: Sequence[JoinDefinition],
+    business_terms: Sequence[BusinessTermDefinition],
     question: str,
     max_columns: int,
 ) -> list[CatalogColumn]:
     relation, semantic = candidate.relation, candidate.semantic
     if len(relation.columns) <= max_columns:
-        return relation.columns
+        return list(relation.columns)
 
     required = set(relation.primary_key)
     required.update(column for key in relation.foreign_keys for column in key.columns)
@@ -560,8 +574,8 @@ def _select_context_columns(
     for column in relation.columns:
         phrases = [column.name, column.comment]
         if semantic is not None:
-            phrases.extend(semantic.column_aliases.get(column.name, []))
-            phrases.extend(semantic.value_hints.get(column.name, []))
+            phrases.extend(semantic.column_aliases.get(column.name, ()))
+            phrases.extend(semantic.value_hints.get(column.name, ()))
         if any(
             phrase is not None and _contains_business_phrase(question, phrase)
             for phrase in phrases
@@ -587,7 +601,7 @@ def _to_column_response(
     column: CatalogColumn,
     relation: CatalogRelation,
     semantic: RelationSemantic | None,
-    all_joins: list[JoinDefinition],
+    all_joins: Sequence[JoinDefinition],
 ) -> dict[str, object]:
     roles: list[str] = []
     if semantic and semantic.grain and column.name in semantic.grain.key_columns:
@@ -607,13 +621,17 @@ def _to_column_response(
         "data_type": column.data_type,
         "nullable": column.nullable,
         "description": column.comment,
-        "aliases": semantic.column_aliases.get(column.name, []) if semantic else [],
-        "value_hints": semantic.value_hints.get(column.name, []) if semantic else [],
+        "aliases": list(semantic.column_aliases.get(column.name, ())) if semantic else [],
+        "value_hints": list(semantic.value_hints.get(column.name, ())) if semantic else [],
         "semantic_roles": roles,
     }
 
 
-def _is_join_key(relation: str, column: str, joins: list[JoinDefinition]) -> bool:
+def _is_join_key(
+    relation: str,
+    column: str,
+    joins: Sequence[JoinDefinition],
+) -> bool:
     return any(
         (join.left_relation == relation and any(pair["left"] == column for pair in join.column_pairs))
         or (join.right_relation == relation and any(pair["right"] == column for pair in join.column_pairs))
@@ -625,7 +643,7 @@ def _to_join_response(join: JoinDefinition) -> dict[str, object]:
     return {
         "left_relation": join.left_relation,
         "right_relation": join.right_relation,
-        "column_pairs": join.column_pairs,
+        "column_pairs": [dict(pair) for pair in join.column_pairs],
         "cardinality": join.cardinality,
         "fanout": join.fanout,
         "guidance": join.guidance,
@@ -636,7 +654,7 @@ def _to_measure_response(measure: MeasureDefinition) -> dict[str, object]:
     result: dict[str, object] = {
         "name": measure.name,
         "description": measure.description,
-        "aliases": measure.aliases,
+        "aliases": list(measure.aliases),
         "aggregation": measure.aggregation,
     }
     if measure.column:
@@ -650,7 +668,7 @@ def _to_measure_response(measure: MeasureDefinition) -> dict[str, object]:
 
 def _build_ambiguities(
     selected: list[RankedRelation],
-    joins: list[JoinDefinition],
+    joins: Sequence[JoinDefinition],
     stale: bool,
     has_composition: bool,
 ) -> list[dict[str, str]]:
@@ -703,7 +721,9 @@ def _has_meaningful_reason(candidate: RankedRelation) -> bool:
 
 
 def _build_answerability(
-    question: str, rules: list[QuestionRule], ambiguities: list[dict[str, str]]
+    question: str,
+    rules: Sequence[QuestionRule],
+    ambiguities: list[dict[str, str]],
 ) -> dict[str, object]:
     matched = [rule for rule in rules if any(_contains_business_phrase(question, phrase) for phrase in rule.phrases)]
     if matched:
@@ -731,7 +751,10 @@ def _build_answerability(
     }
 
 
-def _select_business_terms(question: str, terms: list[BusinessTermDefinition]) -> list[dict[str, object]]:
+def _select_business_terms(
+    question: str,
+    terms: Sequence[BusinessTermDefinition],
+) -> list[dict[str, object]]:
     result: list[dict[str, object]] = []
     for term in terms:
         aliases = [alias for alias in term.aliases if _contains_business_phrase(question, alias)]
@@ -741,7 +764,15 @@ def _select_business_terms(question: str, terms: list[BusinessTermDefinition]) -
             "name": term.name,
             "description": term.description,
             "matched_aliases": aliases,
-            "predicates": [asdict(predicate) for predicate in term.predicates],
+            "predicates": [
+                {
+                    "relation": predicate.relation,
+                    "column": predicate.column,
+                    "operator": predicate.operator,
+                    "values": list(predicate.values),
+                }
+                for predicate in term.predicates
+            ],
         }
         if term.calculation:
             item["calculation"] = term.calculation
@@ -749,13 +780,16 @@ def _select_business_terms(question: str, terms: list[BusinessTermDefinition]) -
     return result
 
 
-def _select_composition_hints(question: str, hints: list[CompositionHint]) -> list[dict[str, object]]:
+def _select_composition_hints(
+    question: str,
+    hints: Sequence[CompositionHint],
+) -> list[dict[str, object]]:
     return [
         {
             "name": hint.name,
             "strategy": hint.strategy,
             "guidance": hint.guidance,
-            "combine_keys": hint.combine_keys,
+            "combine_keys": list(hint.combine_keys),
         }
         for hint in hints
         if any(_contains_business_phrase(question, phrase) for phrase in hint.phrases)

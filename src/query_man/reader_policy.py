@@ -84,7 +84,7 @@ async def require_reader_session_policy(
         (
             source.connection.database,
             source.connection.user,
-            source.allowed_schemas,
+            list(source.allowed_schemas),
             source.budget.work_mem_kb,
             source.budget.temp_file_limit_kb,
             source.budget.max_parallel_workers_per_gather,

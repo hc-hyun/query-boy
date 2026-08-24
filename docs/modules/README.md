@@ -74,14 +74,14 @@ owner는 주의점에 기록하며 primary owner와 같은 뜻으로 해석하�
 
 | 현재 파일 또는 영역 | 논리적 owner | 전환상 주의점 |
 |---|---|---|
-| `models.py` source/budget/semantic/provenance types | Source Catalog | Catalog/metadata types도 같은 파일에 있으므로 type 변경은 Metadata 계약도 확인한다. Delivery admin validation은 `SourceEnvironment`를 소비한다. |
-| `models.py` catalog/prepared metadata/provider types | Metadata | 작은 `CatalogProvider`와 이를 확장하는 `RuntimeCatalogProvider`를 제공한다. `SourceProfile`을 소비하므로 Source Catalog 계약을 변경하지 않는다. |
+| `models.py` source/budget/semantic/provenance types | Source Catalog | Published graph의 sequence는 tuple, nested mapping은 alias를 복사한 read-only mapping이다. Catalog/metadata types도 같은 파일에 있으므로 type 변경은 Metadata 계약도 확인한다. Delivery admin validation은 `SourceEnvironment`를 소비한다. |
+| `models.py` catalog/prepared metadata/provider types | Metadata | Catalog column/key/index/relation/snapshot/prepared graph는 recursively immutable하다. 작은 `CatalogProvider`와 이를 확장하는 `RuntimeCatalogProvider`를 제공한다. `SourceProfile`을 소비하므로 Source Catalog 계약을 변경하지 않는다. |
 | `registry.py` | Source Catalog | `SourceReader`와 이를 확장하는 `SourceProjectionWriter`를 제공한다. Control Plane은 validator/writer를, ordinary consumer는 reader를 소비한다. Delivery admin validation은 공개 `Identifier`와 `StableSlug` type을 소비하므로 validation 의미 변경 시 Delivery도 확인한다. |
-| `catalog.py`, `metadata.py`, `relevance.py`, `revision.py`, `quality_level.py` | Metadata | `MetadataService`는 `SourceReader`를 소비한다. `reader_policy.py`와 SQL capability는 cross-module 계약이다. |
+| `catalog.py`, `metadata.py`, `relevance.py`, `revision.py`, `quality_level.py` | Metadata | Catalog는 private mutable builder를 public boundary 전에 freeze한다. `MetadataService`는 immutable graph와 `SourceReader`를 소비하고 wire projection은 list/dict를 유지한다. `reader_policy.py`와 SQL capability는 cross-module 계약이다. |
 | `query.py`, `sql_validation.py`, `result_encoding.py` | Guarded Query | `QueryService`는 `SourceReader`와 작은 `QueryExecutor`를 소비하고 Runtime에는 이를 확장하는 `RuntimeQueryExecutor`를 제공한다. Result dictionary 의미는 별도 application contract다. |
 | `reader_policy.py` | Source Catalog | Metadata와 Guarded Query가 소비하며 두 DB 경로가 같은 safety policy를 사용해야 한다. |
 | `source_admin.py`, `source_store.py`, `secrets.py` | Control Plane | `SourceReloader`는 `SourceProjectionWriter`와 작은 `SourcePoolInvalidator`, isolated staging은 `SourceReader`/`CatalogProvider`를 소비한다. `source_admin.py`는 public administration input/sequence와 use case를 제공하고 `source_store.py`는 persistence-private type/transaction을 소유한다. Source projection, management catalog와 mutation receipt 의미를 함께 보존한다. |
-| `metadata_store.py` Protocol/codec | Metadata contract | PostgreSQL store와 Control DB transaction ownership은 Control Plane이다. |
+| `metadata_store.py` Protocol/codec | Metadata contract | Immutable Python graph와 기존 persisted JSON array/object를 상호 변환한다. PostgreSQL store와 Control DB transaction ownership은 Control Plane이다. |
 | `metadata_store.py` PostgreSQL implementation | Control Plane | Metadata가 implementation을 알지 않도록 한다. |
 | `gateway.py`, `access.py`, `mcp_server.py`, `http_validation.py` | Delivery | `GatewayService`는 `SourceReader`를 소비한다. Public caller/application/transport와 bounded validation contract다. |
 | `source_admin_routes.py` | Delivery | Control Plane의 public `CONTROL_SEQUENCE_MAX`, verified-publish input/use case와 Source Catalog의 `SourceEnvironment`, `Identifier`, `StableSlug` validation type을 소비하는 public admin HTTP/validation contract다. Control persistence와 Assurance DTO를 import하지 않는다. |
@@ -100,14 +100,14 @@ owner는 주의점에 기록하며 primary owner와 같은 뜻으로 해석하�
 | `tests/conftest.py` | Assurance test infrastructure | Repository-wide pytest fixture composition이다. Control DB fixture 의미는 Control Plane이 제공하며 coordinating agent가 consumer 실행 순서를 확인하고 single-writer로 편집한다. |
 | `tests/control_database.py` | Control Plane | Disposable Control DB, migration apply, authority fingerprint와 leak-free cleanup test contract다. 여러 integration test가 소비하므로 Control Plane owner와 coordinating agent가 한 writer를 지정한다. |
 | `tests/test_documentation.py` | Assurance | 모든 module의 문서 link, owner mapping, immutable ledger, governance와 금지된 Delivery hidden import guard를 조립한다. 각 module이 자신의 사실을 검토하되 coordinating agent만 이 shared gate를 편집한다. |
-| `tests/test_registry.py` | Source Catalog contract; cross-module capability verification | Registry behavior와 exact `SourceReader`/`SourceProjectionWriter` shape 및 직접 consumer annotation을 함께 검증한다. Capability 계약 변경 때 coordinating agent가 single-writer를 맡는다. |
-| `tests/test_catalog.py`, `tests/test_query.py` | Metadata/Guarded Query provider contract | 작은 application Protocol과 Runtime composite의 exact method set, 상속 및 sync/async signature를 각 provider가 검증한다. Composite를 함께 바꾸면 coordinating agent가 consumer 순서를 정한다. |
+| `tests/test_registry.py` | Source Catalog contract; cross-module capability verification | Registry behavior, source/semantic graph의 deep immutability·alias 차단과 exact `SourceReader`/`SourceProjectionWriter` shape 및 직접 consumer annotation을 함께 검증한다. Capability 계약 변경 때 coordinating agent가 single-writer를 맡는다. |
+| `tests/test_catalog.py`, `tests/test_query.py` | Metadata/Guarded Query provider contract | Catalog graph의 deep immutability와 작은 application Protocol/Runtime composite의 exact method set, 상속 및 sync/async signature를 각 provider가 검증한다. Composite를 함께 바꾸면 coordinating agent가 consumer 순서를 정한다. |
 | `tests/test_http.py` | Delivery | HTTP/MCP parent surface가 primary 범위이며 Runtime lifespan과 Control Plane public admin input/use case도 검증한다. Symbol별 owner review 뒤 coordinating agent가 file single-writer를 맡는다. |
 | `tests/test_runtime_startup_cleanup.py` | Runtime | MCP child `enter` 실패 시 Runtime parent cleanup 순서·exactly-once 시도·최초 오류 보존과 failed child `exit` 비호출을 검증한다. Runtime owner가 primary writer이고 Delivery는 child partial-enter 책임 경계만 검토한다. |
 | `tests/test_managed_mode.py`, `tests/test_control_startup.py` | Runtime | Runtime composite annotation/누락 capability fail-closed와 managed composition/startup가 primary 범위이며 Delivery access, Control Plane authority와 Assurance verified membership을 함께 검증한다. Coordinating agent가 provider/consumer 변경 순서를 정한다. |
 | `tests/test_runtime_config.py` | Runtime | Environment/source authority 조립이 primary 범위이며 Source Catalog의 source directory와 budget configuration 입력을 함께 검증한다. 두 owner가 같은 fixture/config assertion을 병렬 편집하지 않도록 coordinating agent가 single-writer를 지정한다. |
 | `tests/test_source_admin.py` | Control Plane | Source Catalog validation, Metadata publish, Guarded Query execution, public verified input에서 Assurance DTO로의 exact mapping을 함께 검증한다. Control Plane owner가 primary writer이고 cross-module contract 변경 시 coordinating single-writer로 전환한다. |
-| `tests/test_metadata_store.py` | Metadata contract; Control Plane implementation | Persisted metadata port/codec과 Control DB implementation을 함께 검증하는 transition test다. 두 owner가 병렬 편집하지 않고 coordinating agent가 test-case 단위 변경 순서를 지정한다. |
+| `tests/test_metadata_store.py` | Metadata contract; Control Plane implementation | Persisted metadata port/codec, legacy array/object round-trip와 immutable decode graph 및 Control DB implementation을 함께 검증하는 transition test다. 두 owner가 병렬 편집하지 않고 coordinating agent가 test-case 단위 변경 순서를 지정한다. |
 | `tests/test_quality_level.py` | Metadata | Publish quality 판정이 primary 범위이고 Assurance verified membership을 소비한다. 두 계약을 함께 바꾸면 coordinating agent가 single-writer를 지정한다. |
 | `tests/test_result_encoding.py` | Guarded Query | Canonical result scalar encoding이 primary 범위이며 Assurance verified result hash가 직접 소비한다. Encoding/hash 경계를 함께 바꿀 때 두 owner가 병렬 편집하지 않고 coordinating agent가 single-writer를 지정한다. |
 | `tests/test_mcp.py`, `tests/test_mcp_server*.py` | Delivery contract; Assurance acceptance | Delivery의 MCP wire/workflow 의미를 Assurance가 실제 SDK/load/soak로 검증한다. Protocol fixture와 공통 helper는 coordinating single-writer로 다룬다. |
@@ -216,8 +216,9 @@ Module contract는 사용자 명시적 승인 없이 변경하지 않는다. 일
 lifecycle Protocol과 offline composition 선택지는
 [module contract decision guide](../module-contract-decision-guide.md)에 설명한다. 사용자는
 2026-08-24 `D0-A`~`D5-A`와 공통 불변조건을 승인했다. `D0-A`/`RTSAFE-01`,
-`D1-A`/`MOD-04`, `D2-A`/`MOD-05`와 `D4-A`/`MOD-06`은 구현 완료됐고, 나머지 Active TODO가 완료되기 전에는 승인된 target을 현재
-구현 contract로 해석하지 않는다. Contract/provider를 순서대로 확정한 뒤에만 consumer
+`D1-A`/`MOD-04`, `D2-A`/`MOD-05`, `D4-A`/`MOD-06`과 `D3-A`/`MOD-07`은 구현 완료됐고,
+남은 `D5-A`/`MOD-08`이 완료되기 전에는 그 target을 현재 구현 contract로 해석하지 않는다.
+Contract/provider를 순서대로 확정한 뒤에만 consumer
 implementation을 병렬화한다.
 
 ## Agent 작업 절차

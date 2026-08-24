@@ -60,11 +60,13 @@ codec/compatibility contract만 소유한다.
 `CatalogProvider`를 계속 소비한다. Runtime은 이를 확장한 `RuntimeCatalogProvider`를 요구하고
 concrete `PostgresCatalog`는 두 Protocol을 구조적으로 구현한다.
 
-Control DB의 persisted snapshot/revision history는 immutable하지만 현재 process 안의 published
-Python object graph는 deep immutable이 아니다. `PreparedMetadata`의 바깥 dataclass는 frozen이어도
-안쪽 `CatalogSnapshot`, relation, column과 list는 mutable하고 cache consumer가 같은 graph를 볼 수
-있다. [결정 가이드의 D3-A](../../module-contract-decision-guide.md#d3-공유-data의-deep-immutability)는
-승인됐지만 `MOD-07` 구현 대기이므로 deep immutability를 현재 보장으로 가정하지 않는다.
+Control DB의 persisted snapshot/revision history와 process 안의 published Python graph는 서로 다른
+경계에서 모두 immutable하다. `CatalogColumn`, key/index, `CatalogRelation`, `CatalogSnapshot`과
+`PreparedMetadata`의 모든 public sequence는 tuple이고 dataclass는 frozen이다. Catalog row 조립과
+persistence decode는 private mutable builder를 사용할 수 있지만 cache/provider boundary 전에
+새 immutable graph로 freeze하고 입력 collection alias를 남기지 않는다. 이 보장은
+[결정 가이드의 D3-A](../../module-contract-decision-guide.md#d3-공유-data의-deep-immutability)와
+`MOD-07`의 구현 결과다.
 
 ## 제공 계약
 
@@ -77,6 +79,8 @@ get_published(source_id) -> snapshot + exact metadata_revision
 ```
 
 - Snapshot은 current source definition과 compatible해야 한다.
+- Snapshot과 `PreparedMetadata`의 도달 가능한 public graph는 재귀적으로 immutable하며 provider는
+  mutable builder나 decoder 입력의 alias를 반환하지 않는다.
 - Revision mismatch, schema drift, reader policy drift와 stale upper bound 초과는 fail-closed한다.
 - Published snapshot relation은 Guarded Query relation allowlist의 최대 범위다.
 - Row estimate는 fresh best-effort hint이며 persisted revision과 correctness 판단의 재료가 아니다.
@@ -106,6 +110,8 @@ Approved join, business term, composition hint와 ambiguity의 현재 field/orde
 이 exact top-level/nested shape, compact UTF-8 JSON byte accounting과 revision format은 HTTP/MCP가
 공동으로 사용하는 계약이다. Context에서 column을 생략하는 것은 SQL deny rule이 아니며, query
 allowlist는 published snapshot relation과 Guarded Query policy가 결정한다.
+Python snapshot tuple/read-only mapping은 projection 경계에서 명시적으로 list/dict로 바꾸므로
+HTTP/MCP application result와 JSON은 기존 array/object shape를 유지한다.
 
 ### Metadata revision contract
 
@@ -122,6 +128,8 @@ generation/state version, `minimum_quality_level`, `estimated_rows`, freshness/c
 revision에서 제외한다. Provenance-only publish는 새 source generation을 만들 수 있지만 query
 metadata revision은 바꾸지 않는다. 포함·제외 재료, list canonical ordering과 digest format은
 persisted snapshot 및 rolling replica compatibility contract다.
+Canonicalizer는 list와 tuple, dict와 immutable mapping을 같은 canonical array/object로
+정규화하며 representation만으로 digest를 바꾸지 않는다.
 
 ### Metadata lifecycle contract
 
@@ -150,7 +158,8 @@ RuntimeCatalogProvider extends CatalogProvider:
 
 Runtime composite는 source generation 교체 때 pool을 반드시 invalidate하기 위한 조립 계약이다.
 `MetadataService`의 `CatalogProvider` type contract는 invalidate capability를 요구하거나 노출하지
-않는다. Runtime이 같은 concrete adapter를 주입하므로 이는 runtime sandbox가 아니다.
+않는다. Provider의 `load` 결과는 위의 recursively immutable `CatalogSnapshot`이어야 한다. Runtime이
+같은 concrete adapter를 주입하므로 이는 runtime sandbox가 아니다.
 
 ### MetadataStore port
 
@@ -167,6 +176,10 @@ close()
 `activate`는 revision을 pin하고 `unpin`은 다음 refresh를 허용하지만 persisted activation freshness를
 0으로 초기화하지 않는다. Metadata는 이 capability를 소비하지만 PostgreSQL table과 transaction
 구현을 직접 소유하지 않는다.
+
+Snapshot codec은 immutable Python tuple을 Control DB JSON array로 명시적으로 encode하고 legacy
+array/object document를 새 immutable graph로 decode한다. Persisted JSON shape, revision과 기존 row의
+호환성은 그대로이며 `MOD-07`에는 schema/data migration이 없다.
 
 ## 소비 계약
 
@@ -192,6 +205,7 @@ policy descriptor다. 이 dependency를 바꾸는 refactoring은 외부 context 
 - DB comment와 semantic text를 명령으로 실행하거나 join 규칙으로 해석하지 않는다.
 - Allowed schema/kind, tenant policy, budget, overlay와 revision material drift를 fail-closed한다.
 - Persisted snapshot payload와 revision이 다르면 저장값을 사용하지 않는다.
+- Published source/metadata graph에 mutable collection 또는 decoder/builder input alias를 남기지 않는다.
 - Process restart가 persisted activation freshness를 초기화하지 않는다.
 - Cache나 process health state를 Control DB authority로 사용하지 않는다.
 - Metadata response와 retrieval은 source별 budget의 relation/column/byte 상한을 지킨다.
@@ -232,10 +246,12 @@ immutable history/rolling replica compatibility를 포함한다.
 
 ```text
 uv run pytest tests/test_registry.py tests/test_catalog.py tests/test_metadata.py tests/test_relevance.py \
-  tests/test_revision.py tests/test_quality_level.py
+  tests/test_revision.py tests/test_metadata_store.py tests/test_quality_level.py
 ```
 
-Persisted store는 기본 pytest marker에서 제외되므로 다음을 별도로 실행한다.
+Persisted store의 PostgreSQL integration case는 기본 pytest marker에서 제외되므로 다음을 별도로
+실행한다. 같은 파일의 unmarked snapshot codec·legacy compatibility test는 위 focused gate에서
+실행된다.
 
 ```text
 uv run pytest -m integration tests/test_metadata_store.py

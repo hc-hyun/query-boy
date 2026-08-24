@@ -49,10 +49,10 @@ interface와 forwarding layer를 미리 만들 위험이 있다. 필요한 것�
 `D2-A`, `D3-A`, `D4-A`, `D5-A`와 “모든 권장 선택에 공통으로 유지할 불변조건”을 승인했다.
 구현은 `D0 -> D1 -> D2 -> D4 -> D3 -> D5` 순서로 직렬화하고 각 provider contract가 확정된
 뒤에만 서로 다른 consumer 구현을 병렬화한다. `D0-A`/`RTSAFE-01`, `D1-A`/`MOD-04`,
-`D2-A`/`MOD-05`와 `D4-A`/`MOD-06`은 구현·검증을 완료해
+`D2-A`/`MOD-05`, `D4-A`/`MOD-06`과 `D3-A`/`MOD-07`은 구현·검증을 완료해
 [completion ledger](../implementation-roadmap.md#14-post-baseline-completion-ledger-and-active-development)로
-이동했다. 나머지 Active TODO가 완료되기 전에는 승인된 목표를 현재 구현 계약으로 간주하지
-않으며, 승인 범위를 넘어서는 변경은 다시 승인받는다.
+이동했다. 남은 `D5-A`/`MOD-08`이 완료되기 전에는 그 목표를 현재 구현 계약으로 간주하지 않으며,
+승인 범위를 넘어서는 변경은 다시 승인받는다.
 
 ## Consequences
 

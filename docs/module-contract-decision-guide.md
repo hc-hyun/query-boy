@@ -22,9 +22,10 @@ ID별 구현 상태를 함께 기록한다.
 6. Offline 품질 CLI의 예외적인 조립 권한을 어디에 둘 것인가
 
 이 문서는 선택지의 상세 범위와 구현 순서를 설명하고 ADR 0018의 승인 기록을 보조한다. 위
-Approved 조합은 명시적으로 승인됐다. `RTSAFE-01`, `MOD-04`, `MOD-05`와 `MOD-06`은 구현이 끝나 완료
-ledger로 이동했고, 나머지 추적 ID가 완료되기 전까지 그 목표를 현재 구현 계약으로 오해하지 않는다. 승인
-범위를 넘어서는 code, schema, configuration 또는 module contract 변경은 다시 승인받는다.
+Approved 조합은 명시적으로 승인됐다. `RTSAFE-01`, `MOD-04`, `MOD-05`, `MOD-06`과 `MOD-07`은
+구현이 끝나 완료 ledger로 이동했다. 남은 `MOD-08`이 완료되기 전까지 D5 목표를 현재 구현 계약으로
+오해하지 않는다. 승인 범위를 넘어서는 code, schema, configuration 또는 module contract 변경은
+다시 승인받는다.
 
 ## 한눈에 보는 현재 상태
 
@@ -39,13 +40,16 @@ Control  ──> Assurance verified DTO
 일반 consumer ──> SourceReader
 Control writer ──> SourceProjectionWriter
 
+Source/Metadata ──> 외부 JSON은 유지하면서 published graph를 deep immutable로 제공
+
 Runtime ──> 필수 RuntimeQueryExecutor/RuntimeCatalogProvider를 검증하고 직접 호출
 
 Assurance core type/hash + offline CLI concrete wiring이 같은 파일에 공존
 ```
 
 승인된 전체 조합이 완료되면 다음처럼 된다. Runtime cleanup 행은 `RTSAFE-01`, Delivery/Control
-행은 `MOD-04`, Source capability 두 행은 `MOD-05`, lifecycle 행은 `MOD-06`으로 이미 반영됐다.
+행은 `MOD-04`, Source capability 두 행은 `MOD-05`, lifecycle 행은 `MOD-06`, published graph의
+deep immutability는 `MOD-07`로 이미 반영됐다.
 
 ```text
 권장 목표
@@ -57,6 +61,8 @@ Control  ──> Assurance verified 계약
 
 일반 consumer ──> SourceReader
 Control writer ──> SourceProjectionWriter
+
+Source/Metadata ──> 외부 JSON은 유지하면서 published graph를 deep immutable로 제공
 
 Runtime ──> 명시된 필수 lifecycle Protocol
 
@@ -143,8 +149,8 @@ Wave 0는 아래 행위를 허용하지 않는다.
 | D1 hidden dependency | `MOD-04` | 구현·검증 완료; roadmap ledger로 이동 |
 | D2 read/write capability | `MOD-05` | 구현·검증 완료; roadmap ledger로 이동 |
 | D4 lifecycle Protocol | `MOD-06` | 구현·검증 완료; roadmap ledger로 이동 |
-| D3 deep immutability | `MOD-07` | `MOD-06` 완료와 exact D3 choice 승인; 다음 구현 작업 |
-| D5 offline composition | `MOD-08` | `MOD-07` 완료와 exact D5 choice 승인 |
+| D3 deep immutability | `MOD-07` | 구현·검증 완료; roadmap ledger로 이동 |
+| D5 offline composition | `MOD-08` | `MOD-07` 완료와 exact D5 choice 승인; 다음 구현 작업 |
 
 이 plan, Wave 0 또는 Active TODO 순서만 승인하는 것은 `D0-A`~`D5-A` 선택 승인이 아니었다.
 2026-08-24 사용자가 [승인 회신 방법](#승인-회신-방법)의 권장 조합과 공통 불변조건을 명시적으로
@@ -303,7 +309,7 @@ DB/schema/data migration은 없다.
 
 ## D3. 공유 data의 deep immutability
 
-### 현재 사실
+### 구현 전 사실
 
 `SourceProfile`은 `frozen=True`지만 안쪽 semantic list/dict는 수정할 수 있다. `PreparedMetadata`도
 frozen이지만 안쪽 `CatalogSnapshot`, relation과 column object는 mutable하다. 겉표지에는
@@ -340,6 +346,19 @@ mutation이 다른 query나 revision 계산에 영향을 줄 수 있다.
 의도한 DB migration은 없다. Python public type 변화가 넓으므로 coordinating workstream 안에서
 provider를 먼저 편집하되, 모든 직접 consumer·문서·test까지 통과하는 하나의 atomic commit으로
 확정한다. Mixed-version replica의 external contract는 동일하게 유지한다.
+
+### D3-A 구현 결과 (`MOD-07` 완료)
+
+Source Catalog provider와 public dataclass는 sequence를 실제 tuple로, nested semantic mapping을
+원본 alias를 복사한 read-only mapping으로 freeze한다. Metadata catalog는 private mutable builder를
+사용한 뒤 frozen column/key/index/relation/snapshot graph를 반환하고 persistence decoder도 같은
+경계에서 freeze한다. Context와 snapshot codec은 tuple/read-only mapping을 기존 list/dict로
+명시적으로 projection한다.
+
+List/dict와 tuple/immutable mapping을 같은 canonical array/object로 처리하는 revision
+canonicalizer, nested mutation/alias 거부, legacy persisted JSON round-trip와 변경 전 exact revision
+및 snapshot JSON golden을 runnable test로 고정했다. Golden이 유지돼 Control DB migration은 없고
+HTTP/MCP, metadata revision, canonical result encoding과 verified hash 계약은 그대로다.
 
 ## D4. Runtime lifecycle Protocol
 
@@ -461,7 +480,7 @@ rollback으로 끝난다.
 | D0-A | 없음 | External contract 동일 | 최초 error 보존, exactly-once parent cleanup | Code rollback |
 | D1-A | 없음 | HTTP/storage 동일 | Private import 제거, verified identity/hash 불변 | Code rollback |
 | D2-A | 없음 | Runtime output 동일 | Read consumer type contract가 writer capability를 요구·노출하지 않음 | Code rollback |
-| D3-A | 없음이 목표 | JSON/revision/hash가 같을 때만 허용 | Nested mutation 거부, golden digest/hash 불변 | Code rollback |
+| D3-A | 없음; golden 호환 검증 완료 | External JSON/revision/hash 동일 | Nested mutation 거부, golden digest/hash 불변 | Code rollback |
 | D4-A | 없음 | External contract 동일 | Capability 누락 시 ready 전 fail-closed | Code rollback |
 | D5-A | 없음 | Production runtime와 무관 | CLI safety path와 exit/output 불변 | Code rollback |
 
@@ -479,10 +498,11 @@ D4-A  일반 application 계약은 작게, Runtime 필수 lifecycle은 명시적
 D5-A  기존 offline workflow는 유지하면서 composition 예외 위치를 격리
 ```
 
-변경량을 줄이는 것이 최우선이면 D3만 `D3-B`를 선택할 수 있다. 다만 large metadata를
-조회할 때마다 복사하는 CPU/memory 비용을 먼저 측정해야 한다. D0-A, D1-A, D2-A와 D4-A는 각각
-`RTSAFE-01`, `MOD-04`, `MOD-05`, `MOD-06`에서 완료되어 startup leak, Delivery hidden-import,
-혼합 consumer capability와 optional lifecycle debt는 더 이상 현재 상태가 아니다.
+변경량을 줄이는 것이 최우선이면 D3만 `D3-B`를 선택할 수 있었다. 다만 large metadata를
+조회할 때마다 복사하는 CPU/memory 비용을 먼저 측정해야 했다. 승인된 D0-A, D1-A, D2-A, D4-A와
+D3-A는 각각 `RTSAFE-01`, `MOD-04`, `MOD-05`, `MOD-06`, `MOD-07`에서 완료되어 startup leak,
+Delivery hidden-import, 혼합 consumer capability, optional lifecycle과 shallow shared-graph debt는 더
+이상 현재 상태가 아니다.
 
 ## 승인 회신 방법
 
@@ -521,8 +541,8 @@ type, 성능 상한, consumer와 rollback 범위를 후속 승인안으로 작�
 2. D1 숨은 dependency 제거 (`MOD-04`) — 완료
 3. D2 read/write capability 분리 (`MOD-05`) — 완료
 4. D4 lifecycle Protocol 명시 (`MOD-06`) — 완료
-5. D3 immutable snapshot 전환 (`MOD-07`) — 다음
-6. D5 offline CLI composition 격리 (`MOD-08`)
+5. D3 immutable snapshot 전환 (`MOD-07`) — 완료
+6. D5 offline CLI composition 격리 (`MOD-08`) — 다음
 7. 전체 dependency/contract audit
 
 각 단계는 provider contract, 직접 consumer, module 문서와 runnable contract test가 함께
@@ -555,7 +575,8 @@ uv run pytest -m integration
 | Startup enter-failure cleanup 보장 | `src/query_man/app.py` lifespan, [`test_runtime_startup_cleanup.py`](../tests/test_runtime_startup_cleanup.py), [Runtime startup contract](modules/runtime/README.md#startup-contract) |
 | Delivery의 public Control administration input 경계 | `src/query_man/source_admin_routes.py`, `src/query_man/source_admin.py`, [`test_documentation.py`](../tests/test_documentation.py), [`test_source_admin.py`](../tests/test_source_admin.py) |
 | 분리된 Source capability | `src/query_man/registry.py`의 `SourceReader`/`SourceProjectionWriter`, [`test_registry.py`](../tests/test_registry.py) |
-| Shallow immutable graph | `src/query_man/models.py`의 source/semantic/catalog/prepared types |
+| Deep immutable source/metadata graph | `src/query_man/models.py`, `src/query_man/registry.py`, `src/query_man/catalog.py`, [`test_registry.py`](../tests/test_registry.py), [`test_catalog.py`](../tests/test_catalog.py) |
+| D3 serialization/revision compatibility | `src/query_man/revision.py`, `src/query_man/metadata_store.py`, `src/query_man/metadata.py`, [`test_revision.py`](../tests/test_revision.py), [`test_metadata_store.py`](../tests/test_metadata_store.py) |
 | 명시된 Runtime lifecycle Protocol | `src/query_man/query.py`의 `RuntimeQueryExecutor`, `src/query_man/models.py`의 `RuntimeCatalogProvider`, [`test_query.py`](../tests/test_query.py), [`test_catalog.py`](../tests/test_catalog.py) |
 | Runtime required capability validation/direct lifecycle | `src/query_man/app.py`, [`test_managed_mode.py`](../tests/test_managed_mode.py), [`test_http.py`](../tests/test_http.py) |
 | Offline composition 예외 | `src/query_man/quality.py`, `src/query_man/verified.py`, [Assurance module](modules/assurance/README.md) |

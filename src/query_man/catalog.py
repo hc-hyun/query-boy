@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import re
+from collections.abc import Sequence
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from psycopg.rows import dict_row
@@ -12,6 +14,7 @@ from query_man.models import (
     CatalogForeignKey,
     CatalogIndex,
     CatalogRelation,
+    CatalogRelationKind,
     CatalogSnapshot,
     SourceProfile,
 )
@@ -271,7 +274,7 @@ class PostgresCatalog:
                 cursor = await connection.execute(
                     CATALOG_QUERY,
                     (
-                        source.allowed_schemas,
+                        list(source.allowed_schemas),
                         [_POSTGRES_KINDS[kind] for kind in source.allowed_relation_kinds],
                         source.budget.max_metadata_columns + 1,
                     ),
@@ -282,7 +285,7 @@ class PostgresCatalog:
                 structure_cursor = await connection.execute(
                     STRUCTURE_QUERY,
                     (
-                        source.allowed_schemas,
+                        list(source.allowed_schemas),
                         [_POSTGRES_KINDS[kind] for kind in source.allowed_relation_kinds],
                         source.budget.max_metadata_columns + 1,
                     ),
@@ -296,12 +299,14 @@ class PostgresCatalog:
                 raise
 
         relations = _rows_to_relations(rows)
-        _apply_structures(relations, structures)
         if len(relations) > source.budget.max_metadata_relations:
             raise RuntimeError("Catalog relation limit exceeded")
         if any(len(relation.columns) > source.budget.max_columns_per_relation for relation in relations):
             raise RuntimeError("Catalog per-relation column limit exceeded")
-        return CatalogSnapshot(relations=relations)
+        frozen_relations = tuple(relation.freeze() for relation in relations)
+        return CatalogSnapshot(
+            relations=_apply_structures(frozen_relations, structures)
+        )
 
     async def close(self) -> None:
         for pool in self._pools.values():
@@ -350,15 +355,43 @@ class PostgresCatalog:
             return pool
 
 
-def _rows_to_relations(rows: list[dict[str, Any]]) -> list[CatalogRelation]:
-    relations: dict[str, CatalogRelation] = {}
+@dataclass
+class _CatalogRelationBuilder:
+    schema: str
+    name: str
+    qualified_name: str
+    sql_name: str
+    kind: CatalogRelationKind
+    comment: str | None
+    estimated_rows: int | None
+    definition_hash: str | None
+    security_invoker: bool
+    columns: list[CatalogColumn] = field(default_factory=list)
+
+    def freeze(self) -> CatalogRelation:
+        return CatalogRelation(
+            schema=self.schema,
+            name=self.name,
+            qualified_name=self.qualified_name,
+            sql_name=self.sql_name,
+            kind=self.kind,
+            columns=tuple(self.columns),
+            comment=self.comment,
+            estimated_rows=self.estimated_rows,
+            definition_hash=self.definition_hash,
+            security_invoker=self.security_invoker,
+        )
+
+
+def _rows_to_relations(rows: list[dict[str, Any]]) -> list[_CatalogRelationBuilder]:
+    relations: dict[str, _CatalogRelationBuilder] = {}
     for row in rows:
         qualified_name = f"{row['schema_name']}.{row['relation_name']}"
         relation = relations.get(qualified_name)
         if relation is None:
             kind = str(row["relation_kind"])
             estimated = row["estimated_rows"]
-            relation = CatalogRelation(
+            relation = _CatalogRelationBuilder(
                 schema=str(row["schema_name"]),
                 name=str(row["relation_name"]),
                 qualified_name=qualified_name,
@@ -368,7 +401,6 @@ def _rows_to_relations(rows: list[dict[str, Any]]) -> list[CatalogRelation]:
                 definition_hash=row["view_definition_hash"],
                 security_invoker=bool(row["security_invoker"]),
                 estimated_rows=None if estimated is None else max(0, round(float(estimated))),
-                columns=[],
             )
             relations[qualified_name] = relation
         relation.columns.append(
@@ -385,31 +417,43 @@ def _rows_to_relations(rows: list[dict[str, Any]]) -> list[CatalogRelation]:
 
 
 def _apply_structures(
-    relations: list[CatalogRelation],
+    relations: Sequence[CatalogRelation],
     rows: list[dict[str, Any]],
-) -> None:
-    by_name = {relation.qualified_name: relation for relation in relations}
+) -> tuple[CatalogRelation, ...]:
+    by_name = {relation.qualified_name for relation in relations}
+    primary_keys = {
+        relation.qualified_name: relation.primary_key
+        for relation in relations
+        if relation.primary_key
+    }
+    foreign_keys = {
+        relation.qualified_name: list(relation.foreign_keys) for relation in relations
+    }
+    indexes = {
+        relation.qualified_name: list(relation.indexes) for relation in relations
+    }
     for row in rows:
         qualified_name = f"{row['schema_name']}.{row['relation_name']}"
-        relation = by_name.get(qualified_name)
-        if relation is None:
+        if qualified_name not in by_name:
             raise RuntimeError("Catalog structure references an unavailable relation")
-        columns = [str(column) for column in row["column_names"]]
+        columns = tuple(str(column) for column in row["column_names"])
         kind = row["structure_kind"]
         if kind == "primary_key":
-            if relation.primary_key:
+            if qualified_name in primary_keys:
                 raise RuntimeError("Catalog relation has multiple primary keys")
-            relation.primary_key = columns
+            primary_keys[qualified_name] = columns
         elif kind == "foreign_key":
-            relation.foreign_keys.append(
+            foreign_keys[qualified_name].append(
                 CatalogForeignKey(
                     columns=columns,
                     referenced_relation=str(row["referenced_relation"]),
-                    referenced_columns=[str(column) for column in row["referenced_columns"]],
+                    referenced_columns=tuple(
+                        str(column) for column in row["referenced_columns"]
+                    ),
                 )
             )
         elif kind == "index":
-            relation.indexes.append(
+            indexes[qualified_name].append(
                 CatalogIndex(
                     columns=columns,
                     unique=bool(row["is_unique"]),
@@ -418,6 +462,15 @@ def _apply_structures(
             )
         else:
             raise RuntimeError("Catalog returned an unknown structure kind")
+    return tuple(
+        replace(
+            relation,
+            primary_key=primary_keys.get(relation.qualified_name, ()),
+            foreign_keys=tuple(foreign_keys[relation.qualified_name]),
+            indexes=tuple(indexes[relation.qualified_name]),
+        )
+        for relation in relations
+    )
 
 
 def _quote_identifier(value: str) -> str:

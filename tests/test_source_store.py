@@ -389,7 +389,16 @@ async def test_source_store_publishes_rotates_rolls_back_and_deactivates(
         ).items
 
         refreshed_snapshot = minimal_development_snapshot()
-        refreshed_snapshot.relations[0].comment = "catalog active pointer refresh"
+        refreshed_snapshot = replace(
+            refreshed_snapshot,
+            relations=(
+                replace(
+                    refreshed_snapshot.relations[0],
+                    comment="catalog active pointer refresh",
+                ),
+                *refreshed_snapshot.relations[1:],
+            ),
+        )
         refreshed_metadata = PreparedMetadata(
             refreshed_snapshot,
             create_metadata_revision(source, refreshed_snapshot),

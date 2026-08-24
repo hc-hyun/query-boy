@@ -160,8 +160,9 @@ RuntimeQueryExecutor extends QueryExecutor:
 ## 소비 계약
 
 - [Source Catalog](../source-catalog/README.md)의 `SourceReader`로 얻는 source profile, budget, tenant
-  policy와 reader safety
-- [Metadata](../metadata/README.md)의 exact published snapshot/revision과 allowed relation ceiling
+  policy와 reader safety. Profile/semantic graph는 recursively immutable한 read-only 입력이다.
+- [Metadata](../metadata/README.md)의 exact recursively immutable published snapshot/revision과 allowed
+  relation ceiling
 - [Runtime](../runtime/README.md)의 operations reporting contract
 
 Delivery caller는 shared active source contract를 확인한 뒤 generated query ID와 server-derived
@@ -172,7 +173,7 @@ private implementation을 import한다는 뜻이 아니다.
 
 Guarded Query는 Control DB table이나 HTTP/MCP request model을 직접 알지 않는다.
 `QueryService`의 registry dependency는 `SourceReader`이며 source projection mutation capability를
-소비하지 않는다.
+소비하지 않는다. Source profile이나 published snapshot을 query 실행 중 in-place 변경하지 않는다.
 
 ## 불변조건
 

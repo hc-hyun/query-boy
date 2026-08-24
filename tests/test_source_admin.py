@@ -864,7 +864,7 @@ async def test_failed_staging_preserves_current_source() -> None:
     before = store.active["third-source"]
 
     incomplete = minimal_development_snapshot()
-    incomplete.relations = incomplete.relations[:1]
+    incomplete = replace(incomplete, relations=incomplete.relations[:1])
     catalog_factory.snapshot = incomplete
 
     with pytest.raises(SourceValidationError):
@@ -886,7 +886,7 @@ async def test_failed_staging_does_not_pollute_production_health() -> None:
         assert operations.snapshot()["sources"] == {"third-source": "healthy"}
 
         incomplete = minimal_development_snapshot()
-        incomplete.relations = incomplete.relations[:1]
+        incomplete = replace(incomplete, relations=incomplete.relations[:1])
         catalog_factory.snapshot = incomplete
         with pytest.raises(SourceValidationError):
             await admin.publish("third-source", _manifest(), "bad-update-secret")
@@ -1570,7 +1570,7 @@ async def test_deterministic_staging_rejection_is_receipted_without_restaging() 
     await admin.publish("third-source", _manifest(), "first-secret")
     current = store.active["third-source"]
     incomplete = minimal_development_snapshot()
-    incomplete.relations = incomplete.relations[:1]
+    incomplete = replace(incomplete, relations=incomplete.relations[:1])
     catalog_factory.snapshot = incomplete
     context = _mutation_context(
         8,

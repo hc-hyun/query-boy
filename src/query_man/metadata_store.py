@@ -293,14 +293,18 @@ def encode_snapshot(snapshot: CatalogSnapshot) -> dict[str, object]:
                 "comment": relation.comment,
                 "definition_hash": relation.definition_hash,
                 **({"security_invoker": True} if relation.security_invoker else {}),
-                **({"primary_key": relation.primary_key} if relation.primary_key else {}),
+                **(
+                    {"primary_key": list(relation.primary_key)}
+                    if relation.primary_key
+                    else {}
+                ),
                 **(
                     {
                         "foreign_keys": [
                             {
-                                "columns": key.columns,
+                                "columns": list(key.columns),
                                 "referenced_relation": key.referenced_relation,
-                                "referenced_columns": key.referenced_columns,
+                                "referenced_columns": list(key.referenced_columns),
                             }
                             for key in relation.foreign_keys
                         ]
@@ -312,7 +316,7 @@ def encode_snapshot(snapshot: CatalogSnapshot) -> dict[str, object]:
                     {
                         "indexes": [
                             {
-                                "columns": index.columns,
+                                "columns": list(index.columns),
                                 "unique": index.unique,
                                 "primary": index.primary,
                             }
@@ -348,7 +352,7 @@ def _decode(
     try:
         document = _SnapshotDocument.model_validate(raw)
         snapshot = CatalogSnapshot(
-            relations=[
+            relations=tuple(
                 CatalogRelation(
                     schema=relation.schema_name,
                     name=relation.relation_name,
@@ -358,7 +362,7 @@ def _decode(
                         f"{_quote_identifier(relation.relation_name)}"
                     ),
                     kind=relation.kind,
-                    columns=[
+                    columns=tuple(
                         CatalogColumn(
                             name=column.name,
                             sql_name=_quote_identifier(column.name),
@@ -368,31 +372,31 @@ def _decode(
                             comment=column.comment,
                         )
                         for column in relation.columns
-                    ],
+                    ),
                     comment=relation.comment,
                     estimated_rows=None,
                     definition_hash=relation.definition_hash,
                     security_invoker=relation.security_invoker,
-                    primary_key=relation.primary_key,
-                    foreign_keys=[
+                    primary_key=tuple(relation.primary_key),
+                    foreign_keys=tuple(
                         CatalogForeignKey(
-                            columns=key.columns,
+                            columns=tuple(key.columns),
                             referenced_relation=key.referenced_relation,
-                            referenced_columns=key.referenced_columns,
+                            referenced_columns=tuple(key.referenced_columns),
                         )
                         for key in relation.foreign_keys
-                    ],
-                    indexes=[
+                    ),
+                    indexes=tuple(
                         CatalogIndex(
-                            columns=index.columns,
+                            columns=tuple(index.columns),
                             unique=index.unique,
                             primary=index.primary,
                         )
                         for index in relation.indexes
-                    ],
+                    ),
                 )
                 for relation in document.relations
-            ]
+            )
         )
     except (TypeError, ValueError) as error:
         raise StoredMetadataInvalidError("Stored metadata document is invalid") from error

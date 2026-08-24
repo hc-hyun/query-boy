@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import inspect
 import os
-from dataclasses import replace
+from dataclasses import FrozenInstanceError, replace
 from typing import get_type_hints
 
 import pytest
@@ -12,8 +12,21 @@ from psycopg.conninfo import make_conninfo
 
 from query_man.catalog import PostgresCatalog, _apply_structures
 from query_man.metadata import MetadataService
-from query_man.models import CatalogProvider, RuntimeCatalogProvider
-from tests.helpers import ROOT_DIRECTORY, load_test_registry, minimal_development_snapshot
+from query_man.models import (
+    CatalogForeignKey,
+    CatalogIndex,
+    CatalogProvider,
+    CatalogSnapshot,
+    PreparedMetadata,
+    RuntimeCatalogProvider,
+)
+from tests.helpers import (
+    ROOT_DIRECTORY,
+    column,
+    load_test_registry,
+    minimal_development_snapshot,
+    relation,
+)
 
 
 def test_runtime_catalog_provider_protocol_has_exact_lifecycle_shape() -> None:
@@ -48,9 +61,65 @@ def test_runtime_catalog_provider_protocol_has_exact_lifecycle_shape() -> None:
     assert get_type_hints(MetadataService.__init__)["catalog"] is CatalogProvider
 
 
+def test_published_catalog_graph_is_recursively_immutable_and_alias_free() -> None:
+    base = relation("ai.example", [column("id")])
+    columns = list(base.columns)
+    primary_key = ["id"]
+    foreign_key_columns = ["id"]
+    referenced_columns = ["id"]
+    index_columns = ["id"]
+    foreign_keys = [
+        CatalogForeignKey(
+            foreign_key_columns,  # type: ignore[arg-type]
+            "ai.example",
+            referenced_columns,  # type: ignore[arg-type]
+        )
+    ]
+    indexes = [
+        CatalogIndex(index_columns, unique=True, primary=True)  # type: ignore[arg-type]
+    ]
+    published_relation = replace(  # type: ignore[arg-type]
+        base,
+        columns=columns,
+        primary_key=primary_key,
+        foreign_keys=foreign_keys,
+        indexes=indexes,
+    )
+    relations = [published_relation]
+    snapshot = CatalogSnapshot(relations)  # type: ignore[arg-type]
+    prepared = PreparedMetadata(snapshot, f"sha256:{'0' * 64}")
+
+    columns.append(column("mutated"))
+    primary_key.append("mutated")
+    foreign_key_columns.append("mutated")
+    referenced_columns.append("mutated")
+    index_columns.append("mutated")
+    foreign_keys.clear()
+    indexes.clear()
+    relations.clear()
+
+    assert isinstance(snapshot.relations, tuple)
+    assert isinstance(published_relation.columns, tuple)
+    assert published_relation.primary_key == ("id",)
+    assert published_relation.foreign_keys[0].columns == ("id",)
+    assert published_relation.foreign_keys[0].referenced_columns == ("id",)
+    assert published_relation.indexes[0].columns == ("id",)
+    assert prepared.snapshot is snapshot
+    with pytest.raises(FrozenInstanceError):
+        snapshot.relations = ()  # type: ignore[misc]
+    with pytest.raises(FrozenInstanceError):
+        published_relation.comment = "mutated"  # type: ignore[misc]
+    with pytest.raises(FrozenInstanceError):
+        published_relation.columns[0].name = "mutated"  # type: ignore[misc]
+    with pytest.raises(FrozenInstanceError):
+        prepared.revision = "mutated"  # type: ignore[misc]
+    with pytest.raises(AttributeError):
+        published_relation.columns.append(column("mutated"))  # type: ignore[attr-defined]
+
+
 def test_applies_primary_foreign_key_and_index_structures() -> None:
     relations = minimal_development_snapshot().relations
-    _apply_structures(
+    relations = _apply_structures(
         relations,
         [
             {
@@ -86,11 +155,11 @@ def test_applies_primary_foreign_key_and_index_structures() -> None:
         ],
     )
     by_name = {relation.qualified_name: relation for relation in relations}
-    assert by_name["ai.issue_overview"].primary_key == ["issue_id"]
+    assert by_name["ai.issue_overview"].primary_key == ("issue_id",)
     assert by_name["ai.issue_comments"].foreign_keys[0].referenced_relation == (
         "ai.issue_overview"
     )
-    assert by_name["ai.issue_overview"].indexes[0].columns == ["discovered_at"]
+    assert by_name["ai.issue_overview"].indexes[0].columns == ("discovered_at",)
 
 
 @pytest.mark.integration
@@ -109,8 +178,8 @@ async def test_live_catalog_collects_only_simple_visible_table_structures() -> N
     assert source is not None
     source = replace(
         source,
-        allowed_schemas=["development"],
-        allowed_relation_kinds=["table"],
+        allowed_schemas=("development",),
+        allowed_relation_kinds=("table",),
     )
     admin = await AsyncConnection.connect(
         make_conninfo(
@@ -148,7 +217,7 @@ async def test_live_catalog_collects_only_simple_visible_table_structures() -> N
 
     by_name = {relation.qualified_name: relation for relation in snapshot.relations}
     issues = by_name["development.issues"]
-    assert issues.primary_key == ["id"]
+    assert issues.primary_key == ("id",)
     assert {
         (tuple(key.columns), key.referenced_relation, tuple(key.referenced_columns))
         for key in issues.foreign_keys

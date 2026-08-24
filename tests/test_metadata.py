@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from dataclasses import replace
 
 import pytest
 
 from query_man.errors import MetadataUnavailableError
-from query_man.metadata import MetadataService
+from query_man.metadata import MetadataService, _to_relation_response
 from query_man.models import (
     CatalogForeignKey,
     CatalogIndex,
@@ -16,6 +17,7 @@ from query_man.models import (
     SourceProfile,
 )
 from query_man.registry import SourceRegistry
+from query_man.relevance import RankedRelation, SelectionReason
 from query_man.revision import create_metadata_revision
 from query_man.sql_validation import (
     DEFAULT_ALLOWED_FUNCTIONS,
@@ -144,7 +146,14 @@ def test_freshness_provenance_is_not_part_of_metadata_identity() -> None:
 @pytest.mark.asyncio
 async def test_rejects_semantic_overlay_drift() -> None:
     snapshot = minimal_development_snapshot()
-    snapshot.relations = [item for item in snapshot.relations if item.qualified_name == "ai.issue_overview"]
+    snapshot = replace(
+        snapshot,
+        relations=tuple(
+            item
+            for item in snapshot.relations
+            if item.qualified_name == "ai.issue_overview"
+        ),
+    )
     service = MetadataService(load_test_registry(), StaticCatalog(snapshot))
     with pytest.raises(MetadataUnavailableError):
         await service.get_context("development-issues", "최근 문제")
@@ -185,7 +194,7 @@ async def test_source_outage_fails_closed_after_stale_limit_expires() -> None:
 @pytest.mark.asyncio
 async def test_fails_closed_on_drift_even_with_cache() -> None:
     incomplete = minimal_development_snapshot()
-    incomplete.relations = incomplete.relations[:1]
+    incomplete = replace(incomplete, relations=incomplete.relations[:1])
     catalog = SnapshotSequenceCatalog([minimal_development_snapshot(), incomplete])
     service = MetadataService(load_test_registry(), catalog, cache_ttl_ms=0, now=lambda: 1000)
     await service.get_context("development-issues", "최근 문제")
@@ -202,7 +211,7 @@ async def test_invalidated_refresh_cannot_replace_new_profile_metadata() -> None
     second_source = replace(
         first_source,
         control_generation=2,
-        semantic_overlay=replace(first_source.semantic_overlay, business_terms=[]),
+        semantic_overlay=replace(first_source.semantic_overlay, business_terms=()),
     )
     assert first_source != second_source
     registry = SourceRegistry([first_source])
@@ -247,7 +256,7 @@ async def test_cached_metadata_must_match_current_source_contract() -> None:
     first = await service.get_published(first_source.source_id)
     second_source = replace(
         first_source,
-        semantic_overlay=replace(first_source.semantic_overlay, business_terms=[]),
+        semantic_overlay=replace(first_source.semantic_overlay, business_terms=()),
     )
     assert create_metadata_revision(second_source, first.snapshot) != first.revision
     registry.upsert(second_source)
@@ -299,6 +308,68 @@ async def test_exposes_deterministic_sql_capabilities_from_validation_policy() -
 
 
 @pytest.mark.asyncio
+async def test_context_projection_keeps_plain_json_arrays_and_objects() -> None:
+    service = MetadataService(
+        load_test_registry(),
+        StaticCatalog(minimal_development_snapshot()),
+    )
+
+    for question in (
+        "문제 원인과 조치를 보여줘",
+        "문제별 댓글을 보여줘",
+        "보고자와 담당자, 댓글 작성자별 활동 건수를 비교해줘",
+    ):
+        response = await service.get_context("development-issues", question)
+        encoded = json.dumps(response, ensure_ascii=False, separators=(",", ":"))
+
+        assert json.loads(encoded) == response
+        for join in response["joins"]:
+            assert isinstance(join["column_pairs"], list)
+            assert all(isinstance(pair, dict) for pair in join["column_pairs"])
+
+
+def test_relation_projection_bytes_match_pre_immutability_golden() -> None:
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+    relation = next(
+        item
+        for item in minimal_development_snapshot().relations
+        if item.qualified_name == "ai.issue_overview"
+    )
+    semantic = next(
+        item
+        for item in source.semantic_overlay.relations
+        if item.relation == relation.qualified_name
+    )
+    response = _to_relation_response(
+        RankedRelation(
+            relation,
+            semantic,
+            1.0,
+            [
+                SelectionReason("relation_alias", "problem"),
+                SelectionReason("column_alias", "원인", "cause"),
+            ],
+        ),
+        1,
+        source.semantic_overlay.joins,
+        source.semantic_overlay.business_terms,
+        "원인 문제",
+        20,
+    )
+    encoded = json.dumps(
+        response,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode()
+
+    assert len(encoded) == 3_781
+    assert hashlib.sha256(encoded).hexdigest() == (
+        "a3362a4d0b23e7dd0d95053ce410474785cd2185a77b6f39f15e65f048b554ea"
+    )
+
+
+@pytest.mark.asyncio
 async def test_returns_verified_user_activity_composition() -> None:
     service = MetadataService(load_test_registry(), StaticCatalog(minimal_development_snapshot()))
     response = await service.get_context("development-issues", "보고자와 담당자, 댓글 작성자별 활동 건수를 비교해줘")
@@ -313,14 +384,32 @@ async def test_returns_verified_user_activity_composition() -> None:
 @pytest.mark.asyncio
 async def test_exposes_physical_keys_without_approving_a_semantic_join() -> None:
     snapshot = minimal_development_snapshot()
-    by_name = {relation.qualified_name: relation for relation in snapshot.relations}
-    by_name["ai.issue_overview"].primary_key = ["issue_id"]
-    by_name["ai.issue_overview"].indexes = [
-        CatalogIndex(["discovered_at"], unique=False, primary=False)
-    ]
-    by_name["ai.issue_comments"].foreign_keys = [
-        CatalogForeignKey(["issue_id"], "ai.issue_overview", ["issue_id"])
-    ]
+    snapshot = replace(
+        snapshot,
+        relations=tuple(
+            replace(
+                relation,
+                primary_key=("issue_id",),
+                indexes=(
+                    CatalogIndex(
+                        ("discovered_at",), unique=False, primary=False
+                    ),
+                ),
+            )
+            if relation.qualified_name == "ai.issue_overview"
+            else replace(
+                relation,
+                foreign_keys=(
+                    CatalogForeignKey(
+                        ("issue_id",), "ai.issue_overview", ("issue_id",)
+                    ),
+                ),
+            )
+            if relation.qualified_name == "ai.issue_comments"
+            else relation
+            for relation in snapshot.relations
+        ),
+    )
     service = MetadataService(load_test_registry(), StaticCatalog(snapshot))
     response = await service.get_context(
         "development-issues",
@@ -367,13 +456,29 @@ async def test_scopes_wide_relation_columns_to_question_and_required_semantics()
         for relation in snapshot.relations
         if relation.qualified_name == "ai.issue_overview"
     )
-    for number in range(1, 61):
-        extra = column(f"extra_attribute_{number:02d}")
-        extra.ordinal = len(issue.columns) + 1
-        issue.columns.append(extra)
-    issue.indexes = [
-        CatalogIndex(["extra_attribute_60"], unique=False, primary=False)
-    ]
+    issue = replace(
+        issue,
+        columns=issue.columns
+        + tuple(
+            replace(
+                column(f"extra_attribute_{number:02d}"),
+                ordinal=len(issue.columns) + number,
+            )
+            for number in range(1, 61)
+        ),
+        indexes=(
+            CatalogIndex(
+                ("extra_attribute_60",), unique=False, primary=False
+            ),
+        ),
+    )
+    snapshot = replace(
+        snapshot,
+        relations=tuple(
+            issue if relation.qualified_name == issue.qualified_name else relation
+            for relation in snapshot.relations
+        ),
+    )
     registry = load_test_registry()
     sources = [
         replace(
@@ -476,7 +581,13 @@ async def test_pinned_different_revision_uses_active_freshness(
         freshness_age_ms=freshness_age_ms,
     )
     candidate_snapshot = minimal_development_snapshot()
-    candidate_snapshot.relations[0].comment = "different candidate"
+    candidate_snapshot = replace(
+        candidate_snapshot,
+        relations=(
+            replace(candidate_snapshot.relations[0], comment="different candidate"),
+            *candidate_snapshot.relations[1:],
+        ),
+    )
     store = MemoryMetadataStore()
     store.values[source.source_id] = {active_revision: active}
     store.active[source.source_id] = active_revision
@@ -540,7 +651,13 @@ async def test_rolls_back_to_a_previous_published_revision() -> None:
     registry = load_test_registry()
     first_snapshot = minimal_development_snapshot()
     second_snapshot = minimal_development_snapshot()
-    second_snapshot.relations[0].comment = "new catalog comment"
+    second_snapshot = replace(
+        second_snapshot,
+        relations=(
+            replace(second_snapshot.relations[0], comment="new catalog comment"),
+            *second_snapshot.relations[1:],
+        ),
+    )
     store = MemoryMetadataStore()
     clock = [1_000]
     service = MetadataService(

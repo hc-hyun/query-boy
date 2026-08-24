@@ -75,6 +75,19 @@ type 이동은 동작 변경과 섞지 않는 별도 mechanical refactoring으�
 object다. Profile 자체를 wire response, persisted JSON, log 또는 metric에 serialize하지 않는다.
 다른 module은 필요한 field만 memory 안에서 소비한다.
 
+### Published source immutability contract
+
+`SourceReader.get()`이 반환하는 `SourceProfile`과 도달 가능한 semantic graph는 재귀적으로
+immutable하다. Public sequence는 실제 tuple이고 `column_aliases`, `value_hints`와 join column
+pair는 원본 dict를 복사한 read-only mapping이며 mapping 안의 sequence도 tuple이다. Dataclass
+constructor와 YAML provider는 입력 collection을 복사해 published graph 밖의 mutable alias로
+내용을 바꿀 수 없게 한다. 따라서 registry는 같은 profile identity를 여러 reader에 안전하게
+공유할 수 있고 consumer는 in-place mutation 대신 새 검증 profile을 writer boundary에 전달한다.
+
+이 Python runtime representation은 Source manifest와 Control Plane의 stored manifest를 바꾸지
+않는다. YAML/JSON sequence와 object는 계속 array/list와 object/dict로 decode·serialize하며
+`SourceProfile` 자체는 여전히 wire나 persistence에 내보내지 않는다.
+
 ### Shared source validation type contract
 
 Delivery의 admin path/query wire validation은 현재 Source Catalog가 정의한 다음 type을 소비한다.
@@ -143,6 +156,7 @@ Source Catalog는 Control DB table이나 HTTP/MCP type을 직접 알지 않는�
   `source_id`의 host/port/database/user/TLS/environment 재지정 거부는 Control Plane과의 필수 cross-module
   invariant이며 그 경로를 우회해 registry를 갱신하지 않는다.
 - Budget, overlay와 tenant policy 변경이 metadata revision에 미치는 영향을 숨기지 않는다.
+- Published source/semantic graph에 mutable collection이나 외부 mutable alias를 남기지 않는다.
 - Runtime projection writer는 하나다. Ordinary reader와 isolated staging/Assurance application
   reference는 `SourceReader`로 좁히며 `upsert/remove`를 호출하지 않는다. Runtime composition은 같은
   concrete instance를 reader consumer와 Control writer에 capability별로 주입할 수 있다.
@@ -162,6 +176,7 @@ Source Catalog는 Control DB table이나 HTTP/MCP type을 직접 알지 않는�
 - Source manifest v2, provenance, budget profile 또는 access-related source field의 shape/version 변경
 - Delivery가 소비하는 `SourceEnvironment`, `Identifier`, `StableSlug`의 허용값, pattern 또는 길이 변경
 - `SourceProfile` 필드 의미나 public source summary 변경
+- Published source/semantic collection의 tuple/read-only mapping 표현이나 alias-copy 보장 변경
 - Allowed schema/relation kind, tenant isolation 또는 reader policy의 완화/확대
 - Metadata revision에 참여하는 source/budget/overlay 의미 변경
 - `SourceReader` 또는 `SourceProjectionWriter` method, argument, return shape나 capability 관계 변경

@@ -167,8 +167,10 @@ catalog와 query executor를 같은 순서의 두 `SourcePoolInvalidator`로 빠
 ## 소비 계약
 
 - [Source Catalog](../source-catalog/README.md)의 concrete registry construction,
-  `SourceReader`와 `SourceProjectionWriter` configuration capability
-- [Metadata](../metadata/README.md)의 service/store와 `RuntimeCatalogProvider` lifecycle
+  `SourceReader`와 `SourceProjectionWriter` configuration capability. 같은 registry instance가 공유하는
+  published profile graph는 recursively immutable하다.
+- [Metadata](../metadata/README.md)의 service/store, immutable catalog snapshot과
+  `RuntimeCatalogProvider` lifecycle
 - [Guarded Query](../guarded-query/README.md)의 `RuntimeQueryExecutor`
   admission/drain/invalidate/close lifecycle
 - [Control Plane](../control-plane/README.md)의 stores, reloader와 convergence semantics
@@ -190,6 +192,8 @@ catalog와 query executor를 같은 순서의 두 `SourcePoolInvalidator`로 빠
 - Public liveness/readiness에 source ID, internal component detail과 credential state를 노출하지 않는다.
 - Source별 동작 차이를 composition branch로 만들지 않는다.
 - Source authority mode를 source별로 섞거나 managed failure를 bootstrap file로 fallback하지 않는다.
+- Runtime composition은 shared source/profile/snapshot graph를 in-place 변경하지 않고 owner가 제공한
+  projection/invalidation capability만 호출한다.
 
 ## 모듈 내부 변경
 

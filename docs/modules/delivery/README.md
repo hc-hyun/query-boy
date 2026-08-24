@@ -153,7 +153,8 @@ bounded header/query/path parsing을 적용한다. MCP와 admin의 더 강한 �
 
 - [Source Catalog](../source-catalog/README.md)의 `SourceReader` sanitized source summaries와 admin wire
   validation에 사용하는 `SourceEnvironment`, `Identifier`, `StableSlug`
-- [Metadata](../metadata/README.md)의 context application result
+- [Metadata](../metadata/README.md)의 plain list/dict context application result. Internal immutable
+  source/snapshot representation을 wire에 직접 serialize하지 않는다.
 - [Guarded Query](../guarded-query/README.md)의 query/cancel result와 safe domain errors
 - [Control Plane](../control-plane/README.md)의 management projection, mutation receipt/use cases와
   conflict/error meaning 및 public sequence/verified-publish input
@@ -165,6 +166,8 @@ Admin route는 Control Plane의 `source_store.py`와 Assurance의 `verified.py`�
 Plane이 공개한 administration input만 만든다.
 위 Source Catalog validation type의 pattern/range를 바꾸면 admin path/query wire acceptance도 바뀌므로
 두 module의 계약과 기존 client compatibility를 함께 확인한다.
+Metadata/Source Catalog의 runtime tuple/read-only mapping 전환은 Delivery HTTP/MCP array/object shape를
+바꾸지 않으며 `/meta`와 `get_context`는 같은 기존 projection을 직렬화한다.
 
 ## 불변조건
 

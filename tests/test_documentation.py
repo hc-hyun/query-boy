@@ -114,7 +114,6 @@ EXPECTED_ID_COUNTS = {
     "MCPX": 8,
 }
 EXPECTED_OPEN_TODO_IDS = (
-    "MOD-07",
     "MOD-08",
     "CTRL-06",
     "CTRL-07",
@@ -158,6 +157,7 @@ EXPECTED_POST_BASELINE_COMPLETED_IDS = (
     "MOD-04",
     "MOD-05",
     "MOD-06",
+    "MOD-07",
 )
 CRITICAL_NON_PYTHON_MODULE_MAPPINGS = (
     "| `config/sources/`, `config/budget-profiles.yaml` | Source Catalog |",
@@ -367,9 +367,9 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
     assert "Lower-track의 `read-only prework`" in todo
     assert "**plan 승인은 contract 선택" in todo
     assert "승인이 아니다**" in todo
-    assert "`MOD-07` → `MOD-08`" in todo
-    assert "2026-08-24 사용자가 남은 `D3-A`, `D5-A`" in todo
-    assert "lifecycle Protocol `MOD-06`은" in todo
+    assert "다음 구현 작업은 `MOD-08`" in todo
+    assert "2026-08-24 사용자가 `D5-A`" in todo
+    assert "deep immutability `MOD-07`은 완료" in todo
     assert "Ledger의 `RTSAFE-01` 완료 및 `MOD-04`~`MOD-08`과 `CTRL-*` 완료" in todo
     assert "`RTSAFE-*`, `MOD-*`" not in todo
 
@@ -516,8 +516,11 @@ def test_module_boundary_docs_cover_owners_contracts_and_current_python_files() 
     assert "병렬 agent가 직접 priority를 재배열하지 않는다" in index
 
 
-def test_module_contract_decision_guide_records_approval_and_pending_implementation() -> None:
+def test_module_contract_decision_guide_records_approval_and_implementation_status() -> None:
     guide = MODULE_CONTRACT_DECISION_GUIDE.read_text(encoding="utf-8")
+    metadata_module = (MODULE_INDEX.parent / "metadata" / "README.md").read_text(
+        encoding="utf-8"
+    )
     readme = (ROOT_DIRECTORY / "README.md").read_text(encoding="utf-8")
     index = MODULE_INDEX.read_text(encoding="utf-8")
     todo = DEVELOPMENT_TODO.read_text(encoding="utf-8")
@@ -553,12 +556,24 @@ def test_module_contract_decision_guide_records_approval_and_pending_implementat
     assert "D1 숨은 dependency 제거 (`MOD-04`) — 완료" in guide
     assert "D2 read/write capability 분리 (`MOD-05`) — 완료" in guide
     assert "D4 lifecycle Protocol 명시 (`MOD-06`) — 완료" in guide
-    assert "D3 immutable snapshot 전환 (`MOD-07`) — 다음" in guide
+    assert "D3 immutable snapshot 전환 (`MOD-07`) — 완료" in guide
+    assert "D5 offline CLI composition 격리 (`MOD-08`) — 다음" in guide
+    assert "남은 `MOD-08`" in guide
+    assert (
+        guide.count(
+            "Source/Metadata ──> 외부 JSON은 유지하면서 published graph를 deep immutable로 제공"
+        )
+        == 2
+    )
+    assert "tests/test_revision.py tests/test_metadata_store.py" in metadata_module
+    assert "unmarked snapshot codec·legacy compatibility test" in metadata_module
     assert "Delivery의 public Control administration input 경계" in guide
     assert "`MOD-04`" in roadmap
     assert "`MOD-05`" in roadmap
     assert "`MOD-06`" in roadmap
-    assert "`D3-A`, `D5-A`" in todo
+    assert "`MOD-07`" in roadmap
+    assert "`D5-A`" in todo
+    assert "`D3-A`, `D5-A`" not in todo
     for document in (readme, index, todo, roadmap):
         assert MODULE_CONTRACT_DECISION_GUIDE.name in document
 

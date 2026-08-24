@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import ast
 import inspect
+import json
 import shutil
 import textwrap
-from dataclasses import replace
+from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
+from types import MappingProxyType
 from typing import get_type_hints
 
 import pytest
@@ -87,6 +89,85 @@ def test_source_consumers_receive_only_the_capability_they_need() -> None:
     assert _local_annotation(quality_module._run, "registry") == "SourceReader"
     assert _local_annotation(verified_module._run, "registry") == "SourceReader"
     assert _local_annotation(SourceAdminService._stage, "registry") == "SourceReader"
+
+
+def test_published_source_profile_graph_is_recursively_immutable() -> None:
+    registry = load_test_registry()
+    source = registry.get("development-issues")
+    assert source is not None
+    overlay = source.semantic_overlay
+
+    assert isinstance(source.allowed_schemas, tuple)
+    assert isinstance(source.allowed_relation_kinds, tuple)
+    assert isinstance(overlay.relations, tuple)
+    assert isinstance(overlay.joins, tuple)
+    assert isinstance(overlay.business_terms, tuple)
+    assert isinstance(overlay.question_rules, tuple)
+    assert isinstance(overlay.composition_hints, tuple)
+    for relation in overlay.relations:
+        assert isinstance(relation.aliases, tuple)
+        assert isinstance(relation.use_for, tuple)
+        assert isinstance(relation.column_aliases, MappingProxyType)
+        assert isinstance(relation.value_hints, MappingProxyType)
+        assert all(isinstance(items, tuple) for items in relation.column_aliases.values())
+        assert all(isinstance(items, tuple) for items in relation.value_hints.values())
+        assert isinstance(relation.measures, tuple)
+        assert all(isinstance(measure.aliases, tuple) for measure in relation.measures)
+        if relation.grain is not None:
+            assert isinstance(relation.grain.key_columns, tuple)
+    for join in overlay.joins:
+        assert isinstance(join.column_pairs, tuple)
+        assert all(isinstance(pair, MappingProxyType) for pair in join.column_pairs)
+    for term in overlay.business_terms:
+        assert isinstance(term.aliases, tuple)
+        assert isinstance(term.predicates, tuple)
+        assert all(isinstance(predicate.values, tuple) for predicate in term.predicates)
+    for rule in overlay.question_rules:
+        assert isinstance(rule.phrases, tuple)
+        assert isinstance(rule.missing_concepts, tuple)
+        assert isinstance(rule.options, tuple)
+    for hint in overlay.composition_hints:
+        assert isinstance(hint.phrases, tuple)
+        assert isinstance(hint.combine_keys, tuple)
+
+    with pytest.raises(FrozenInstanceError):
+        source.name = "mutated"  # type: ignore[misc]
+    with pytest.raises(TypeError):
+        overlay.relations[0].column_aliases["mutated"] = ()  # type: ignore[index]
+    with pytest.raises(TypeError):
+        overlay.joins[0].column_pairs[0]["left"] = "mutated"  # type: ignore[index]
+    with pytest.raises(AttributeError):
+        overlay.relations.append(overlay.relations[0])  # type: ignore[attr-defined]
+
+
+def test_source_profile_construction_does_not_retain_mutable_aliases() -> None:
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+    relation = source.semantic_overlay.relations[0]
+    join = source.semantic_overlay.joins[0]
+    schemas = list(source.allowed_schemas)
+    aliases = ["original-alias"]
+    column_aliases = {"issue_id": ["original-column-alias"]}
+    pair = {"left": "issue_id", "right": "issue_id"}
+
+    copied_source = replace(source, allowed_schemas=schemas)  # type: ignore[arg-type]
+    copied_relation = replace(  # type: ignore[arg-type]
+        relation,
+        aliases=aliases,
+        column_aliases=column_aliases,
+    )
+    copied_join = replace(join, column_pairs=[pair])  # type: ignore[arg-type]
+    schemas.append("mutated")
+    aliases.append("mutated")
+    column_aliases["issue_id"].append("mutated")
+    pair["left"] = "mutated"
+
+    assert "mutated" not in copied_source.allowed_schemas
+    assert copied_relation.aliases == ("original-alias",)
+    assert copied_relation.column_aliases["issue_id"] == (
+        "original-column-alias",
+    )
+    assert copied_join.column_pairs[0]["left"] == "issue_id"
 
 
 def test_loads_public_source_fields_only() -> None:
@@ -252,7 +333,7 @@ def test_accepts_postgresql_identifier_boundary_in_projected_fields() -> None:
     validated = validate_source_manifest(raw, {identifier: budget}, "reader-secret")
 
     assert validated.profile.budget.name == identifier
-    assert validated.profile.allowed_schemas == [identifier]
+    assert validated.profile.allowed_schemas == (identifier,)
     assert validated.profile.connection.database == identifier
     assert validated.profile.connection.user == identifier
 
@@ -370,6 +451,11 @@ def test_validates_control_plane_manifest_without_storing_secret(
 
     assert validated.profile.connection.password == "control-plane-secret"
     assert "control-plane-secret" not in str(validated.document)
+    assert json.loads(json.dumps(validated.document)) == validated.document
+    assert isinstance(validated.document["allowed_schemas"], list)
+    assert isinstance(validated.document["allowed_relation_kinds"], list)
+    assert isinstance(validated.document["semantic_overlay"], dict)
+    assert isinstance(validated.document["semantic_overlay"]["relations"], list)  # type: ignore[index]
     assert validated.document["version"] == 2
     assert validated.document["provenance"] == raw["provenance"]
     assert validated.profile.provenance.owner == "query-man"

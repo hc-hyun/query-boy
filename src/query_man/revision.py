@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict
+from collections.abc import Mapping, Sequence
+from dataclasses import fields, is_dataclass
 from typing import Any
 
 from query_man.models import CatalogSnapshot, SourceProfile
@@ -18,8 +19,8 @@ def create_metadata_revision(source: SourceProfile, catalog: CatalogSnapshot) ->
             if source.tenant_isolation != "none"
             else {}
         ),
-        "execution_budget": asdict(source.budget),
-        "semantic_overlay": asdict(source.semantic_overlay),
+        "execution_budget": source.budget,
+        "semantic_overlay": source.semantic_overlay,
         "relations": [
             {
                 "schema": relation.schema,
@@ -82,16 +83,20 @@ def create_metadata_revision(source: SourceProfile, catalog: CatalogSnapshot) ->
 
 
 def _canonicalize(value: Any) -> Any:
-    if isinstance(value, list):
+    if is_dataclass(value) and not isinstance(value, type):
+        return _canonicalize(
+            {field.name: getattr(value, field.name) for field in fields(value)}
+        )
+    if isinstance(value, (list, tuple)):
         result = [_canonicalize(item) for item in value]
         return sorted(
             result,
             key=lambda item: json.dumps(item, ensure_ascii=False, separators=(",", ":"), sort_keys=True),
         )
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         return {key: _canonicalize(item) for key, item in sorted(value.items()) if item is not None}
     return value
 
 
-def _ordered_names(values: list[str]) -> list[dict[str, str]]:
+def _ordered_names(values: Sequence[str]) -> list[dict[str, str]]:
     return [{f"{position:04d}": value} for position, value in enumerate(values)]

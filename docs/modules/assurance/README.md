@@ -126,8 +126,10 @@ core는 Control DB implementation을 import하지 않는다.
 
 ## 소비 계약
 
-- [Source Catalog](../source-catalog/README.md)의 `SourceReader`로 얻는 known source와 semantic definition
-- [Metadata](../metadata/README.md)의 context, published revision과 L0/L1/L2 gate semantics
+- [Source Catalog](../source-catalog/README.md)의 `SourceReader`로 얻는 recursively immutable known
+  source와 semantic definition
+- [Metadata](../metadata/README.md)의 plain JSON context, immutable published snapshot/revision과
+  L0/L1/L2 gate semantics
 - [Guarded Query](../guarded-query/README.md)의 SQL policy, guarded execution과 canonical result encoding
 
 Assurance는 Delivery transport나 Control DB concrete adapter를 통해 검증 규칙을 우회하지 않는다.
@@ -135,6 +137,8 @@ Assurance는 Delivery transport나 Control DB concrete adapter를 통해 검증 
 ## 불변조건
 
 - Verified contract는 exact metadata revision과 relation set에 묶인다.
+- Source/metadata Python collection representation 전환만으로 metadata revision, canonical result
+  encoding 또는 verified result hash를 바꾸지 않는다.
 - Truncated result, changed column order, row count 또는 hash는 verification 성공이 아니다.
 - Expected output을 live result에서 자동 갱신하거나 승인하지 않는다.
 - Quality/verified config의 unknown version/field/source와 duplicate ID를 fail-closed한다.

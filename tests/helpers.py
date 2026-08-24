@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 
@@ -34,23 +34,27 @@ def column(name: str, data_type: str = "text") -> CatalogColumn:
     return CatalogColumn(name, f'"{name}"', 1, data_type, "unknown")
 
 
-def relation(qualified_name: str, columns: list[CatalogColumn], kind: str = "view") -> CatalogRelation:
+def relation(
+    qualified_name: str,
+    columns: Sequence[CatalogColumn],
+    kind: str = "view",
+) -> CatalogRelation:
     schema, name = qualified_name.split(".", 1)
-    for index, item in enumerate(columns, 1):
-        item.ordinal = index
     return CatalogRelation(
         schema=schema,
         name=name,
         qualified_name=qualified_name,
         sql_name=f'"{schema}"."{name}"',
         kind=kind,  # type: ignore[arg-type]
-        columns=columns,
+        columns=tuple(
+            replace(item, ordinal=index) for index, item in enumerate(columns, 1)
+        ),
     )
 
 
 def minimal_development_snapshot() -> CatalogSnapshot:
     return CatalogSnapshot(
-        [
+        (
             relation(
                 "ai.issue_comments",
                 [
@@ -90,5 +94,5 @@ def minimal_development_snapshot() -> CatalogSnapshot:
                     column("unresolved_issue_count", "integer"),
                 ],
             ),
-        ]
+        )
     )

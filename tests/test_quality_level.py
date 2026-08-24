@@ -85,7 +85,13 @@ async def test_rejected_rollback_preserves_active_revision() -> None:
     old_value = PreparedMetadata(snapshot, old_revision)
 
     current_snapshot = minimal_development_snapshot()
-    current_snapshot.relations[0].comment = "verified revision"
+    current_snapshot = replace(
+        current_snapshot,
+        relations=(
+            replace(current_snapshot.relations[0], comment="verified revision"),
+            *current_snapshot.relations[1:],
+        ),
+    )
     current_revision = create_metadata_revision(source, current_snapshot)
     current_value = PreparedMetadata(current_snapshot, current_revision)
     store = MemoryMetadataStore()

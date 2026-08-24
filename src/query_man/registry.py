@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Protocol
@@ -499,8 +499,8 @@ def _resolve_source(
             password=password,
             ssl=parsed.connection.ssl,
         ),
-        allowed_schemas=list(dict.fromkeys(parsed.allowed_schemas)),
-        allowed_relation_kinds=list(dict.fromkeys(parsed.allowed_relation_kinds)),  # type: ignore[arg-type]
+        allowed_schemas=tuple(dict.fromkeys(parsed.allowed_schemas)),
+        allowed_relation_kinds=tuple(dict.fromkeys(parsed.allowed_relation_kinds)),  # type: ignore[arg-type]
         budget=budget,
         semantic_overlay=overlay,
         provenance=SourceProvenance(
@@ -514,7 +514,7 @@ def _resolve_source(
 
 
 def _build_overlay(raw: _SemanticOverlay) -> SemanticOverlay:
-    relations = [
+    relations = tuple(
         RelationSemantic(
             relation=item.relation,
             role=item.role,  # type: ignore[arg-type]
@@ -531,9 +531,11 @@ def _build_overlay(raw: _SemanticOverlay) -> SemanticOverlay:
             ),
             default_time_column=item.default_time_column,
             use_for=_unique(item.use_for),
-            column_aliases={key: _unique(value) for key, value in item.column_aliases.items()},
+            column_aliases={
+                key: _unique(value) for key, value in item.column_aliases.items()
+            },
             value_hints={key: _unique(value) for key, value in item.value_hints.items()},
-            measures=[
+            measures=tuple(
                 MeasureDefinition(
                     name=measure.name,
                     description=measure.description,
@@ -544,30 +546,30 @@ def _build_overlay(raw: _SemanticOverlay) -> SemanticOverlay:
                     denominator_measure=measure.denominator_measure,
                 )
                 for measure in item.measures
-            ],
+            ),
         )
         for item in raw.relations
-    ]
+    )
     return SemanticOverlay(
         default_relation=raw.default_relation,
         relations=relations,
-        joins=[
+        joins=tuple(
             JoinDefinition(
                 left_relation=item.left_relation,
                 right_relation=item.right_relation,
-                column_pairs=[pair.model_dump() for pair in item.column_pairs],
+                column_pairs=tuple(pair.model_dump() for pair in item.column_pairs),
                 cardinality=item.cardinality,  # type: ignore[arg-type]
                 fanout=item.fanout,
                 guidance=item.guidance,
             )
             for item in raw.joins
-        ],
-        business_terms=[
+        ),
+        business_terms=tuple(
             BusinessTermDefinition(
                 name=item.name,
                 description=item.description,
                 aliases=_unique(item.aliases),
-                predicates=[
+                predicates=tuple(
                     BusinessPredicate(
                         relation=predicate.relation,
                         column=predicate.column,
@@ -575,12 +577,12 @@ def _build_overlay(raw: _SemanticOverlay) -> SemanticOverlay:
                         values=_unique(predicate.values),
                     )
                     for predicate in item.predicates
-                ],
+                ),
                 calculation=item.calculation,
             )
             for item in raw.business_terms
-        ],
-        question_rules=[
+        ),
+        question_rules=tuple(
             QuestionRule(
                 code=item.code,
                 status=item.status,  # type: ignore[arg-type]
@@ -590,8 +592,8 @@ def _build_overlay(raw: _SemanticOverlay) -> SemanticOverlay:
                 options=_unique(item.options),
             )
             for item in raw.question_rules
-        ],
-        composition_hints=[
+        ),
+        composition_hints=tuple(
             CompositionHint(
                 name=item.name,
                 phrases=_unique(item.phrases),
@@ -600,11 +602,15 @@ def _build_overlay(raw: _SemanticOverlay) -> SemanticOverlay:
                 combine_keys=_unique(item.combine_keys),
             )
             for item in raw.composition_hints
-        ],
+        ),
     )
 
 
-def _validate_overlay(path: Path | str, allowed_schemas: list[str], overlay: SemanticOverlay) -> None:
+def _validate_overlay(
+    path: Path | str,
+    allowed_schemas: Sequence[str],
+    overlay: SemanticOverlay,
+) -> None:
     relation_names = [item.relation for item in overlay.relations]
     _require_unique(path, "relation semantics", relation_names)
     names = set(relation_names)
@@ -633,10 +639,10 @@ def _validate_overlay(path: Path | str, allowed_schemas: list[str], overlay: Sem
             raise RegistryConfigurationError(f"{path} business term {term.name} references an unknown relation")
 
 
-def _require_unique(path: Path | str, kind: str, values: list[str]) -> None:
+def _require_unique(path: Path | str, kind: str, values: Sequence[str]) -> None:
     if len(set(values)) != len(values):
         raise RegistryConfigurationError(f"{path} contains duplicate {kind}")
 
 
-def _unique[T](values: list[T]) -> list[T]:
-    return list(dict.fromkeys(values))
+def _unique[T](values: Sequence[T]) -> tuple[T, ...]:
+    return tuple(dict.fromkeys(values))
