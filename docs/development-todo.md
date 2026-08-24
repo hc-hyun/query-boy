@@ -45,9 +45,9 @@ resource를 역순으로 정리해 connection pool이나 background task를 남�
 | Direct consumers | Runtime server/process lifecycle과 readiness; 새 cross-module consumer는 없음 |
 | Affected providers/verifiers | Delivery MCP child lifespan과 이미 조립된 Control Plane/Metadata/Guarded Query resource의 cleanup capability; Runtime/Delivery failure-path tests |
 | Contract baseline | [Runtime startup contract](modules/runtime/README.md#startup-contract)은 child `enter` 실패 시 역순 cleanup을 현재 보장하지 않는 debt로 명시한다. |
-| Approval gate | Exactly-once 역순 cleanup과 원래 startup error 보존은 새 lifecycle 보장이다. 선택지와 provider 영향을 사용자에게 제시해 승인받기 전에는 구현하지 않는다. Method, grace, startup/shutdown 순서나 public health 의미까지 바뀌면 그 범위도 별도 승인받는다. |
+| Approval gate | 2026-08-24 사용자가 `D0-A`와 decision guide의 공통 불변조건을 승인했다. Method, grace, 그 밖의 startup/shutdown 순서나 public health 의미까지 바뀌면 그 범위는 별도 승인받는다. |
 | Single writer | Runtime owner가 `app.py` lifespan symbol을 수정하고 Delivery owner는 route/wire 부분을 동시 편집하지 않는다. |
-| Start gate | 계약 선택 승인 전 blocked; 승인되면 repository 전체의 다음 구현 작업 |
+| Start gate | `D0-A` 승인 완료; repository 전체의 다음 구현 작업 |
 | Verification | Runtime/Delivery focused failure-path test, `ruff`, `mypy`, root `pytest`; DB resource 경계를 건드리면 integration test |
 
 - [ ] `RTSAFE-01` MCP child lifespan의 `__aenter__`가 실패하면 진입하지 못한 child에
@@ -67,24 +67,24 @@ shared snapshot과 offline composition 경계를 승인된 공개 contract로 �
 | Direct consumers | `MOD-04` Delivery, `MOD-05` ordinary source readers/Control projector, `MOD-06` Runtime/Control reloader, `MOD-07` source/metadata snapshot consumers, `MOD-08` offline CLI entrypoint |
 | Affected providers/verifiers | Delivery, Runtime, Control Plane, Metadata, Guarded Query, Source Catalog과 Assurance의 각 focused/contract test |
 | Contract baseline | ADR 0018, 현재 module index/README와 decision guide에 적은 현재 동작·공통 불변조건 |
-| Approval gate | `D1-A`, `D2-A`, `D4-A`, `D3-A`, `D5-A`는 모두 권장 초안이며 미승인이다. 각 exact A choice를 사용자가 명시적으로 승인하기 전에는 해당 ID를 구현하지 않는다. `D1`/`D5`의 B/C와 `D2`/`D3`/`D4`의 B는 구현 전 exact follow-up contract를 다시 승인받아야 한다. `D2-C`/`D3-C`/`D4-C`는 현재 상태와 debt를 유지해 구현할 내용이 없다. 이를 선택하면 사용자가 해당 P0.5 ID의 bypass/deferral과 P1 Start gate를 별도로 재결정해야 한다. |
+| Approval gate | 2026-08-24 사용자가 `D1-A`, `D2-A`, `D4-A`, `D3-A`, `D5-A`와 decision guide의 공통 불변조건을 승인했다. 승인된 exact 범위를 넘어서는 변경이나 대안 전환은 다시 승인받는다. |
 | Single writer | Coordinating agent가 `MOD-04` → `MOD-05` → `MOD-06` → `MOD-07` → `MOD-08` 순서로 contract/provider를 직렬화한다. Provider baseline 확정 뒤 서로 다른 consumer implementation만 병렬화한다. |
-| Start gate | `RTSAFE-01` 완료 후, 각 exact choice 승인을 받은 ID만 위 순서로 시작한다. Lower-track read-only prework는 지금 가능하지만 item 시작이나 baseline 변경은 아니다. |
+| Start gate | `RTSAFE-01` 완료 후 `MOD-04`부터 위 순서로 시작한다. Lower-track read-only prework는 지금 가능하지만 item 시작이나 baseline 변경은 아니다. |
 | Verification | Decision guide의 각 exact contract test, provider와 모든 직접 consumer focused test, `ruff`, `mypy`, root `pytest`, DB 경계의 integration test |
 
-- [ ] `MOD-04` 사용자가 `D1-A` 또는 후속 exact contract를 승인한 뒤 Delivery의
+- [ ] `MOD-04` 승인된 `D1-A`에 따라 Delivery의
   Control Plane persistence/Assurance DTO hidden import를 승인된 public contract/dependency 방향으로
   회수하고 external wire/storage 의미 불변을 검증한다.
-- [ ] `MOD-05` 사용자가 `D2-A` 또는 후속 exact contract를 승인한 뒤 ordinary source
+- [ ] `MOD-05` 승인된 `D2-A`에 따라 ordinary source
   consumer와 Control projector의 read/write capability를 승인된 type 경계로 분리하고 runtime
   output 불변을 검증한다.
-- [ ] `MOD-06` 사용자가 `D4-A` 또는 후속 exact contract를 승인한 뒤 Guarded Query와
+- [ ] `MOD-06` 승인된 `D4-A`에 따라 Guarded Query와
   Metadata가 Runtime에 필요한 lifecycle capability를 승인된 Protocol로 제공하고 누락 adapter가
   ready 전 fail-closed하는지 검증한다.
-- [ ] `MOD-07` 사용자가 `D3-A` 또는 후속 exact contract를 승인한 뒤 Source Catalog과
+- [ ] `MOD-07` 승인된 `D3-A`에 따라 Source Catalog과
   Metadata의 public snapshot을 승인된 immutability 경계로 전환하고 serialized JSON, revision과
   verified hash 불변을 검증한다.
-- [ ] `MOD-08` 사용자가 `D5-A` 또는 후속 exact contract를 승인한 뒤 Assurance
+- [ ] `MOD-08` 승인된 `D5-A`에 따라 Assurance
   offline CLI concrete composition을 승인된 owner/경계로 격리하고 command/output/exit와 Guarded Query
   safety path 불변을 검증한다.
 
@@ -222,11 +222,10 @@ Production mutation executor는 이 track에 없다. 필요해지면 credential 
 ## Approval-Gated Contract Work
 
 Startup cleanup은 `RTSAFE-01`, hidden dependency/read-write/lifecycle/immutability/offline composition은
-`MOD-04`~`MOD-08`이 순서와 완료 조건만 추적한다. 이 scheduling 또는 Wave 0
-prework에 대한 승인은 [module contract decision guide](module-contract-decision-guide.md)의
-`D0-A`~`D5-A` 계약 선택 승인이 아니다. 사용자가 각 exact choice와 공통 불변조건
-범위를 명시적으로 승인하기 전에는 관련 code/schema/config/contract 문서의
-의미를 변경하지 않는다.
+`MOD-04`~`MOD-08`이 순서와 완료 조건을 추적한다. 2026-08-24 사용자는
+[module contract decision guide](module-contract-decision-guide.md)의 `D0-A`~`D5-A`와 공통
+불변조건을 명시적으로 승인했다. 각 ID가 완료되기 전에는 승인된 목표를 현재 구현 계약으로
+오해하지 않으며, 승인 범위를 넘어서는 의미 변경은 다시 승인받는다.
 
 ## Explicit Non-Goals
 

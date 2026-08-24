@@ -130,7 +130,7 @@ owner는 주의점에 기록하며 primary owner와 같은 뜻으로 해석하�
 | Root `README.md`, `docs/architecture.md`, `docs/mvp.md` | Coordinating agent | 전체 system navigation과 current/target 범위를 여러 module에 handoff한다. 각 사실의 module owner가 검토하고 coordinating agent가 single-writer로 편집한다. |
 | `docs/development-todo.md` | Coordinating agent | Repository 전체 priority, approval/start gate와 single-writer handoff를 소유한다. TODO 추가는 계약 승인이 아니며 병렬 agent가 직접 priority를 재배열하지 않는다. |
 | `docs/implementation-roadmap.md` | Coordinating agent | 완료 ID와 evidence를 보존하는 immutable completion ledger다. Primary module 결과와 Assurance evidence를 확인한 뒤 한 writer가 갱신한다. |
-| `docs/module-contract-decision-guide.md` | Coordinating agent | 승인 전 proposal과 선택 범위를 전달하는 공통 handoff 문서다. 선택 전 current contract나 accepted ADR로 해석하지 않고 한 writer만 초안을 갱신한다. |
+| `docs/module-contract-decision-guide.md` | Coordinating agent | 승인된 D0-A~D5-A의 exact 범위, 구현 순서와 아직 완료되지 않은 current/target 차이를 전달하는 공통 handoff 문서다. 한 writer만 갱신한다. |
 | `docs/verification/`의 cross-module evidence | Assurance | 실행 시점의 provider/consumer evidence를 보존한다. 새 evidence는 coordinating writer가 작성하고 과거 evidence를 현재 보장처럼 소급 수정하지 않는다. |
 | Root `AGENTS.md`, 이 module index와 cross-module accepted ADR | Coordinating agent | Repository governance와 공통 contract authority다. 영향 module owner review 뒤 coordinating agent만 편집한다. |
 
@@ -205,13 +205,14 @@ Module contract는 사용자 명시적 승인 없이 변경하지 않는다. 일
 사용자가 해당 계약과 영향 범위를 명시적으로 승인한 뒤에만 code, schema, configuration과 계약
 문서를 같은 변경에서 갱신한다. 승인 범위를 넘어서는 추가 계약 변경은 다시 승인을 받는다.
 
-## 승인 대기 중인 계약 강화
+## 승인된 계약 강화와 구현 상태
 
 현재 조사된 startup cleanup, hidden dependency, read/write capability, deep immutability,
 lifecycle Protocol과 offline composition 선택지는
-[module contract decision guide](../module-contract-decision-guide.md)에 설명한다. 이 문서는
-proposal이며 선택 ID와 공통 불변조건을 사용자가 명시적으로 승인하기 전에는 accepted ADR이나
-현재 contract가 아니다.
+[module contract decision guide](../module-contract-decision-guide.md)에 설명한다. 사용자는
+2026-08-24 `D0-A`~`D5-A`와 공통 불변조건을 승인했다. 각 Active TODO가 완료되기 전에는 승인된
+target을 현재 구현 contract로 해석하지 않으며, contract/provider를 순서대로 확정한 뒤에만
+consumer implementation을 병렬화한다.
 
 ## Agent 작업 절차
 

@@ -43,6 +43,14 @@ interface와 forwarding layer를 미리 만들 위험이 있다. 필요한 것�
 - 현재 shared file은 transition map의 모든 owner가 공동 영향 범위다. 물리 package 이동은 public
   의미를 보존하고 runnable tests로 검증하는 별도 mechanical refactoring으로 수행한다.
 
+### 2026-08-24 Approved Contract-Hardening Follow-up
+
+사용자는 [module contract decision guide](../module-contract-decision-guide.md)의 `D0-A`, `D1-A`,
+`D2-A`, `D3-A`, `D4-A`, `D5-A`와 “모든 권장 선택에 공통으로 유지할 불변조건”을 승인했다.
+구현은 `D0 -> D1 -> D2 -> D4 -> D3 -> D5` 순서로 직렬화하고 각 provider contract가 확정된
+뒤에만 서로 다른 consumer 구현을 병렬화한다. 각 Active TODO가 완료되기 전에는 승인된 목표를
+현재 구현 계약으로 간주하지 않으며, 승인 범위를 넘어서는 변경은 다시 승인받는다.
+
 ## Consequences
 
 - Agent는 담당 module을 중심으로 읽고 작업하면서도 직접 consumer와 안전 경계를 놓치지 않는다.

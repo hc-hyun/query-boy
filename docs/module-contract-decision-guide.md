@@ -1,8 +1,11 @@
 # 모듈 계약 강화 결정 가이드
 
-Status: Proposal — 사용자 선택 전에는 승인된 계약이 아님
+Status: Accepted choices — implementation in progress
 
-Last reviewed: 2026-08-23
+Last reviewed: 2026-08-24
+
+Approved: 2026-08-24 — `D0-A`, `D1-A`, `D2-A`, `D3-A`, `D4-A`, `D5-A`와
+[모든 권장 선택에 공통으로 유지할 불변조건](#모든-권장-선택에-공통으로-유지할-불변조건)
 
 ## 이 문서의 목적
 
@@ -18,8 +21,10 @@ Query Man은 하나의 process로 배포되지만, 개발할 때는 일곱 개 �
 5. Runtime lifecycle capability를 어떻게 명시할 것인가
 6. Offline 품질 CLI의 예외적인 조립 권한을 어디에 둘 것인가
 
-이 문서는 ADR이 아니며 아래 권장안도 승인이 아니다. 사용자가 선택 ID와 범위를 명시적으로
-승인하기 전에는 관련 code, schema, configuration 또는 module contract의 의미를 변경하지 않는다.
+이 문서는 선택지의 상세 범위와 구현 순서를 설명하고 ADR 0018의 승인 기록을 보조한다. 위
+Approved 조합은 명시적으로 승인됐지만, 각 Active TODO가 완료되기 전까지 해당 목표를 현재 구현
+계약으로 오해하지 않는다. 승인 범위를 넘어서는 code, schema, configuration 또는 module contract
+변경은 다시 승인받는다.
 
 ## 한눈에 보는 현재 상태
 
@@ -111,7 +116,7 @@ module의 서랍을 직접 열지 않고 공식 창구만 사용하게 만드는
 초안을 만든 뒤 다시 승인받는다. `D0-C`/`D2-C`/`D3-C`/`D4-C`는 현재 상태를 유지하고 debt를
 보류하는 선택이라 구현 승인이 필요하지 않다.
 
-## Wave 0: 미승인 계약의 read-only prework
+## Wave 0: 승인 전 read-only prework (완료)
 
 현재 가능한 Wave 0는 계약을 구현하는 단계가 아니다. 다음 read-only prework만
 더 낮은 priority의 Start gate 전에도 병렬로 할 수 있다.
@@ -139,9 +144,9 @@ Wave 0는 아래 행위를 허용하지 않는다.
 | D3 deep immutability | `MOD-07` | `MOD-06` 완료와 exact D3 choice 승인 |
 | D5 offline composition | `MOD-08` | `MOD-07` 완료와 exact D5 choice 승인 |
 
-이 plan, Wave 0 또는 Active TODO 순서를 승인하는 것은 `D0-A`~`D5-A` 선택을
-승인하는 것이 아니다. Contract 구현은 [승인 회신 방법](#승인-회신-방법)처럼
-implementation-ready 선택 ID와 공통 불변조건 범위를 사용자가 명시한 후에만 시작한다.
+이 plan, Wave 0 또는 Active TODO 순서만 승인하는 것은 `D0-A`~`D5-A` 선택 승인이 아니었다.
+2026-08-24 사용자가 [승인 회신 방법](#승인-회신-방법)의 권장 조합과 공통 불변조건을 명시적으로
+승인했으므로 이제 각 Active ID를 정해진 순서로 구현할 수 있다.
 
 `D1`/`D5`의 B/C와 `D2`/`D3`/`D4`의 B는 implementation-ready A choice가 아니므로
 구현 전 exact follow-up contract를 다시 승인받는다. 반면 `D2-C`/`D3-C`/`D4-C`는

@@ -367,7 +367,8 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
     assert "**plan 승인은 contract 선택" in todo
     assert "승인이 아니다**" in todo
     assert "`MOD-04` → `MOD-05` → `MOD-06` → `MOD-07` → `MOD-08`" in todo
-    assert "`D2-C`/`D3-C`/`D4-C`는 현재 상태와 debt를 유지" in todo
+    assert "2026-08-24 사용자가 `D0-A`" in todo
+    assert "2026-08-24 사용자가 `D1-A`, `D2-A`, `D4-A`, `D3-A`, `D5-A`" in todo
     assert "`RTSAFE-*`, `MOD-04`~`MOD-08`과 `CTRL-*`" in todo
     assert "`RTSAFE-*`, `MOD-*`" not in todo
 
@@ -478,16 +479,17 @@ def test_module_boundary_docs_cover_owners_contracts_and_current_python_files() 
     assert "병렬 agent가 직접 priority를 재배열하지 않는다" in index
 
 
-def test_module_contract_decision_guide_is_explicitly_unapproved_and_discoverable() -> None:
+def test_module_contract_decision_guide_records_approval_and_pending_implementation() -> None:
     guide = MODULE_CONTRACT_DECISION_GUIDE.read_text(encoding="utf-8")
     readme = (ROOT_DIRECTORY / "README.md").read_text(encoding="utf-8")
     index = MODULE_INDEX.read_text(encoding="utf-8")
     todo = DEVELOPMENT_TODO.read_text(encoding="utf-8")
     roadmap = ROADMAP.read_text(encoding="utf-8")
 
-    assert "Status: Proposal — 사용자 선택 전에는 승인된 계약이 아님" in guide
+    assert "Status: Accepted choices — implementation in progress" in guide
+    assert "Approved: 2026-08-24" in guide
     assert "## 용어사전" in guide
-    assert "## Wave 0: 미승인 계약의 read-only prework" in guide
+    assert "## Wave 0: 승인 전 read-only prework (완료)" in guide
     assert "## 승인 회신 방법" in guide
     for decision in range(6):
         assert f"## D{decision}." in guide
@@ -505,9 +507,11 @@ def test_module_contract_decision_guide_is_explicitly_unapproved_and_discoverabl
         assert f"| {decision} " in guide
         assert f"`{item_id}`" in guide
     assert "Wave 0는 아래 행위를 허용하지 않는다" in guide
-    assert "이 plan, Wave 0 또는 Active TODO 순서를 승인하는 것은" in guide
+    assert "이 plan, Wave 0 또는 Active TODO 순서만 승인하는 것은" in guide
     assert "`D1`/`D5`의 B/C와 `D2`/`D3`/`D4`의 B" in guide
     assert "P0.5 ID가 자동으로 완료되거나 P1 gate가 자동으로 열리지 않는다" in guide
+    assert "`D0-A`와 decision guide의 공통 불변조건을 승인했다" in todo
+    assert "`D1-A`, `D2-A`, `D4-A`, `D3-A`, `D5-A`" in todo
     for document in (readme, index, todo, roadmap):
         assert MODULE_CONTRACT_DECISION_GUIDE.name in document
 

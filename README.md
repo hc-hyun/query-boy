@@ -47,9 +47,8 @@ docker compose down
 [docs/implementation-roadmap.md](docs/implementation-roadmap.md), 현재 우선순위 TODO는
 [docs/development-todo.md](docs/development-todo.md)를 참고합니다. Module 단위로 작업할 때는
 [module boundaries](docs/modules/README.md)에서 owner, 계약과 집중해서 읽을 범위를 먼저 확인합니다.
-현재 승인 대기 중인 module 계약 강화 선택지는
-[module contract decision guide](docs/module-contract-decision-guide.md)에 있으며, 선택 ID가
-명시적으로 승인되기 전에는 구현하지 않습니다.
+승인된 module 계약 강화 선택지와 아직 완료되지 않은 구현 상태는
+[module contract decision guide](docs/module-contract-decision-guide.md)와 active TODO에서 추적합니다.
 기존 production baseline 증거는
 [completion audit](docs/verification/2026-08-23-completion-audit.md), 그 이후 refactoring baseline과 당시 운영 경계는
 [refactoring assurance](docs/verification/2026-08-23-refactoring-assurance.md), 컨테이너 실행 증거는
