@@ -8,7 +8,7 @@ from query_man.access import CallerContext
 from query_man.errors import AppError, OperatorRequiredError, QueryNotFoundError, SourceNotFoundError
 from query_man.metadata import MetadataService
 from query_man.query import QueryService
-from query_man.registry import SourceRegistry
+from query_man.registry import SourceReader
 
 logger = logging.getLogger("query_man.audit")
 
@@ -16,7 +16,7 @@ logger = logging.getLogger("query_man.audit")
 class GatewayService:
     def __init__(
         self,
-        registry: SourceRegistry,
+        registry: SourceReader,
         metadata: MetadataService,
         queries: QueryService,
     ) -> None:

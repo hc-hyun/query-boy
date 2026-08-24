@@ -63,6 +63,8 @@ Query Man은 현재 하나의 deployable process인 modular monolith다. Runtime
 ### Composition contract
 
 - Production server의 concrete PostgreSQL adapters는 이 composition root에서 capability에 주입한다.
+- Runtime은 concrete `SourceRegistry`를 생성하고 같은 instance를 ordinary service/probe에는
+  `SourceReader`, Control reloader에는 `SourceProjectionWriter` capability로 주입한다.
 - Delivery는 Gateway/application service만 받고 persistence/executor internals를 직접 받지 않는다.
 - Metadata와 Guarded Query는 Control DB implementation을 직접 import하지 않는다.
 - Runtime-only dependency edge는 wiring/lifecycle 외의 업무 호출을 허용하지 않는다.
@@ -154,7 +156,8 @@ debt다. Type에 없다는 이유로 제거하지 않으며 정식 interface 변
 
 ## 소비 계약
 
-- [Source Catalog](../source-catalog/README.md)의 registry/configuration capability
+- [Source Catalog](../source-catalog/README.md)의 concrete registry construction,
+  `SourceReader`와 `SourceProjectionWriter` configuration capability
 - [Metadata](../metadata/README.md)의 service/catalog/store lifecycle
 - [Guarded Query](../guarded-query/README.md)의 executor admission/drain/invalidate/close lifecycle
 - [Control Plane](../control-plane/README.md)의 stores, reloader와 convergence semantics
@@ -208,7 +211,7 @@ debt다. Type에 없다는 이유로 제거하지 않으며 정식 interface 변
 최소 focused gate:
 
 ```text
-uv run pytest tests/test_runtime_config.py tests/test_operations.py \
+uv run pytest tests/test_registry.py tests/test_runtime_config.py tests/test_operations.py \
   tests/test_server.py tests/test_http.py tests/test_managed_mode.py \
   tests/test_runtime_startup_cleanup.py
 ```

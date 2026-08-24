@@ -31,6 +31,8 @@ from query_man.query import QueryService
 from query_man.reader_policy import ReaderSessionPolicyError
 from query_man.registry import (
     RegistryConfigurationError,
+    SourceProjectionWriter,
+    SourceReader,
     SourceRegistry,
     validate_source_manifest,
 )
@@ -197,7 +199,7 @@ class MutationContext:
 class SourceReloader:
     def __init__(
         self,
-        registry: SourceRegistry,
+        registry: SourceProjectionWriter,
         metadata: MetadataService,
         metadata_store: MetadataStore,
         source_store: SourceStore,
@@ -1188,8 +1190,9 @@ class SourceAdminService:
 
     async def _stage(self, source: SourceProfile) -> PreparedMetadata:
         catalog = self._catalog_factory()
+        registry: SourceReader = SourceRegistry([source])
         service = MetadataService(
-            SourceRegistry([source]),
+            registry,
             catalog,
             verified_revisions=self._verified_revisions,
         )

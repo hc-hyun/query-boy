@@ -65,8 +65,9 @@ Control Plane은 PostgreSQL pool, SQL, lock과 transaction을 소유한다. 현�
 다른 쪽 계약을 함께 바꾸지 않는다.
 
 `SourceAdminService._stage`는 candidate를 active runtime과 격리해 검증하려고 일시적인
-`SourceRegistry + MetadataService + CatalogProvider`를 조립한다. 이는 Control Plane에 한정된
-staging composition root이며 production HTTP/MCP wiring이나 Metadata 업무 규칙을 소유하지 않는다.
+`SourceRegistry + MetadataService + CatalogProvider`를 조립하고 registry application reference는
+`SourceReader`로 좁힌다. 이는 Control Plane에 한정된 staging composition root이며 production
+HTTP/MCP wiring이나 Metadata 업무 규칙을 소유하지 않는다.
 
 Public admin route, operator-first request parsing, bounded JSON/header/query validation과 HTTP error
 rendering은 [Delivery](../delivery/README.md)가 소유한다. Control Plane은 이미 검증된
@@ -143,6 +144,8 @@ public Delivery contract와 persisted projection contract다.
 
 Control DB commit은 desired-state 원자성을 보장하지만 모든 process의 in-memory 적용까지 하나의
 분산 transaction으로 만들지는 않는다. 각 replica의 `SourceReloader`가 polling으로 수렴한다.
+`SourceReloader`는 Source Catalog의 `SourceProjectionWriter`를 받아 read와 `upsert/remove` capability를
+함께 소비하는 유일한 runtime projector다.
 
 Replica 적용 순서는 다음과 같다.
 
@@ -189,7 +192,8 @@ connection 구성의 필요한 범위를 넘어 log나 response에 남지 않는
 
 ## 소비 계약
 
-- [Source Catalog](../source-catalog/README.md)의 strict manifest validator, budget와 projection writer
+- [Source Catalog](../source-catalog/README.md)의 strict manifest validator, budget와
+  `SourceProjectionWriter`
 - [Metadata](../metadata/README.md)의 candidate preparation, quality gate, store port와 snapshot codec
 - [Guarded Query](../guarded-query/README.md)의 validated execution for verified publish
 - [Assurance](../assurance/README.md)의 verified DTO, exact revision/relation와 result hash contract
@@ -251,7 +255,8 @@ Source Catalog/Metadata/Query/Delivery/Runtime/Assurance 영향을 포함한다.
 최소 focused gate:
 
 ```text
-uv run pytest tests/test_source_admin.py tests/test_secrets.py tests/test_managed_mode.py
+uv run pytest tests/test_registry.py tests/test_source_admin.py tests/test_secrets.py \
+  tests/test_managed_mode.py
 ```
 
 Persistence tests는 기본 pytest marker에서 제외되므로 다음을 별도로 실행한다.

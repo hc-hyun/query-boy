@@ -151,7 +151,8 @@ resolved-object 검증과 commit에서 같은 SQLSTATE가 발생해도 사용자
 
 ## 소비 계약
 
-- [Source Catalog](../source-catalog/README.md)의 source profile, budget, tenant policy와 reader safety
+- [Source Catalog](../source-catalog/README.md)의 `SourceReader`로 얻는 source profile, budget, tenant
+  policy와 reader safety
 - [Metadata](../metadata/README.md)의 exact published snapshot/revision과 allowed relation ceiling
 - [Runtime](../runtime/README.md)의 operations reporting contract
 
@@ -162,6 +163,8 @@ shutdown/reload 때 lifecycle capability를 정해진 순서로 호출한다. �
 private implementation을 import한다는 뜻이 아니다.
 
 Guarded Query는 Control DB table이나 HTTP/MCP request model을 직접 알지 않는다.
+`QueryService`의 registry dependency는 `SourceReader`이며 source projection mutation capability를
+소비하지 않는다.
 
 ## 불변조건
 
@@ -204,7 +207,7 @@ rolling request/active query 처리 계획을 포함한다.
 최소 focused gate:
 
 ```text
-uv run pytest tests/test_sql_validation.py tests/test_security_evaluation.py \
+uv run pytest tests/test_registry.py tests/test_sql_validation.py tests/test_security_evaluation.py \
   tests/test_query.py tests/test_result_encoding.py
 ```
 

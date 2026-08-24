@@ -151,8 +151,8 @@ bounded header/query/path parsing을 적용한다. MCP와 admin의 더 강한 �
 
 ## 소비 계약
 
-- [Source Catalog](../source-catalog/README.md)의 sanitized source summaries, 논리적 read method와 admin
-  wire validation에 사용하는 `SourceEnvironment`, `Identifier`, `StableSlug`
+- [Source Catalog](../source-catalog/README.md)의 `SourceReader` sanitized source summaries와 admin wire
+  validation에 사용하는 `SourceEnvironment`, `Identifier`, `StableSlug`
 - [Metadata](../metadata/README.md)의 context application result
 - [Guarded Query](../guarded-query/README.md)의 query/cancel result와 safe domain errors
 - [Control Plane](../control-plane/README.md)의 management projection, mutation receipt/use cases와
@@ -160,6 +160,7 @@ bounded header/query/path parsing을 적용한다. MCP와 admin의 더 강한 �
 - [Runtime](../runtime/README.md)의 aggregate health/operations state와 lifecycle context
 
 Delivery는 domain module의 concrete PostgreSQL adapter나 Control DB table을 직접 호출하지 않는다.
+`GatewayService`는 concrete `SourceRegistry`가 아니라 `SourceReader`를 받아 `list/get`만 사용한다.
 Admin route는 Control Plane의 `source_store.py`와 Assurance의 `verified.py`를 import하지 않고 Control
 Plane이 공개한 administration input만 만든다.
 위 Source Catalog validation type의 pattern/range를 바꾸면 admin path/query wire acceptance도 바뀌므로
@@ -214,7 +215,7 @@ module은 자신이 생성하는 audit field의 비노출을 책임진다.
 최소 focused gate:
 
 ```text
-uv run pytest tests/test_access.py tests/test_http.py tests/test_mcp.py \
+uv run pytest tests/test_registry.py tests/test_access.py tests/test_http.py tests/test_mcp.py \
   tests/test_runtime_startup_cleanup.py
 ```
 

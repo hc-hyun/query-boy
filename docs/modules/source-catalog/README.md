@@ -48,11 +48,12 @@ metadata revision/context 생성은 [Metadata](../metadata/README.md)가 담당�
 `models.py`에는 Metadata type도 함께 있으므로 현재는 type별 소유권을 구분한다. Source 관련
 type 이동은 동작 변경과 섞지 않는 별도 mechanical refactoring으로 수행한다.
 
-현재 concrete `SourceRegistry`는 `list/get/source_ids`와 `upsert/remove`를 한 type에서 모두
-제공한다. Delivery, Metadata, Guarded Query와 Assurance는 논리 계약상 read method만 사용하지만
-Python type/capability는 아직 분리되지 않았다. 이는
-[결정 가이드의 D2](../../module-contract-decision-guide.md#d2-source-조회와-수정-capability)에
-기록된 미승인 contract debt이며, 목표 `SourceReader`를 현재 구현으로 가정하지 않는다.
+`registry.py`는 read-only `SourceReader`와 이를 확장하는 `SourceProjectionWriter` Protocol을
+제공한다. Concrete `SourceRegistry`는 두 Protocol을 구조적으로 구현하고 기존 다섯 method와
+`load`를 그대로 제공한다. 이는 wrapper나 runtime sandbox가 아니라 일반 consumer의 annotation을
+좁혀 accidental mutation을 mypy와 review에서 찾는 개발 경계다. 승인 범위와 compatibility는
+[결정 가이드 D2](../../module-contract-decision-guide.md#d2-source-조회와-수정-capability)와
+[ADR 0018](../../decisions/0018-module-ownership-and-contract-governance.md)에 기록한다.
 
 ## 제공 계약
 
@@ -87,13 +88,13 @@ Delivery의 admin path/query wire validation은 현재 Source Catalog가 정의�
 
 ### Source read contract
 
-Delivery, Metadata, Guarded Query와 Assurance는 논리 계약상 source 조회 method만 소비한다. 현재
-concrete registry가 mutation method도 함께 노출한다는 사실은 위 transition debt와 같이 해석한다.
+Delivery, Metadata, Guarded Query와 Assurance application code는 다음 `SourceReader`만 소비한다.
 
 ```text
-list() -> [{"source_id": str, "name": str, "description": str}]
-get(source_id) -> current SourceProfile | not found
-source_ids() -> immutable set-like snapshot
+SourceReader:
+  list() -> list[dict[str, str]]
+  get(source_id) -> SourceProfile | None
+  source_ids() -> frozenset[str]
 ```
 
 `list()`는 `source_id` 순으로 정렬하며 위 세 field 외 connection, credential, provenance와
@@ -101,7 +102,16 @@ internal control state를 반환하지 않는다. 이 소비자들은 registry�
 
 ### Source projection write contract
 
-Managed mode에서는 Control Plane의 runtime projector만 검증된 state를 `upsert/remove`할 수 있다.
+Control Plane의 runtime projector/reloader는 read contract를 확장한 다음
+`SourceProjectionWriter`를 소비한다.
+
+```text
+SourceProjectionWriter extends SourceReader:
+  upsert(source) -> None
+  remove(source_id) -> None
+```
+
+Managed mode에서는 이 projector만 검증된 state를 `upsert/remove`한다.
 Bootstrap mode는 process 시작 시 filesystem manifest로 initial registry를 만들며 두 authority를
 한 process에서 합치지 않는다. `state_version`은
 증가하지만 rollback은 과거 generation을 다시 활성화할 수 있으므로 generation 자체를 monotonic으로
@@ -133,8 +143,9 @@ Source Catalog는 Control DB table이나 HTTP/MCP type을 직접 알지 않는�
   `source_id`의 host/port/database/user/TLS/environment 재지정 거부는 Control Plane과의 필수 cross-module
   invariant이며 그 경로를 우회해 registry를 갱신하지 않는다.
 - Budget, overlay와 tenant policy 변경이 metadata revision에 미치는 영향을 숨기지 않는다.
-- Runtime projection writer는 하나다. Ordinary reader는 현재 concrete registry가 mutation method를
-  노출하더라도 이를 호출하지 않는다. Type 수준 capability 분리는 아직 구현되지 않았다.
+- Runtime projection writer는 하나다. Ordinary reader와 isolated staging/Assurance application
+  reference는 `SourceReader`로 좁히며 `upsert/remove`를 호출하지 않는다. Runtime composition은 같은
+  concrete instance를 reader consumer와 Control writer에 capability별로 주입할 수 있다.
 
 ## 모듈 내부 변경
 
@@ -153,6 +164,7 @@ Source Catalog는 Control DB table이나 HTTP/MCP type을 직접 알지 않는�
 - `SourceProfile` 필드 의미나 public source summary 변경
 - Allowed schema/relation kind, tenant isolation 또는 reader policy의 완화/확대
 - Metadata revision에 참여하는 source/budget/overlay 의미 변경
+- `SourceReader` 또는 `SourceProjectionWriter` method, argument, return shape나 capability 관계 변경
 - Registry writer 권한이나 hot-reload state ordering 변경
 - 같은 source ID의 connection/environment identity 재지정 허용
 - Credential resolution, redaction 또는 storage trust boundary 변경
@@ -165,7 +177,9 @@ Source Catalog는 Control DB table이나 HTTP/MCP type을 직접 알지 않는�
 최소 focused gate:
 
 ```text
-uv run pytest tests/test_registry.py tests/test_runtime_config.py
+uv run pytest tests/test_registry.py tests/test_runtime_config.py tests/test_metadata.py \
+  tests/test_query.py tests/test_http.py tests/test_source_admin.py tests/test_quality.py \
+  tests/test_verified.py tests/test_managed_mode.py
 ```
 
 Manifest, budget, tenant 또는 reader DB 경계를 바꾸면 관련 metadata/query tests와 reader

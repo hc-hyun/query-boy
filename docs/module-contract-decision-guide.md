@@ -22,8 +22,8 @@ ID별 구현 상태를 함께 기록한다.
 6. Offline 품질 CLI의 예외적인 조립 권한을 어디에 둘 것인가
 
 이 문서는 선택지의 상세 범위와 구현 순서를 설명하고 ADR 0018의 승인 기록을 보조한다. 위
-Approved 조합은 명시적으로 승인됐다. `RTSAFE-01`과 `MOD-04`는 구현이 끝나 완료 ledger로
-이동했고, 나머지 추적 ID가 완료되기 전까지 그 목표를 현재 구현 계약으로 오해하지 않는다. 승인
+Approved 조합은 명시적으로 승인됐다. `RTSAFE-01`, `MOD-04`와 `MOD-05`는 구현이 끝나 완료
+ledger로 이동했고, 나머지 추적 ID가 완료되기 전까지 그 목표를 현재 구현 계약으로 오해하지 않는다. 승인
 범위를 넘어서는 code, schema, configuration 또는 module contract 변경은 다시 승인받는다.
 
 ## 한눈에 보는 현재 상태
@@ -36,15 +36,16 @@ Runtime ──> MCP child lifespan 진입 실패 시 parent 최상위 resource�
 Delivery ──> Control Plane 공개 sequence/verified-publish input
 Control  ──> Assurance verified DTO
 
-일반 consumer ──> 읽기와 쓰기가 모두 있는 concrete SourceRegistry
+일반 consumer ──> SourceReader
+Control writer ──> SourceProjectionWriter
 
 Runtime ──> getattr로 Python Protocol에 없는 drain/invalidate capability를 선택적으로 호출
 
 Assurance core type/hash + offline CLI concrete wiring이 같은 파일에 공존
 ```
 
-승인된 전체 조합이 완료되면 다음처럼 된다. Runtime 행은 `RTSAFE-01`, Delivery/Control 행은
-`MOD-04`로 이미 반영됐다.
+승인된 전체 조합이 완료되면 다음처럼 된다. Runtime cleanup 행은 `RTSAFE-01`, Delivery/Control
+행은 `MOD-04`, Source capability 두 행은 `MOD-05`로 이미 반영됐다.
 
 ```text
 권장 목표
@@ -140,8 +141,8 @@ Wave 0는 아래 행위를 허용하지 않는다.
 |---|---|---|
 | D0 startup cleanup | `RTSAFE-01` | 구현·검증 완료; roadmap ledger로 이동 |
 | D1 hidden dependency | `MOD-04` | 구현·검증 완료; roadmap ledger로 이동 |
-| D2 read/write capability | `MOD-05` | `MOD-04` 완료와 exact D2 choice 승인 완료; 다음 구현 작업 |
-| D4 lifecycle Protocol | `MOD-06` | `MOD-05` 완료와 exact D4 choice 승인 |
+| D2 read/write capability | `MOD-05` | 구현·검증 완료; roadmap ledger로 이동 |
+| D4 lifecycle Protocol | `MOD-06` | `MOD-05` 완료와 exact D4 choice 승인; 다음 구현 작업 |
 | D3 deep immutability | `MOD-07` | `MOD-06` 완료와 exact D3 choice 승인 |
 | D5 offline composition | `MOD-08` | `MOD-07` 완료와 exact D5 choice 승인 |
 
@@ -255,16 +256,19 @@ DB migration은 없다. External contract가 같아 mixed-version replica가 함
 
 ### 현재 사실
 
-`SourceRegistry` 하나가 조회와 수정을 모두 제공한다.
+`SourceRegistry` concrete 하나는 기존 조회와 수정 method를 모두 제공한다.
 
 ```text
 조회: list, get, source_ids
 수정: upsert, remove
 ```
 
-Delivery, Metadata, Guarded Query와 Assurance는 조회만 필요하지만 concrete registry type을
-받는다. 실제로 mutation은 Control Plane reloader만 수행한다. 현재 경계는 문서로만 금지되어
-AI agent나 새 code가 잘못된 mutation을 추가해도 type checker가 막지 못한다.
+`MOD-05` 구현 뒤 Source Catalog는 structural `SourceReader`와 이를 확장하는
+`SourceProjectionWriter` Protocol을 제공한다. Delivery `GatewayService`, Metadata
+`MetadataService`, Guarded Query `QueryService`, Runtime probe와 Assurance application reference는
+`SourceReader`로 좁혀지고 Control Plane `SourceReloader`만 `SourceProjectionWriter`를 받는다.
+Concrete registry의 method나 identity를 숨기는 runtime sandbox는 아니며 type checker와 review가
+일반 consumer의 accidental mutation을 찾는 경계다.
 
 ### 선택지
 
@@ -274,7 +278,7 @@ AI agent나 새 code가 잘못된 mutation을 추가해도 type checker가 막�
 | D2-B | 별도의 read-only wrapper를 만들어 일반 consumer에 전달하고 concrete registry는 Runtime/Control Plane만 가진다. | Runtime에서도 mutation method에 접근하기 더 어렵다. | Wrapper와 전달 계층, identity/cache 고려가 늘어난다. |
 | D2-C | Concrete `SourceRegistry`를 계속 전달하고 문서로만 mutation을 금지한다. | Code 변경이 없다. | 실수를 자동으로 찾지 못하며 병렬 agent 격리 목표가 약해진다. |
 
-### D2-A를 승인하면 바뀌는 정확한 범위
+### 승인·구현된 D2-A의 정확한 범위
 
 ```text
 SourceReader:
@@ -454,7 +458,7 @@ rollback으로 끝난다.
 |---|---|---|---|---|
 | D0-A | 없음 | External contract 동일 | 최초 error 보존, exactly-once parent cleanup | Code rollback |
 | D1-A | 없음 | HTTP/storage 동일 | Private import 제거, verified identity/hash 불변 | Code rollback |
-| D2-A | 없음 | Runtime output 동일 | Read consumer에 writer capability가 전달되지 않음 | Code rollback |
+| D2-A | 없음 | Runtime output 동일 | Read consumer type contract가 writer capability를 요구·노출하지 않음 | Code rollback |
 | D3-A | 없음이 목표 | JSON/revision/hash가 같을 때만 허용 | Nested mutation 거부, golden digest/hash 불변 | Code rollback |
 | D4-A | 없음 | External contract 동일 | Capability 누락 시 ready 전 fail-closed | Code rollback |
 | D5-A | 없음 | Production runtime와 무관 | CLI safety path와 exit/output 불변 | Code rollback |
@@ -474,9 +478,9 @@ D5-A  기존 offline workflow는 유지하면서 composition 예외 위치를 �
 ```
 
 변경량을 줄이는 것이 최우선이면 D3만 `D3-B`를 선택할 수 있다. 다만 large metadata를
-조회할 때마다 복사하는 CPU/memory 비용을 먼저 측정해야 한다. D0-A와 D1-A는 각각
-`RTSAFE-01`, `MOD-04`에서 완료되어 startup leak과 Delivery hidden-import debt는 더 이상 현재
-상태가 아니다.
+조회할 때마다 복사하는 CPU/memory 비용을 먼저 측정해야 한다. D0-A, D1-A와 D2-A는 각각
+`RTSAFE-01`, `MOD-04`, `MOD-05`에서 완료되어 startup leak, Delivery hidden-import와 혼합
+consumer capability debt는 더 이상 현재 상태가 아니다.
 
 ## 승인 회신 방법
 
@@ -513,8 +517,8 @@ type, 성능 상한, consumer와 rollback 범위를 후속 승인안으로 작�
 
 1. D0 startup failure cleanup (`RTSAFE-01`) — 완료
 2. D1 숨은 dependency 제거 (`MOD-04`) — 완료
-3. D2 read/write capability 분리 (`MOD-05`) — 다음
-4. D4 lifecycle Protocol 명시 (`MOD-06`)
+3. D2 read/write capability 분리 (`MOD-05`) — 완료
+4. D4 lifecycle Protocol 명시 (`MOD-06`) — 다음
 5. D3 immutable snapshot 전환 (`MOD-07`)
 6. D5 offline CLI composition 격리 (`MOD-08`)
 7. 전체 dependency/contract audit
@@ -536,7 +540,7 @@ uv run pytest -m integration
 
 - Child enter 실패 때 진입하지 못한 child exit를 호출하지 않고 parent resource만 역순 정리
 - Delivery가 Control persistence와 Assurance DTO를 직접 import하지 않음
-- Read consumer가 writer capability를 요구하거나 받지 않음
+- Read consumer type contract가 writer capability를 요구하거나 노출하지 않음
 - Nested snapshot mutation 거부와 metadata revision/result hash 불변
 - Lifecycle capability 누락 시 composition이 ready 전에 fail-closed
 - Assurance core와 offline CLI concrete wiring 분리
@@ -548,7 +552,7 @@ uv run pytest -m integration
 |---|---|
 | Startup enter-failure cleanup 보장 | `src/query_man/app.py` lifespan, [`test_runtime_startup_cleanup.py`](../tests/test_runtime_startup_cleanup.py), [Runtime startup contract](modules/runtime/README.md#startup-contract) |
 | Delivery의 public Control administration input 경계 | `src/query_man/source_admin_routes.py`, `src/query_man/source_admin.py`, [`test_documentation.py`](../tests/test_documentation.py), [`test_source_admin.py`](../tests/test_source_admin.py) |
-| 혼합 Source capability | `src/query_man/registry.py`의 `SourceRegistry` |
+| 분리된 Source capability | `src/query_man/registry.py`의 `SourceReader`/`SourceProjectionWriter`, [`test_registry.py`](../tests/test_registry.py) |
 | Shallow immutable graph | `src/query_man/models.py`의 source/semantic/catalog/prepared types |
 | 누락된 lifecycle Protocol | `src/query_man/query.py`의 `QueryExecutor`, `src/query_man/models.py`의 `CatalogProvider` |
 | Runtime의 optional capability 탐색 | `src/query_man/app.py`의 invalidator/drain `getattr` |

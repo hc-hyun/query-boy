@@ -32,7 +32,7 @@ from query_man.metadata_store import PostgresMetadataStore
 from query_man.models import CatalogProvider
 from query_man.operations import operations
 from query_man.query import PostgresQueryExecutor, QueryExecutor, QueryService
-from query_man.registry import SourceRegistry, load_budget_profiles
+from query_man.registry import SourceReader, SourceRegistry, load_budget_profiles
 from query_man.runtime_config import RuntimeConfig
 from query_man.secrets import SourceSecretCipher
 from query_man.source_admin import SourceAdminService, SourcePoolInvalidator, SourceReloader
@@ -625,7 +625,7 @@ async def _reload_sources(reloader: SourceReloader, interval_ms: int) -> None:
 
 
 async def _probe_registered_sources(
-    registry: SourceRegistry,
+    registry: SourceReader,
     metadata: MetadataService,
 ) -> None:
     async def probe(source_id: str) -> None:

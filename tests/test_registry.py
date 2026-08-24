@@ -1,20 +1,92 @@
 from __future__ import annotations
 
+import ast
+import inspect
 import shutil
+import textwrap
 from dataclasses import replace
 from pathlib import Path
+from typing import get_type_hints
 
 import pytest
 import yaml
 
+import query_man.quality as quality_module
+import query_man.verified as verified_module
+from query_man.app import _probe_registered_sources
+from query_man.gateway import GatewayService
+from query_man.metadata import MetadataService
+from query_man.models import SourceProfile
+from query_man.query import QueryService
 from query_man.registry import (
     POSTGRES_IDENTIFIER_MAX_LENGTH,
     RegistryConfigurationError,
+    SourceProjectionWriter,
+    SourceReader,
     SourceRegistry,
     load_budget_profiles,
     validate_source_manifest,
 )
+from query_man.source_admin import SourceAdminService, SourceReloader
 from tests.helpers import DUMMY_ENVIRONMENT, ROOT_DIRECTORY, load_test_registry
+
+
+def _public_methods(protocol: type[object]) -> set[str]:
+    return {
+        name
+        for name, value in vars(protocol).items()
+        if not name.startswith("_") and callable(value)
+    }
+
+
+def _local_annotation(function: object, variable: str) -> str | None:
+    tree = ast.parse(textwrap.dedent(inspect.getsource(function)))
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == variable
+        ):
+            return ast.unparse(node.annotation)
+    return None
+
+
+def test_source_capability_protocols_have_exact_approved_shapes() -> None:
+    assert _public_methods(SourceReader) == {"get", "list", "source_ids"}
+    assert get_type_hints(SourceReader.list) == {
+        "return": list[dict[str, str]],
+    }
+    assert get_type_hints(SourceReader.get) == {
+        "source_id": str,
+        "return": SourceProfile | None,
+    }
+    assert get_type_hints(SourceReader.source_ids) == {
+        "return": frozenset[str],
+    }
+    assert SourceReader in SourceProjectionWriter.__mro__
+    assert _public_methods(SourceProjectionWriter) == {"remove", "upsert"}
+    assert get_type_hints(SourceProjectionWriter.upsert) == {
+        "source": SourceProfile,
+        "return": type(None),
+    }
+    assert get_type_hints(SourceProjectionWriter.remove) == {
+        "source_id": str,
+        "return": type(None),
+    }
+
+
+def test_source_consumers_receive_only_the_capability_they_need() -> None:
+    assert get_type_hints(GatewayService.__init__)["registry"] is SourceReader
+    assert get_type_hints(MetadataService.__init__)["registry"] is SourceReader
+    assert get_type_hints(QueryService.__init__)["registry"] is SourceReader
+    assert get_type_hints(_probe_registered_sources)["registry"] is SourceReader
+    assert (
+        get_type_hints(SourceReloader.__init__)["registry"]
+        is SourceProjectionWriter
+    )
+    assert _local_annotation(quality_module._run, "registry") == "SourceReader"
+    assert _local_annotation(verified_module._run, "registry") == "SourceReader"
+    assert _local_annotation(SourceAdminService._stage, "registry") == "SourceReader"
 
 
 def test_loads_public_source_fields_only() -> None:

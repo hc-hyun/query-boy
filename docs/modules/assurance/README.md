@@ -61,8 +61,9 @@ cross-module 계약이다. `verified.py`의 DTO/hash는 Control Plane이 직접 
 Delivery는 이를 import하지 않는다. CLI 내부 정리라는 이유로 shape나 hash 의미를 바꾸지 않는다.
 
 `quality.py`와 `verified.py`의 CLI entrypoint는 offline acceptance에 한정된 bounded composition
-root다. SourceRegistry, Metadata, Catalog와 Query concrete adapter를 조립할 수 있지만 production
-HTTP/MCP runtime wiring이나 domain policy를 소유하지 않는다.
+root다. Concrete `SourceRegistry`, Metadata, Catalog와 Query adapter를 생성할 수 있지만 registry
+local/application reference는 `SourceReader`로 좁힌다. Production HTTP/MCP runtime wiring이나 domain
+policy를 소유하지 않는다.
 
 ## 제공 계약
 
@@ -125,7 +126,7 @@ core는 Control DB implementation을 import하지 않는다.
 
 ## 소비 계약
 
-- [Source Catalog](../source-catalog/README.md)의 known source와 semantic definition
+- [Source Catalog](../source-catalog/README.md)의 `SourceReader`로 얻는 known source와 semantic definition
 - [Metadata](../metadata/README.md)의 context, published revision과 L0/L1/L2 gate semantics
 - [Guarded Query](../guarded-query/README.md)의 SQL policy, guarded execution과 canonical result encoding
 
@@ -175,7 +176,7 @@ acceptance evidence 갱신 계획을 포함한다.
 최소 focused gate:
 
 ```text
-uv run pytest tests/test_quality.py tests/test_verified.py \
+uv run pytest tests/test_registry.py tests/test_quality.py tests/test_verified.py \
   tests/test_quality_level.py tests/test_result_encoding.py
 ```
 

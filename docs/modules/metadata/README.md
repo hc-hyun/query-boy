@@ -62,8 +62,8 @@ codec/compatibility contract만 소유한다.
 Control DB의 persisted snapshot/revision history는 immutable하지만 현재 process 안의 published
 Python object graph는 deep immutable이 아니다. `PreparedMetadata`의 바깥 dataclass는 frozen이어도
 안쪽 `CatalogSnapshot`, relation, column과 list는 mutable하고 cache consumer가 같은 graph를 볼 수
-있다. [결정 가이드의 D3](../../module-contract-decision-guide.md#d3-공유-data의-deep-immutability)는
-미승인 제안이므로 deep immutability를 현재 보장으로 가정하지 않는다.
+있다. [결정 가이드의 D3-A](../../module-contract-decision-guide.md#d3-공유-data의-deep-immutability)는
+승인됐지만 `MOD-07` 구현 대기이므로 deep immutability를 현재 보장으로 가정하지 않는다.
 
 ## 제공 계약
 
@@ -153,7 +153,8 @@ close()
 
 ## 소비 계약
 
-- [Source Catalog](../source-catalog/README.md)의 current source profile, semantic overlay와 budget
+- [Source Catalog](../source-catalog/README.md)의 `SourceReader`로 얻는 current source profile,
+  semantic overlay와 budget
 - Source Catalog의 reader-session safety contract
 - [Guarded Query](../guarded-query/README.md)의 SQL policy revision/capability descriptor
 - [Control Plane](../control-plane/README.md)이 구현하는 MetadataStore persistence capability
@@ -165,6 +166,8 @@ close()
 
 현재 `metadata.py`가 SQL validator constant를 직접 import하지만, 의미상 소비 대상은 immutable
 policy descriptor다. 이 dependency를 바꾸는 refactoring은 외부 context 결과를 그대로 유지한다.
+`MetadataService`의 registry dependency는 `SourceReader`이며 source projection mutation capability를
+소비하지 않는다.
 
 ## 불변조건
 
@@ -210,7 +213,7 @@ immutable history/rolling replica compatibility를 포함한다.
 최소 focused gate:
 
 ```text
-uv run pytest tests/test_catalog.py tests/test_metadata.py tests/test_relevance.py \
+uv run pytest tests/test_registry.py tests/test_catalog.py tests/test_metadata.py tests/test_relevance.py \
   tests/test_revision.py tests/test_quality_level.py
 ```
 

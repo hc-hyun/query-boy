@@ -26,7 +26,7 @@ from query_man.models import (
 from query_man.operations import operations
 from query_man.quality_level import QualityLevelReport, assess_quality_level
 from query_man.reader_policy import ReaderSessionPolicyError
-from query_man.registry import SourceRegistry
+from query_man.registry import SourceReader
 from query_man.relevance import (
     RankedRelation,
     RelationRetrievalIndex,
@@ -58,7 +58,7 @@ class _PinnedActiveRevision(Exception):
 class MetadataService:
     def __init__(
         self,
-        registry: SourceRegistry,
+        registry: SourceReader,
         catalog: CatalogProvider,
         *,
         cache_ttl_ms: int = 30_000,

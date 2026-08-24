@@ -5,7 +5,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Protocol
 
 import yaml
 from pydantic import (
@@ -313,6 +313,20 @@ class _SourceFile(_StrictModel):
         if self.tenant_isolation == "rls" and self.allowed_relation_kinds != ["view"]:
             raise ValueError("RLS sources must expose security-invoker views only")
         return self
+
+
+class SourceReader(Protocol):
+    def list(self) -> list[dict[str, str]]: ...
+
+    def get(self, source_id: str) -> SourceProfile | None: ...
+
+    def source_ids(self) -> frozenset[str]: ...
+
+
+class SourceProjectionWriter(SourceReader, Protocol):
+    def upsert(self, source: SourceProfile) -> None: ...
+
+    def remove(self, source_id: str) -> None: ...
 
 
 class SourceRegistry:

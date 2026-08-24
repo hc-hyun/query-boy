@@ -31,7 +31,7 @@ from query_man.reader_policy import (
     reader_session_budget_values,
     require_reader_session_policy,
 )
-from query_man.registry import SourceRegistry
+from query_man.registry import SourceReader
 from query_man.result_encoding import encode_result_value
 from query_man.sql_validation import (
     SQL_POLICY_REVISION,
@@ -149,7 +149,7 @@ class QueryExecutor(Protocol):
 class QueryService:
     def __init__(
         self,
-        registry: SourceRegistry,
+        registry: SourceReader,
         metadata: MetadataService,
         executor: QueryExecutor,
     ) -> None:

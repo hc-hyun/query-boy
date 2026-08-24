@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from query_man.catalog import PostgresCatalog
 from query_man.metadata import MetadataService
-from query_man.registry import SourceRegistry
+from query_man.registry import SourceReader, SourceRegistry
 from query_man.verified import VerifiedQueryRegistry
 
 Identifier = Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,99}$")]
@@ -181,7 +181,7 @@ def main() -> None:
 
 async def _run(root: Path) -> None:
     load_dotenv(root / ".env")
-    registry = SourceRegistry.load(
+    registry: SourceReader = SourceRegistry.load(
         root / "config" / "sources",
         root / "config" / "budget-profiles.yaml",
     )
