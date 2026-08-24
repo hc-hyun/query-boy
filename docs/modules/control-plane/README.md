@@ -36,8 +36,8 @@ Control Plane은 “어떤 source 정의와 metadata/verified revision이 현재
 
 ## 현재 코드 위치
 
-- [`source_admin.py`](../../../src/query_man/source_admin.py): `SourceAdminService`, `SourceReloader`와
-  persistence/invalidator ports
+- [`source_admin.py`](../../../src/query_man/source_admin.py): `SourceAdminService`, `SourceReloader`,
+  public administration input/sequence 계약과 persistence/invalidator ports
 - [`source_store.py`](../../../src/query_man/source_store.py): `PostgresSourceStore`와 state transition
   transactions
 - [`metadata_store.py`](../../../src/query_man/metadata_store.py): `PostgresMetadataStore` implementation
@@ -78,6 +78,22 @@ rendering은 [Delivery](../delivery/README.md)가 소유한다. Control Plane은
 
 Public 관리 mutation은 authenticated actor에서 만든 `MutationContext`를 받고 현재
 generation/state version을 기준으로 검증한다. Resume은 expected metadata revision도 요구한다.
+Delivery는 Control persistence나 Assurance DTO 대신 다음 public Python 계약만 사용한다.
+
+```text
+CONTROL_SEQUENCE_MAX = 9_223_372_036_854_775_807
+VerifiedExpectedInput(columns, row_count, result_hash)
+PublishVerifiedQueryInput(
+  query_id, source_id, question, sql, metadata_revision, relations, expected
+)
+SourceAdminService.publish_verified_query(
+  PublishVerifiedQueryInput, tenant_id, MutationContext | None
+)
+```
+
+두 input은 frozen dataclass다. Control Plane 서비스만 이를 Assurance의 `VerifiedQuery`와
+`ExpectedResult`로 변환하고 persistence port에는 그 verified contract를 전달한다. Sequence 상한은
+현재 Control DB `bigint`와 HTTP validation 의미를 그대로 공개한 값이며 독립적으로 변경하지 않는다.
 각 operation은 다음 persisted transition을 시도한다.
 
 ```text
@@ -224,6 +240,8 @@ Plane이 Delivery/Runtime private implementation에 의존한다는 뜻이 아�
   convergence 의미 변경
 - Pool/registry/metadata invalidation 및 health 적용 순서 변경
 - Verified query persistence key, exact revision/result contract 변경
+- `CONTROL_SEQUENCE_MAX`, public administration input의 field/frozen shape 또는
+  `publish_verified_query` argument 의미 변경
 
 승인 요청에는 기존 persisted data migration, rolling replica compatibility, rollback과 복구 절차,
 Source Catalog/Metadata/Query/Delivery/Runtime/Assurance 영향을 포함한다.
@@ -245,6 +263,9 @@ uv run pytest -m integration tests/test_source_store.py tests/test_metadata_stor
 
 Schema, transaction, lock/CAS 또는 runtime projection 경계를 바꾸면 전체 integration gate와 관련
 control-plane 복구 절차를 실행한다. 완료 전 root `AGENTS.md`의 전체 gate도 실행한다.
+Public administration input 또는 verified mapping을 바꾸면 Delivery `test_http.py`,
+[`test_documentation.py`](../../../tests/test_documentation.py)의 import guard와
+`test_control_startup.py`도 함께 실행한다.
 
 ## 집중해서 읽을 범위
 

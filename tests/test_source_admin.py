@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import FrozenInstanceError, fields, replace
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, get_type_hints
 
 import pytest
 import yaml
@@ -30,7 +30,14 @@ from query_man.registry import (
     validate_source_manifest,
 )
 from query_man.secrets import EncryptedSecret, SourceSecretCipher
-from query_man.source_admin import MutationContext, SourceAdminService, SourceReloader
+from query_man.source_admin import (
+    CONTROL_SEQUENCE_MAX,
+    MutationContext,
+    PublishVerifiedQueryInput,
+    SourceAdminService,
+    SourceReloader,
+    VerifiedExpectedInput,
+)
 from query_man.source_store import (
     MutationIdempotencyConflictError,
     MutationPage,
@@ -49,6 +56,59 @@ from query_man.source_store import (
 from query_man.sql_validation import ValidatedSql
 from query_man.verified import ExpectedResult, VerifiedQuery, create_result_hash
 from tests.helpers import ROOT_DIRECTORY, minimal_development_snapshot
+
+
+def test_verified_publish_input_is_frozen_control_contract() -> None:
+    expected = VerifiedExpectedInput(
+        columns=("status",),
+        row_count=1,
+        result_hash=f"sha256:{'1' * 64}",
+    )
+    query = PublishVerifiedQueryInput(
+        query_id="third-source-status",
+        source_id="third-source",
+        question="상태를 보여줘",
+        sql="SELECT status FROM ai.issue_overview",
+        metadata_revision=f"sha256:{'2' * 64}",
+        relations=("ai.issue_overview",),
+        expected=expected,
+    )
+
+    assert CONTROL_SEQUENCE_MAX == 9_223_372_036_854_775_807
+    assert tuple(field.name for field in fields(VerifiedExpectedInput)) == (
+        "columns",
+        "row_count",
+        "result_hash",
+    )
+    assert tuple(field.name for field in fields(PublishVerifiedQueryInput)) == (
+        "query_id",
+        "source_id",
+        "question",
+        "sql",
+        "metadata_revision",
+        "relations",
+        "expected",
+    )
+    assert get_type_hints(VerifiedExpectedInput) == {
+        "columns": tuple[str, ...],
+        "row_count": int,
+        "result_hash": str,
+    }
+    assert get_type_hints(PublishVerifiedQueryInput) == {
+        "query_id": str,
+        "source_id": str,
+        "question": str,
+        "sql": str,
+        "metadata_revision": str,
+        "relations": tuple[str, ...],
+        "expected": VerifiedExpectedInput,
+    }
+    for target, field_name, value in (
+        (query, "query_id", "changed"),
+        (expected, "row_count", 2),
+    ):
+        with pytest.raises(FrozenInstanceError):
+            setattr(target, field_name, value)
 
 
 class MemoryMetadataStore:
@@ -1245,14 +1305,14 @@ async def test_reloader_replaces_bootstrap_verified_revisions_for_controlled_sou
     await admin.publish("third-source", manifest, "first-secret")
     current = store.active["third-source"]
     rows = [{"status": "OPEN"}]
-    query = VerifiedQuery(
+    query = PublishVerifiedQueryInput(
         query_id="third-source-open-status",
         source_id="third-source",
         question="상태 예시를 보여줘",
         sql="SELECT status FROM ai.issue_overview ORDER BY status LIMIT 1",
         metadata_revision=current.metadata_revision,
         relations=("ai.issue_overview",),
-        expected=ExpectedResult(
+        expected=VerifiedExpectedInput(
             columns=("status",),
             row_count=1,
             result_hash=create_result_hash(("status",), rows),
@@ -1292,14 +1352,14 @@ async def test_verified_query_contract_enables_l2_publish() -> None:
     await admin.publish("third-source", manifest, "first-secret")
     current = store.active["third-source"]
     rows = [{"status": "OPEN"}]
-    query = VerifiedQuery(
+    query = PublishVerifiedQueryInput(
         query_id="third-source-open-status",
         source_id="third-source",
         question="상태 예시를 보여줘",
         sql="SELECT status FROM ai.issue_overview ORDER BY status LIMIT 1",
         metadata_revision=current.metadata_revision,
         relations=("ai.issue_overview",),
-        expected=ExpectedResult(
+        expected=VerifiedExpectedInput(
             columns=("status",),
             row_count=1,
             result_hash=create_result_hash(("status",), rows),
@@ -1320,7 +1380,21 @@ async def test_verified_query_contract_enables_l2_publish() -> None:
 
     assert verified["status"] == "verified"
     assert promoted["quality_level"] == "L2"
-    assert store.verified == [query]
+    assert store.verified == [
+        VerifiedQuery(
+            query_id=query.query_id,
+            source_id=query.source_id,
+            question=query.question,
+            sql=query.sql,
+            metadata_revision=query.metadata_revision,
+            relations=query.relations,
+            expected=ExpectedResult(
+                columns=query.expected.columns,
+                row_count=query.expected.row_count,
+                result_hash=query.expected.result_hash,
+            ),
+        )
+    ]
 
 
 @pytest.mark.asyncio
@@ -1595,14 +1669,14 @@ async def test_deterministic_verified_query_failure_is_receipted_and_replayed(
     await admin.publish("third-source", _manifest(), "first-secret")
     current = store.active["third-source"]
     rows = [{"status": "OPEN"}]
-    query = VerifiedQuery(
+    query = PublishVerifiedQueryInput(
         query_id="third-source-open-status",
         source_id="third-source",
         question="receipt에 저장하면 안 되는 질문",
         sql="SELECT status FROM ai.issue_overview ORDER BY status LIMIT 1",
         metadata_revision=current.metadata_revision,
         relations=("ai.issue_overview",),
-        expected=ExpectedResult(
+        expected=VerifiedExpectedInput(
             columns=("status",),
             row_count=1,
             result_hash=create_result_hash(("status",), rows),
@@ -1643,14 +1717,14 @@ async def test_verified_query_local_source_gap_is_not_receipted_and_can_retry(
     await admin.publish("third-source", _manifest(), "first-secret")
     current = store.active["third-source"]
     rows = [{"status": "OPEN"}]
-    query = VerifiedQuery(
+    query = PublishVerifiedQueryInput(
         query_id="third-source-retry-gap",
         source_id="third-source",
         question="로컬 적용 지연 뒤 재시도",
         sql="SELECT status FROM ai.issue_overview ORDER BY status LIMIT 1",
         metadata_revision=current.metadata_revision,
         relations=("ai.issue_overview",),
-        expected=ExpectedResult(
+        expected=VerifiedExpectedInput(
             columns=("status",),
             row_count=1,
             result_hash=create_result_hash(("status",), rows),

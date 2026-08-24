@@ -11,8 +11,8 @@ Approved: 2026-08-24 — `D0-A`, `D1-A`, `D2-A`, `D3-A`, `D4-A`, `D5-A`와
 
 Query Man은 하나의 process로 배포되지만, 개발할 때는 일곱 개 논리 module이 각자 공개한
 창구만 사용하려 한다. 현재 문서 경계는 생겼지만 일부 관계는 Python type이나 조립 구조로
-강제되지 않는다. 이 문서는 그 간격을 실제로 바꾸기 전에 사용자가 선택할 여섯 가지 결정을
-쉬운 말로 설명한다.
+강제되지 않는다. 이 문서는 그 간격에 대한 여섯 가지 선택을 쉬운 말로 설명하고, 승인 범위와
+ID별 구현 상태를 함께 기록한다.
 
 1. Startup 도중 실패했을 때 어디까지 정리할 것인가
 2. Delivery의 숨은 import를 어느 공개 계약으로 돌릴 것인가
@@ -22,9 +22,9 @@ Query Man은 하나의 process로 배포되지만, 개발할 때는 일곱 개 �
 6. Offline 품질 CLI의 예외적인 조립 권한을 어디에 둘 것인가
 
 이 문서는 선택지의 상세 범위와 구현 순서를 설명하고 ADR 0018의 승인 기록을 보조한다. 위
-Approved 조합은 명시적으로 승인됐다. `RTSAFE-01`은 구현이 끝나 완료 ledger로 이동했고, 나머지
-추적 ID가 완료되기 전까지 그 목표를 현재 구현 계약으로 오해하지 않는다. 승인 범위를 넘어서는
-code, schema, configuration 또는 module contract 변경은 다시 승인받는다.
+Approved 조합은 명시적으로 승인됐다. `RTSAFE-01`과 `MOD-04`는 구현이 끝나 완료 ledger로
+이동했고, 나머지 추적 ID가 완료되기 전까지 그 목표를 현재 구현 계약으로 오해하지 않는다. 승인
+범위를 넘어서는 code, schema, configuration 또는 module contract 변경은 다시 승인받는다.
 
 ## 한눈에 보는 현재 상태
 
@@ -33,8 +33,8 @@ code, schema, configuration 또는 module contract 변경은 다시 승인받는
 
 Runtime ──> MCP child lifespan 진입 실패 시 parent 최상위 resource를 고정 순서로 cleanup
 
-Delivery ──> Control Plane 저장소 내부 상수
-    └──────> Assurance DTO 직접 생성
+Delivery ──> Control Plane 공개 sequence/verified-publish input
+Control  ──> Assurance verified DTO
 
 일반 consumer ──> 읽기와 쓰기가 모두 있는 concrete SourceRegistry
 
@@ -43,7 +43,8 @@ Runtime ──> getattr로 Python Protocol에 없는 drain/invalidate capability
 Assurance core type/hash + offline CLI concrete wiring이 같은 파일에 공존
 ```
 
-승인된 전체 조합이 완료되면 다음처럼 된다. Runtime 행은 `RTSAFE-01`로 이미 반영됐다.
+승인된 전체 조합이 완료되면 다음처럼 된다. Runtime 행은 `RTSAFE-01`, Delivery/Control 행은
+`MOD-04`로 이미 반영됐다.
 
 ```text
 권장 목표
@@ -138,8 +139,8 @@ Wave 0는 아래 행위를 허용하지 않는다.
 | 계약 결정 | 추적 ID | 상태/공식 시작 gate |
 |---|---|---|
 | D0 startup cleanup | `RTSAFE-01` | 구현·검증 완료; roadmap ledger로 이동 |
-| D1 hidden dependency | `MOD-04` | `RTSAFE-01` 완료와 exact D1 choice 승인 완료; 다음 구현 작업 |
-| D2 read/write capability | `MOD-05` | `MOD-04` 완료와 exact D2 choice 승인 |
+| D1 hidden dependency | `MOD-04` | 구현·검증 완료; roadmap ledger로 이동 |
+| D2 read/write capability | `MOD-05` | `MOD-04` 완료와 exact D2 choice 승인 완료; 다음 구현 작업 |
 | D4 lifecycle Protocol | `MOD-06` | `MOD-05` 완료와 exact D4 choice 승인 |
 | D3 deep immutability | `MOD-07` | `MOD-06` 완료와 exact D3 choice 승인 |
 | D5 offline composition | `MOD-08` | `MOD-07` 완료와 exact D5 choice 승인 |
@@ -199,14 +200,13 @@ DB migration, wire/persisted schema와 data loss 영향은 없다. Rollback은 c
 
 ### 현재 사실
 
-Delivery 소유 `source_admin_routes.py`가 다음 private/foreign type을 직접 import한다.
-
-- Control Plane persistence implementation의 `POSTGRES_BIGINT_MAX`
-- Assurance 소유 `VerifiedQuery`와 `ExpectedResult`
-
-하지만 허용 dependency는 `Delivery -> Control Plane administration use case`와
-`Control Plane -> Assurance verified contract`다. 현재 import는 route가 저장소 내부 숫자와
-두 단계 아래 DTO를 알아야 하는 숨은 결합이다.
+`MOD-04` 구현 뒤 Delivery 소유 `source_admin_routes.py`는 기존 Control Plane public
+`MutationContext`/`SourceAdminService`와 새 `CONTROL_SEQUENCE_MAX`,
+`PublishVerifiedQueryInput`, `VerifiedExpectedInput`을 소비한다. Control Plane persistence
+implementation의 `POSTGRES_BIGINT_MAX`와 Assurance 소유 `VerifiedQuery`/`ExpectedResult`를 직접
+import하지 않는다. `SourceAdminService`가 public input을 Assurance DTO로 exact mapping한다.
+[`test_documentation.py`](../tests/test_documentation.py)의 import guard와
+[`test_source_admin.py`](../tests/test_source_admin.py)의 mapping test가 이 경계를 고정한다.
 
 ### 선택지
 
@@ -216,7 +216,7 @@ Delivery 소유 `source_admin_routes.py`가 다음 private/foreign type을 직�
 | D1-B | `Delivery -> Assurance`를 공식 허용하고 sequence 상한만 Control Plane public contract로 옮긴다. | 변경량이 가장 작다. | Assurance DTO 변경이 Delivery route 변경으로 전파되고 dependency graph가 더 촘촘해진다. |
 | D1-C | 전역 `contracts` package를 새로 만들어 DTO와 상한을 모두 옮긴다. | Import 위치는 한곳이 된다. | 현재 규모에서 owner 없는 공용 창고가 될 위험이 크고 물리 이동 범위가 넓다. |
 
-### D1-A를 승인하면 바뀌는 정확한 범위
+### D1-A 승인 범위와 구현 결과
 
 Control Plane 공개 계약에 다음 exact public symbol을 추가한다.
 
@@ -474,8 +474,9 @@ D5-A  기존 offline workflow는 유지하면서 composition 예외 위치를 �
 ```
 
 변경량을 줄이는 것이 최우선이면 D3만 `D3-B`를 선택할 수 있다. 다만 large metadata를
-조회할 때마다 복사하는 CPU/memory 비용을 먼저 측정해야 한다. D0-A는 `RTSAFE-01`에서 완료되어
-D0-C의 startup leak debt는 더 이상 현재 상태가 아니다.
+조회할 때마다 복사하는 CPU/memory 비용을 먼저 측정해야 한다. D0-A와 D1-A는 각각
+`RTSAFE-01`, `MOD-04`에서 완료되어 startup leak과 Delivery hidden-import debt는 더 이상 현재
+상태가 아니다.
 
 ## 승인 회신 방법
 
@@ -511,8 +512,8 @@ type, 성능 상한, consumer와 rollback 범위를 후속 승인안으로 작�
 계약 변경은 coordinating workstream 하나가 다음 순서로 직렬화한다.
 
 1. D0 startup failure cleanup (`RTSAFE-01`) — 완료
-2. D1 숨은 dependency 제거 (`MOD-04`) — 다음
-3. D2 read/write capability 분리 (`MOD-05`)
+2. D1 숨은 dependency 제거 (`MOD-04`) — 완료
+3. D2 read/write capability 분리 (`MOD-05`) — 다음
 4. D4 lifecycle Protocol 명시 (`MOD-06`)
 5. D3 immutable snapshot 전환 (`MOD-07`)
 6. D5 offline CLI composition 격리 (`MOD-08`)
@@ -546,7 +547,7 @@ uv run pytest -m integration
 | 관찰 | 현재 위치 |
 |---|---|
 | Startup enter-failure cleanup 보장 | `src/query_man/app.py` lifespan, [`test_runtime_startup_cleanup.py`](../tests/test_runtime_startup_cleanup.py), [Runtime startup contract](modules/runtime/README.md#startup-contract) |
-| Delivery의 private/foreign import | `src/query_man/source_admin_routes.py` import와 verified publish route |
+| Delivery의 public Control administration input 경계 | `src/query_man/source_admin_routes.py`, `src/query_man/source_admin.py`, [`test_documentation.py`](../tests/test_documentation.py), [`test_source_admin.py`](../tests/test_source_admin.py) |
 | 혼합 Source capability | `src/query_man/registry.py`의 `SourceRegistry` |
 | Shallow immutable graph | `src/query_man/models.py`의 source/semantic/catalog/prepared types |
 | 누락된 lifecycle Protocol | `src/query_man/query.py`의 `QueryExecutor`, `src/query_man/models.py`의 `CatalogProvider` |

@@ -5,7 +5,7 @@ import json
 import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
-from typing import Protocol
+from typing import Final, Protocol
 
 from query_man.errors import (
     AppError,
@@ -36,6 +36,7 @@ from query_man.registry import (
 )
 from query_man.secrets import EncryptedSecret, SecretDecryptionError, SourceSecretCipher
 from query_man.source_store import (
+    POSTGRES_BIGINT_MAX,
     MutationIdempotencyConflictError,
     MutationPage,
     MutationReceipt,
@@ -50,9 +51,28 @@ from query_man.source_store import (
     StoredSourceNotFoundError,
 )
 from query_man.sql_validation import SQL_POLICY_REVISION, SqlValidationError, validate_sql
-from query_man.verified import VerifiedQuery, create_result_hash
+from query_man.verified import ExpectedResult, VerifiedQuery, create_result_hash
 
 logger = logging.getLogger("query_man.source_control")
+CONTROL_SEQUENCE_MAX: Final[int] = POSTGRES_BIGINT_MAX
+
+
+@dataclass(frozen=True)
+class VerifiedExpectedInput:
+    columns: tuple[str, ...]
+    row_count: int
+    result_hash: str
+
+
+@dataclass(frozen=True)
+class PublishVerifiedQueryInput:
+    query_id: str
+    source_id: str
+    question: str
+    sql: str
+    metadata_revision: str
+    relations: tuple[str, ...]
+    expected: VerifiedExpectedInput
 
 
 class SourceStore(Protocol):
@@ -751,10 +771,23 @@ class SourceAdminService:
 
     async def publish_verified_query(
         self,
-        query: VerifiedQuery,
+        query_input: PublishVerifiedQueryInput,
         tenant_id: str,
         mutation: MutationContext | None = None,
     ) -> dict[str, object]:
+        query = VerifiedQuery(
+            query_id=query_input.query_id,
+            source_id=query_input.source_id,
+            question=query_input.question,
+            sql=query_input.sql,
+            metadata_revision=query_input.metadata_revision,
+            relations=query_input.relations,
+            expected=ExpectedResult(
+                columns=query_input.expected.columns,
+                row_count=query_input.expected.row_count,
+                result_hash=query_input.expected.result_hash,
+            ),
+        )
         request = self._mutation_request(
             mutation,
             operation="publish_verified_query",

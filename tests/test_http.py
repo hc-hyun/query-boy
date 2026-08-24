@@ -24,10 +24,13 @@ from query_man.operations import operations
 from query_man.query import QueryExecutor
 from query_man.registry import SourceRegistry
 from query_man.runtime_config import RuntimeConfig
-from query_man.source_admin import MutationContext
-from query_man.source_store import POSTGRES_BIGINT_MAX
+from query_man.source_admin import (
+    CONTROL_SEQUENCE_MAX,
+    MutationContext,
+    PublishVerifiedQueryInput,
+    VerifiedExpectedInput,
+)
 from query_man.sql_validation import SQL_POLICY_REVISION, ValidatedSql
-from query_man.verified import ExpectedResult, VerifiedQuery
 from tests.helpers import ROOT_DIRECTORY, load_test_registry, minimal_development_snapshot
 
 
@@ -348,7 +351,7 @@ class RecordingSourceAdmin:
 
     async def publish_verified_query(
         self,
-        query: VerifiedQuery,
+        query: PublishVerifiedQueryInput,
         tenant_id: str,
         mutation: MutationContext | None = None,
     ) -> dict[str, object]:
@@ -1184,14 +1187,14 @@ async def test_operator_mutation_routes_forward_context_and_payload(
         ),
         (
             "publish_verified_query",
-            VerifiedQuery(
+            PublishVerifiedQueryInput(
                 query_id="known-source-check",
                 source_id="known-source",
                 question="Check the known source",
                 sql="SELECT issue_id FROM ai.issue_overview LIMIT 1",
                 metadata_revision=metadata_revision,
                 relations=("ai.issue_overview",),
-                expected=ExpectedResult(
+                expected=VerifiedExpectedInput(
                     columns=("issue_id",),
                     row_count=1,
                     result_hash=result_hash,
@@ -1281,7 +1284,7 @@ async def test_operator_mutation_routes_reject_invalid_contract_before_service(
     }
     overflow_state = {
         **existing_headers,
-        "x-expected-generation": str(POSTGRES_BIGINT_MAX + 1),
+        "x-expected-generation": str(CONTROL_SEQUENCE_MAX + 1),
     }
     unexpected_revision = {
         **existing_headers,
@@ -1608,7 +1611,7 @@ async def test_operator_admin_source_gets_return_bounded_errors(
         "/admin/sources/known-source/history?before_generation=0",
         (
             "/admin/sources/known-source/history?before_generation="
-            f"{POSTGRES_BIGINT_MAX + 1}"
+            f"{CONTROL_SEQUENCE_MAX + 1}"
         ),
         "/admin/mutations/not-a-canonical-uuid",
         f"/admin/mutations/{_MUTATION_KEYS[0]}?unexpected=value",
@@ -1618,7 +1621,7 @@ async def test_operator_admin_source_gets_return_bounded_errors(
         "/admin/sources/known-source/mutations?before_event_id=0",
         (
             "/admin/sources/known-source/mutations?before_event_id="
-            f"{POSTGRES_BIGINT_MAX + 1}"
+            f"{CONTROL_SEQUENCE_MAX + 1}"
         ),
         "/admin/sources/known-source/mutations?unexpected=value",
         "/admin/sources/known-source/mutations?limit=10&limit=20",

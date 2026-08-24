@@ -57,8 +57,8 @@ membership과 offline 품질 증거를 제공하고 동일 기준을 회귀 검�
   [`test_result_encoding.py`](../../../tests/test_result_encoding.py)
 
 [`quality_level.py`](../../../src/query_man/quality_level.py)는 Metadata owner이고 Assurance가 검증하는
-cross-module 계약이다. `verified.py`의 DTO/hash는 Control Plane도 소비하므로 shared contract이며
-CLI 내부 정리라는 이유로 shape나 hash 의미를 바꾸지 않는다.
+cross-module 계약이다. `verified.py`의 DTO/hash는 Control Plane이 직접 소비하는 shared contract이며
+Delivery는 이를 import하지 않는다. CLI 내부 정리라는 이유로 shape나 hash 의미를 바꾸지 않는다.
 
 `quality.py`와 `verified.py`의 CLI entrypoint는 offline acceptance에 한정된 bounded composition
 root다. SourceRegistry, Metadata, Catalog와 Query concrete adapter를 조립할 수 있지만 production
@@ -119,7 +119,8 @@ Control Plane이 이를 L2 판단 입력으로 주입한다. Membership은 exact
 revision으로 자동 승계하지 않는다. Bootstrap mode는 filesystem verified contract만 load하고,
 managed mode는 empty map에서 시작해 Control DB verified contract만 반영한다. 두 authority를
 합치거나 managed failure 때 filesystem으로 fallback하지 않는다.
-Control Plane은 Assurance의 Verified DTO/hash를 소비해 immutable contract를 publish한다. Assurance
+Control Plane은 public administration input을 Assurance의 Verified DTO로 변환하고 그 DTO/hash를
+소비해 immutable contract를 publish한다. Delivery는 Assurance DTO를 직접 만들지 않으며 Assurance
 core는 Control DB implementation을 import하지 않는다.
 
 ## 소비 계약
@@ -187,6 +188,8 @@ uv run query-man-verify
 
 Control publish/L2 경계를 바꾸면 source-admin tests를, live database verification 경계를 바꾸면
 `uv run pytest -m integration`도 실행한다. 완료 전 root `AGENTS.md`의 전체 gate를 실행한다.
+Control public input에서 Verified DTO로 가는 mapping을 바꾸면 `tests/test_source_admin.py`도 함께
+실행한다.
 
 ## 집중해서 읽을 범위
 

@@ -15,8 +15,8 @@ from dotenv import load_dotenv
 from query_man.access import AccessPolicy
 from query_man.app import build_app
 from query_man.runtime_config import RuntimeConfig
+from query_man.source_admin import PublishVerifiedQueryInput, VerifiedExpectedInput
 from query_man.source_store import PostgresSourceStore
-from query_man.verified import ExpectedResult, VerifiedQuery
 from tests.helpers import ROOT_DIRECTORY
 
 _SOURCE_ID = "support-tickets"
@@ -130,14 +130,14 @@ async def test_managed_control_state_survives_restart_deactivate_and_rollback(
 
             expected = verified_document["expected"]
             verified = await admin.publish_verified_query(
-                VerifiedQuery(
+                PublishVerifiedQueryInput(
                     query_id=verified_document["query_id"],
                     source_id=_SOURCE_ID,
                     question=verified_document["question"],
                     sql=verified_document["sql"],
                     metadata_revision=semantic_revision,
                     relations=tuple(verified_document["relations"]),
-                    expected=ExpectedResult(
+                    expected=VerifiedExpectedInput(
                         columns=tuple(expected["columns"]),
                         row_count=expected["row_count"],
                         result_hash=expected["result_hash"],

@@ -14,9 +14,13 @@ from query_man.errors import OperatorRequiredError, SourceControlUnavailableErro
 from query_man.http_validation import is_json_content_type
 from query_man.models import SourceEnvironment
 from query_man.registry import Identifier, StableSlug
-from query_man.source_admin import MutationContext, SourceAdminService
-from query_man.source_store import POSTGRES_BIGINT_MAX
-from query_man.verified import ExpectedResult, VerifiedQuery
+from query_man.source_admin import (
+    CONTROL_SEQUENCE_MAX,
+    MutationContext,
+    PublishVerifiedQueryInput,
+    SourceAdminService,
+    VerifiedExpectedInput,
+)
 
 audit_logger = logging.getLogger("query_man.audit")
 _router = APIRouter()
@@ -76,7 +80,7 @@ class SourceHistoryQuery(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     limit: int = Field(50, ge=1, le=100)
-    before_generation: int | None = Field(None, ge=1, le=POSTGRES_BIGINT_MAX)
+    before_generation: int | None = Field(None, ge=1, le=CONTROL_SEQUENCE_MAX)
 
 
 class SourceDetailQuery(BaseModel):
@@ -87,7 +91,7 @@ class SourceMutationHistoryQuery(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     limit: int = Field(50, ge=1, le=100)
-    before_event_id: int | None = Field(None, ge=1, le=POSTGRES_BIGINT_MAX)
+    before_event_id: int | None = Field(None, ge=1, le=CONTROL_SEQUENCE_MAX)
 
 
 class SourcePathParameters(BaseModel):
@@ -103,7 +107,7 @@ class MutationPathParameters(BaseModel):
 
 
 class RollbackPathParameters(SourcePathParameters):
-    generation: int = Field(ge=1, le=POSTGRES_BIGINT_MAX)
+    generation: int = Field(ge=1, le=CONTROL_SEQUENCE_MAX)
 
 
 class MutationHeaders(BaseModel):
@@ -194,7 +198,7 @@ def _parse_mutation_headers(
         raise _request_validation_error(error, "header") from error
     generation = int(parsed.expected_generation)
     state_version = int(parsed.expected_state_version)
-    if generation > POSTGRES_BIGINT_MAX or state_version > POSTGRES_BIGINT_MAX:
+    if generation > CONTROL_SEQUENCE_MAX or state_version > CONTROL_SEQUENCE_MAX:
         raise _invalid_request("header", "expected_state", "value_error")
     if (generation == 0) != (state_version == 0):
         raise _invalid_request("header", "expected_state", "value_error")
@@ -433,14 +437,14 @@ async def publish_verified_query(
     mutation = _parse_mutation_headers(request, caller)
     payload = await _parse_json_body(request, VerifiedQueryRequest)
     return await _source_admin(request).publish_verified_query(
-        VerifiedQuery(
+        PublishVerifiedQueryInput(
             query_id=payload.query_id,
             source_id=source_id,
             question=payload.question,
             sql=payload.sql,
             metadata_revision=payload.metadata_revision,
             relations=tuple(payload.relations),
-            expected=ExpectedResult(
+            expected=VerifiedExpectedInput(
                 columns=tuple(payload.expected.columns),
                 row_count=payload.expected.row_count,
                 result_hash=payload.expected.result_hash,

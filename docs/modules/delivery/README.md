@@ -41,8 +41,10 @@ HTTP와 MCP parity는 모든 endpoint가 같다는 뜻이 아니다. 공통 data
 - [`http_validation.py`](../../../src/query_man/http_validation.py): HTTP/MCP/admin이 공유하는 bounded
   JSON Content-Type validator
 - [`source_admin_routes.py`](../../../src/query_man/source_admin_routes.py): admin catalog/mutation routes,
-  operator-first parsing, request limits와 Control Plane use-case 호출. Admin path/query wire validation은
-  Source Catalog의 `SourceEnvironment`, `Identifier`, `StableSlug` type을 소비한다.
+  operator-first parsing, request limits와 Control Plane public input/use-case 호출. Admin sequence
+  validation은 `CONTROL_SEQUENCE_MAX`, verified publish mapping은 `PublishVerifiedQueryInput`과
+  `VerifiedExpectedInput`을 소비한다. Admin path/query wire validation은 Source Catalog의
+  `SourceEnvironment`, `Identifier`, `StableSlug` type을 소비한다.
 - [`app.py`](../../../src/query_man/app.py): HTTP request DTO, parent auth middleware, routes, handlers와
   disconnect; composition/lifespan 부분은 Runtime 소유
 - [`errors.py`](../../../src/query_man/errors.py): public `AppError` envelope/rendering contract;
@@ -154,10 +156,12 @@ bounded header/query/path parsing을 적용한다. MCP와 admin의 더 강한 �
 - [Metadata](../metadata/README.md)의 context application result
 - [Guarded Query](../guarded-query/README.md)의 query/cancel result와 safe domain errors
 - [Control Plane](../control-plane/README.md)의 management projection, mutation receipt/use cases와
-  conflict/error meaning
+  conflict/error meaning 및 public sequence/verified-publish input
 - [Runtime](../runtime/README.md)의 aggregate health/operations state와 lifecycle context
 
 Delivery는 domain module의 concrete PostgreSQL adapter나 Control DB table을 직접 호출하지 않는다.
+Admin route는 Control Plane의 `source_store.py`와 Assurance의 `verified.py`를 import하지 않고 Control
+Plane이 공개한 administration input만 만든다.
 위 Source Catalog validation type의 pattern/range를 바꾸면 admin path/query wire acceptance도 바뀌므로
 두 module의 계약과 기존 client compatibility를 함께 확인한다.
 
@@ -172,6 +176,8 @@ Delivery는 domain module의 concrete PostgreSQL adapter나 Control DB table을 
 - Query-facing `GET /sources`/`list_sources()` projection에는 connection endpoint와 internal
   control state가 포함되지 않는다. Operator-only admin detail의 제한된 connection projection은
   Control Plane management contract를 따른다.
+- Admin sequence/verified payload는 Control persistence나 Assurance DTO가 아니라 Control Plane
+  public administration input을 통해 전달한다.
 
 ## 모듈 내부 변경
 
@@ -220,6 +226,8 @@ uv run pytest -m 'mcp_server and not soak' -s tests/test_mcp_server.py
 
 Protocol/socket 경계를 바꾸면 integration disconnect test를, admin mutation parsing/receipt를 바꾸면
 source-admin/control-store tests를, concurrency/session 경계를 바꾸면 MCP load/soak test를 추가한다.
+Control public administration input 소비를 바꾸면 `tests/test_documentation.py`의 hidden-import guard와
+`tests/test_source_admin.py`의 provider mapping test도 실행한다.
 완료 전 root `AGENTS.md`의 전체 gate를 실행한다.
 
 ## 집중해서 읽을 범위
