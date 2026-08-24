@@ -194,6 +194,9 @@ class DisconnectCatalog:
     async def close(self) -> None:
         pass
 
+    async def invalidate(self, _source_id: str) -> None:
+        pass
+
 
 class DisconnectExecutor:
     def __init__(self) -> None:
@@ -221,6 +224,15 @@ class DisconnectExecutor:
         return False
 
     async def close(self) -> None:
+        pass
+
+    def stop_accepting(self) -> None:
+        pass
+
+    async def drain(self, _grace_ms: int) -> None:
+        self.stop_accepting()
+
+    async def invalidate(self, _source_id: str) -> None:
         pass
 
 

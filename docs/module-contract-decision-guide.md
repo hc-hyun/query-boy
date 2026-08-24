@@ -22,7 +22,7 @@ ID별 구현 상태를 함께 기록한다.
 6. Offline 품질 CLI의 예외적인 조립 권한을 어디에 둘 것인가
 
 이 문서는 선택지의 상세 범위와 구현 순서를 설명하고 ADR 0018의 승인 기록을 보조한다. 위
-Approved 조합은 명시적으로 승인됐다. `RTSAFE-01`, `MOD-04`와 `MOD-05`는 구현이 끝나 완료
+Approved 조합은 명시적으로 승인됐다. `RTSAFE-01`, `MOD-04`, `MOD-05`와 `MOD-06`은 구현이 끝나 완료
 ledger로 이동했고, 나머지 추적 ID가 완료되기 전까지 그 목표를 현재 구현 계약으로 오해하지 않는다. 승인
 범위를 넘어서는 code, schema, configuration 또는 module contract 변경은 다시 승인받는다.
 
@@ -39,13 +39,13 @@ Control  ──> Assurance verified DTO
 일반 consumer ──> SourceReader
 Control writer ──> SourceProjectionWriter
 
-Runtime ──> getattr로 Python Protocol에 없는 drain/invalidate capability를 선택적으로 호출
+Runtime ──> 필수 RuntimeQueryExecutor/RuntimeCatalogProvider를 검증하고 직접 호출
 
 Assurance core type/hash + offline CLI concrete wiring이 같은 파일에 공존
 ```
 
 승인된 전체 조합이 완료되면 다음처럼 된다. Runtime cleanup 행은 `RTSAFE-01`, Delivery/Control
-행은 `MOD-04`, Source capability 두 행은 `MOD-05`로 이미 반영됐다.
+행은 `MOD-04`, Source capability 두 행은 `MOD-05`, lifecycle 행은 `MOD-06`으로 이미 반영됐다.
 
 ```text
 권장 목표
@@ -142,8 +142,8 @@ Wave 0는 아래 행위를 허용하지 않는다.
 | D0 startup cleanup | `RTSAFE-01` | 구현·검증 완료; roadmap ledger로 이동 |
 | D1 hidden dependency | `MOD-04` | 구현·검증 완료; roadmap ledger로 이동 |
 | D2 read/write capability | `MOD-05` | 구현·검증 완료; roadmap ledger로 이동 |
-| D4 lifecycle Protocol | `MOD-06` | `MOD-05` 완료와 exact D4 choice 승인; 다음 구현 작업 |
-| D3 deep immutability | `MOD-07` | `MOD-06` 완료와 exact D3 choice 승인 |
+| D4 lifecycle Protocol | `MOD-06` | 구현·검증 완료; roadmap ledger로 이동 |
+| D3 deep immutability | `MOD-07` | `MOD-06` 완료와 exact D3 choice 승인; 다음 구현 작업 |
 | D5 offline composition | `MOD-08` | `MOD-07` 완료와 exact D5 choice 승인 |
 
 이 plan, Wave 0 또는 Active TODO 순서만 승인하는 것은 `D0-A`~`D5-A` 선택 승인이 아니었다.
@@ -345,19 +345,21 @@ provider를 먼저 편집하되, 모든 직접 consumer·문서·test까지 통�
 
 ### 현재 사실
 
-Production implementation에는 다음 method가 있지만 현재 application Protocol에 모두 드러나지
-않는다.
+Production concrete는 기존 lifecycle method를 유지하고 provider가 작은 application Protocol과
+Runtime 전용 composite Protocol을 나눠 제공한다.
 
 ```text
-Query implementation: stop_accepting, drain, invalidate, close
-Catalog implementation: invalidate, close
-
 QueryExecutor Protocol: execute, cancel, close
+RuntimeQueryExecutor: QueryExecutor + stop_accepting, drain, invalidate
 CatalogProvider Protocol: load, close
+RuntimeCatalogProvider: CatalogProvider + invalidate
 ```
 
-Runtime은 `getattr`로 `drain`/`invalidate` 존재를 확인하고 없는 adapter에서는 일부 lifecycle
-작업을 조용히 생략한다. 운영 조립이 실제로 필요한 capability를 type으로 요구하지 않는 상태다.
+`MOD-06` 구현 뒤 Runtime은 주입/default adapter를 falsey 여부가 아니라 `None` 여부로 선택하고
+composite의 모든 required method가 callable인지 app composition에서 검증한다. 누락 adapter는
+sync/probe/background task나 ready 전 `TypeError`로 실패한다. 정상 shutdown은 configured grace로
+`drain`을 직접 호출하며 managed reloader에는 catalog와 query invalidator가 모두 주입된다. Runtime
+검사는 callable 존재를, provider Protocol/mypy/contract test는 sync/async signature를 고정한다.
 
 ### 선택지
 
@@ -367,7 +369,7 @@ Runtime은 `getattr`로 `drain`/`invalidate` 존재를 확인하고 없는 adapt
 | D4-B | 기존 `QueryExecutor`와 `CatalogProvider`에 lifecycle method를 모두 직접 추가한다. | Protocol 수가 적고 눈에 잘 보인다. | Lifecycle을 쓰지 않는 QueryService와 test fake까지 운영 method를 구현해야 한다. |
 | D4-C | 현재 optional `getattr` 호출을 유지한다. | Code 변경이 없다. | Custom adapter에서 shutdown drain이나 source invalidation이 조용히 빠질 수 있다. |
 
-### D4-A를 승인하면 바뀌는 정확한 범위
+### 승인·구현된 D4-A의 정확한 범위
 
 ```text
 RuntimeQueryExecutor extends QueryExecutor:
@@ -478,9 +480,9 @@ D5-A  기존 offline workflow는 유지하면서 composition 예외 위치를 �
 ```
 
 변경량을 줄이는 것이 최우선이면 D3만 `D3-B`를 선택할 수 있다. 다만 large metadata를
-조회할 때마다 복사하는 CPU/memory 비용을 먼저 측정해야 한다. D0-A, D1-A와 D2-A는 각각
-`RTSAFE-01`, `MOD-04`, `MOD-05`에서 완료되어 startup leak, Delivery hidden-import와 혼합
-consumer capability debt는 더 이상 현재 상태가 아니다.
+조회할 때마다 복사하는 CPU/memory 비용을 먼저 측정해야 한다. D0-A, D1-A, D2-A와 D4-A는 각각
+`RTSAFE-01`, `MOD-04`, `MOD-05`, `MOD-06`에서 완료되어 startup leak, Delivery hidden-import,
+혼합 consumer capability와 optional lifecycle debt는 더 이상 현재 상태가 아니다.
 
 ## 승인 회신 방법
 
@@ -518,8 +520,8 @@ type, 성능 상한, consumer와 rollback 범위를 후속 승인안으로 작�
 1. D0 startup failure cleanup (`RTSAFE-01`) — 완료
 2. D1 숨은 dependency 제거 (`MOD-04`) — 완료
 3. D2 read/write capability 분리 (`MOD-05`) — 완료
-4. D4 lifecycle Protocol 명시 (`MOD-06`) — 다음
-5. D3 immutable snapshot 전환 (`MOD-07`)
+4. D4 lifecycle Protocol 명시 (`MOD-06`) — 완료
+5. D3 immutable snapshot 전환 (`MOD-07`) — 다음
 6. D5 offline CLI composition 격리 (`MOD-08`)
 7. 전체 dependency/contract audit
 
@@ -554,7 +556,7 @@ uv run pytest -m integration
 | Delivery의 public Control administration input 경계 | `src/query_man/source_admin_routes.py`, `src/query_man/source_admin.py`, [`test_documentation.py`](../tests/test_documentation.py), [`test_source_admin.py`](../tests/test_source_admin.py) |
 | 분리된 Source capability | `src/query_man/registry.py`의 `SourceReader`/`SourceProjectionWriter`, [`test_registry.py`](../tests/test_registry.py) |
 | Shallow immutable graph | `src/query_man/models.py`의 source/semantic/catalog/prepared types |
-| 누락된 lifecycle Protocol | `src/query_man/query.py`의 `QueryExecutor`, `src/query_man/models.py`의 `CatalogProvider` |
-| Runtime의 optional capability 탐색 | `src/query_man/app.py`의 invalidator/drain `getattr` |
+| 명시된 Runtime lifecycle Protocol | `src/query_man/query.py`의 `RuntimeQueryExecutor`, `src/query_man/models.py`의 `RuntimeCatalogProvider`, [`test_query.py`](../tests/test_query.py), [`test_catalog.py`](../tests/test_catalog.py) |
+| Runtime required capability validation/direct lifecycle | `src/query_man/app.py`, [`test_managed_mode.py`](../tests/test_managed_mode.py), [`test_http.py`](../tests/test_http.py) |
 | Offline composition 예외 | `src/query_man/quality.py`, `src/query_man/verified.py`, [Assurance module](modules/assurance/README.md) |
 | 허용 dependency graph | [Module index](modules/README.md#허용-의존-방향) |

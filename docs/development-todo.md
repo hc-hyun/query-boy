@@ -36,24 +36,21 @@ Status: Active
 
 ## P0.5 — Module Contract Hardening
 
-목표: 남은 Runtime lifecycle, shared snapshot과 offline composition 경계를 승인된 공개
-contract로 강제한다. Read/write capability 분리는 `MOD-05`로 완료했다. 선택지와
+목표: 남은 shared snapshot과 offline composition 경계를 승인된 공개 contract로 강제한다.
+Read/write capability와 Runtime lifecycle은 `MOD-05`/`MOD-06`으로 완료했다. 선택지와
 정확한 영향은 [module contract decision guide](module-contract-decision-guide.md)를 따른다.
 
 | 작업 경계 | 내용 |
 |---|---|
-| Primary module | 남은 권장 A choice의 ID별 contract provider: `MOD-06` Guarded Query/Metadata, `MOD-07` Source Catalog/Metadata, `MOD-08` Assurance |
-| Direct consumers | `MOD-06` Runtime/Control reloader, `MOD-07` source/metadata snapshot consumers, `MOD-08` offline CLI entrypoint |
+| Primary module | 남은 권장 A choice의 ID별 contract provider: `MOD-07` Source Catalog/Metadata, `MOD-08` Assurance |
+| Direct consumers | `MOD-07` source/metadata snapshot consumers, `MOD-08` offline CLI entrypoint |
 | Affected providers/verifiers | Delivery, Runtime, Control Plane, Metadata, Guarded Query, Source Catalog과 Assurance의 각 focused/contract test |
 | Contract baseline | ADR 0018, 현재 module index/README와 decision guide에 적은 현재 동작·공통 불변조건 |
-| Approval gate | 2026-08-24 사용자가 남은 `D4-A`, `D3-A`, `D5-A`와 decision guide의 공통 불변조건을 승인했다. 승인된 exact 범위를 넘어서는 변경이나 대안 전환은 다시 승인받는다. |
-| Single writer | Coordinating agent가 `MOD-06` → `MOD-07` → `MOD-08` 순서로 contract/provider를 직렬화한다. Provider baseline 확정 뒤 서로 다른 consumer implementation만 병렬화한다. |
-| Start gate | `RTSAFE-01`, `MOD-04`와 `MOD-05` 완료; repository 전체의 다음 구현 작업은 `MOD-06`이다. 이후 항목은 위 순서를 따른다. Lower-track read-only prework는 가능하지만 item 시작이나 baseline 변경은 아니다. |
+| Approval gate | 2026-08-24 사용자가 남은 `D3-A`, `D5-A`와 decision guide의 공통 불변조건을 승인했다. 승인된 exact 범위를 넘어서는 변경이나 대안 전환은 다시 승인받는다. |
+| Single writer | Coordinating agent가 `MOD-07` → `MOD-08` 순서로 contract/provider를 직렬화한다. Provider baseline 확정 뒤 서로 다른 consumer implementation만 병렬화한다. |
+| Start gate | `RTSAFE-01`과 `MOD-04`~`MOD-06` 완료; repository 전체의 다음 구현 작업은 `MOD-07`이다. 이후 항목은 위 순서를 따른다. Lower-track read-only prework는 가능하지만 item 시작이나 baseline 변경은 아니다. |
 | Verification | Decision guide의 각 exact contract test, provider와 모든 직접 consumer focused test, `ruff`, `mypy`, root `pytest`, DB 경계의 integration test |
 
-- [ ] `MOD-06` 승인된 `D4-A`에 따라 Guarded Query와
-  Metadata가 Runtime에 필요한 lifecycle capability를 승인된 Protocol로 제공하고 누락 adapter가
-  ready 전 fail-closed하는지 검증한다.
 - [ ] `MOD-07` 승인된 `D3-A`에 따라 Source Catalog과
   Metadata의 public snapshot을 승인된 immutability 경계로 전환하고 serialized JSON, revision과
   verified hash 불변을 검증한다.
@@ -194,9 +191,9 @@ Production mutation executor는 이 track에 없다. 필요해지면 credential 
 
 ## Approval-Gated Contract Work
 
-Startup cleanup `RTSAFE-01`, hidden dependency `MOD-04`와 read/write capability `MOD-05`는
-완료되어 roadmap ledger로 이동했다. Lifecycle/immutability/offline composition은
-`MOD-06`~`MOD-08`이 순서와 완료 조건을 추적한다. 2026-08-24 사용자는
+Startup cleanup `RTSAFE-01`, hidden dependency `MOD-04`, read/write capability `MOD-05`와
+lifecycle Protocol `MOD-06`은 완료되어 roadmap ledger로 이동했다. Immutability/offline
+composition은 `MOD-07`~`MOD-08`이 순서와 완료 조건을 추적한다. 2026-08-24 사용자는
 [module contract decision guide](module-contract-decision-guide.md)의 `D0-A`~`D5-A`와 공통
 불변조건을 명시적으로 승인했다. 남은 각 ID가 완료되기 전에는 승인된 목표를 현재 구현 계약으로
 오해하지 않으며, 승인 범위를 넘어서는 의미 변경은 다시 승인받는다.

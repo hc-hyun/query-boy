@@ -36,8 +36,8 @@ Guarded Query는 이미 선택된 source와 published metadata revision을 기�
 
 - [`sql_validation.py`](../../../src/query_man/sql_validation.py): AST policy, allowlist,
   `ValidatedSql`과 `SQL_POLICY_REVISION`
-- [`query.py`](../../../src/query_man/query.py): `QueryService`, `QueryExecutor`와
-  `PostgresQueryExecutor`
+- [`query.py`](../../../src/query_man/query.py): `QueryService`, 작은 application `QueryExecutor`,
+  Runtime 전용 `RuntimeQueryExecutor`와 `PostgresQueryExecutor`
 - [`result_encoding.py`](../../../src/query_man/result_encoding.py): result scalar의 JSON-safe
   canonical encoding
 - [`errors.py`](../../../src/query_man/errors.py): query rejection/invalid/overload/timeout/unavailable
@@ -51,10 +51,10 @@ Guarded Query는 이미 선택된 source와 published metadata revision을 기�
   [`test_query.py`](../../../tests/test_query.py),
   [`test_result_encoding.py`](../../../tests/test_result_encoding.py)
 
-현재 `QueryExecutor` Protocol에는 `execute`, `cancel`, `close`만 드러나지만 production 조립부는
-`stop_accepting`, `drain`, `invalidate` capability도 사용한다. 이는 현재 필수 lifecycle 계약이
-type에 완전히 표현되지 않은 contract debt다. 문서화되지 않았다는 이유로 없애거나 의미를 바꾸지
-않으며, Protocol 정리는 별도의 승인된 계약 작업으로 수행한다.
+`QueryService`는 `execute/cancel/close`만 제공하는 작은 `QueryExecutor`를 계속 소비한다. Runtime은
+이를 확장한 `RuntimeQueryExecutor`를 요구하므로 application-only fake나 adapter가 운영 lifecycle
+method까지 구현할 필요는 없다. Concrete `PostgresQueryExecutor`는 두 Protocol을 구조적으로
+구현한다.
 
 ## 제공 계약
 
@@ -144,6 +144,14 @@ resolved-object 검증과 commit에서 같은 SQLSTATE가 발생해도 사용자
 
 ### Executor lifecycle contract
 
+```text
+RuntimeQueryExecutor extends QueryExecutor:
+  stop_accepting() -> None
+  async drain(grace_ms: int) -> None
+  async invalidate(source_id: str) -> None
+  async close() -> None  # inherited
+```
+
 - `stop_accepting` 뒤 새 query를 받지 않는다.
 - `drain(grace)`는 진행 중 query를 기다린 뒤 남은 query를 취소한다.
 - Source generation 변경 시 해당 source pool과 admission state를 `invalidate`한다.
@@ -197,7 +205,7 @@ Guarded Query는 Control DB table이나 HTTP/MCP request model을 직접 알지 
 - Timeout, concurrency, plan, row, byte와 memory/temp limit의 의미 또는 완화
 - Tenant context, reader session, resolved-object 검사나 fail-closed 정책 변경
 - Query error/reason code, 정보 비노출 또는 cancel-not-found 의미 변경
-- `QueryExecutor`와 pool invalidate/drain/shutdown capability 변경
+- `QueryExecutor` 또는 `RuntimeQueryExecutor` method/shape와 pool invalidate/drain/shutdown 의미 변경
 
 승인 요청에는 Source Catalog, Metadata, Delivery, Runtime과 Assurance의 직접 consumer 영향 및
 rolling request/active query 처리 계획을 포함한다.

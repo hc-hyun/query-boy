@@ -3,15 +3,14 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import cast
 
 import pytest
 from fastapi import FastAPI
 
 import query_man.app as app_module
 from query_man.access import AccessPolicy
-from query_man.models import CatalogProvider
-from query_man.query import QueryExecutor
+from query_man.models import CatalogSnapshot, RuntimeCatalogProvider, SourceProfile
+from query_man.query import RuntimeQueryExecutor
 from query_man.runtime_config import RuntimeConfig
 from tests.helpers import ROOT_DIRECTORY
 
@@ -99,9 +98,15 @@ def _build_failing_app(
             raise_if_failed("source_store")
 
     class FakeCatalog:
+        async def load(self, _source: SourceProfile) -> CatalogSnapshot:
+            raise AssertionError("catalog load is not expected")
+
         async def close(self) -> None:
             events.append("catalog_close")
             raise_if_failed("catalog")
+
+        async def invalidate(self, _source_id: str) -> None:
+            pass
 
     class FakeQueryExecutor:
         def __init__(self) -> None:
@@ -120,6 +125,18 @@ def _build_failing_app(
                 await self.drain(0)
             events.append("query_close")
             raise_if_failed("query_executor")
+
+        async def load(self, _source: SourceProfile) -> CatalogSnapshot:
+            raise AssertionError("catalog load is not expected")
+
+        async def execute(self, *_args: object, **_kwargs: object) -> dict[str, object]:
+            raise AssertionError("query execution is not expected")
+
+        async def cancel(self, _query_id: str) -> bool:
+            return False
+
+        async def invalidate(self, _source_id: str) -> None:
+            pass
 
     class FailingChildLifespan:
         async def __aenter__(self) -> None:
@@ -155,12 +172,15 @@ def _build_failing_app(
         lambda *_args, **_kwargs: FakeMCPServer(),
     )
 
-    query_executor = FakeQueryExecutor()
-    catalog = query_executor if alias_query_and_catalog else FakeCatalog()
+    fake_query_executor = FakeQueryExecutor()
+    query_executor: RuntimeQueryExecutor = fake_query_executor
+    catalog: RuntimeCatalogProvider = (
+        fake_query_executor if alias_query_and_catalog else FakeCatalog()
+    )
     app = app_module.build_app(
         _runtime(tmp_path),
-        catalog=cast(CatalogProvider, catalog),
-        query_executor=cast(QueryExecutor, query_executor),
+        catalog=catalog,
+        query_executor=query_executor,
         access_policy=_shared_policy(tmp_path),
     )
 

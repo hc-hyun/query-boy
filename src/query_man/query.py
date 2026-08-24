@@ -146,6 +146,14 @@ class QueryExecutor(Protocol):
     async def close(self) -> None: ...
 
 
+class RuntimeQueryExecutor(QueryExecutor, Protocol):
+    def stop_accepting(self) -> None: ...
+
+    async def drain(self, grace_ms: int) -> None: ...
+
+    async def invalidate(self, source_id: str) -> None: ...
+
+
 class QueryService:
     def __init__(
         self,

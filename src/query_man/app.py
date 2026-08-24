@@ -7,7 +7,6 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from contextlib import asynccontextmanager, suppress
-from typing import cast
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -29,9 +28,9 @@ from query_man.mcp_server import (
 )
 from query_man.metadata import MetadataService
 from query_man.metadata_store import PostgresMetadataStore
-from query_man.models import CatalogProvider
+from query_man.models import RuntimeCatalogProvider
 from query_man.operations import operations
-from query_man.query import PostgresQueryExecutor, QueryExecutor, QueryService
+from query_man.query import PostgresQueryExecutor, QueryService, RuntimeQueryExecutor
 from query_man.registry import SourceReader, SourceRegistry, load_budget_profiles
 from query_man.runtime_config import RuntimeConfig
 from query_man.secrets import SourceSecretCipher
@@ -190,12 +189,28 @@ class QueryRequest(BaseModel):
     sql_policy_revision: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
 
 
+def _require_runtime_capabilities(
+    component: str,
+    provider: object,
+    methods: tuple[str, ...],
+) -> None:
+    missing = tuple(
+        method
+        for method in methods
+        if not callable(getattr(provider, method, None))
+    )
+    if missing:
+        raise TypeError(
+            f"{component} is missing required runtime capabilities: {', '.join(missing)}"
+        )
+
+
 def build_app(
     runtime_config: RuntimeConfig,
     *,
     registry: SourceRegistry | None = None,
-    catalog: CatalogProvider | None = None,
-    query_executor: QueryExecutor | None = None,
+    catalog: RuntimeCatalogProvider | None = None,
+    query_executor: RuntimeQueryExecutor | None = None,
     access_policy: AccessPolicy | None = None,
 ) -> FastAPI:
     operations.reset()
@@ -206,7 +221,12 @@ def build_app(
     elif registry is None:
         registry = SourceRegistry.load(runtime_config.source_directory, runtime_config.budget_file)
     operations.reconcile_sources(registry.source_ids())
-    catalog = catalog or PostgresCatalog()
+    catalog = PostgresCatalog() if catalog is None else catalog
+    _require_runtime_capabilities(
+        "catalog",
+        catalog,
+        ("load", "close", "invalidate"),
+    )
     source_ids = [source["source_id"] for source in registry.list()]
     verified_revisions = (
         VerifiedQueryRegistry.load(
@@ -231,7 +251,12 @@ def build_app(
         store=metadata_store,
         verified_revisions=verified_revisions,
     )
-    query_executor = query_executor or PostgresQueryExecutor()
+    query_executor = PostgresQueryExecutor() if query_executor is None else query_executor
+    _require_runtime_capabilities(
+        "query_executor",
+        query_executor,
+        ("execute", "cancel", "close", "stop_accepting", "drain", "invalidate"),
+    )
     query_service = QueryService(registry, metadata, query_executor)
     if access_policy is None:
         if runtime_config.access_policy_file is not None:
@@ -253,11 +278,7 @@ def build_app(
             raise ValueError("Managed source mode configuration is incomplete")
         source_store = PostgresSourceStore(control_dsn)
         cipher = SourceSecretCipher.from_base64(encryption_key)
-        invalidators = tuple(
-            cast(SourcePoolInvalidator, candidate)
-            for candidate in (catalog, query_executor)
-            if callable(getattr(candidate, "invalidate", None))
-        )
+        invalidators: tuple[SourcePoolInvalidator, ...] = (catalog, query_executor)
         budgets = load_budget_profiles(runtime_config.budget_file)
         source_reloader = SourceReloader(
             registry,
@@ -353,9 +374,7 @@ def build_app(
                         reload_task.cancel()
                         with suppress(asyncio.CancelledError):
                             await reload_task
-                    drain = getattr(query_executor, "drain", None)
-                    if callable(drain):
-                        await drain(runtime_config.shutdown_grace_ms)
+                    await query_executor.drain(runtime_config.shutdown_grace_ms)
                     try:
                         await query_executor.close()
                     finally:

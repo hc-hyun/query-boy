@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from dataclasses import replace
-from typing import Any
+from typing import Any, get_type_hints
 
 import pytest
 from psycopg import errors
@@ -19,10 +20,61 @@ from query_man.errors import (
 from query_man.metadata import MetadataService
 from query_man.models import CatalogSnapshot, SourceProfile
 from query_man.operations import operations
-from query_man.query import PlanSummary, PostgresQueryExecutor, QueryService, _summarize_plan
+from query_man.query import (
+    PlanSummary,
+    PostgresQueryExecutor,
+    QueryExecutor,
+    QueryService,
+    RuntimeQueryExecutor,
+    _summarize_plan,
+)
 from query_man.registry import SourceRegistry
 from query_man.sql_validation import SQL_POLICY_REVISION, ValidatedSql
 from tests.helpers import load_test_registry, minimal_development_snapshot
+
+
+def test_runtime_query_executor_protocol_has_exact_lifecycle_shape() -> None:
+    application_methods = {
+        name
+        for name, value in vars(QueryExecutor).items()
+        if not name.startswith("_") and callable(value)
+    }
+    runtime_methods = {
+        name
+        for name, value in vars(RuntimeQueryExecutor).items()
+        if not name.startswith("_") and callable(value)
+    }
+
+    assert application_methods == {"cancel", "close", "execute"}
+    assert QueryExecutor in RuntimeQueryExecutor.__mro__
+    assert runtime_methods == {"drain", "invalidate", "stop_accepting"}
+    assert get_type_hints(RuntimeQueryExecutor.stop_accepting) == {
+        "return": type(None),
+    }
+    assert get_type_hints(RuntimeQueryExecutor.drain) == {
+        "grace_ms": int,
+        "return": type(None),
+    }
+    assert get_type_hints(RuntimeQueryExecutor.invalidate) == {
+        "source_id": str,
+        "return": type(None),
+    }
+    assert not inspect.iscoroutinefunction(RuntimeQueryExecutor.stop_accepting)
+    assert inspect.iscoroutinefunction(RuntimeQueryExecutor.drain)
+    assert inspect.iscoroutinefunction(RuntimeQueryExecutor.invalidate)
+    for method, names in (
+        (RuntimeQueryExecutor.stop_accepting, ("self",)),
+        (RuntimeQueryExecutor.drain, ("self", "grace_ms")),
+        (RuntimeQueryExecutor.invalidate, ("self", "source_id")),
+    ):
+        parameters = tuple(inspect.signature(method).parameters.values())
+        assert tuple(parameter.name for parameter in parameters) == names
+        assert all(
+            parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+            and parameter.default is inspect.Parameter.empty
+            for parameter in parameters
+        )
+    assert get_type_hints(QueryService.__init__)["executor"] is QueryExecutor
 
 
 class StaticCatalog:

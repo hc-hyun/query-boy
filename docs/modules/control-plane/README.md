@@ -146,6 +146,9 @@ Control DB commit은 desired-state 원자성을 보장하지만 모든 process�
 분산 transaction으로 만들지는 않는다. 각 replica의 `SourceReloader`가 polling으로 수렴한다.
 `SourceReloader`는 Source Catalog의 `SourceProjectionWriter`를 받아 read와 `upsert/remove` capability를
 함께 소비하는 유일한 runtime projector다.
+Pool/cache adapter에는 Control Plane 소유의 작은 `SourcePoolInvalidator.invalidate(source_id)` port만
+요구한다. Runtime이 provider-owned composite lifecycle을 검증하고 catalog, query executor 순서로 두
+invalidator를 주입하며 Control Plane은 그 composite Protocol을 소유하거나 optional하게 탐색하지 않는다.
 
 Replica 적용 순서는 다음과 같다.
 

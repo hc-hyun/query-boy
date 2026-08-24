@@ -19,9 +19,9 @@ from query_man.errors import (
     SourceNotFoundError,
 )
 from query_man.mcp_server import MCP_PROTOCOL_VERSION
-from query_man.models import CatalogSnapshot, SourceProfile
+from query_man.models import CatalogSnapshot, RuntimeCatalogProvider, SourceProfile
 from query_man.operations import operations
-from query_man.query import QueryExecutor
+from query_man.query import RuntimeQueryExecutor
 from query_man.registry import SourceRegistry
 from query_man.runtime_config import RuntimeConfig
 from query_man.source_admin import (
@@ -39,6 +39,9 @@ class NeverCalledCatalog:
         raise RuntimeError("Catalog should not be called")
 
     async def close(self) -> None:
+        pass
+
+    async def invalidate(self, _source_id: str) -> None:
         pass
 
 
@@ -74,6 +77,7 @@ class RecordingQueryExecutor:
         self.budgets: list[object] = []
         self.cancel_calls: list[str] = []
         self.cancel_result = False
+        self.lifecycle: list[str] = []
 
     async def execute(
         self,
@@ -103,6 +107,16 @@ class RecordingQueryExecutor:
         }
 
     async def close(self) -> None:
+        self.lifecycle.append("close")
+
+    def stop_accepting(self) -> None:
+        self.lifecycle.append("stop_accepting")
+
+    async def drain(self, grace_ms: int) -> None:
+        self.stop_accepting()
+        self.lifecycle.append(f"drain:{grace_ms}")
+
+    async def invalidate(self, _source_id: str) -> None:
         pass
 
     async def cancel(self, query_id: str) -> bool:
@@ -220,15 +234,15 @@ def runtime_config(api_token: str | None = None) -> RuntimeConfig:
 
 
 def client(
-    catalog: object,
+    catalog: RuntimeCatalogProvider,
     api_token: str | None = None,
-    query_executor: QueryExecutor | None = None,
+    query_executor: RuntimeQueryExecutor | None = None,
     access_policy: AccessPolicy | None = None,
 ) -> httpx.AsyncClient:
     app = build_app(
         runtime_config(api_token),
         registry=load_test_registry(),
-        catalog=catalog,  # type: ignore[arg-type]
+        catalog=catalog,
         query_executor=query_executor,
         access_policy=access_policy,
     )
@@ -1759,6 +1773,22 @@ async def test_executes_query_with_current_metadata_revision(
     assert "elapsed_ms=1 row_count=1 result_bytes=21" in caplog.text
     assert "plan_total_cost=10.0" in caplog.text
     assert "plan_max_rows=1 plan_node_count=2" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_runtime_shutdown_drains_injected_executor_with_configured_grace() -> None:
+    executor = RecordingQueryExecutor()
+    app = build_app(
+        runtime_config(),
+        registry=load_test_registry(),
+        catalog=ReturningCatalog(minimal_development_snapshot()),
+        query_executor=executor,
+    )
+
+    async with app.router.lifespan_context(app):
+        pass
+
+    assert executor.lifecycle == ["stop_accepting", "drain:10000", "close"]
 
 
 @pytest.mark.asyncio

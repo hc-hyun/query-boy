@@ -41,7 +41,8 @@ Metadata는 SQL 실행기가 아니다. 질문에 어떤 relation, column, grain
 - [`quality_level.py`](../../../src/query_man/quality_level.py): runtime publish quality gate
 - [`errors.py`](../../../src/query_man/errors.py): metadata unavailable/revision mismatch 의미;
   public rendering은 Delivery 계약
-- [`models.py`](../../../src/query_man/models.py): catalog snapshot and prepared metadata types
+- [`models.py`](../../../src/query_man/models.py): catalog snapshot/prepared metadata type, 작은
+  `CatalogProvider`와 Runtime 전용 `RuntimeCatalogProvider`
 - [`metadata_store.py`](../../../src/query_man/metadata_store.py): MetadataStore port, persisted snapshot codec와
   PostgreSQL implementation이 함께 있는 transition hot spot
 - Focused tests: [`test_catalog.py`](../../../tests/test_catalog.py),
@@ -55,9 +56,9 @@ Metadata는 SQL 실행기가 아니다. 질문에 어떤 relation, column, grain
 [Control Plane](../control-plane/README.md)이 소유한다. Metadata는 store capability와 snapshot
 codec/compatibility contract만 소유한다.
 
-현재 `CatalogProvider` Protocol은 `load/close`만 선언하지만 production reloader는 concrete
-`PostgresCatalog.invalidate(source_id)`도 사용한다. 이는 실제 lifecycle에는 필요하지만 type에
-완전히 표현되지 않은 contract debt다. 물리 분리나 대체 adapter 작업에서 누락하지 않는다.
+`MetadataService`와 Control Plane candidate staging은 `load/close`만 제공하는 작은
+`CatalogProvider`를 계속 소비한다. Runtime은 이를 확장한 `RuntimeCatalogProvider`를 요구하고
+concrete `PostgresCatalog`는 두 Protocol을 구조적으로 구현한다.
 
 Control DB의 persisted snapshot/revision history는 immutable하지만 현재 process 안의 published
 Python object graph는 deep immutable이 아니다. `PreparedMetadata`의 바깥 dataclass는 frozen이어도
@@ -135,6 +136,22 @@ persisted snapshot 및 rolling replica compatibility contract다.
 - Fresh cache hit는 PostgreSQL reader policy를 다시 조회하지 않으며 drift는 다음 refresh에서
   검출한다. Cache hit를 live privilege probe로 해석하지 않는다.
 
+### Catalog provider capability contract
+
+```text
+CatalogProvider:
+  async load(source) -> CatalogSnapshot
+  async close() -> None
+
+RuntimeCatalogProvider extends CatalogProvider:
+  async invalidate(source_id: str) -> None
+  async close() -> None  # inherited
+```
+
+Runtime composite는 source generation 교체 때 pool을 반드시 invalidate하기 위한 조립 계약이다.
+`MetadataService`의 `CatalogProvider` type contract는 invalidate capability를 요구하거나 노출하지
+않는다. Runtime이 같은 concrete adapter를 주입하므로 이는 runtime sandbox가 아니다.
+
 ### MetadataStore port
 
 ```text
@@ -203,6 +220,7 @@ policy descriptor다. 이 dependency를 바꾸는 refactoring은 외부 context 
 - Wide relation의 필수 column 우선순위, 필수 수의 target 초과, index hiding과 truncation 의미 변경
 - Retrieval threshold, default relation fallback, selection reason 또는 deterministic ordering 변경
 - SQL capability를 context에 포함하는 방법이나 SQL policy revision coupling 변경
+- `CatalogProvider` 또는 `RuntimeCatalogProvider` method/shape와 invalidate/close 의미 변경
 - Published runtime object graph의 mutability, aliasing 또는 public collection type 변경
 
 승인 요청에는 Source Catalog, Guarded Query, Control Plane, Delivery와 Assurance 영향 및 기존

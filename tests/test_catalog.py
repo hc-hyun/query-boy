@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import inspect
 import os
 from dataclasses import replace
+from typing import get_type_hints
 
 import pytest
 from dotenv import load_dotenv
@@ -9,7 +11,41 @@ from psycopg import AsyncConnection
 from psycopg.conninfo import make_conninfo
 
 from query_man.catalog import PostgresCatalog, _apply_structures
+from query_man.metadata import MetadataService
+from query_man.models import CatalogProvider, RuntimeCatalogProvider
 from tests.helpers import ROOT_DIRECTORY, load_test_registry, minimal_development_snapshot
+
+
+def test_runtime_catalog_provider_protocol_has_exact_lifecycle_shape() -> None:
+    application_methods = {
+        name
+        for name, value in vars(CatalogProvider).items()
+        if not name.startswith("_") and callable(value)
+    }
+    runtime_methods = {
+        name
+        for name, value in vars(RuntimeCatalogProvider).items()
+        if not name.startswith("_") and callable(value)
+    }
+
+    assert application_methods == {"close", "load"}
+    assert CatalogProvider in RuntimeCatalogProvider.__mro__
+    assert runtime_methods == {"invalidate"}
+    assert get_type_hints(RuntimeCatalogProvider.invalidate) == {
+        "source_id": str,
+        "return": type(None),
+    }
+    assert inspect.iscoroutinefunction(RuntimeCatalogProvider.invalidate)
+    parameters = tuple(
+        inspect.signature(RuntimeCatalogProvider.invalidate).parameters.values()
+    )
+    assert tuple(parameter.name for parameter in parameters) == ("self", "source_id")
+    assert all(
+        parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+        and parameter.default is inspect.Parameter.empty
+        for parameter in parameters
+    )
+    assert get_type_hints(MetadataService.__init__)["catalog"] is CatalogProvider
 
 
 def test_applies_primary_foreign_key_and_index_structures() -> None:

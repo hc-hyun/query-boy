@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from pathlib import Path
 from textwrap import dedent, indent
-from typing import Literal
+from typing import Literal, get_type_hints
 
 import pytest
 
 import query_man.app as app_module
 from query_man.access import AccessPolicy, AccessPolicyConfigurationError
+from query_man.catalog import PostgresCatalog
+from query_man.models import RuntimeCatalogProvider
+from query_man.query import PostgresQueryExecutor, RuntimeQueryExecutor
 from query_man.registry import SourceRegistry
 from query_man.runtime_config import RuntimeConfig
 from query_man.verified import VerifiedQueryRegistry
@@ -16,6 +19,80 @@ from tests.helpers import ROOT_DIRECTORY, load_test_registry
 _SOURCE_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 _QUERY_TOKEN = "query-token-value-with-at-least-32-characters"
 _ADMIN_TOKEN = "admin-token-value-with-at-least-32-characters"
+
+
+def test_runtime_composition_requires_composite_provider_contracts() -> None:
+    hints = get_type_hints(app_module.build_app)
+
+    assert hints["catalog"] == RuntimeCatalogProvider | None
+    assert hints["query_executor"] == RuntimeQueryExecutor | None
+
+
+@pytest.mark.parametrize("method", ["load", "close", "invalidate"])
+def test_runtime_rejects_catalog_with_missing_required_capability(
+    method: str,
+) -> None:
+    catalog = PostgresCatalog()
+    setattr(catalog, method, None)
+
+    with pytest.raises(
+        TypeError,
+        match=rf"catalog is missing required runtime capabilities: {method}",
+    ):
+        app_module.build_app(
+            _runtime("bootstrap", ROOT_DIRECTORY / "config" / "sources"),
+            registry=load_test_registry(),
+            catalog=catalog,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize(
+    "method",
+    ["execute", "cancel", "close", "stop_accepting", "drain", "invalidate"],
+)
+def test_runtime_rejects_query_executor_with_missing_required_capability(
+    method: str,
+) -> None:
+    executor = PostgresQueryExecutor()
+    setattr(executor, method, None)
+
+    with pytest.raises(
+        TypeError,
+        match=rf"query_executor is missing required runtime capabilities: {method}",
+    ):
+        app_module.build_app(
+            _runtime("bootstrap", ROOT_DIRECTORY / "config" / "sources"),
+            registry=load_test_registry(),
+            query_executor=executor,  # type: ignore[arg-type]
+        )
+
+
+def test_runtime_does_not_replace_falsey_incomplete_adapters() -> None:
+    class FalseyCatalog(PostgresCatalog):
+        def __bool__(self) -> bool:
+            return False
+
+    class FalseyQueryExecutor(PostgresQueryExecutor):
+        def __bool__(self) -> bool:
+            return False
+
+    catalog = FalseyCatalog()
+    catalog.invalidate = None  # type: ignore[assignment]
+    with pytest.raises(TypeError, match=r"catalog.*invalidate"):
+        app_module.build_app(
+            _runtime("bootstrap", ROOT_DIRECTORY / "config" / "sources"),
+            registry=load_test_registry(),
+            catalog=catalog,
+        )
+
+    executor = FalseyQueryExecutor()
+    executor.drain = None  # type: ignore[assignment]
+    with pytest.raises(TypeError, match=r"query_executor.*drain"):
+        app_module.build_app(
+            _runtime("bootstrap", ROOT_DIRECTORY / "config" / "sources"),
+            registry=load_test_registry(),
+            query_executor=executor,
+        )
 
 
 def _runtime(
@@ -92,6 +169,10 @@ def test_managed_mode_starts_empty_without_loading_source_or_verified_files(
     assert app.state.registry.source_ids() == frozenset()
     assert app.state.source_admin is not None
     assert app.state.source_reloader is not None
+    assert app.state.source_reloader._invalidators == (
+        app.state.catalog,
+        app.state.query_executor,
+    )
 
 
 def test_managed_mode_rejects_an_injected_registry(tmp_path: Path) -> None:

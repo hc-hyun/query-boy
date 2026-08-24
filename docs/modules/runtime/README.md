@@ -65,6 +65,10 @@ Query Man은 현재 하나의 deployable process인 modular monolith다. Runtime
 - Production server의 concrete PostgreSQL adapters는 이 composition root에서 capability에 주입한다.
 - Runtime은 concrete `SourceRegistry`를 생성하고 같은 instance를 ordinary service/probe에는
   `SourceReader`, Control reloader에는 `SourceProjectionWriter` capability로 주입한다.
+- Query와 catalog adapter는 각각 provider가 소유한 `RuntimeQueryExecutor`와
+  `RuntimeCatalogProvider`를 만족해야 한다. Runtime은 default 또는 주입된 adapter를 선택한 직후
+  required method 전체가 callable인지 검사하고 누락되면 app composition에서 `TypeError`로
+  fail-closed한다. Sync/async signature는 provider Protocol, mypy와 contract test가 고정한다.
 - Delivery는 Gateway/application service만 받고 persistence/executor internals를 직접 받지 않는다.
 - Metadata와 Guarded Query는 Control DB implementation을 직접 import하지 않는다.
 - Runtime-only dependency edge는 wiring/lifecycle 외의 업무 호출을 허용하지 않는다.
@@ -77,10 +81,15 @@ Query Man은 현재 하나의 deployable process인 modular monolith다. Runtime
 
 ```text
 environment/configuration validate -> logging configure -> operations reset
--> source authority 선택
-   bootstrap: filesystem source + verified contract load; Control dependency 없음
-   managed: empty registry + verified map; Control DB/store/reloader compose
--> concrete modules compose
+-> source registry authority 선택
+   bootstrap: filesystem source registry; managed: empty registry
+-> catalog adapter 선택 + required Runtime capability validate
+-> verified membership authority 선택
+   bootstrap: filesystem verified contract; managed: empty map
+-> metadata store/service와 query adapter/service compose
+   query adapter 선택 직후 required Runtime capability validate
+-> access/gateway compose
+-> managed Control stores/reloader compose
 -> managed Control reloader initial sync
 -> active inventory reconcile
 -> source별 bounded metadata probe
@@ -128,9 +137,10 @@ Grace 안에 끝나지 않은 queued/active query는 cancel되고 PostgreSQL rol
 HTTP와 MCP disconnect도 같은 task-cancel 경로를 사용한다. Shutdown 중 새 non-health request는
 service-shutting-down 의미로 거부한다.
 
-현재 Query executor의 `stop_accepting`, `drain`, `invalidate`와 catalog의 `invalidate`는 실제
-production lifecycle이 사용하는 capability지만 일부 Protocol에 완전히 표현되지 않은 contract
-debt다. Type에 없다는 이유로 제거하지 않으며 정식 interface 변경은 사용자 승인을 받는다.
+Runtime은 정상 shutdown에서 optional method 탐색 없이 `RuntimeQueryExecutor.drain(configured grace)`를
+직접 호출한 뒤 query executor와 catalog를 기존 순서로 close한다. Managed reloader에는 검증된
+catalog와 query executor를 같은 순서의 두 `SourcePoolInvalidator`로 빠짐없이 주입한다. Capability
+검사용 `getattr`는 required method의 callable 존재 확인일 뿐 optional lifecycle skip이 아니다.
 
 ### Health and operations contract
 
@@ -158,8 +168,9 @@ debt다. Type에 없다는 이유로 제거하지 않으며 정식 interface 변
 
 - [Source Catalog](../source-catalog/README.md)의 concrete registry construction,
   `SourceReader`와 `SourceProjectionWriter` configuration capability
-- [Metadata](../metadata/README.md)의 service/catalog/store lifecycle
-- [Guarded Query](../guarded-query/README.md)의 executor admission/drain/invalidate/close lifecycle
+- [Metadata](../metadata/README.md)의 service/store와 `RuntimeCatalogProvider` lifecycle
+- [Guarded Query](../guarded-query/README.md)의 `RuntimeQueryExecutor`
+  admission/drain/invalidate/close lifecycle
 - [Control Plane](../control-plane/README.md)의 stores, reloader와 convergence semantics
 - [Delivery](../delivery/README.md)의 Gateway/routes/MCP factory, parent middleware와 transport lifespan
 - [Assurance](../assurance/README.md)의 bootstrap filesystem 또는 managed Control verified membership
@@ -197,7 +208,8 @@ debt다. Type에 없다는 이유로 제거하지 않으며 정식 interface 변
 - Environment variable, required/optional/default와 secure-mode validation 변경
 - Bootstrap/managed authority, filesystem non-read/fallback와 access-policy requirement 변경
 - Startup, reloader sync/probe와 shutdown admission/drain/close 순서 변경
-- Executor/catalog lifecycle hook 이름과 의미 또는 disconnect propagation 변경
+- `RuntimeQueryExecutor`/`RuntimeCatalogProvider` required capability, callable validation 시점,
+  lifecycle hook 이름·의미 또는 disconnect propagation 변경
 - Readiness/health status, HTTP status와 public/operator disclosure 변경
 - Metric name/label/cardinality와 structured log/redaction allowlist 변경
 - Reload interval, authority/convergence와 failed-apply 동작 변경
