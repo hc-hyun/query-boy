@@ -201,6 +201,9 @@ operator-first auth/validation, exact monitoring GET/PUT/credential POST/DELETE/
 `/usage.database_native` serialization/error mapping을 소유하고 Control Plane의 공개 use case/projection만
 소비한다. Monitoring credential, source function, Control table/lease/baseline을 읽거나 구현하지 않는다.
 Direction-only B는 ID 선택만으로 이 owner 범위를 열지 않으며 별도 exact 계약이 필요하다.
+`COST-04` threshold/alert의 operator wire와 delivery backend도 A base 승인에 포함되지 않으며 별도
+exact addendum 전 route, notification 또는 metric label을 추가하지 않는다. 기존 base rollup의 31일
+window와 별개인 alert event/state retention도 이 addendum에서 정한다.
 
 ### MCP contract
 

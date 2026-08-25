@@ -72,7 +72,8 @@ membership과 offline 품질 증거를 제공하고 동일 기준을 회귀 검�
 - [`source onboarding Skill acceptance`](../../verification/2026-08-25-source-onboarding-skill.md):
   fresh-context forward evaluation, spy admin endpoint와 deterministic zero-mutation evidence
 - [`source database corner acceptance`](../../verification/2026-08-25-source-database-corners.md):
-  세 disposable PostgreSQL source와 wide-column fix, timezone contract gap, zero-residue evidence
+  test별 disposable PostgreSQL 18 source와 metadata/query fix, encoding/source-semantics contract gap,
+  zero-residue evidence
 
 [`quality_level.py`](../../../src/query_man/quality_level.py)는 Metadata owner이고 Assurance가 검증하는
 cross-module 계약이다. `verified.py`의 DTO/hash는 Control Plane이 직접 소비하는 shared contract이며
@@ -121,10 +122,19 @@ Rows는 Guarded Query의 canonical result encoding을 거친 값이어야 한다
 date/time, mapping 또는 non-finite value encoding이 바뀌면 같은 SQL의 verified hash도 바뀐다.
 Aware datetime은 UTC `+00:00`이고 naive datetime/date/time/timetz는 기존 ISO 표현이다. Canonical-time
 policy나 metadata revision이 바뀌면 값이 같은 contract도 새 exact revision에서 다시 실행한다.
-Month-bearing interval, JSONB fractional numeric, empty unsupported collection, array lower-bound,
-record/unknown result OID collision과 reader semantic/format default drift는
+Month-bearing interval, time 24시, fractional/duplicate-key JSON, SQL_ASCII, collation, empty unsupported
+collection, array lower-bound, record/unknown result OID collision과 reader semantic/format default drift는
 [DB corner audit](../../verification/2026-08-25-source-database-corners.md)의 open lossless/stability
 gap이며 일반 무손실 evidence로 취급하지 않는다.
+
+`DBEDGE-04`는 public output이 boolean뿐인 view에서 hidden base text collation을
+`C`→`pg_c_utf8`로 바꾸어도 current snapshot/revision이 같고 result/hash만 바뀌는 것을
+disposable PostgreSQL 18 DB로 고정한다. Same-definition custom domain의 direct `pg_type`
+dependency와 `typcollation` drift, base OID로 domain identity가 지워지는 것도 raw catalog/driver
+sentinel로 고정한다. ADR 0020 exact A가 승인되면 Assurance는 visible binding뿐 아니라
+recursive view dependency fingerprint, declared/custom domain pre-erasure rejection, result OID/cursor loader, v1/v2 codec,
+current/rollback full verified reissue와 rollback을 cross-module acceptance로 검증한다. 승인 전에는
+이 characterization을 새 production contract의 완료 evidence로 해석하지 않는다.
 
 ### Metadata quality evaluation contract
 

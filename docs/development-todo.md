@@ -36,26 +36,27 @@ Status: Active
 
 ## P2.4 — Lossless Scalar Encoding, Reader Formatting And Result Types
 
-목표: PostgreSQL interval의 calendar-month 의미, JSON/JSONB fractional numeric precision과 array
-lower bound를 public row와 verified hash까지 조용한 손실 없이 전달하거나 손실 전에 명시적으로
-fail-closed한다. Empty multirange/range-array의 ordinary array 오인도 닫고, finite-float 표현과
-date/interval/string/NULL/array-literal SQL 의미·decode가 role setting default와 무관하게 결정적이어야
-한다. Driver가 tuple/string으로 평탄화한 record/composite와 unknown result OID도 supported SQL type으로
-오인하지 않아야 한다.
+목표: PostgreSQL interval calendar-month, time 24시, JSON/JSONB fractional/duplicate-key, SQL
+encoding과 array lower bound를 public row/verified hash까지 조용한 손실 없이 전달하거나 손실 전에
+명시적으로 fail-closed한다. Empty multirange/range-array의 ordinary array 오인도 닫고, finite-float,
+date/string/NULL/array-literal/timezone abbreviation과 database/column collation 의미가 role/source
+default 및 live drift와 무관하게 결정적이어야 한다. Driver가 int/tuple/string/list로 평탄화한
+record/composite와 unknown/non-allowlisted result OID도 supported SQL type으로 오인하지 않아야 한다.
 
 | 작업 경계 | 내용 |
 |---|---|
 | Primary module | Guarded Query |
 | Direct consumers | Delivery public result, Assurance verified result hash와 Control Plane verified publish |
 | Affected providers/verifiers | Source Catalog deterministic reader settings, Metadata revision material, Runtime coordinated cutover와 cross-database Assurance acceptance |
-| Contract baseline | psycopg default loader가 month-bearing interval을 30-day `timedelta`로 평탄화하고 JSONB fractional number를 binary float로 읽는다. Empty multirange/range-array는 empty integer array처럼 성공하고, array lower bound는 list 변환에서 사라진다. Anonymous record는 field count/type을 잃고 unknown OID가 Python string이면 text처럼 성공한다. [`DBEDGE-02`~`DBEDGE-03`](verification/2026-08-25-source-database-corners.md)이 이 collision, allowed-base domain과 user-defined enum/domain-array OID 차이, `extra_float_digits`별 finite-float drift, ambiguous `DateStyle`, non-postgres `IntervalStyle`, `standard_conforming_strings`, `transform_null_equals`와 `array_nulls`의 같은 SQL 의미·hash 차이를 실제 PostgreSQL 18에서 재현했다. Infinity date, range와 nonempty multirange/range-array는 비공개 `QUERY_UNAVAILABLE` 후 rollback/recovery한다. |
-| Approval gate | Loader, `DateStyle`/`IntervalStyle`/`extra_float_digits`와 SQL semantic settings, result OID allowlist, array type/lower-bound policy, canonical row, SQL policy/metadata revision과 verified migration은 public/policy 계약 변경이다. 사용자가 [ADR 0020](decisions/0020-lossless-interval-and-json-numeric-encoding.md)의 implementation 선택 `ENC-01-A|B` 또는 production completion을 block하는 defer `ENC-01-C`를 정확히 선택해야 한다. |
-| Single writer | Coordinating agent가 exact policy material을 동결한 뒤 Source Catalog의 shared `reader_policy.py`, Guarded Query result-cursor loader/encoder, Metadata/Assurance consumer 순으로 직렬화한다. 확정된 서로 다른 consumer 검증만 병렬화한다. |
-| Start gate | `DBEDGE-02`~`DBEDGE-03` reproduction과 선택지 작성은 완료됐다. `ENC-01`의 정확한 사용자 선택이 다음 순서이며 승인 전 loader/setting/encoder/revision/hash를 바꾸지 않는다. |
-| Verification | Month/sign/day/subsecond interval, large/scale/exponent/nested JSON numeric, allowed/unknown result OID, anonymous/named composite, empty/nonempty range·multirange와 그 array, 1/non-1 lower-bound array, noncanonical reader defaults, ambiguous literal inventory, user-result cursor-only loader와 EXPLAIN/plan_summary 비회귀, pool reset, byte/hash, stale-token rejection, full verified reissue와 rollback |
+| Contract baseline | psycopg default loader가 month-bearing interval과 fractional JSON numeric을 평탄화하고 duplicate-key JSON의 앞 key를 버리며 time 24시를 decode하지 못한다. SQL_ASCII text는 bytea와 같은 bytes/Base64가 되고 collation·timezone abbreviation은 같은 revision SQL 의미를 바꾼다. Empty unsupported collection/array lower bound와 record/composite 및 `oid/name`·array/unknown OID identity도 Python 기본형에서 사라진다. [`DBEDGE-02`~`DBEDGE-04`](verification/2026-08-25-source-database-corners.md)이 이를 실제 PostgreSQL 18 disposable DB에서 재현했다. Infinity date, range와 nonempty multirange/range-array는 비공개 `QUERY_UNAVAILABLE` 후 rollback/recovery한다. |
+| Approval gate | Loader, UTF8 source/client, reader semantic settings/fingerprint, collation snapshot/revision material, result OID allowlist, array type/lower-bound policy, canonical row, SQL policy/metadata revision과 verified migration은 persisted/public/policy 계약 변경이다. [ADR 0020](decisions/0020-lossless-interval-and-json-numeric-encoding.md)의 A는 fingerprint byte schema/bounds, private nested-view definition, direct type edge·declared/custom domain pre-erasure rejection, explicit COLLATE/active versionless rejection, provider/Protocol, snapshot codec v1/v2, exact result/error/policy golden, migration/rollback과 named-timezone·provider-artifact·custom procedure/operator residual limitation까지 묶은 implementation-ready 제안이다. 아직 사용자가 이 exact 범위를 명시적으로 승인하지 않았다. B는 별도 exact restatement가 필요하고 C는 production completion을 block하는 defer라 완료 선택이 아니다. 일반적인 진행/승인이나 ID만으로 구현하지 않는다. |
+| Single writer | Coordinating agent가 symbol phase별로 Guarded Query immutable result/SQL-policy descriptor provider → Source Catalog shared `reader_policy.py` → Metadata fingerprint/snapshot codec/revision provider → Guarded Query result-cursor loader/encoder·fingerprint consumer 순으로 baseline을 직렬화한다. 각 provider baseline이 확정된 뒤 서로 다른 Delivery/Control Plane/Runtime/Assurance consumer 구현·검증만 병렬화하고 shared transition test/doc은 coordinating agent가 계속 single-writer로 다룬다. Guarded Query module을 두 agent가 동시에 쓰는 뜻이 아니며, descriptor provider commit 후 executor consumer phase를 같은 owner가 이어서 수행한다. |
+| Start gate | `DBEDGE-02`~`DBEDGE-04` reproduction과 선택지 작성은 완료됐다. `ENC-01`의 정확한 사용자 선택이 다음 순서이며 승인 전 loader/setting/encoder/source-semantics snapshot/revision/hash를 바꾸지 않는다. |
+| Verification | Month/sign/day/subsecond interval, time/timetz 24시, large/scale/exponent/nested/duplicate JSON, UTF8/SQL_ASCII, timezone abbreviation/collation fingerprint, direct/whole-relation domain pre-erasure rejection, allowed/unknown result OID와 named composite, empty/nonempty unsupported collection, 1/non-1 lower-bound array, noncanonical defaults, managed inventory, cursor-only loader와 EXPLAIN 비회귀, pool reset, byte/hash, stale-token rejection, full verified reissue와 rollback |
 
-- [ ] `ENC-01` ADR 0020의 lossless 지원 A, 손실 전 거부 B 또는 production 미완료 defer C 중 exact
-  canonical contract와 provider/consumer·migration 영향을 사용자 결정으로 확정한다.
+- [ ] `ENC-01` ADR 0020의 exact lossless A, 별도 restatement가 필요한 손실 전 거부 B 또는 production
+  미완료 defer C 중 canonical contract와 provider/consumer·migration·residual limitation 영향을 사용자의
+  명시적 결정으로 확정한다.
 - [ ] `ENC-02` 승인된 A/B를 구현하고 policy/revision/verified migration과 rollback을 검증한다.
   C를 선택하면 runtime guard가 없으므로 `ENC-02`/`TIME-03`과 production acceptance를 block하고 open
   defer로 유지한다.
@@ -94,7 +95,7 @@ source/resource-tier 단위에서 관측한다. 이는 auxiliary statement와 �
 | Direct consumers | Delivery admin projection과 operator workflow |
 | Affected providers/verifiers | Runtime collector/composition, Source Catalog budget 의미, Metadata revision, 완료된 `CTRL-07` observation baseline과 `CTRL-08` projection, Assurance acceptance. Guarded Query의 reader-role workload는 관측 대상일 뿐 새 signal API provider가 아니다. |
 | Contract baseline | [ADR 0016](decisions/0016-centralized-source-management-plane.md), [ADR 0017](decisions/0017-shared-source-access-and-resource-tier.md)와 [source management plane](source-management-plane.md), 완료된 `CTRL-07A` observation method/freshness/logical retention과 `CTRL-08` usage/cost state |
-| Approval gate | Monitoring identity, collector/rollup schema, retention, status와 admin projection은 새 persisted/public 계약이다. Read-only prework인 [proposed ADR 0021](decisions/0021-database-native-cost-attribution.md)의 `COST-01-A|B|C` 중 A는 implementation-ready 제안, C는 exact defer, B는 direction-only다. A 구현 또는 C defer는 exact 범위를 사용자가 승인해야 하며 B는 lifecycle/wire/persistence/rollback을 다시 명시한 별도 승인이 먼저다. ID 선택이나 포괄적 승인은 계약 승인이 아니다. |
+| Approval gate | Monitoring identity, collector/rollup schema, retention, status와 admin projection은 새 persisted/public 계약이다. Read-only prework인 [proposed ADR 0021](decisions/0021-database-native-cost-attribution.md)의 `COST-01-A|B|C` 중 A는 base collector/rollup/projection implementation-ready 제안, C는 exact defer, B는 direction-only다. A 구현 또는 C defer는 exact 범위를 사용자가 승인해야 하며 B는 lifecycle/wire/persistence/rollback을 다시 명시한 별도 승인이 먼저다. A에도 `COST-04` 급증 threshold/alert의 key/window/baseline/hysteresis/lifecycle/delivery가 없어 이를 구현·완료하려면 별도 exact addendum 승인이 필요하다. ID 선택이나 포괄적 승인은 계약 승인이 아니다. |
 | Single writer | Control Plane owner가 observation 계약을 먼저 확정하고 signal producer와 Delivery consumer는 이후 병렬화한다. |
 | Start gate | 완료된 `CTRL-07` baseline과 `CTRL-08` projection 뒤에도 열린 `TIME-03`이 우선이다. 이를 완료하거나 사용자가 명시적으로 defer한 뒤 proposed ADR 0021의 정확한 monitoring 계약과 영향 범위를 별도 승인받는다. 현재 선택지 초안은 lower-track read-only prework일 뿐 `COST-01` 시작/완료가 아니다. 아래의 “다음”은 track-local 순서다. |
 | Verification | 최소 권한 DB integration, reset/server-deallocation/entry/replica/cardinality 경계, redaction과 root gate |
@@ -109,9 +110,13 @@ source/resource-tier 단위에서 관측한다. 이는 auxiliary statement와 �
   rollup으로 연결하고
   reset, server-wide deallocation/entry disappearance, replica 중복과 sampling 오차를 명시한다. PostgreSQL query ID와 gateway
   fingerprint의 정확한 대응이나 caller/tenant 비용 dimension을 만들지 않는다.
-- [ ] `COST-04` Source/profile별 DB-native usage 급증 threshold, alert, retention과 admin 조회 계약을
+- [ ] `COST-04` Source/profile별 DB-native usage 급증 threshold, alert-event retention과 admin 조회 계약을
   정의하고 query-facing/non-admin public endpoint·metric label에 source를 노출하지 않는다. Operator-only
-  `/admin/sources/{source_id}/...` path의 source ID는 이 금지에 포함되지 않는다.
+  `/admin/sources/{source_id}/...` path의 source ID는 이 금지에 포함되지 않는다. Proposed ADR 0021의
+  base A 승인만으로 시작하지 않고 key/window/baseline/missing·stale/hysteresis/cooldown, alert
+  lifecycle/delivery/alert-event retention/redaction addendum를 사용자에게 exact 승인받는다. Base rollup의
+  inclusive 31일 logical visibility/input window는 `COST-01-A` 범위이고 alert event/state 보존 기간은
+  아직 정하지 않았다.
 - [ ] `COST-05` 실제 fixture에서 낮은 사용량·execution-time-heavy·block read/write·temp/WAL
   statement aggregate를 구분하는 acceptance와
   provider 자료가 없거나 user/organization chargeback이 불가능할 때의 운영 판단 절차를

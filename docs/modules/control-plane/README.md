@@ -69,6 +69,11 @@ Control Plane은 “어떤 source 정의와 metadata/verified revision이 현재
 Control Plane은 PostgreSQL pool, SQL, lock과 transaction을 소유한다. 현재 shared file이라는 이유로
 다른 쪽 계약을 함께 바꾸지 않는다.
 
+ADR 0020 exact A가 승인되더라도 v1/v2 snapshot document의 shape·validation·encoding은
+Metadata 소유다. Control Plane은 기존 JSONB transaction/immutable generation·pointer 생명주기로
+encoded document를 저장하고 rollback pointer를 적용할 뿐이며, v1 row를 update/delete하거나
+v1을 v2로 자동 변환하지 않는다. 이 v2 의미는 아직 현재 persisted contract가 아니다.
+
 `SourceAdminService._stage`는 candidate를 active runtime과 격리해 검증하려고 일시적인
 `SourceRegistry + MetadataService + RuntimeCatalogProvider`를 조립하고 registry application reference는
 `SourceReader`로 좁힌다. 이는 Control Plane에 한정된 staging composition root이며 production
@@ -321,7 +326,8 @@ prework인 [proposed ADR 0021](../../decisions/0021-database-native-cost-attribu
 monitoring identity, reset/deallocation-aware target-reader-role aggregate와 sibling `database_native`
 section의 선택지만 기록한다. ENC final baseline 확정, `TIME-03` 완료 또는 명시적 defer와 정확한
 `COST-01-A|B|C` 승인 전에는 source monitoring role/function, Control schema/store나 `/usage` 의미를
-변경하지 않는다.
+변경하지 않는다. A의 base collector/rollup 제안에도 `COST-04` 급증 threshold/alert 계산·상태·전달
+계약은 없으므로 별도 exact addendum 승인 전 alert state/table을 만들지 않는다.
 
 Delivery는 이 application result만 소비하고 table/private DTO를 읽지 않는다. Unknown source는
 `SourceNotFoundError`, DB/decode/cardinality 오류는 `SourceControlUnavailableError`이며 stale 또는

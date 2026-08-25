@@ -133,12 +133,15 @@ async def _attempt_cleanup_steps(
 async def _disposable_source_database(
     *,
     reader_timezone: str = "UTC",
+    database_encoding: str = "UTF8",
 ) -> AsyncIterator[_DisposableSourceDatabase]:
     environment = _postgres_environment()
     if environment is None:
         pytest.skip("local PostgreSQL administrator credentials are not configured")
     if reader_timezone not in _READER_TIMEZONES:
         raise ValueError("Unsupported disposable reader timezone")
+    if database_encoding not in {"UTF8", "SQL_ASCII"}:
+        raise ValueError("Unsupported disposable database encoding")
 
     suffix = uuid.uuid4().hex
     database_name = f"{_DATABASE_PREFIX}{suffix}"
@@ -193,9 +196,10 @@ async def _disposable_source_database(
             sql.SQL("GRANT SET ON PARAMETER temp_file_limit TO {}").format(sql.Identifier(reader_name))
         )
         await maintenance.execute(
-            sql.SQL("CREATE DATABASE {} OWNER {} ENCODING 'UTF8' TEMPLATE template0").format(
+            sql.SQL("CREATE DATABASE {} OWNER {} ENCODING {} TEMPLATE template0").format(
                 sql.Identifier(database_name),
                 sql.Identifier(environment["POSTGRES_USER"]),
+                sql.Literal(database_encoding),
             )
         )
         database_created = True
@@ -1325,6 +1329,744 @@ async def test_enc_01_characterizes_current_scalar_loss_and_reader_default_drift
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_enc_01_characterizes_sql_ascii_text_bytea_collision() -> None:
+    async with _disposable_source_database(database_encoding="SQL_ASCII") as database:
+        connection = await AsyncConnection.connect(
+            make_conninfo(
+                host="127.0.0.1",
+                port=database.port,
+                dbname=database.name,
+                user=database.reader_name,
+                password=database.reader_password,
+                sslmode="disable",
+            )
+        )
+        try:
+            assert connection.info.encoding == "ascii"
+            cursor = await connection.execute(
+                "SELECT pg_catalog.current_setting('server_encoding'), "
+                "pg_catalog.current_setting('client_encoding')"
+            )
+            assert await cursor.fetchone() == (b"SQL_ASCII", b"SQL_ASCII")
+
+            cursor = await connection.execute(
+                "SELECT 'hello'::text, pg_catalog.decode('68656c6c6f', 'hex')"
+            )
+            sql_ascii_row = await cursor.fetchone()
+            assert sql_ascii_row == (b"hello", b"hello")
+            sql_ascii_values = tuple(
+                encode_result_value(value) for value in sql_ascii_row
+            )
+            # ponytail: defect characterization; psycopg returns SQL_ASCII text as
+            # bytes, so the current encoder cannot distinguish it from bytea.
+            assert sql_ascii_values == (
+                "base64:aGVsbG8=",
+                "base64:aGVsbG8=",
+            )
+            assert create_result_hash(
+                ("value",), [{"value": sql_ascii_values[0]}]
+            ) == create_result_hash(
+                ("value",), [{"value": sql_ascii_values[1]}]
+            ) == (
+                "sha256:64f407d6e0fcd189c2c7d4bed463c38771b2f31823d40ff9cb96886fae19ce76"
+            )
+
+            await connection.execute(
+                "SELECT pg_catalog.set_config('client_encoding', 'UTF8', true)"
+            )
+            assert connection.info.encoding == "utf-8"
+            cursor = await connection.execute(
+                "SELECT 'hello'::text, pg_catalog.decode('68656c6c6f', 'hex')"
+            )
+            utf8_client_row = await cursor.fetchone()
+            assert utf8_client_row == ("hello", b"hello")
+            utf8_client_values = tuple(
+                encode_result_value(value) for value in utf8_client_row
+            )
+            assert utf8_client_values == ("hello", "base64:aGVsbG8=")
+            assert create_result_hash(
+                ("value",), [{"value": utf8_client_values[0]}]
+            ) == (
+                "sha256:a59c30483e34a8f6e687a53a5c025eee6dde4f8d60834b25d241d2aa4a0dec93"
+            )
+
+            await connection.rollback()
+            assert connection.info.transaction_status is TransactionStatus.IDLE
+            assert connection.info.encoding == "ascii"
+        finally:
+            active_error = sys.exception()
+            cleanup_errors = await _attempt_cleanup_steps(
+                (
+                    ("rollback SQL_ASCII probe", connection.rollback),
+                    ("close SQL_ASCII probe", connection.close),
+                )
+            )
+            if cleanup_errors:
+                if active_error is not None:
+                    raise BaseExceptionGroup(
+                        "SQL_ASCII probe and cleanup failed",
+                        [active_error, *cleanup_errors],
+                    )
+                raise BaseExceptionGroup(
+                    "SQL_ASCII probe cleanup failed", cleanup_errors
+                )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_enc_01_characterizes_json_duplicate_key_loss() -> None:
+    async with _disposable_source_database() as database:
+        admin = await AsyncConnection.connect(database.admin_dsn, autocommit=True)
+        try:
+            await admin.execute("CREATE SCHEMA analytics")
+            await admin.execute(
+                "CREATE TABLE analytics.json_edges "
+                "(record_id bigint PRIMARY KEY, duplicate_payload json, "
+                "collapsed_payload json, duplicate_binary_payload jsonb, "
+                "collapsed_binary_payload jsonb)"
+            )
+            await admin.execute(
+                "INSERT INTO analytics.json_edges VALUES "
+                "(1, '{\"outer\":{\"amount\":1,\"amount\":2}}'::json, "
+                "'{\"outer\":{\"amount\":2}}'::json, "
+                "'{\"outer\":{\"amount\":1,\"amount\":2}}'::jsonb, "
+                "'{\"outer\":{\"amount\":2}}'::jsonb)"
+            )
+            await admin.execute(
+                sql.SQL("GRANT USAGE ON SCHEMA analytics TO {}").format(
+                    sql.Identifier(database.reader_name)
+                )
+            )
+            await admin.execute(
+                sql.SQL("GRANT SELECT ON analytics.json_edges TO {}").format(
+                    sql.Identifier(database.reader_name)
+                )
+            )
+        finally:
+            active_error = sys.exception()
+            cleanup_errors = await _attempt_cleanup_steps(
+                (("close JSON-edge setup admin", admin.close),)
+            )
+            if cleanup_errors:
+                if active_error is not None:
+                    raise BaseExceptionGroup(
+                        "JSON-edge setup and cleanup failed",
+                        [active_error, *cleanup_errors],
+                    )
+                raise BaseExceptionGroup(
+                    "JSON-edge setup cleanup failed", cleanup_errors
+                )
+
+        source = _source_profile(database, "json-edges", ("table",))
+        catalog, executor, metadata, query = _open_services(source)
+        try:
+            published = await metadata.get_published(source.source_id)
+            relation = published.snapshot.relations[0]
+            assert [(column.name, column.data_type) for column in relation.columns] == [
+                ("record_id", "bigint"),
+                ("duplicate_payload", "json"),
+                ("collapsed_payload", "json"),
+                ("duplicate_binary_payload", "jsonb"),
+                ("collapsed_binary_payload", "jsonb"),
+            ]
+
+            decoded_results = []
+            for column in (
+                "duplicate_payload",
+                "collapsed_payload",
+                "duplicate_binary_payload",
+                "collapsed_binary_payload",
+            ):
+                decoded_results.append(
+                    await query.query(
+                        source.source_id,
+                        f"SELECT {column} AS value FROM analytics.json_edges",
+                        published.revision,
+                        SQL_POLICY_REVISION,
+                    )
+                )
+
+            # ponytail: defect characterization; the current JSON loader keeps only
+            # the last duplicate object key. JSONB is the database-normalized control.
+            assert all(
+                result["rows"] == [{"value": {"outer": {"amount": 2}}}]
+                for result in decoded_results
+            )
+            assert {
+                create_result_hash(("value",), result["rows"])
+                for result in decoded_results
+            } == {
+                "sha256:638b941219f3f2bbbd3a92acaf57a2cc5f14e026d386e161fd8b3d24afa32b43"
+            }
+
+            json_text_results = []
+            for column in ("duplicate_payload", "collapsed_payload"):
+                json_text_results.append(
+                    await query.query(
+                        source.source_id,
+                        f"SELECT {column}::text AS value FROM analytics.json_edges",
+                        published.revision,
+                        SQL_POLICY_REVISION,
+                    )
+                )
+            assert json_text_results[0]["rows"] == [
+                {"value": '{"outer":{"amount":1,"amount":2}}'}
+            ]
+            assert json_text_results[1]["rows"] == [
+                {"value": '{"outer":{"amount":2}}'}
+            ]
+            assert [
+                create_result_hash(("value",), result["rows"])
+                for result in json_text_results
+            ] == [
+                "sha256:805656339a9ec4c31deae76681fb0b5d583754cec7bfc3006ea804411e08bdb4",
+                "sha256:b81e68d6a989f1c789e2b943cfb1d060c578f9a67c505b3ae7c928f447c5c802",
+            ]
+        finally:
+            active_error = sys.exception()
+            cleanup_errors = await _attempt_cleanup_steps(
+                (
+                    ("close JSON-edge query executor", executor.close),
+                    ("close JSON-edge catalog", catalog.close),
+                )
+            )
+            if cleanup_errors:
+                if active_error is not None:
+                    raise BaseExceptionGroup(
+                        "JSON-edge query and cleanup failed",
+                        [active_error, *cleanup_errors],
+                    )
+                raise BaseExceptionGroup(
+                    "JSON-edge query cleanup failed", cleanup_errors
+                )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_enc_01_characterizes_postgresql_end_of_day_time() -> None:
+    async with _disposable_source_database() as database:
+        admin = await AsyncConnection.connect(database.admin_dsn, autocommit=True)
+        try:
+            await admin.execute("CREATE SCHEMA analytics")
+            await admin.execute(
+                "CREATE TABLE analytics.time_edges "
+                "(record_id bigint PRIMARY KEY, end_of_day time, midnight time)"
+            )
+            await admin.execute(
+                "INSERT INTO analytics.time_edges VALUES "
+                "(1, time '24:00:00', time '00:00:00')"
+            )
+            await admin.execute(
+                sql.SQL("GRANT USAGE ON SCHEMA analytics TO {}").format(
+                    sql.Identifier(database.reader_name)
+                )
+            )
+            await admin.execute(
+                sql.SQL("GRANT SELECT ON analytics.time_edges TO {}").format(
+                    sql.Identifier(database.reader_name)
+                )
+            )
+        finally:
+            active_error = sys.exception()
+            cleanup_errors = await _attempt_cleanup_steps(
+                (("close time-edge setup admin", admin.close),)
+            )
+            if cleanup_errors:
+                if active_error is not None:
+                    raise BaseExceptionGroup(
+                        "Time-edge setup and cleanup failed",
+                        [active_error, *cleanup_errors],
+                    )
+                raise BaseExceptionGroup(
+                    "Time-edge setup cleanup failed", cleanup_errors
+                )
+
+        source = _source_profile(database, "time-edges", ("table",))
+        catalog, executor, metadata, query = _open_services(source)
+        try:
+            published = await metadata.get_published(source.source_id)
+            relation = published.snapshot.relations[0]
+            assert [(column.name, column.data_type) for column in relation.columns] == [
+                ("record_id", "bigint"),
+                ("end_of_day", "time without time zone"),
+                ("midnight", "time without time zone"),
+            ]
+
+            with pytest.raises(QueryUnavailableError) as unavailable:
+                await query.query(
+                    source.source_id,
+                    "SELECT end_of_day AS value FROM analytics.time_edges",
+                    published.revision,
+                    SQL_POLICY_REVISION,
+                )
+            assert unavailable.value.details is None
+            assert isinstance(unavailable.value.__cause__, errors.DataError)
+
+            midnight = await query.query(
+                source.source_id,
+                "SELECT midnight AS value FROM analytics.time_edges",
+                published.revision,
+                SQL_POLICY_REVISION,
+            )
+            _assert_canonical_result(
+                midnight,
+                published.revision,
+                ["value"],
+                [{"value": "00:00:00"}],
+            )
+            assert create_result_hash(("value",), midnight["rows"]) == (
+                "sha256:fecfa06c6d3ff0ca592b5c095d9b63d5cf794dee3234a1a0c595bd2fc1057c50"
+            )
+
+            text_result = await query.query(
+                source.source_id,
+                "SELECT end_of_day::text AS end_of_day, midnight::text AS midnight "
+                "FROM analytics.time_edges",
+                published.revision,
+                SQL_POLICY_REVISION,
+            )
+            _assert_canonical_result(
+                text_result,
+                published.revision,
+                ["end_of_day", "midnight"],
+                [{"end_of_day": "24:00:00", "midnight": "00:00:00"}],
+            )
+            await _assert_pool_restored_reader_timezone(executor, source, "UTC")
+        finally:
+            active_error = sys.exception()
+            cleanup_errors = await _attempt_cleanup_steps(
+                (
+                    ("close time-edge query executor", executor.close),
+                    ("close time-edge catalog", catalog.close),
+                )
+            )
+            if cleanup_errors:
+                if active_error is not None:
+                    raise BaseExceptionGroup(
+                        "Time-edge query and cleanup failed",
+                        [active_error, *cleanup_errors],
+                    )
+                raise BaseExceptionGroup(
+                    "Time-edge query cleanup failed", cleanup_errors
+                )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_enc_01_characterizes_column_collation_revision_gap() -> None:
+    async with _disposable_source_database() as database:
+        admin = await AsyncConnection.connect(database.admin_dsn, autocommit=True)
+        try:
+            await admin.execute("CREATE SCHEMA analytics")
+            await admin.execute(
+                'CREATE TABLE analytics.collation_edges '
+                '(record_id bigint PRIMARY KEY, label text COLLATE "C")'
+            )
+            await admin.execute(
+                "INSERT INTO analytics.collation_edges VALUES (1, 'Ä')"
+            )
+            await admin.execute(
+                sql.SQL("GRANT USAGE ON SCHEMA analytics TO {}").format(
+                    sql.Identifier(database.reader_name)
+                )
+            )
+            await admin.execute(
+                sql.SQL("GRANT SELECT ON analytics.collation_edges TO {}").format(
+                    sql.Identifier(database.reader_name)
+                )
+            )
+
+            source = _source_profile(database, "collation-edges", ("table",))
+            catalog, executor, metadata, query = _open_services(
+                source,
+                cache_ttl_ms=0,
+            )
+            try:
+                c_published = await metadata.get_published(source.source_id)
+                c_result = await query.query(
+                    source.source_id,
+                    "SELECT pg_catalog.lower(label) AS value "
+                    "FROM analytics.collation_edges",
+                    c_published.revision,
+                    SQL_POLICY_REVISION,
+                )
+                _assert_canonical_result(
+                    c_result,
+                    c_published.revision,
+                    ["value"],
+                    [{"value": "Ä"}],
+                )
+                assert create_result_hash(("value",), c_result["rows"]) == (
+                    "sha256:8fb5cd618a48f4b36dea2978fd188891679fdb0d92ae29924758eb4f4dc8f3c9"
+                )
+
+                await admin.execute(
+                    "ALTER TABLE analytics.collation_edges "
+                    "ALTER COLUMN label TYPE text "
+                    "COLLATE pg_catalog.pg_c_utf8 USING label"
+                )
+
+                metadata.invalidate(source.source_id)
+                unicode_published = await metadata.get_published(source.source_id)
+                assert unicode_published.revision == c_published.revision
+                assert unicode_published.snapshot == c_published.snapshot
+                unicode_result = await query.query(
+                    source.source_id,
+                    "SELECT pg_catalog.lower(label) AS value "
+                    "FROM analytics.collation_edges",
+                    unicode_published.revision,
+                    SQL_POLICY_REVISION,
+                )
+                # ponytail: defect characterization; attcollation is absent from
+                # the current published snapshot and therefore from its revision.
+                _assert_canonical_result(
+                    unicode_result,
+                    unicode_published.revision,
+                    ["value"],
+                    [{"value": "ä"}],
+                )
+                assert create_result_hash(("value",), unicode_result["rows"]) == (
+                    "sha256:c4692859cde38b3e26c3bc09be96cc3ae2db09442fb7e8e826deace60da05a64"
+                )
+            finally:
+                active_error = sys.exception()
+                cleanup_errors = await _attempt_cleanup_steps(
+                    (
+                        ("close collation query executor", executor.close),
+                        ("close collation catalog", catalog.close),
+                    )
+                )
+                if cleanup_errors:
+                    if active_error is not None:
+                        raise BaseExceptionGroup(
+                            "Collation query and cleanup failed",
+                            [active_error, *cleanup_errors],
+                        )
+                    raise BaseExceptionGroup(
+                        "Collation query cleanup failed", cleanup_errors
+                    )
+        finally:
+            active_error = sys.exception()
+            cleanup_errors = await _attempt_cleanup_steps(
+                (("close collation-edge setup admin", admin.close),)
+            )
+            if cleanup_errors:
+                if active_error is not None:
+                    raise BaseExceptionGroup(
+                        "Collation-edge setup and cleanup failed",
+                        [active_error, *cleanup_errors],
+                    )
+                raise BaseExceptionGroup(
+                    "Collation-edge setup cleanup failed", cleanup_errors
+                )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_enc_01_characterizes_hidden_view_collation_dependency_gap() -> None:
+    async with _disposable_source_database() as database:
+        admin = await AsyncConnection.connect(database.admin_dsn, autocommit=True)
+        try:
+            await admin.execute("CREATE SCHEMA analytics")
+            await admin.execute(
+                'CREATE TABLE analytics.hidden_collation_edges '
+                '(record_id bigint PRIMARY KEY, label text COLLATE "C")'
+            )
+            await admin.execute(
+                "INSERT INTO analytics.hidden_collation_edges VALUES (1, 'Ä')"
+            )
+            await admin.execute(
+                "CREATE VIEW analytics.hidden_collation_projection AS "
+                "SELECT record_id, pg_catalog.lower(label) = 'ä' AS folded_matches "
+                "FROM analytics.hidden_collation_edges"
+            )
+            await admin.execute(
+                sql.SQL("GRANT USAGE ON SCHEMA analytics TO {}").format(
+                    sql.Identifier(database.reader_name)
+                )
+            )
+            await admin.execute(
+                sql.SQL(
+                    "GRANT SELECT ON analytics.hidden_collation_projection TO {}"
+                ).format(sql.Identifier(database.reader_name))
+            )
+
+            source = _source_profile(database, "hidden-collation", ("view",))
+            catalog, executor, metadata, query = _open_services(
+                source,
+                cache_ttl_ms=0,
+            )
+            try:
+                c_published = await metadata.get_published(source.source_id)
+                assert [
+                    relation.qualified_name
+                    for relation in c_published.snapshot.relations
+                ] == ["analytics.hidden_collation_projection"]
+                relation = c_published.snapshot.relations[0]
+                assert [(column.name, column.data_type) for column in relation.columns] == [
+                    ("record_id", "bigint"),
+                    ("folded_matches", "boolean"),
+                ]
+                c_result = await query.query(
+                    source.source_id,
+                    "SELECT folded_matches "
+                    "FROM analytics.hidden_collation_projection",
+                    c_published.revision,
+                    SQL_POLICY_REVISION,
+                )
+                _assert_canonical_result(
+                    c_result,
+                    c_published.revision,
+                    ["folded_matches"],
+                    [{"folded_matches": False}],
+                )
+                assert create_result_hash(
+                    ("folded_matches",), c_result["rows"]
+                ) == (
+                    "sha256:24a658e9869ee578b8189b9e41242fe1521c1843bf2e4bae7ff64cca6c9c396f"
+                )
+
+                await admin.execute(
+                    "DROP VIEW analytics.hidden_collation_projection"
+                )
+                await admin.execute(
+                    "ALTER TABLE analytics.hidden_collation_edges "
+                    "ALTER COLUMN label TYPE text "
+                    "COLLATE pg_catalog.pg_c_utf8 USING label"
+                )
+                await admin.execute(
+                    "CREATE VIEW analytics.hidden_collation_projection AS "
+                    "SELECT record_id, pg_catalog.lower(label) = 'ä' AS folded_matches "
+                    "FROM analytics.hidden_collation_edges"
+                )
+                await admin.execute(
+                    sql.SQL(
+                        "GRANT SELECT ON analytics.hidden_collation_projection TO {}"
+                    ).format(sql.Identifier(database.reader_name))
+                )
+
+                metadata.invalidate(source.source_id)
+                unicode_published = await metadata.get_published(source.source_id)
+                assert unicode_published.revision == c_published.revision
+                assert unicode_published.snapshot == c_published.snapshot
+                unicode_result = await query.query(
+                    source.source_id,
+                    "SELECT folded_matches "
+                    "FROM analytics.hidden_collation_projection",
+                    unicode_published.revision,
+                    SQL_POLICY_REVISION,
+                )
+                # ponytail: defect characterization; the published boolean output
+                # has no collation, while its hidden base-column dependency changes.
+                _assert_canonical_result(
+                    unicode_result,
+                    unicode_published.revision,
+                    ["folded_matches"],
+                    [{"folded_matches": True}],
+                )
+                assert create_result_hash(
+                    ("folded_matches",), unicode_result["rows"]
+                ) == (
+                    "sha256:a6e1781ce2c45d140ae02f09454591e2ce6dcbd16eb2d3ca699f1f86a10b678a"
+                )
+            finally:
+                active_error = sys.exception()
+                cleanup_errors = await _attempt_cleanup_steps(
+                    (
+                        ("close hidden-collation query executor", executor.close),
+                        ("close hidden-collation catalog", catalog.close),
+                    )
+                )
+                if cleanup_errors:
+                    if active_error is not None:
+                        raise BaseExceptionGroup(
+                            "Hidden-collation query and cleanup failed",
+                            [active_error, *cleanup_errors],
+                        )
+                    raise BaseExceptionGroup(
+                        "Hidden-collation query cleanup failed", cleanup_errors
+                    )
+        finally:
+            active_error = sys.exception()
+            cleanup_errors = await _attempt_cleanup_steps(
+                (("close hidden-collation setup admin", admin.close),)
+            )
+            if cleanup_errors:
+                if active_error is not None:
+                    raise BaseExceptionGroup(
+                        "Hidden-collation setup and cleanup failed",
+                        [active_error, *cleanup_errors],
+                    )
+                raise BaseExceptionGroup(
+                    "Hidden-collation setup cleanup failed", cleanup_errors
+                )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_enc_01_characterizes_domain_type_dependencies() -> None:
+    async with _disposable_source_database() as database:
+        admin = await AsyncConnection.connect(database.admin_dsn, autocommit=True)
+        try:
+            await admin.execute("CREATE SCHEMA analytics")
+
+            async def read_domain_dependency() -> list[tuple[object, ...]]:
+                cursor = await admin.execute(
+                    """
+                    SELECT pg_catalog.pg_get_viewdef(view_relation.oid, false),
+                           type_namespace.nspname,
+                           dependent_type.typname,
+                           dependency.refobjsubid,
+                           collation_namespace.nspname,
+                           collation_definition.collname
+                    FROM pg_catalog.pg_rewrite AS rewrite
+                    JOIN pg_catalog.pg_class AS view_relation
+                      ON view_relation.oid = rewrite.ev_class
+                    JOIN pg_catalog.pg_namespace AS view_namespace
+                      ON view_namespace.oid = view_relation.relnamespace
+                    JOIN pg_catalog.pg_depend AS dependency
+                      ON dependency.classid = 'pg_catalog.pg_rewrite'::regclass
+                     AND dependency.objid = rewrite.oid
+                     AND dependency.objsubid = 0
+                     AND dependency.deptype = 'n'
+                    JOIN pg_catalog.pg_type AS dependent_type
+                      ON dependency.refclassid = 'pg_catalog.pg_type'::regclass
+                     AND dependent_type.oid = dependency.refobjid
+                    JOIN pg_catalog.pg_namespace AS type_namespace
+                      ON type_namespace.oid = dependent_type.typnamespace
+                    JOIN pg_catalog.pg_collation AS collation_definition
+                      ON collation_definition.oid = dependent_type.typcollation
+                    JOIN pg_catalog.pg_namespace AS collation_namespace
+                      ON collation_namespace.oid = collation_definition.collnamespace
+                    WHERE view_namespace.nspname = 'analytics'
+                      AND view_relation.relname = 'domain_collation_projection'
+                      AND rewrite.rulename = '_RETURN'
+                      AND rewrite.ev_type = '1'
+                      AND rewrite.is_instead
+                    """
+                )
+                return await cursor.fetchall()
+
+            await admin.execute(
+                'CREATE DOMAIN analytics.collated_label AS text COLLATE "C"'
+            )
+            await admin.execute(
+                "CREATE VIEW analytics.domain_collation_projection AS "
+                "SELECT 'Ä'::analytics.collated_label AS value"
+            )
+            c_rows = await read_domain_dependency()
+            assert len(c_rows) == 1
+            assert c_rows[0][1:] == (
+                "analytics",
+                "collated_label",
+                0,
+                "pg_catalog",
+                "C",
+            )
+
+            await admin.execute("DROP VIEW analytics.domain_collation_projection")
+            await admin.execute("DROP DOMAIN analytics.collated_label")
+            await admin.execute(
+                "CREATE DOMAIN analytics.collated_label AS text "
+                "COLLATE pg_catalog.pg_c_utf8"
+            )
+            await admin.execute(
+                "CREATE VIEW analytics.domain_collation_projection AS "
+                "SELECT 'Ä'::analytics.collated_label AS value"
+            )
+            unicode_rows = await read_domain_dependency()
+            assert len(unicode_rows) == 1
+            assert unicode_rows[0][1:] == (
+                "analytics",
+                "collated_label",
+                0,
+                "pg_catalog",
+                "pg_c_utf8",
+            )
+            assert unicode_rows[0][0] == c_rows[0][0]
+
+            await admin.execute(
+                "CREATE DOMAIN analytics.positive_integer AS integer "
+                "CHECK (VALUE > 0)"
+            )
+            await admin.execute(
+                "CREATE TABLE analytics.domain_row "
+                "(record_id bigint, amount analytics.positive_integer)"
+            )
+            await admin.execute(
+                "CREATE VIEW analytics.domain_row_projection AS "
+                "SELECT source IS NOT NULL AS present "
+                "FROM analytics.domain_row AS source"
+            )
+            whole_relation_cursor = await admin.execute(
+                """
+                SELECT dependency.refobjsubid
+                FROM pg_catalog.pg_rewrite AS rewrite
+                JOIN pg_catalog.pg_class AS view_relation
+                  ON view_relation.oid = rewrite.ev_class
+                JOIN pg_catalog.pg_namespace AS view_namespace
+                  ON view_namespace.oid = view_relation.relnamespace
+                JOIN pg_catalog.pg_depend AS dependency
+                  ON dependency.classid = 'pg_catalog.pg_rewrite'::regclass
+                 AND dependency.objid = rewrite.oid
+                 AND dependency.objsubid = 0
+                 AND dependency.deptype = 'n'
+                 AND dependency.refclassid = 'pg_catalog.pg_class'::regclass
+                JOIN pg_catalog.pg_class AS referenced_relation
+                  ON referenced_relation.oid = dependency.refobjid
+                JOIN pg_catalog.pg_namespace AS referenced_namespace
+                  ON referenced_namespace.oid = referenced_relation.relnamespace
+                WHERE view_namespace.nspname = 'analytics'
+                  AND view_relation.relname = 'domain_row_projection'
+                  AND rewrite.rulename = '_RETURN'
+                  AND rewrite.ev_type = '1'
+                  AND rewrite.is_instead
+                  AND referenced_namespace.nspname = 'analytics'
+                  AND referenced_relation.relname = 'domain_row'
+                """
+            )
+            assert await whole_relation_cursor.fetchall() == [(0,)]
+
+            direct_type_cursor = await admin.execute(
+                """
+                SELECT pg_catalog.count(*)
+                FROM pg_catalog.pg_rewrite AS rewrite
+                JOIN pg_catalog.pg_class AS view_relation
+                  ON view_relation.oid = rewrite.ev_class
+                JOIN pg_catalog.pg_namespace AS view_namespace
+                  ON view_namespace.oid = view_relation.relnamespace
+                JOIN pg_catalog.pg_depend AS dependency
+                  ON dependency.classid = 'pg_catalog.pg_rewrite'::regclass
+                 AND dependency.objid = rewrite.oid
+                 AND dependency.objsubid = 0
+                 AND dependency.deptype = 'n'
+                 AND dependency.refclassid = 'pg_catalog.pg_type'::regclass
+                WHERE view_namespace.nspname = 'analytics'
+                  AND view_relation.relname = 'domain_row_projection'
+                  AND rewrite.rulename = '_RETURN'
+                  AND rewrite.ev_type = '1'
+                  AND rewrite.is_instead
+                """
+            )
+            assert await direct_type_cursor.fetchone() == (0,)
+        finally:
+            active_error = sys.exception()
+            cleanup_errors = await _attempt_cleanup_steps(
+                (("close domain-collation setup admin", admin.close),)
+            )
+            if cleanup_errors:
+                if active_error is not None:
+                    raise BaseExceptionGroup(
+                        "Domain-collation probe and cleanup failed",
+                        [active_error, *cleanup_errors],
+                    )
+                raise BaseExceptionGroup(
+                    "Domain-collation probe cleanup failed", cleanup_errors
+                )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_enc_01_characterizes_sql_semantic_gucs_and_array_identity_loss() -> None:
     async with _disposable_source_database() as database:
         connection = await AsyncConnection.connect(
@@ -1601,6 +2343,7 @@ async def test_enc_01_characterizes_public_query_semantic_guc_drift() -> None:
             standard_conforming_strings: str,
             transform_null_equals: str,
             array_nulls: str,
+            timezone_abbreviations: str,
         ) -> None:
             connection = await AsyncConnection.connect(
                 database.admin_dsn, autocommit=True
@@ -1610,6 +2353,7 @@ async def test_enc_01_characterizes_public_query_semantic_guc_drift() -> None:
                     ("standard_conforming_strings", standard_conforming_strings),
                     ("transform_null_equals", transform_null_equals),
                     ("array_nulls", array_nulls),
+                    ("timezone_abbreviations", timezone_abbreviations),
                 ):
                     await connection.execute(
                         sql.SQL("ALTER ROLE {} SET {} TO {}").format(
@@ -1654,6 +2398,12 @@ async def test_enc_01_characterizes_public_query_semantic_guc_drift() -> None:
                         "SELECT '{NULL}'::text[] AS value "
                         "FROM analytics.semantic_edges",
                     ),
+                    (
+                        "timezone_abbreviation",
+                        "SELECT '2024-01-01 12:00 CST'::pg_catalog.timestamptz "
+                        "AS value "
+                        "FROM analytics.semantic_edges",
+                    ),
                 ):
                     result = await query.query(
                         source.source_id,
@@ -1695,6 +2445,7 @@ async def test_enc_01_characterizes_public_query_semantic_guc_drift() -> None:
             standard_conforming_strings="off",
             transform_null_equals="on",
             array_nulls="off",
+            timezone_abbreviations="Australia",
         )
         drift_revision, drift_results = await read_public_results()
         assert drift_results == {
@@ -1710,12 +2461,17 @@ async def test_enc_01_characterizes_public_query_semantic_guc_drift() -> None:
                 ["NULL"],
                 "sha256:58c554cec2ac89ee75e8ff731df9f8b83ab3511cb79db36e8abda29935e640b0",
             ),
+            "timezone_abbreviation": (
+                "2024-01-01T02:30:00+00:00",
+                "sha256:95bbd395245ad95402487aea0c6d8038bdd9a46d3ce5cef298ddbaf9eaa342f7",
+            ),
         }
 
         await set_reader_defaults(
             standard_conforming_strings="on",
             transform_null_equals="off",
             array_nulls="on",
+            timezone_abbreviations="Default",
         )
         baseline_revision, baseline_results = await read_public_results()
         # ponytail: defect characterization; semantic role defaults are not revision material.
@@ -1732,6 +2488,10 @@ async def test_enc_01_characterizes_public_query_semantic_guc_drift() -> None:
             "array": (
                 [None],
                 "sha256:2ceeafc6cdd6acffce2907fafba6a2490f69e992d58c4516cc7ec548e0383242",
+            ),
+            "timezone_abbreviation": (
+                "2024-01-01T18:00:00+00:00",
+                "sha256:4e9285bbe4bbd477dfa08dfd6b9d0583b528f942c7ac6fccaeaf52e40abc8591",
             ),
         }
 
@@ -1902,15 +2662,27 @@ async def test_enc_01_characterizes_record_and_unknown_oid_passthrough() -> None
         try:
             await admin.execute("CREATE SCHEMA analytics")
             await admin.execute(
+                "CREATE TYPE analytics.edge_pair AS "
+                "(left_value integer, right_value text)"
+            )
+            await admin.execute(
                 "CREATE TABLE analytics.exotic_edges "
                 "(record_id bigint PRIMARY KEY, cash money, cash_text text, "
-                "location point, location_text text, payload xml, payload_text text)"
+                "location point, location_text text, payload xml, payload_text text, "
+                "object_id oid, integer_id integer, object_ids oid[], "
+                "integer_ids integer[], internal_name name, ordinary_name text, "
+                "internal_names name[], ordinary_names text[], "
+                "details analytics.edge_pair, details_text text)"
             )
             await admin.execute(
                 "INSERT INTO analytics.exotic_edges VALUES "
                 "(1, 12.34::money, 12.34::money::text, "
                 "point(1, 2), point(1, 2)::text, "
-                "xmlparse(document '<a> x </a>'), '<a> x </a>')"
+                "xmlparse(document '<a> x </a>'), '<a> x </a>', "
+                "42::oid, 42::integer, ARRAY[42::oid], ARRAY[42::integer], "
+                "'edge'::name, 'edge'::text, ARRAY['edge'::name], "
+                "ARRAY['edge'::text], "
+                "ROW(1, 'x')::analytics.edge_pair, '(1,x)')"
             )
             await admin.execute(
                 sql.SQL("GRANT USAGE ON SCHEMA analytics TO {}").format(
@@ -1919,6 +2691,11 @@ async def test_enc_01_characterizes_record_and_unknown_oid_passthrough() -> None
             )
             await admin.execute(
                 sql.SQL("GRANT SELECT ON analytics.exotic_edges TO {}").format(
+                    sql.Identifier(database.reader_name)
+                )
+            )
+            await admin.execute(
+                sql.SQL("GRANT USAGE ON TYPE analytics.edge_pair TO {}").format(
                     sql.Identifier(database.reader_name)
                 )
             )
@@ -1950,30 +2727,79 @@ async def test_enc_01_characterizes_record_and_unknown_oid_passthrough() -> None
                 ("location_text", "text"),
                 ("payload", "xml"),
                 ("payload_text", "text"),
+                ("object_id", "oid"),
+                ("integer_id", "integer"),
+                ("object_ids", "oid[]"),
+                ("integer_ids", "integer[]"),
+                ("internal_name", "name"),
+                ("ordinary_name", "text"),
+                ("internal_names", "name[]"),
+                ("ordinary_names", "text[]"),
+                ("details", "analytics.edge_pair"),
+                ("details_text", "text"),
             ]
 
-            for unknown_column, text_column in (
-                ("cash", "cash_text"),
-                ("location", "location_text"),
-                ("payload", "payload_text"),
+            for unsupported_column, supported_column, expected, expected_hash in (
+                ("cash", "cash_text", None, None),
+                ("location", "location_text", None, None),
+                ("payload", "payload_text", None, None),
+                (
+                    "object_id",
+                    "integer_id",
+                    42,
+                    "sha256:2384dae5eba946d6aa6abfe5fae28f91bbe382ec0e4463d79324295faa7ab8c5",
+                ),
+                (
+                    "object_ids",
+                    "integer_ids",
+                    [42],
+                    "sha256:43663c93efe60cf5380f065a12e4de4e3b41247c2ae8c1f6c3c1ed3f0a7f83c0",
+                ),
+                (
+                    "internal_name",
+                    "ordinary_name",
+                    "edge",
+                    "sha256:c84c5f563750fb3e1638ffc51e30cb66428ba29f3ee0fd16515e61b0e72ed422",
+                ),
+                (
+                    "internal_names",
+                    "ordinary_names",
+                    ["edge"],
+                    "sha256:645242b412f8b101d1b8ac61008eb3caffe05240e80f1025a10ea01fb5991f2a",
+                ),
+                (
+                    "details",
+                    "details_text",
+                    "(1,x)",
+                    "sha256:fa729036d81fc0c620774ba3d568783eb25f4e214af3df943bf6e620cb1902bf",
+                ),
             ):
-                unknown_result = await query.query(
+                unsupported_result = await query.query(
                     source.source_id,
-                    f"SELECT {unknown_column} AS value FROM analytics.exotic_edges",
+                    f"SELECT {unsupported_column} AS value "
+                    "FROM analytics.exotic_edges",
                     published.revision,
                     SQL_POLICY_REVISION,
                 )
-                text_result = await query.query(
+                supported_result = await query.query(
                     source.source_id,
-                    f"SELECT {text_column} AS value FROM analytics.exotic_edges",
+                    f"SELECT {supported_column} AS value "
+                    "FROM analytics.exotic_edges",
                     published.revision,
                     SQL_POLICY_REVISION,
                 )
-                # ponytail: defect characterization; driver str hides the SQL type OID.
-                assert unknown_result["rows"] == text_result["rows"]
-                assert create_result_hash(
-                    ("value",), unknown_result["rows"]
-                ) == create_result_hash(("value",), text_result["rows"])
+                # ponytail: defect characterization; Python runtime values hide
+                # string-, integer- and list-valued unsupported SQL type OIDs.
+                assert unsupported_result["rows"] == supported_result["rows"]
+                result_hash = create_result_hash(
+                    ("value",), unsupported_result["rows"]
+                )
+                assert result_hash == create_result_hash(
+                    ("value",), supported_result["rows"]
+                )
+                if expected is not None:
+                    assert unsupported_result["rows"] == [{"value": expected}]
+                    assert result_hash == expected_hash
 
             record_results = []
             for expression in (

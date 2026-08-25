@@ -159,13 +159,22 @@ planning/query를 실행한다. Role/database default는 source 소유 값 그�
 rollback, timeout과 cancel 뒤 pool 재사용에서 그 default가 복원돼야 한다.
 
 현재 공통 policy는 `DateStyle`, `IntervalStyle`, `extra_float_digits`,
-`standard_conforming_strings`, `transform_null_equals`, `array_nulls`를 설정·검사하지 않는다. 실제
+`standard_conforming_strings`, `transform_null_equals`, `array_nulls`, `client_encoding`과
+`timezone_abbreviations`를 설정·검사하지 않고 server encoding과 effective database/column collation을
+snapshot/revision material로 admission하지 않는다. 실제
 PostgreSQL 18 characterization에서 이 default가 ambiguous date, backslash string, NULL 비교와 NULL
-array literal의 SQL 의미, interval availability 및 finite-float hash를 흔드는 것이 확인됐다.
+array literal의 SQL 의미, interval availability, finite-float hash, timezone abbreviation instant와
+SQL text/binary identity를 흔들고 collation-only DDL은 same-revision result를 바꾸는 것이 확인됐다.
 `bytea_output=hex|escape`는 현재 loader/Base64 결과가 같았다.
 [Proposed ADR 0020](../../decisions/0020-lossless-interval-and-json-numeric-encoding.md)의
 `ENC-01-A|B|C`가 정확히 승인되기 전에는 shared `reader_policy.py`나 metadata revision material을
 변경하지 않는다.
+
+Exact A 제안에서 Source Catalog의 추가 역할은 Catalog/Query pool startup의
+`client_encoding=UTF8`, UTC-first transaction-local setting과 PostgreSQL-18/UTF8 reader admission으로
+한정된다. Catalog semantics SQL, fingerprint material/hash와 snapshot codec/revision은 Metadata
+소유이며 Source Catalog에 복제하지 않는다. 이 경계도 exact A 승인 전에는 현재
+contract가 아니다.
 
 ## 소비 계약
 

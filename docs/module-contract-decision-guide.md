@@ -566,10 +566,10 @@ Control DB schema, replica observation, freshness와 admin response 계약은 20
 별도 승인을 받아 구현됐고, 기존 계약을 재현한 `CTRL-09` isolated cross-service Control recovery
 fixture acceptance까지 완료됐다. 이후 plan-only Source Onboarding Skill `SKILL-01`~`SKILL-06`도
 독립 forward evaluation과 mutation 0 증거로 완료됐다. Disposable source DB assurance
-`DBEDGE-01`~`DBEDGE-03`도 완료했다. Reader TimeZone/canonical hash 변경은 별도 승인된
+`DBEDGE-01`~`DBEDGE-04`도 완료했다. Reader TimeZone/canonical hash 변경은 별도 승인된
 `TIME-01`과 `TIME-02`에서
 결정·구현했고 완료 이력을 roadmap ledger로 옮겼다. 후속 database corner에서 발견한
-lossless scalar, semantic GUC, result OID와 array identity gap은
+lossless scalar/JSON/time, source encoding/collation, semantic GUC, result OID와 array identity gap은
 [proposed ADR 0020](decisions/0020-lossless-interval-and-json-numeric-encoding.md)의 `ENC-01` 승인 전
 구현을 동결했다. Repository fixture와 local cutover까지는 검증했지만 final encoding baseline의 실제
 managed production inventory·재발행·rollback change record인 `TIME-03`은 열려 있다. 이를 완료하거나

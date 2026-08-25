@@ -144,9 +144,10 @@ Privilege, connection, server shutdown, 알 수 없는 SQLSTATE와 driver/serial
 - Function/operator의 resolved candidate와 volatility 검증은 ADR 0003을 따른다.
 - Reader UTC, canonical-time policy material, revision 전환과 business calendar 분리는
   [ADR 0019](0019-canonical-time-stability.md)를 따른다.
-- Default psycopg loader가 month-bearing interval과 fractional JSONB numeric을 무손실로 전달하지
-  못하고 empty multirange를 array로 오인하며 reader formatting default가 SQL 의미·hash를 흔드는 현재
-  gap과 승인 전 선택지는 [proposed ADR 0020](0020-lossless-interval-and-json-numeric-encoding.md)에
+- Default psycopg loader가 interval/time/duplicate·fractional JSON을 무손실로 전달하지 못하고
+  SQL_ASCII와 result OID identity를 혼동하며 empty multirange를 array로 오인한다. Reader semantic
+  setting과 unversioned collation이 SQL 의미·hash를 흔드는 현재 gap과 승인 전 선택지는
+  [proposed ADR 0020](0020-lossless-interval-and-json-numeric-encoding.md)에
   기록한다. 승인 전에는 현재 encoding을 lossless/deterministic 범위로 확대해 해석하지 않는다.
 - Query ID는 실행 전에 생성되어 audit log와 PostgreSQL `application_name`에 동일하게
   기록된다. 완료 audit는 query ID, caller/tenant/source, fingerprint, queue/elapsed,

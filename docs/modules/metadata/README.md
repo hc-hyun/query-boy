@@ -136,6 +136,23 @@ persisted snapshot 및 rolling replica compatibility contract다.
 Canonicalizer는 list와 tuple, dict와 immutable mapping을 같은 canonical array/object로
 정규화하며 representation만으로 digest를 바꾸지 않는다.
 
+현재 revision에는 source/server encoding, timezone-abbreviation table과 effective database/column
+collation이 없다. PostgreSQL 18 disposable acceptance에서 column `C`→`pg_c_utf8` 변경 뒤 fresh
+snapshot/revision도 같지만 `lower()` 결과/hash가 달라지는 gap을 재현했다. 이는 현 계약의 보장으로
+확대하지 않는다. [Proposed ADR 0020](../../decisions/0020-lossless-interval-and-json-numeric-encoding.md)의
+`source_semantics_fingerprint` persisted snapshot/revision 변경은 `ENC-01-A|B|C` exact 승인 전
+구현하지 않는다.
+
+ADR 0020의 exact A 제안이 승인되면 Metadata가 bounded source-semantics catalog probe,
+canonical fingerprint, declared domain column/direct custom type pre-erasure admission, strict snapshot codec
+v1/v2와 metadata revision v1/v2를 소유한다. Source
+Catalog은 reader setting/admission을, Guarded Query는 Metadata가 공개한 동일 fingerprint helper와
+published fingerprint를 소비한다. Metadata revision은 먼저 동결된 Guarded Query-owned immutable
+result-policy v2/SQL-policy v3 descriptor를 소비하므로 descriptor provider baseline 전에 구현하지
+않는다. Control Plane은 encoded JSONB의 transaction provider일 뿐
+codec을 재정의하지 않는다. 이는 현재 구현 설명이 아니라 승인 대기 중인 소유권
+제안이다.
+
 ### Metadata lifecycle contract
 
 - Fresh candidate를 validate하고 source definition과 함께 revision을 계산한다.

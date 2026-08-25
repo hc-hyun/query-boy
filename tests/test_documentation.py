@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from urllib.parse import unquote
 
+import query_man.sql_validation as sql_validation_module
 from tests.helpers import ROOT_DIRECTORY
 
 ROADMAP = ROOT_DIRECTORY / "docs" / "implementation-roadmap.md"
@@ -230,6 +231,7 @@ EXPECTED_POST_BASELINE_COMPLETED_IDS = (
     "DBEDGE-01",
     "DBEDGE-02",
     "DBEDGE-03",
+    "DBEDGE-04",
     "TIME-01",
     "TIME-02",
 )
@@ -470,6 +472,18 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
     delivery_contract = (
         ROOT_DIRECTORY / "docs" / "modules" / "delivery" / "README.md"
     ).read_text(encoding="utf-8")
+    source_catalog_contract = (
+        ROOT_DIRECTORY / "docs" / "modules" / "source-catalog" / "README.md"
+    ).read_text(encoding="utf-8")
+    metadata_contract = (
+        ROOT_DIRECTORY / "docs" / "modules" / "metadata" / "README.md"
+    ).read_text(encoding="utf-8")
+    guarded_query_contract = (
+        ROOT_DIRECTORY / "docs" / "modules" / "guarded-query" / "README.md"
+    ).read_text(encoding="utf-8")
+    control_plane_contract = (
+        ROOT_DIRECTORY / "docs" / "modules" / "control-plane" / "README.md"
+    ).read_text(encoding="utf-8")
     matches = re.findall(r"^- \[([ x])\] `([A-Z]+)-(\d{2})`", todo, re.MULTILINE)
     ids = [f"{prefix}-{number}" for _checked, prefix, number in matches]
 
@@ -495,9 +509,18 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
     assert "## P0.5 — Module Contract Hardening" not in todo
     assert "offline composition `MOD-08`은 모두" in todo
     assert "## P2 — Source Onboarding Skill" not in todo
-    assert "implementation 선택 `ENC-01-A|B`" in todo
-    assert "production completion을 block하는 defer `ENC-01-C`" in todo
-    assert "승인 전 loader/setting/encoder/revision/hash를 바꾸지" in todo
+    assert "A는 fingerprint byte schema/bounds" in todo
+    assert "B는 별도 exact restatement가 필요" in todo
+    assert "C는 production completion을 block하는 defer" in todo
+    assert "일반적인 진행/승인이나 ID만으로 구현하지 않는다" in todo
+    assert "Source Catalog shared `reader_policy.py` → Metadata fingerprint" in todo
+    assert "Exact A 제안에서 Source Catalog의 추가 역할" in source_catalog_contract
+    assert "Metadata가 bounded source-semantics catalog probe" in metadata_contract
+    assert "현재 executor 계약이 아니다" in guarded_query_contract
+    assert "v1 row를 update/delete" in control_plane_contract
+    assert "V1/V2 serving" in runtime_contract
+    assert "recursive view dependency fingerprint" in assurance_contract
+    assert "승인 전 loader/setting/encoder/source-semantics snapshot/revision/hash" in todo
     assert "Production inventory·권한·backup·route가 제공되어야" in todo
     assert "명시적으로 defer하기 전에는 `COST-01` 구현을 시작하지" in todo
     assert "proposed ADR 0021의 정확한 monitoring 계약과 영향 범위를 별도 승인" in todo
@@ -510,12 +533,16 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
     assert "`CTRL-08` usage/cost state" in todo
     assert "현재 선택지 초안은 lower-track read-only prework" in todo
     assert "`COST-01-A|B|C`" in todo
+    assert "`COST-04` 급증 threshold/alert" in todo
+    assert "alert event/state 보존 기간은" in todo
     assert "`TRACE-01-A|B|C`" in todo
     assert (
         "Status: Proposed read-only prework — priority gate and user approval required"
         in cost_adr
     )
     assert "`COST-01-A` — dedicated sanitized monitor (recommended)" in cost_adr
+    assert "`COST-04` Contract Gap — separate exact addendum required" in cost_adr
+    assert "아래 A 문구는 위 `COST-04` threshold/alert addendum를 승인하지 않는다" in cost_adr
     assert "pg_monitor" in cost_adr
     assert "query text" in cost_adr
     assert "row별 `stats_since`" in cost_adr
@@ -769,7 +796,10 @@ def test_source_database_corner_docs_record_canonical_time_resolution() -> None:
     assert "`DBEDGE-01`" in audit
     assert "`DBEDGE-02`" in audit
     assert "`DBEDGE-03`" in audit
+    assert "`DBEDGE-04`" in audit
     assert "test_source_database_corners.py" in module_index
+    assert "domain `pg_depend`는 raw driver/catalog probe" in module_index
+    assert "raw-only driver/catalog probe" in audit
     assert SOURCE_DATABASE_CORNERS_AUDIT.name in assurance
     assert "database `0`, role `0`" in audit
     assert "### Resolved follow-up: canonical `timestamptz`" in audit
@@ -786,48 +816,156 @@ def test_source_database_corner_docs_record_canonical_time_resolution() -> None:
     assert "production external state를 완료로 주장하지 않는다" in canonical_audit
     assert "열린 `TIME-03`" in audit
     assert (
-        "Approval-required follow-up: lossless interval, JSONB numeric, and reader formatting"
+        "Approval-required follow-up: lossless encoding and source semantics"
         in audit
     )
     assert "Status: Proposed — user approval required before implementation" in lossless_adr
     assert "`ENC-01-A` — lossless canonical values (recommended)" in lossless_adr
-    assert (
-        "`DateStyle=ISO, YMD`, `IntervalStyle=iso_8601`, `extra_float_digits=1`,"
-        in lossless_adr
-    )
+    assert "`DateStyle=ISO, YMD`" in lossless_adr
+    assert "`IntervalStyle=iso_8601`" in lossless_adr
+    assert "`extra_float_digits=1`" in lossless_adr
     assert "`standard_conforming_strings=on`" in lossless_adr
     assert "`transform_null_equals=off`" in lossless_adr
     assert "`array_nulls=on`" in lossless_adr
+    assert "`client_encoding=UTF8`" in lossless_adr
+    assert "`server_encoding=UTF8`" in lossless_adr
+    assert "`timezone_abbreviations=Default`" in lossless_adr
+    assert "`source_semantics_fingerprint`" in lossless_adr
+    assert "Decoded key가 같은 duplicate" in lossless_adr
+    assert 'exact `"24:00:00"`' in lossless_adr
+    assert "이 ADR은 제안일 뿐 승인된 계약이 아니다" in lossless_adr
+    assert "Exact failure and stale mapping" in lossless_adr
+    assert "Result OID scalar allowlist는 exact 24개" in lossless_adr
+    assert "snapshot_contract_version" in lossless_adr
+    assert "view_dependency_column_collations" in lossless_adr
+    assert "view_dependency_definitions" in lossless_adr
+    assert "direct pg_type edge" in lossless_adr
+    assert re.search(
+        r"declared/custom\s+domain pre-erasure rejection",
+        lossless_adr,
+    )
+    assert "CollateClause" in lossless_adr
+    assert "Function and operator dependency residual limitation" in lossless_adr
+    assert "IANA/POSIX named timezone rule drift" in lossless_adr
+    assert "`pg_catalog.default` provider `database_default`" in lossless_adr
+    assert "1,849 bytes" in lossless_adr
+    assert (
+        "sha256:cf38dcf490fcd06886b7f0c8d308accc464d8ec9bb9fffcf9bc7c52b76ca37e7"
+        in lossless_adr
+    )
+    assert (
+        "sha256:138b8c7fb1e017172acc6542236cb2f3890d5c0af98592766d566fe049639353"
+        in lossless_adr
+    )
+    result_policy_match = re.search(
+        r"#### Exact result policy v2 and SQL policy v3.*?```json\n(.*?)\n```",
+        lossless_adr,
+        re.DOTALL,
+    )
+    assert result_policy_match is not None
+    result_policy = json.loads(result_policy_match.group(1))
+    result_policy_bytes = json.dumps(
+        result_policy,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+        allow_nan=False,
+    ).encode("utf-8")
+    assert len(result_policy_bytes) == 1_849
+    assert hashlib.sha256(result_policy_bytes).hexdigest() == (
+        "cf38dcf490fcd06886b7f0c8d308accc464d8ec9bb9fffcf9bc7c52b76ca37e7"
+    )
+    sql_policy = {
+        "version": 3,
+        "result_encoding_policy": result_policy,
+        "functions": sorted(sql_validation_module.DEFAULT_ALLOWED_FUNCTIONS),
+        "operators": sorted(sql_validation_module.DEFAULT_ALLOWED_OPERATORS),
+        "types": sorted(sql_validation_module.DEFAULT_ALLOWED_TYPES),
+        "unqualified_types": sorted(
+            sql_validation_module.DEFAULT_ALLOWED_UNQUALIFIED_TYPES
+        ),
+        "sql_value_functions": sorted(
+            sql_validation_module._ALLOWED_SQL_VALUE_FUNCTIONS
+        ),
+        "forbidden_nodes": sorted(
+            sql_validation_module._FORBIDDEN_NODE_CODES.items()
+        ),
+        "rejected_expressions": sorted(
+            sql_validation_module._REJECTED_A_EXPR_CONSTRUCTS.items()
+        ),
+        "allowed_nodes": sorted(sql_validation_module._ALLOWED_NODE_TAGS),
+    }
+    sql_policy_bytes = json.dumps(
+        sql_policy,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    assert hashlib.sha256(sql_policy_bytes).hexdigest() == (
+        "138b8c7fb1e017172acc6542236cb2f3890d5c0af98592766d566fe049639353"
+    )
+    assert tuple(result_policy["result_oid"]["allowed_pg_catalog_scalar"]) == (
+        "bit",
+        "bool",
+        "bpchar",
+        "bytea",
+        "cidr",
+        "date",
+        "float4",
+        "float8",
+        "inet",
+        "int2",
+        "int4",
+        "int8",
+        "interval",
+        "json",
+        "jsonb",
+        "numeric",
+        "text",
+        "time",
+        "timestamp",
+        "timestamptz",
+        "timetz",
+        "uuid",
+        "varbit",
+        "varchar",
+    )
+    assert result_policy["result_oid"]["domain"] == (
+        "reject_declared_domain_before_oid_erasure"
+    )
     assert "user-result cursor scope" in lossless_adr
     assert "`EXPLAIN (FORMAT JSON)`" in lossless_adr
     assert "`IntervalStyle=postgres`를 설정·검사" in lossless_adr
     assert "Runtime이 type/setting exclusion을 강제하지 못" in lossless_adr
     assert "Range/Multirange 및 그 array" in lossless_adr
-    assert "User-result cursor description의 SQL type OID" in lossless_adr
     assert "domain-over-approved-array" in lossless_adr
     assert "array-of-domain/enum" in lossless_adr
     assert "`bit|varbit`는" in lossless_adr
-    assert "money, XML, geometric, macaddr" in lossless_adr
-    assert "`bool`, `int2|int4|int8`, `text|varchar|bpchar`" in lossless_adr
-    assert "`date|time|timetz|timestamp|timestamptz|interval`" in lossless_adr
-    assert "`pg_lsn`, `tid`, unknown type" in lossless_adr
-    assert "pg_lsn/tid/unknown 및 그 밖의" in lossless_adr
+    for result_type in ("money", "XML", "geometric", "macaddr"):
+        assert result_type in lossless_adr
+    assert "`oid/name/reg*/xid*`" in lossless_adr
+    assert "money/XML/geometric/macaddr/pg_lsn/tid" in lossless_adr
     assert "non-1 lower bound" in lossless_adr
     assert "`ENC-02`에서 final encoding baseline을 구현·검증한" in lossless_adr
-    assert "B 또는 C를 선택하면 해당 policy version" in lossless_adr
+    assert "B는 policy version, migration/cutover" in lossless_adr
     assert "하나의 coordinated `TIME-03`" in lossless_adr
-    assert "SQL policy version은 3" in lossless_adr
+    assert "SQL policy v3" in lossless_adr
     assert "sha256:a1d1217174eb9b0ebce121652ec50bec72411619310ca4f1fee427d55f412014" in audit
     assert "sha256:3b05810025aca001615bd4e78fdbb40763f9d3ea1ba257043625796ba3783ced" in audit
     assert "sha256:77f588e368495248abbd8eb87354efadbd31afa38d0ca675154506624470f06a" in audit
     assert "sha256:0a4513b560854f795950856ddcddcc1a5f8fac4b0341fce951944bbc8ba066dd" in audit
     assert "sha256:dadd5b0c8d9a51f5db4a5117d804c30dcbcc7f4cfa417a4df154de40d63de4f3" in audit
+    assert "sha256:638b941219f3f2bbbd3a92acaf57a2cc5f14e026d386e161fd8b3d24afa32b43" in audit
+    assert "sha256:64f407d6e0fcd189c2c7d4bed463c38771b2f31823d40ff9cb96886fae19ce76" in audit
+    assert "sha256:c4692859cde38b3e26c3bc09be96cc3ae2db09442fb7e8e826deace60da05a64" in audit
+    assert "sha256:24a658e9869ee578b8189b9e41242fe1521c1843bf2e4bae7ff64cca6c9c396f" in audit
+    assert "sha256:a6e1781ce2c45d140ae02f09454591e2ce6dcbd16eb2d3ca699f1f86a10b678a" in audit
     assert "`47 passed`, 16 deselected" in audit
     assert "`14 passed`, 1 deselected" in audit
     assert "`47 passed`, 20 deselected" in audit
     assert "`18 passed`, 1 deselected" in audit
-    assert "`645 passed`, 85 deselected" in audit
-    assert "`73 passed`, 657 deselected" in audit
+    assert "`24 passed`, 1 deselected" in audit
+    assert "`645 passed`, 91 deselected" in audit
+    assert "`79 passed`, 657 deselected" in audit
 
 
 def test_mutation_receipt_docs_preserve_terminal_and_secret_boundaries() -> None:

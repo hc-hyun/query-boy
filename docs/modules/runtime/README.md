@@ -153,6 +153,12 @@ catalog와 query executor를 같은 순서의 두 `SourcePoolInvalidator`로 빠
 Transaction-local UTC는 commit, rollback과 shutdown cancel 뒤 pool에 남지 않는다. Canonical-time
 rollback은 R2를 같은 순서로 drain한 뒤 보존된 R1 binary/generation/revision/L2를 복구하고 route한다.
 
+ADR 0020 exact A는 아직 승인 대기 제안이다. 승인되면 Runtime은 encoding,
+fingerprint 또는 snapshot codec을 소유하지 않고, old fleet/source connection을 0까지 drain한
+뒤 v2 counterpart를 route 밖에서 조립하는 coordinated cutover만 소유한다. V1/V2 serving
+fleet는 섞지 않고 rollback은 보존된 v1 pointer/L2와 old release를 다시 조립하며 v2 row를
+삭제하지 않는다. 이 순서는 exact A 승인 전에는 현재 Runtime contract가 아니다.
+
 ### Health and operations contract
 
 - `/health`는 process liveness만 나타낸다.
@@ -174,6 +180,9 @@ MCP/Guarded Query가 소비한다.
 [proposed ADR 0021](../../decisions/0021-database-native-cost-attribution.md)은 Runtime collector/composition
 선택지를 기록할 뿐, ENC/TIME start gate와 정확한 `COST-01-A|B|C` 승인 전에는 task, source credential,
 Control writer나 operations field를 추가하지 않는다.
+Base A에도 `COST-04` threshold/alert scheduler·state·delivery는 정의되지 않아 별도 exact addendum 전
+background evaluator나 notification task를 만들지 않는다. 기존 base rollup 31일 window는 alert
+event/state retention을 정한 것이 아니다.
 
 ### Managed replica reporting contract (`CTRL-06`)
 

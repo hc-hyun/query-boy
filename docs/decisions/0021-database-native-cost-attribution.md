@@ -544,6 +544,24 @@ defer지만 M15는 완료되지 않는다.
    function/role을 drop/reset하지 않는다. Security rollback은 collector drain 뒤 monitoring LOGIN을
    `NOLOGIN`으로 만들 수 있다. Existing source manifest/read credential과 query path는 보존한다.
 
+## `COST-04` Contract Gap — separate exact addendum required
+
+이 ADR의 A는 sanitized collection, delta/rollup, base rollup의 inclusive 31일 logical visibility/input
+window와 operator-only status/projection을 정확히 제안하지만 TODO `COST-04`의 “usage 급증 threshold와
+alert” 의미는 정하지 않는다. 특히 다음
+항목은 현재 승인 문구의 일부가 아니다.
+
+- 비교 key와 source/profile aggregation, sample/window 및 기준선 계산
+- initial/missing/stale/reset/rebaseline에서 평가 여부와 clock
+- threshold 단위, hysteresis, recovery와 cooldown
+- pending/firing/resolved 같은 alert lifecycle, deduplication과 acknowledgement
+- delivery backend/retry, alert event/state retention, operator 조회 shape와 redaction
+
+따라서 `COST-01-A`를 정확히 승인해도 위 항목을 임의로 선택해 `COST-04`를 구현·완료하지 않는다.
+Base rollup evidence가 생긴 뒤 `COST-04-A|B|C` addendum으로 provider/consumer, compatibility,
+migration/rollback과 운영 calibration 영향을 제시하고 사용자의 별도 exact 승인을 받는다. 그 전에는
+기존 `/usage` projection을 threshold나 alert로 해석하거나 새 metric label/notification을 만들지 않는다.
+
 ## Verification
 
 - PostgreSQL 18.6 fresh/upgrade fixture의 positive projection과 direct view/query text/reset/broad-role
@@ -579,8 +597,10 @@ defer지만 M15는 완료되지 않는다.
 이 제안은 승인된 계약이 아니다. 아래 문구는 contract 선택만 고정하며 ENC/TIME start gate를 자동으로
 열지 않는다. 구현까지 먼저 시작하려면 별도로 “열린 ENC-01~02와 TIME-03보다 COST-01~05를 먼저
 수행한다”는 exact reprioritization과 production blocker가 남는 영향을 승인해야 한다.
-현재 A만 아래 문구로 implementation-ready 범위를 제시하며 C는 exact defer다. B는 direction-only라
+현재 A만 base collector/rollup/projection의 implementation-ready 범위를 제시하며 C는 exact defer다.
+B는 direction-only라
 ID 선택만으로 승인할 수 없고 lifecycle/wire/persistence/rollback을 다시 명시한 별도 exact 승인이 필요하다.
+아래 A 문구는 위 `COST-04` threshold/alert addendum를 승인하지 않는다.
 
 ```text
 COST-01-A 계약을 전용 monitoring LOGIN과

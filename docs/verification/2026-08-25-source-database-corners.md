@@ -2,13 +2,15 @@
 
 Status: Complete
 
-Last updated: 2026-08-26 (`DBEDGE-03`)
+Last updated: 2026-08-26 (`DBEDGE-04`)
 
 ## Scope
 
-`DBEDGE-01`과 후속 `DBEDGE-02`~`DBEDGE-03`은 고정 bootstrap fixture를 더 늘리지 않고 test마다 서로
-다른 UUID database를 만들어 Source Catalog → Metadata → Guarded Query의 실제 PostgreSQL 경계를
-검증한다.
+`DBEDGE-01`과 후속 `DBEDGE-02`~`DBEDGE-04`는 고정 bootstrap fixture를 더 늘리지 않고 test마다 서로
+다른 UUID database를 만든다. 대부분은 Source Catalog → Metadata → Guarded Query의 실제 PostgreSQL
+경계를 검증한다. SQL_ASCII text/bytea identity, domain/enum RowDescription OID, domain-type
+`pg_depend` 같은 raw-only driver/catalog probe는 현재 public 계약으로 확대하지 않고, 필요한 경우
+별도 public companion case가 실제 전파를 검증한다.
 각 database는 전용 NOLOGIN view owner와 최소 권한 LOGIN reader를 사용하고, pool 종료 뒤 database와
 두 role을 삭제한다. Production source/configuration, Control DB와 승인된 public contract는 변경하지
 않는다.
@@ -58,7 +60,7 @@ SELECT
 | Catalog hard limits | Cold cache에서 relation 3개/상한 2, column 3개/상한 2, structure 3개/상한 2와 warm cache에서 relation 1개/상한 1 뒤 두 번째 relation grant | 실제 catalog가 partial snapshot을 publish하지 않았고, warm cache도 이전 snapshot을 stale 성공으로 가장하지 않은 채 `METADATA_UNAVAILABLE`로 fail-closed했다. 초과 object를 제거한 뒤 같은 max-one pool은 정상 snapshot을 다시 publish했다. |
 | Unsupported driver values | PostgreSQL infinity date, `int4range`, nonempty `int4multirange`와 nonempty `int4range[]` | 내부 driver/object detail 없이 `QUERY_UNAVAILABLE`로 rollback했고 같은 max-one pool의 다음 supported query가 정상 복구됐다. |
 | Multibyte byte boundary | 한글과 emoji를 포함한 두 row, 첫 row compact UTF-8 exact boundary | 첫 complete row만 반환하고 두 번째 row를 부분 직렬화하지 않은 채 `truncated=true`, exact byte count를 유지했다. |
-| Open scalar/collection/result-type contract characterization | Month interval/30 days, 서로 다른 큰 JSONB fractional numeric, anonymous record와 string-valued unknown OID, empty multirange/range-array/integer-array, 0/1 lower-bound array, `extra_float_digits=1|3|0|-1|-3`, ISO/DMY/MDY DateStyle, non-postgres IntervalStyle, `standard_conforming_strings`, `transform_null_equals`, `array_nulls`와 `bytea_output` | Silent hash collision, unsupported SQL type의 accidental success, SQL 의미/value/hash drift와 driver availability failure를 exact golden으로 재현했다. `bytea_output=hex|escape`는 같은 Base64/hash라는 negative control이었다. 의미 수정은 `ENC-01` 승인 전 중단했다. |
+| Open scalar/collection/result-type contract characterization | Month interval/30 days, 큰 JSONB fractional numeric, duplicate-key JSON, SQL_ASCII text/bytea, time 24시, direct·hidden-view·domain-type `C`/`pg_c_utf8` collation, anonymous/named record, `oid/name`·array와 string/integer/list-valued unknown OID, empty multirange/range-array/integer-array, 0/1 lower-bound array, reader semantic GUC와 `bytea_output` | Silent hash collision, unsupported SQL type accidental success, same-revision SQL 의미/value/hash drift와 driver availability failure를 exact golden으로 재현했다. Boolean view의 hidden base collation도 public snapshot/definition hash를 바꾸지 않았다. Custom domain collation은 같은 view definition 아래 direct `pg_type` dependency와 `typcollation`으로만 바뀌었다. `jsonb` duplicate normalization과 `bytea_output=hex|escape`는 DB/driver가 안정적으로 정규화하는 negative control이었다. 의미 수정은 `ENC-01` 승인 전 중단했다. |
 
 ## Findings And Changes
 
@@ -113,15 +115,18 @@ success/rollback/timeout pool reset을 검증한다. 상세 revision/verified mi
 [canonical-time evidence](2026-08-25-canonical-time-stability.md)에 있다. 실제 managed production
 재발행과 rollback change record는 열린 `TIME-03`이다.
 
-### Approval-required follow-up: lossless interval, JSONB numeric, and reader formatting
+### Approval-required follow-up: lossless encoding and source semantics
 
 PostgreSQL 18/psycopg default loader를 실제 read-only query로 확인한 결과, 현재 encoder가 복구할 수
-없는 silent loss 두 건이 있다.
+없는 silent loss와 SQL type/semantic identity 손실이 여러 경계에 있다.
 
 | Value/default | Driver value/behavior | Finding |
 |---|---|---|
 | `interval '1 month 2 days 03:04:05.6'` | `timedelta(days=32, seconds=11045, microseconds=600000)` | Calendar month와 고정 30일이 구분되지 않는다. |
 | `'{"amount":12345678901234567890.1234567890}'::jsonb` | `{"amount": 1.2345678901234567e+19}` | Fractional numeric precision/scale이 binary float에서 사라진다. |
+| Duplicate-key `json` 대 last-key-only `json` | 둘 다 `{"outer":{"amount":2}}` | PostgreSQL text cast는 서로 다르지만 Python object/public hash는 last key만 남는다. `jsonb`는 PostgreSQL이 last key로 normalize하는 control이다. |
+| SQL_ASCII `text 'hello'` 대 같은 bytea | 둘 다 `bytes` → `base64:aGVsbG8=` | Driver/runtime type만 보는 encoder가 SQL text와 binary를 같은 public value/hash로 합친다. |
+| `time '24:00:00'` 대 midnight | 전자는 psycopg `DataError`, 후자는 `00:00:00` | PostgreSQL의 valid/distinct end-of-day가 현재 allowlisted time 경로에서 실패한다. |
 | 같은 `float8` value `1.2345678901234567`, `extra_float_digits=1|3` 대 `0|-1|-3` | text decode 전에 다른 자릿수의 Python float | Role/session default에 따라 public number와 hash가 달라질 수 있다. |
 | 같은 ambiguous literal `'01/02/2024'::date`, ISO/DMY/MDY `DateStyle` | DB 오류, `2024-02-01`, `2024-01-02` | 같은 SQL의 성공 여부와 날짜 의미/hash가 달라진다. Non-ISO style의 timestamptz output은 추가로 psycopg decode에 실패한다. |
 | 같은 interval, `IntervalStyle=postgres` 대 non-postgres | Loss-prone `timedelta` 또는 psycopg `NotImplementedError` | Role/session default에 따라 silent loss 또는 query availability failure가 달라진다. |
@@ -129,11 +134,16 @@ PostgreSQL 18/psycopg default loader를 실제 read-only query로 확인한 결�
 | 같은 backslash string literal, `standard_conforming_strings=on|off` | Backslash+`n` 또는 실제 newline | 같은 SQL text의 string value/hash가 달라진다. |
 | `NULL = NULL`, `transform_null_equals=off|on` | `null` 또는 `true` | 같은 SQL predicate 의미/value/hash가 달라진다. |
 | `'{NULL}'::text[]`, `array_nulls=on|off` | `[null]` 또는 `["NULL"]` | 같은 SQL array literal 의미/value/hash가 달라진다. |
+| 같은 `CST`, `timezone_abbreviations=Default|Australia` | UTC `18:00` 또는 `02:30` | 같은 metadata/SQL-policy revision과 SQL이 서로 다른 instant/hash가 된다. |
+| `text` column collation `C`→`pg_c_utf8` | `lower('Ä')`가 `Ä`→`ä` | Fresh catalog snapshot/revision도 같아 live semantic DDL을 탐지하지 못한다. |
+| Boolean view의 hidden base column collation `C`→`pg_c_utf8` | 같은 view SQL/output에서 `false`→`true` | View를 같은 definition으로 재생성해도 snapshot/revision이 같아 visible output column만으로는 dependency drift를 탐지하지 못한다. |
+| Custom domain collation `C`→`pg_c_utf8` | View definition은 같지만 direct `pg_type` edge의 `typcollation`이 바뀌 | Column/direct-`pg_collation` edge만 추적하면 constant domain cast의 active collation을 놓친다. |
 | `'[0:1]={10,20}'::integer[]` 대 `'{10,20}'::integer[]` | 둘 다 public `[10,20]` | PostgreSQL array lower bound가 사라져 다른 배열이 같은 value/hash가 된다. |
 | `'{}'::int4range[]` 대 `'{}'::integer[]` | 둘 다 public `[]` | Empty range array는 accidental success하고 nonempty range array는 비공개 실패한다. |
 | `ROW()` 대 `ROW(NULL::integer)` | 둘 다 public `[]` | Anonymous record의 field count와 NULL이 사라져 같은 hash가 된다. |
 | `ROW(1::integer)` 대 `ROW('1'::text)` | 둘 다 public `["1"]` | Anonymous record field type이 사라져 같은 hash가 된다. |
 | `money`, `point`, `xml` column 대 같은 text | psycopg가 모두 Python `str`로 반환 | Result OID를 보지 않는 encoder가 unsupported SQL type을 text처럼 성공시킨다. |
+| `oid/name`과 그 array, named composite 대 allowed integer/text/array | 같은 Python int/str/list 또는 composite text | Known loader도 unsupported result OID를 숨겨 같은 public row/hash로 성공한다. |
 | 같은 `bytea`, `bytea_output=hex|escape` | 둘 다 `base64:AP8=` | Psycopg bytes loader와 encoder가 같은 value/hash로 정규화해 pin 필요성은 확인되지 않았다. |
 
 실제로 `interval '1 month'`와 `interval '30 days'`는 같은 Python value/hash로 합쳐지지만 기준 날짜에
@@ -147,7 +157,16 @@ verified migration이 바뀐다. 따라서 의미 구현을 멈추고
 
 Runnable characterization의 exact collision hash는 interval 두 값 모두
 `sha256:a1d1217174eb9b0ebce121652ec50bec72411619310ca4f1fee427d55f412014`, JSONB 두 값 모두
-`sha256:3b05810025aca001615bd4e78fdbb40763f9d3ea1ba257043625796ba3783ced`였다. 같은 float8 value는
+`sha256:3b05810025aca001615bd4e78fdbb40763f9d3ea1ba257043625796ba3783ced`였다. Duplicate-key와
+last-key-only `json`도 둘 다
+`sha256:638b941219f3f2bbbd3a92acaf57a2cc5f14e026d386e161fd8b3d24afa32b43`였지만 text cast hash는
+`sha256:805656339a9ec4c31deae76681fb0b5d583754cec7bfc3006ea804411e08bdb4`와
+`sha256:b81e68d6a989f1c789e2b943cfb1d060c578f9a67c505b3ae7c928f447c5c802`로 달랐다. SQL_ASCII
+text와 같은 bytea는 둘 다 `base64:aGVsbG8=`/
+`sha256:64f407d6e0fcd189c2c7d4bed463c38771b2f31823d40ff9cb96886fae19ce76`였고 같은 SQL_ASCII
+database에서 client만 UTF8로 설정하면 text는 `hello`/
+`sha256:a59c30483e34a8f6e687a53a5c025eee6dde4f8d60834b25d241d2aa4a0dec93`가 됐다.
+같은 float8 value는
 `extra_float_digits=1|3`에서 `1.2345678901234567`이지만 0, -1, -3에서 각각
 `1.23456789012346`, `1.2345678901235`, `1.23456789012`로 decode됐다. 같은 ambiguous date literal은
 `ISO,YMD`에서 실패하고 DMY/MDY에서 각각 `2024-02-01`/`2024-01-02`와 서로 다른 exact hash를 냈다.
@@ -164,26 +183,55 @@ Empty multirange, empty range array와 empty integer array는 모두
 `array_nulls=on|off`는
 `sha256:2ceeafc6cdd6acffce2907fafba6a2490f69e992d58c4516cc7ec548e0383242`/
 `sha256:58c554cec2ac89ee75e8ff731df9f8b83ab3511cb79db36e8abda29935e640b0`로 갈렸다.
+`timezone_abbreviations=Default|Australia`의 같은 `CST`는 각각 UTC `18:00`/
+`02:30`과
+`sha256:4e9285bbe4bbd477dfa08dfd6b9d0583b528f942c7ac6fccaeaf52e40abc8591`/
+`sha256:95bbd395245ad95402487aea0c6d8038bdd9a46d3ce5cef298ddbaf9eaa342f7`로 갈렸다.
+Column collation을 `C`에서 `pg_c_utf8`로 바꾼 fresh catalog도 같은 revision/snapshot이었지만
+`lower('Ä')`의 hash는
+`sha256:8fb5cd618a48f4b36dea2978fd188891679fdb0d92ae29924758eb4f4dc8f3c9`에서
+`sha256:c4692859cde38b3e26c3bc09be96cc3ae2db09442fb7e8e826deace60da05a64`로 바뀌었다.
+같은 SQL text로 재생성한 boolean view의 hidden base column도 snapshot/revision은 같았지만
+`folded_matches`가 `false`/`true`, hash가
+`sha256:24a658e9869ee578b8189b9e41242fe1521c1843bf2e4bae7ff64cca6c9c396f`/
+`sha256:a6e1781ce2c45d140ae02f09454591e2ce6dcbd16eb2d3ca699f1f86a10b678a`로 갈렸다. 이 결과 때문에
+ADR 0020 A의 fingerprint scope는 visible column에서 recursive view dependency까지 확장했다.
+Custom domain을 `C`에서 `pg_c_utf8`로 같은 이름으로 재생성하고 같은 view SQL을 재생성한
+case는 `pg_get_viewdef()` text가 같았지만 `_RETURN` rule의 direct `pg_type` dependency가 가리키는
+`typcollation`이 `pg_catalog.C`에서 `pg_catalog.pg_c_utf8`로 바뀌었다. 같은 collation을 유지한 채
+domain base/constraint만 바꾸면 binding이 동일할 수 있고 RowDescription은 base OID로 identity를 지운다.
+이 evidence를 반영해 ADR 0020 A는 custom base/domain direct type dependency와 declared domain column을
+OID erasure 전 거부한다. Pinned built-in type edge는 PostgreSQL 18 `pg_depend`에 없으므로
+존재하지 않는 type-binding array를 만들지 않고 image/build/static-catalog identity로 통제한다.
+Noncollatable `positive_integer` domain column을 포함한 whole-row view는 base table에
+`refobjsubid=0` `pg_class` dependency만 남기고 direct `pg_type` edge는 남기지 않았다. 따라서
+domain admission은 collation용 zero-subid expansion과 분리해 모든 non-dropped column을 검사해야 한다.
+`time '24:00:00'` direct result는 비공개 unavailable로 rollback했고 text cast는 PostgreSQL이 midnight와
+구분해 `24:00:00`/`00:00:00`을 반환했다.
 `bytea_output=hex|escape`는 둘 다
 `sha256:2aaa378b22694753a5e7cdfd62a8581ebbef77e9a46dedbe71534041aa288947`였다. Raw setting probe는 오류 뒤
 rollback과 마지막 rollback에서 transaction `IDLE`, 최초 reader default 복원을 함께 확인했다.
 별도 public QueryService case는 reader role default를 서로 반대로 설정한 fresh Catalog/Query pool에서
-같은 metadata/SQL-policy revision과 같은 SQL을 실행해 string, NULL comparison과 array의 public
-value와 canonical helper-derived verified hash가 실제로 모두 달라짐을 확인했다. 이 case는 전체 public
+같은 metadata/SQL-policy revision과 같은 SQL을 실행해 string, NULL comparison, array와 timezone
+abbreviation의 public value와 canonical helper-derived verified hash가 실제로 모두 달라짐을 확인했다. 이 case는 전체 public
 응답의 revision, SQL policy, column/row/count/byte/plan shape도 함께 검증한다. 즉 raw driver 현상에
 한정되지 않고 현재 public query 경계까지 전파된다.
 `ROW()`/`ROW(NULL::integer)`는 empty collection과 같은
 `sha256:77f588e368495248abbd8eb87354efadbd31afa38d0ca675154506624470f06a`,
 `ROW(1::integer)`/`ROW('1'::text)`는
 `sha256:dadd5b0c8d9a51f5db4a5117d804c30dcbcc7f4cfa417a4df154de40d63de4f3`로 합쳐졌다.
+Named composite와 같은 text, `oid/name` 및 그 nonempty array와 같은 integer/text/array도 각각 exact
+public row/hash가 같았다. 이는 unregistered string loader뿐 아니라 registered int/list loader도 result
+OID inspection 없이는 accidental success한다는 증거다.
 PostgreSQL 18 RowDescription은 scalar integer domain을 `int4`, domain-over-`integer[]`를
 `int4[]` OID로 보고했지만 array-of-domain, scalar enum과 enum array는 각각의 user-defined OID를
 유지했다. 기본 psycopg loader에서 앞의 둘은 `1`/`[1, 2]`, 뒤의 user-defined collection/type은
-`"{1}"`/`"ok"`/`"{ok}"` 문자열로 읽혔다. 이 차이는 승인안의 allowlisted base-domain 보존과
-visible user-defined type fail-closed 경계를 위한 runnable upgrade sentinel이다.
+`"{1}"`/`"ok"`/`"{ok}"` 문자열로 읽혔다. 이 차이는 base OID로 identity가 사라지는
+domain도 Metadata/SQL admission에서 미리 거부하고 visible user-defined OID를 query-time에 거부하는
+runnable upgrade sentinel이다.
 
-Repository에 versioned된 verified SQL 11개를 read-only inventory한 결과 ambiguous date/time
-literal, interval, range/multirange 결과와 fractional JSON numeric은 없었다. 유일한 explicit
+Repository에 versioned된 verified SQL 11개를 read-only inventory한 결과 ambiguous date/timezone
+abbreviation literal, interval, range/multirange 결과와 fractional/duplicate-key JSON은 없었다. 유일한 explicit
 timestamptz literal은 ISO date와 offset을 사용하고, commerce JSONB fixture는 string/bool/null 및
 string array만 포함한다. 이는 repository fixture의 예상 결과 보존 근거일 뿐 protected managed
 current/rollback inventory를 대신하지 않으며 production cutover 전 외부 전량 확인이 필요하다.
@@ -191,7 +239,8 @@ current/rollback inventory를 대신하지 않으며 production cutover 전 외�
 Infinity date, range, nonempty multirange와 nonempty range array는 silent conversion이 아니라 현재
 지원하지 않는 driver value다. 새 public encoding을 만들지 않고 bounded `QUERY_UNAVAILABLE`, rollback과
 pool recovery acceptance만 추가했다. Empty multirange/range-array 및 lower-bound array의 accidental
-success와 record/unknown OID의 type gate 수정은 ADR 0020 승인 범위에 남겼다.
+success, SQL_ASCII/collation/source-semantics drift, time 24시와 record/unknown OID의 type gate 수정은
+ADR 0020 승인 범위에 남겼다.
 
 ### No additional product change required for the other edges
 
@@ -220,10 +269,14 @@ success와 record/unknown OID의 type gate 수정은 ADR 0020 승인 범위에 �
 | `uv run pytest tests/test_catalog.py tests/test_metadata.py tests/test_source_database_corners.py -m 'not integration' -q` (`DBEDGE-03`) | PASS — `47 passed`, 20 deselected |
 | `uv run pytest -m integration tests/test_source_database_corners.py -q` (`DBEDGE-03`) | PASS — public QueryService semantic GUC, array identity, domain/enum OID, record/unknown OID characterization 포함 `18 passed`, 1 deselected |
 | `uv run pytest tests/test_documentation.py -q` (`DBEDGE-03`) | PASS — `16 passed` |
+| `uv run ruff check tests/test_documentation.py tests/test_source_database_corners.py` (`DBEDGE-04`) | PASS |
+| `uv run pytest -m integration tests/test_source_database_corners.py -q` (`DBEDGE-04`) | PASS — SQL_ASCII, duplicate JSON, time 24시, timezone abbreviation, direct/hidden-view/domain-type collation과 known-loader OID/named-composite 포함 `24 passed`, 1 deselected |
+| `uv run pytest tests/test_documentation.py -q` (`DBEDGE-04`) | PASS — `16 passed` |
 | `uv run ruff check .` / `uv run mypy src` | PASS — 29 source files, mypy issue 0 |
-| `uv run pytest` | PASS — `645 passed`, 85 deselected |
-| `uv run pytest -m integration` | PASS — `73 passed`, 657 deselected |
+| `uv run pytest` | PASS — `645 passed`, 91 deselected |
+| `uv run pytest -m integration` | PASS — `79 passed`, 657 deselected |
 | Prefix residue query | PASS — database `0`, role `0` |
 
-Root static/unit/integration gate와 전체 revision/hash 재발행 결과는 같은 release acceptance에서
-별도로 실행하고 [canonical-time evidence](2026-08-25-canonical-time-stability.md)에 기록한다.
+현재 `DBEDGE-04` root static/unit/integration 결과는 위 표에 기록했다. 실제 managed source의 전체
+revision/hash 재발행과 `TIME-03` cutover 결과는 protected release acceptance에서 별도로 실행해
+[canonical-time evidence](2026-08-25-canonical-time-stability.md)와 환경별 change record에 추가한다.
