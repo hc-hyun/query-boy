@@ -73,7 +73,8 @@ Control Plane은 PostgreSQL pool, SQL, lock과 transaction을 소유한다. 현�
 RLS v1/v2 snapshot document의 shape·validation·encoding은 Metadata 소유다. Control Plane은 기존
 JSONB transaction/immutable generation·pointer 생명주기로 encoded document를 저장하고 candidate
 failure, standalone RLS cutover의 current/rollback v2 재발행과 verified contract 전량 재실행을 조율할
-뿐이다. Control SQL
+뿐이다. PostgreSQL-version/UTF8, graph text 또는 policy normal/shared dependency가 invalid인 candidate는
+existing validation failure로 거부하며 Control payload/schema에 raw value를 추가하지 않는다. Control SQL
 schema를 추가하거나 v1 row를 update/delete/자동 변환하지 않는다. Protected verified tenant mapping은
 외부 change record의 unique `(source_id, query_id, old_metadata_revision)` key와 existing operator
 caller로 제공하고 누락/mismatch 시 중단한다. 이 v2 의미는 아직 current persisted contract가 아니다.

@@ -192,6 +192,15 @@ check를 구현하지 않는다. 새 timeout knob 없이
 승인 전에는 이를 current budget 의미로 적용하지 않으며,
 production RLS source가 안전하다고 주장하지 않는다.
 
+같은 proposal에서 Source Catalog은 RLS-only public `RLS_READER_CLIENT_ENCODING="UTF8"`과 SQL을
+실행하지 않는 `require_rls_reader_connection_policy`를 소유한다. Metadata Catalog와 Guarded Query
+pool은 RLS connection startup에 이 constant를 쓰고 checkout 직후/reader probe 뒤 verifier로
+PostgreSQL 18, server/client UTF8과 psycopg UTF-8 codec을 확인한다. Non-RLS pool, manifest와 common
+transaction setting은 바꾸지 않는다. Metadata는 exact policy `pg_depend`/`pg_shdepend`와 str-only
+graph admission을 소유한다. RLS startup pin 때문에 prior non-UTF8 client 대비 public value/hash가
+달라질 수 있으므로 current/rollback verified 전량을 재실행하지만 loader/response shape와 broader
+all-source/result semantics는 별도 ADR 0020 `ENC-01` 범위다.
+
 ## 소비 계약
 
 - Runtime configuration이 선택한 mutually exclusive `bootstrap|managed` authority, budget file과

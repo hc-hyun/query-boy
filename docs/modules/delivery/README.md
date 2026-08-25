@@ -122,7 +122,8 @@ error code를 만들지 않는다. Candidate RLS violation은 existing `SOURCE_V
 metadata violation은 `METADATA_UNAVAILABLE`, same-query lock/live drift는 details 없는
 `QUERY_UNAVAILABLE`, trusted tenant 누락은 existing HTTP 400 `QUERY_REJECTED`의 bounded
 `reason_code=TENANT_CONTEXT_REQUIRED`로 매핑하고 policy/role/hidden relation/RLS attestation
-fingerprint를 public detail이나 새 helper log로 공개하지 않는 target이다. 기존 gateway trusted-tenant
+fingerprint와 invalid source encoding/graph/dependency를 public detail이나 새 helper log로 공개하지 않는
+target이다. 기존 gateway trusted-tenant
 deny audit와 public SQL fingerprint audit/redaction 계약은 유지한다. Exact 승인 전에는 현재 error producer나
 HTTP/MCP rendering 계약을 바꾸지 않는다.
 

@@ -31,10 +31,14 @@ trust boundary가 다른 module로 넘어가면 필요한 계약·코드·테스
 ## 승인 대기 중인 공통 계약
 
 [Proposed ADR 0024](../decisions/0024-rls-policy-drift-attestation.md)의 `RLS-01-A`는 Metadata가
-recursive RLS identity와 snapshot/revision v2를 제공하고 Guarded Query가 lock-first transaction에서
-소비하며 Control Plane, Delivery, Runtime과 Assurance가 cutover/error/acceptance를 담당하는 정확한
-제안이다. 아직 사용자에게 exact 범위가 승인되지 않았고 현재 module contract나 제품 구현이 아니다.
-일반적인 plan/진행 승인은 이 경계를 열지 않는다.
+recursive RLS identity, exact policy normal/shared dependency와 snapshot/revision v2를 제공하고 Source
+Catalog가 RLS pool startup client UTF8 및 no-SQL PostgreSQL-18/server/client UTF8 connection policy를
+제공한다. Guarded Query가 두 provider를 lock-first transaction에서 소비하며 Control Plane, Delivery,
+Runtime과 Assurance가 cutover/error/acceptance를 담당하는 정확한 제안이다. 이 encoding restriction은
+client-encoding별 same Python identifier가 다른
+relation을 resolve하는 것을 막는 RLS-only identity 경계다. Non-RLS pool과 broader public result/
+source-semantics encoding은 ADR 0020에 남긴다. 아직 사용자에게 exact 범위가 승인되지 않았고 현재
+module contract나 제품 구현이 아니다. 일반적인 plan/진행 승인은 이 경계를 열지 않는다.
 
 [Proposed ADR 0020](../decisions/0020-lossless-interval-and-json-numeric-encoding.md)의 `ENC-01-A`는 Guarded
 Query result loader/encoder와 SQL/result policy, Source Catalog reader settings, Metadata

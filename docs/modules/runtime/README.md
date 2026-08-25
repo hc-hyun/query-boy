@@ -157,7 +157,11 @@ rollback은 R2를 같은 순서로 drain한 뒤 보존된 R1 binary/generation/r
 RLS fingerprint/codec을 소유하지 않고 old fleet와 source connection을 0까지 drain한 뒤 route 밖 v2
 fleet, verified current/rollback counterpart와 replica convergence를 조립한다. V1/V2 serving fleet를
 섞지 않고 safe functional rollback은 verified v2로만 수행하며 old binary rollback은 RLS source를
-deactivate/unroute한 채 non-RLS만 제공한다.
+deactivate/unroute한 채 non-RLS만 제공한다. V2는 RLS pool startup client UTF8과 PostgreSQL-18/UTF8
+source admission을 요구한다. Non-UTF8 RLS source는 자동 migration하지 않고 unroute/deactivate하며
+source별 DB-owner data migration/re-onboarding을 별도 승인받는다. Startup 변경에 따른 public
+value/hash/rejection은 current/rollback verified 전량에서 비교하고 설명되지 않은 차이면 route하지
+않는다. Non-RLS/all-source lossless encoding 전환은 아래 ADR 0020 v3 path에 속한다.
 
 ADR 0020 exact A도 아직 승인 대기 제안이다. Encoding/source-semantics release는 RLS v2의 field
 shape/semantics를 누적한 v3를 사용하되 RLS attestation은 current live graph에서 새로 계산하고 source별 pre-ENC v1/v2

@@ -394,3 +394,9 @@ relation/column의 `sql_name`을 사용해야 한다.
   [RLS policy drift finding](verification/2026-08-26-rls-policy-drift.md)의 `RLS-01`~`RLS-03`이 열려
   있으므로 RLS source의 production publish와 route activation은 보류한다. Non-RLS source onboarding은
   이 보류 대상이 아니다.
+- [Proposed ADR 0024](decisions/0024-rls-policy-drift-attestation.md)의 `RLS-01-A` target은 RLS Catalog/
+  Query connection startup client UTF8과 PostgreSQL-18/server/client UTF8 admission도 요구한다. 이는
+  아직 승인·구현된 onboarding contract가 아니므로 현재는 위 all-RLS publish/route hold만 유지한다.
+  A가 exact 승인되면 read-only inventory가 non-UTF8 RLS database를 stop condition으로 보고하고,
+  별도 권한과 승인을 받은 operator만 unroute/deactivate 또는 source별 DB-owner data migration/
+  re-onboarding plan과 rollback을 실행한다. Plan-only onboarding Skill은 mutation하지 않는다.

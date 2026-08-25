@@ -217,7 +217,13 @@ security-invoker view를 확인하지만 hidden base relation의 RLS flag/policy
 `BEGIN` 직후 referenced root view `ACCESS SHARE NOWAIT` lock을 첫 relation action으로 두고, settings와
 reader probe 뒤 Metadata-owned live fingerprint를 비교한 다음 resolved-object/`EXPLAIN`/user SQL로
 진행한다. V2 bundle 존재를 tenant-required authority로 사용하고 source generation/state를 다시
-확인한다. Exact 승인 전에는 위 현재 1~9단계나 `QueryExecutor`/error 계약을 교체하지 않는다.
+확인한다. RLS pool은 Source Catalog의 startup client UTF8 constant와 no-SQL PostgreSQL-18/UTF8
+connection verifier를 `BEGIN` 전과 reader probe 뒤에 소비한다. Live helper는 publish와 같은 exact
+policy normal/shared dependency 및 str-only graph admission을 사용한다. Encoding/dependency violation은
+hidden value를 공개하지 않고 checkout이면 transaction 없이 connection을 discard하고, live
+transaction이면 `QUERY_UNAVAILABLE`로 plan 전 rollback한다. Scalar loader/response shape는 그대로지만
+prior non-UTF8 RLS client 대비 value/hash/rejection은 달라질 수 있어 verified 전량 재실행 대상이다.
+Exact 승인 전에는 위 현재 1~9단계나 `QueryExecutor`/error 계약을 교체하지 않는다.
 
 ### Executor lifecycle contract
 

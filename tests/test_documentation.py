@@ -973,6 +973,13 @@ def test_source_database_corner_docs_record_canonical_time_resolution() -> None:
     assurance = (
         ROOT_DIRECTORY / "docs" / "modules" / "assurance" / "README.md"
     ).read_text(encoding="utf-8")
+    source_catalog = (
+        ROOT_DIRECTORY / "docs" / "modules" / "source-catalog" / "README.md"
+    ).read_text(encoding="utf-8")
+    metadata = (
+        ROOT_DIRECTORY / "docs" / "modules" / "metadata" / "README.md"
+    ).read_text(encoding="utf-8")
+    development_todo = DEVELOPMENT_TODO.read_text(encoding="utf-8")
 
     assert "`DBEDGE-01`" in audit
     assert "`DBEDGE-02`" in audit
@@ -997,15 +1004,27 @@ def test_source_database_corner_docs_record_canonical_time_resolution() -> None:
     assert "old MVCC snapshot" in rls_adr
     assert "current_user=session_user=configured-reader" in rls_adr
     assert "rulename='_RETURN'" in rls_adr
+    assert "dbid=current_database_oid" in rls_adr
+    assert "objid IN P" in rls_adr
+    assert "LIMIT N+1" in rls_adr
+    assert 'RLS_READER_CLIENT_ENCODING: Final = "UTF8"' in rls_adr
+    assert "require_rls_reader_connection_policy" in rls_adr
+    assert "server_encoding=UTF8" in rls_adr
+    assert "same-Python-name/different-relation" in rls_adr
     assert "oid < 16384" in rls_adr
     assert "reason_code=TENANT_CONTEXT_REQUIRED" in rls_adr
     assert "Historical decoder" in rls_adr
     assert "production v2 current/rollback row" in rls_adr
     assert "operator_subject" in rls_adr
     assert "metadata_phase_timeout_ms = min(30_000, 8 *" in rls_adr
-    assert RLS_POLICY_ATTESTATION_ADR.name in DEVELOPMENT_TODO.read_text(
-        encoding="utf-8"
-    )
+    canonical_start = rls_adr.index("각 root의 internal canonical material")
+    canonical_end = rls_adr.index("`roles` array length", canonical_start)
+    assert rls_adr[canonical_start:canonical_end].count('"definition_sha256"') == 1
+    assert RLS_POLICY_ATTESTATION_ADR.name in development_todo
+    assert "RLS_READER_CLIENT_ENCODING" in source_catalog
+    assert "require_rls_reader_connection_policy" in source_catalog
+    assert "Metadata는 Source\nCatalog의 no-SQL RLS connection policy를 소비" in metadata
+    assert "Source Catalog의 RLS-only startup constant" in development_todo
     for module_name in MODULE_NAMES:
         module_contract = (
             ROOT_DIRECTORY / "docs" / "modules" / module_name / "README.md"
@@ -1013,10 +1032,17 @@ def test_source_database_corner_docs_record_canonical_time_resolution() -> None:
         assert RLS_POLICY_ATTESTATION_ADR.name in module_contract
     for operator_document in (onboarding, extension_checklist):
         assert RLS_POLICY_DRIFT_AUDIT.name in operator_document
+        assert RLS_POLICY_ATTESTATION_ADR.name in operator_document
         assert "`RLS-01`~`RLS-03`" in operator_document
         assert "production publish" in operator_document
+        assert "non-UTF8 RLS" in operator_document
     assert "`RLS-01`" in rls_audit
     assert "cross-tenant" in rls_audit
+    assert "UTF8, ICU `und`" in rls_audit
+    assert "SQL_ASCII, libc `C`" in rls_audit
+    assert "pg_shdepend" in rls_audit
+    assert "같은 Python identifier" in rls_audit
+    assert "connection startup" in rls_audit
     assert "database `0`, role `0`" in audit
     assert "### Resolved follow-up: canonical `timestamptz`" in audit
     assert "role default `UTC`, `Asia/Seoul`, `America/New_York`" in audit
@@ -1057,6 +1083,8 @@ def test_source_database_corner_docs_record_canonical_time_resolution() -> None:
     assert "snapshot_contract_version" in lossless_adr
     assert "Snapshot v1/v2/v3" in lossless_adr
     assert RLS_POLICY_ATTESTATION_ADR.name in lossless_adr
+    assert "RLS-only admission" in lossless_adr
+    assert "broader `ENC-01` 승인이 아니" in lossless_adr
     assert "snapshot_contract_version\": 3" in lossless_adr
     assert "stored v2 bytes/fingerprint를 복사하지 않고" in lossless_adr
     assert "첫 relation action" in lossless_adr

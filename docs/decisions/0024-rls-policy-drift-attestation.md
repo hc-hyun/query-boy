@@ -46,8 +46,11 @@ table/view DDL의 `ACCESS EXCLUSIVE` lock과 충돌시킨다. 그러나 이미 �
 [`CREATE POLICY`](https://www.postgresql.org/docs/18/sql-createpolicy.html)와
 [`pg_auth_members`](https://www.postgresql.org/docs/18/catalog-pg-auth-members.html),
 [`pg_depend`](https://www.postgresql.org/docs/18/catalog-pg-depend.html),
+[`pg_shdepend`](https://www.postgresql.org/docs/18/catalog-pg-shdepend.html),
 [`pg_rewrite`](https://www.postgresql.org/docs/18/catalog-pg-rewrite.html) 및
-[system catalog initial OID rules](https://www.postgresql.org/docs/18/system-catalog-initial-data.html)를
+[system catalog initial OID rules](https://www.postgresql.org/docs/18/system-catalog-initial-data.html),
+[character-set behavior](https://www.postgresql.org/docs/18/multibyte.html)와
+[psycopg text adaptation](https://www.psycopg.org/psycopg3/docs/basic/adapt.html#strings-adaptation)을
 따른다.
 
 이 결과는 승인된 tenant-isolation contract의 예외가 아니라 보안 결함이다. 이 ADR을 추가하거나
@@ -81,9 +84,10 @@ fingerprint를 비교한 뒤에만 planning과 user SQL을 실행한다.
 임의의 observed hash, operator가 복사한 hash 또는 기존 snapshot은 안전성 증거가 아니다. 이 선택은
 별도 source-manifest hash field나 새 public admin/wire field를 만들지 않는다.
 
-비용은 기존 RLS source가 아래 좁은 policy/view/table 규칙을 만족해야 하고, snapshot v2 재발행과
-route-off fleet cutover가 필요하다는 것이다. Group-target 또는 복합 SELECT policy, partitioned/foreign/
-materialized dependency와 custom function/operator는 새 계약 없이는 사용할 수 없다.
+비용은 기존 RLS source가 PostgreSQL 18/UTF8과 아래 좁은 policy/view/table 규칙을 만족해야 하고,
+snapshot v2 재발행과 route-off fleet cutover가 필요하다는 것이다. Non-UTF8 RLS database는 UTF8
+migration/re-onboarding 없이는 route할 수 없다. Group-target 또는 복합 SELECT policy,
+partitioned/foreign/materialized dependency와 custom function/operator는 새 계약 없이는 사용할 수 없다.
 
 ### `RLS-01-B` — flexible transitive attestation
 
@@ -208,11 +212,94 @@ role OID와 exact equality를 확인한 뒤 persisted material에만 canonical r
 relation DDL lock과 다음 live comparison에서 거부된다. PostgreSQL 18 catalog에서 알 수 없는
 `polcmd` 값은 non-SELECT policy로 추정하지 않고 거부한다.
 
+Stored dependency도 exact raw shape로 검증한다. Catalog numeric OID를 hardcode하거나 persisted field로
+쓰지 않고 live `regclass` identity와 current database OID를 쓴다. Bounded raw `pg_policy` scan과
+dependency 이외의 table당 unique SELECT grammar/cardinality 검사를 먼저 통과한 policy set을 `P`,
+`N=len(P)`로 둔다. `P`는 provider-call union graph의 distinct policy OID set이며 여러 root가 같은
+table/policy에 도달해도 한 번만 센다. Root bound는 각 root에서 reachable한 distinct subset에,
+provider-call bound는 union `P`에 각각 적용한다. `pg_depend`는 한 provider call에서 한 번만 조회한다. Object scope는
+`classid=pg_policy AND objid IN P`까지만 먼저 제한하고 `objsubid`, referenced side와 `deptype`을
+filter하지 않은 seven fields에 `LIMIT 2*N+1`을 적용한다. 다른 policy row는 이 object set 밖이므로
+무시한다. Python에서 policy별로 group한 뒤 순서와 무관하게 다음 두 tuple만 정확히 하나씩 허용한다.
+
+```text
+(pg_policy, policy_oid, 0, pg_class, terminal_table_oid, 0,                 'a')
+(pg_policy, policy_oid, 0, pg_class, terminal_table_oid, tenant_id_attnum, 'n')
+```
+
+첫 row는 policy의 terminal table auto dependency이고 두 번째는 exact positive `tenant_id` ordinal의
+normal dependency다. Duplicate, missing, 다른 class/object/subobject/dependency type과 세 번째 row는
+거부한다. Pinned built-in `=`, `current_setting`, `text`와 `C` collation은 이 catalog에 dependency row가
+없으므로, row 부재를 object safety로 추론하지 않고 위 raw-node와 live built-in 검사를 계속 요구한다.
+
+`pg_shdepend`도 한 provider call에서 한 번만 조회한다. Cluster-wide이고 policy OID가 database마다
+겹칠 수 있으므로 object scope를 `dbid=current_database_oid AND classid=pg_policy AND objid IN P`까지만
+먼저 제한한다. 다른 database나 다른 policy의 row는 이 object set 밖이므로 무시한다. `objsubid`,
+referenced side와 `deptype`을 filter하지 않은 seven fields에 `LIMIT N+1`을 적용하고 policy별로 group한다.
+PUBLIC `polroles=[0]` policy는 exact empty set이어야 한다. Named reader policy는 다음 policy-role shared
+dependency 하나만 허용한다.
+
+```text
+(current_database_oid, pg_policy, policy_oid, 0, pg_authid, exact_reader_oid, 'r')
+```
+
+그 object scope 안의 unexpected `objsubid`, owner, group, 다른 role/dependency row와 duplicate는
+거부한다. 이 두 dependency set은
+admission evidence이고 shape가 위 canonical policy fields에서 결정되므로 persisted material에 별도
+row를 복제하지 않는다. Shape가 달라지면 같은 policy text/hash라도 candidate와 live query를
+fail-closed한다.
+
 ### 3. Canonical identity and fixed bounds
 
 Relation OID, policy OID와 role OID는 durable identity field로 사용하지 않는다. Role은 canonical
 name으로, relation/column은 exact case-sensitive logical name과 ordinal로 기록한다. Raw PostgreSQL
 node는 public/persisted field가 아니라 same-name rebinding 탐지용 SHA-256만 사용한다.
+
+RLS attestation text identity v1은 PostgreSQL 18과 exact UTF8 server/client pair에서만 정의한다.
+Metadata Catalog와 Guarded Query의 RLS source pool은 libpq/psycopg connection-startup keyword
+`client_encoding="UTF8"`을 사용한다. 이 startup/session invariant는 common reader safety provider인
+Source Catalog가 다음 public contract로 소유하고 Metadata와 Guarded Query가 소비한다.
+
+```python
+RLS_READER_CLIENT_ENCODING: Final = "UTF8"
+
+def require_rls_reader_connection_policy(
+    connection: AsyncConnection[Any], source: SourceProfile
+) -> None: ...
+```
+
+함수는 RLS source 전용이며 SQL을 실행하거나 setting/lifecycle을 바꾸지 않는다. Source가 RLS가 아니거나
+libpq ParameterStatus/connection info의 `180000 <= server_version < 190000`,
+`server_encoding=UTF8`, `client_encoding=UTF8`과 psycopg active codec `utf-8` 중 하나라도 다르면 existing
+`ReaderSessionPolicyError`를 낸다. Connection을 연 직후 pre-discovery가 relation을 읽기 전과
+authoritative/query checkout이 `BEGIN`에 들어가기 전에 caller가 실행한다. Root lock과 existing
+settings/common reader probe 뒤 `attest_rls_roots`가 live graph를 읽기 직전에도 같은 connection에서
+다시 실행한다. Metadata는 이 connection policy를 복제하지 않고 strict graph text/fingerprint만
+소유한다. Pre-`BEGIN` mismatch는 rollback 없이 connection을 close/discard하고 pool에 반환하지 않는다.
+Transaction 안의 recheck mismatch는 bounded rollback 뒤 connection을 close/discard한다.
+Connection-startup parameter는 transaction 안의 settings statement가 아니므로 `BEGIN` 뒤 lock-first와
+`TimeZone=UTC` first-settings 순서를 바꾸지 않는다.
+
+이 admission 뒤 graph의 모든 textual leaf는 exact Python `str`만 허용하고 strict UTF-8로 encode한다.
+Psycopg `bytes`, `bytearray`, `memoryview`, 숫자/boolean, 다른 object와 contract가 허용하지 않은 null은
+거부한다. `replace`, `ignore`, `surrogateescape`, locale/default codec, `str(bytes)`, Base64 fallback,
+Unicode normalization, trim과 newline 변환은 사용하지 않는다. Exact UTF-8 bytes는 byte bound,
+C-order sort/equality, inner digest와 final canonical JSON input에 함께 사용한다. 이 규칙은
+root/nested/table schema·relation, reader/owner/policy/target-role/column, function/operator/type/collation
+name, reloptions, deparsed definition/expression, raw node와 dependency projection의 모든 textual
+enum/name에 적용한다. Numeric OID, ordinal과 boolean을 string으로 coerce하지 않는다.
+
+SQL_ASCII raw `e9`를 LATIN1 client가 `str("é")`로 decode한 identity와 raw UTF-8 `c3a9`를 UTF8 client가
+같은 string으로 decode한 identity는 Python string만 보면 충돌하고, 같은 Python identifier도 client
+encoding에 따라 서로 다른 relation을 resolve한다. 따라서 graph-local decode/hash만으로 SQL_ASCII를
+허용하지 않는다. Non-UTF8 RLS source는 database를 UTF8로 migration/re-onboard하고 새 v2를 발행하기
+전에는 publish/route할 수 없다. Non-RLS source의 현재 pool/encoding/result 동작은 이 결정에서 바꾸지
+않는다. RLS scalar loader/canonical response shape도 새로 정의하지 않지만 startup client UTF8 때문에
+prior non-UTF8 RLS session과 비교한 public value/hash가 달라지거나 query가 새로 거부될 수 있고 이는
+아래 full verified reissue/stop condition으로 검증한다. RLS에서도 interval/JSON/result OID 등 public
+result losslessness와 broader source-semantics fingerprint는 ADR 0020의 별도 `ENC-01` 결정에 남긴다.
+Encoding pair는 attestation/snapshot persisted field가 아니라 every candidate/live transaction의
+mandatory admission이다.
 
 각 root의 internal canonical material은 다음 exact key 집합을 사용한다.
 
@@ -287,8 +374,9 @@ node는 public/persisted field가 아니라 same-name rebinding 탐지용 SHA-25
 `sha256:<64 lowercase hex>`로 만든다.
 
 Inner digest input도 implementation choice가 아니다. `search_path=pg_catalog`인 같은 transaction에서
-다음 non-null PostgreSQL text를 받아 어떤 trim, newline/Unicode normalization 또는 prefix도 하지 않고
-exact `value.encode("utf-8")`에 SHA-256을 적용한 뒤 output에만 `sha256:` prefix를 붙인다.
+다음 non-null PostgreSQL `str`을 받아 위 text identity의 exact strict UTF-8 bytes에 어떤 trim,
+newline/Unicode normalization 또는 prefix도 하지 않고 SHA-256을 적용한 뒤 output에만 `sha256:`
+prefix를 붙인다.
 
 | Field | Exact input text |
 |---|---|
@@ -309,6 +397,11 @@ aggregate raw/deparsed input과 aggregate canonical material 각각 16,777,216 U
 Existing source budget의 published root/column 상한도 같이 적용하며 더 작은 값이 effective bound다.
 모든 count/byte limit은 projection/filter/dedupe 전 `bound+1`로 검사한다. 초과를 truncate하거나 새
 source별 knob를 만들지 않고 fail-closed한다.
+
+위 distinct `P`와 relation bound에서 파생되는 policy dependency root별 최대 raw row는 `pg_depend` 512,
+`pg_shdepend` 256(sentinel 513/257), provider-call 전체는 8,192/4,096(sentinel 8,193/4,097)이다. 별도
+configurable bound나 policy별 N개의 query를 추가하지 않는다. Count는 scoped object set에서 semantic
+field filtering/dedupe 전 raw row 수다.
 
 RLS canonical material, hidden schema/table/column, policy/role/expression, raw node와 RLS attestation
 fingerprint는 public context, HTTP/MCP, audit, metric 또는 ordinary log에 저장하지 않는다. 이는 기존
@@ -461,15 +554,22 @@ cancellation은 같은 cleanup 뒤 그대로 전파하고 Metadata failure로 �
 phase timeout은 아래 no-stale `METADATA_UNAVAILABLE`이고 partial root/snapshot을 publish하지 않는다.
 
 ```text
-pre-discovery read-only transaction
+RLS pool connection startup: client_encoding=UTF8
+
+pre-discovery checkout
+  -> no-SQL PostgreSQL-18/server=UTF8/client=UTF8/driver-codec admission
+  -> begin read-only transaction
   -> allowed schema의 candidate root view exact names 수집
   -> commit
 
-authoritative REPEATABLE READ READ ONLY transaction
+authoritative checkout
+  -> no-SQL PostgreSQL-18/server=UTF8/client=UTF8/driver-codec admission
+  -> BEGIN REPEATABLE READ READ ONLY
   -> LOCK TABLE <all sorted candidate roots> IN ACCESS SHARE MODE NOWAIT
   -> TimeZone=UTC                         # 여전히 첫 settings statement
   -> existing transaction-local budget/search_path/row_security/tenant settings
   -> common reader-session probe
+  -> 같은 connection info를 SQL 없이 재확인
   -> root view list 재조회; pre-discovery와 exact equality 확인
   -> recursive admission + fingerprint + existing catalog collection
   -> commit
@@ -503,19 +603,22 @@ Non-RLS v1은 `None`, RLS v2는 relation을 참조하지 않는 `SELECT 1`도 ve
 RLS query transaction의 exact 순서는 다음과 같다.
 
 ```text
+RLS pool connection startup: client_encoding=UTF8
+checkout: no-SQL PostgreSQL-18/server=UTF8/client=UTF8/driver-codec admission
 BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY
 1. LOCK TABLE <sorted referenced root views> IN ACCESS SHARE MODE NOWAIT
 2. TimeZone=UTC                         # 첫 settings statement
 3. existing transaction-local budget/search_path/row_security/tenant settings
 4. common reader/session policy probe, including exact trusted tenant
-5. Metadata-owned live per-root RLS graph admission and fingerprint comparison
-6. existing resolved-object validation
-7. EXPLAIN budget admission
-8. user cursor execute/fetch/encode
-9. success COMMIT; every failure/cancel/disconnect ROLLBACK
+5. 같은 connection info를 SQL 없이 재확인
+6. Metadata-owned live per-root RLS graph admission and fingerprint comparison
+7. existing resolved-object validation
+8. EXPLAIN budget admission
+9. user cursor execute/fetch/encode
+10. success COMMIT; every failure/cancel/disconnect ROLLBACK
 ```
 
-Empty-roots RLS query는 relation lock/fingerprint loop만 비고 2~9단계와 tenant requirement는 그대로다.
+Empty-roots RLS query는 relation lock/fingerprint loop만 비고 2~10단계와 tenant requirement는 그대로다.
 Lock conflict는 기다리거나 retry하지 않는다. Fingerprint mismatch, malformed graph와 probe failure 뒤
 resolved-object/`EXPLAIN`/user SQL을 실행하지 않는다.
 
@@ -523,6 +626,10 @@ QueryService는 metadata read 뒤 `SourceReader.get(source_id)`를 다시 읽고
 `control_generation`, `control_state_version`, enabled existence와 `tenant_isolation`이 처음 읽은 profile과
 같은지 확인한다. 불일치면 executor에 들어가지 않고 fail-closed한다. Executor는 bundle과 source mode가
 서로 모순되거나 RLS bundle인데 tenant가 없으면 DB user SQL 전에 다시 거부한다.
+
+Source generation, state 또는 `tenant_isolation` 변경 apply는 Metadata Catalog와 Guarded Query pool을
+모두 invalidate한 뒤 새 profile을 노출한다. RLS profile은 startup UTF8 option 없이 만들어진 old pool을
+재사용하지 않는다. Invalidation/apply 실패는 old/new pool을 섞지 않고 source를 unavailable로 둔다.
 
 기존 tenant-error precedence는 보존한다. 첫 stable `SourceProfile`이 RLS인데 trusted tenant가 없으면
 metadata read 전에 HTTP 400 `QUERY_REJECTED`와 bounded
@@ -541,13 +648,16 @@ consistency를 확인해 contradiction이면 tenant 유무와 무관하게 detai
 
 | Condition | Public result | Side effect/stale rule |
 |---|---|---|
-| Control candidate의 structural/policy/codec violation | existing `SOURCE_VALIDATION_FAILED` | Candidate generation/snapshot/pointer를 쓰지 않는다. |
-| Trusted tenant가 있는 active RLS v1, invalid v2, deterministic graph violation, refresh drift | details 없는 existing `METADATA_UNAVAILABLE` | Cached/persisted v1 또는 older v2 stale fallback을 금지한다. |
+| Control candidate의 PostgreSQL-version/UTF8/driver-type invariant mismatch | existing `SOURCE_VALIDATION_FAILED` | Candidate generation/snapshot/pointer를 쓰지 않는다. Pre-BEGIN이면 즉시, live recheck이면 rollback 뒤 connection을 close/discard한다. |
+| Control candidate의 structural/policy/snapshot-codec violation | existing `SOURCE_VALIDATION_FAILED` | Candidate generation/snapshot/pointer를 쓰지 않고 transaction을 rollback/reset한다. Reset이 실패할 때만 connection을 discard한다. |
+| Active RLS metadata의 PostgreSQL-version/UTF8/driver-type invariant mismatch | details 없는 existing `METADATA_UNAVAILABLE` | Older v2 stale fallback을 금지한다. Pre-BEGIN이면 즉시, live recheck이면 rollback 뒤 connection을 close/discard한다. |
+| Trusted tenant가 있는 active RLS v1, invalid v2, deterministic graph violation 또는 refresh drift | details 없는 existing `METADATA_UNAVAILABLE` | Cached/persisted v1 또는 older v2 stale fallback을 금지하고 transaction을 rollback/reset한다. Reset이 실패할 때만 connection을 discard한다. |
 | Active RLS metadata pre-discovery/lock/live attestation의 `55P03`, timeout, connection/transport/driver failure | details 없는 existing `METADATA_UNAVAILABLE` | Transient 여부와 무관하게 그 refresh에서 older v2 stale fallback을 금지하고 partial publish하지 않는다. Cancellation은 삼키지 않는다. |
 | Source generation/state/mode second-read mismatch | details 없는 existing `METADATA_UNAVAILABLE` | Executor와 source SQL에 들어가지 않는다. |
 | Stable source mode 또는 consistency를 통과한 v2 bundle이 RLS인데 trusted tenant 없음 | existing HTTP 400 `QUERY_REJECTED`, detail `reason_code=TENANT_CONTEXT_REQUIRED` | Existing source-mode check는 metadata 전, bundle defense는 lock/plan/user SQL 전에 거부한다. |
 | Executor까지 도달한 source-mode/bundle contradiction, tenant 동시 누락 포함 | details 없는 existing `QUERY_UNAVAILABLE` | Contradiction을 tenant check보다 먼저, lock/plan/user SQL 전에 거부한다. |
-| Query lock `NOWAIT` conflict, live mismatch, graph/probe non-timeout internal/driver failure | details 없는 existing `QUERY_UNAVAILABLE` (503) | Resolved-object/plan/user SQL 전 rollback한다. |
+| Query checkout/live PostgreSQL-version/UTF8 mismatch | details 없는 existing `QUERY_UNAVAILABLE` (503) | Checkout mismatch는 `BEGIN` 없이, live mismatch는 rollback 뒤 connection을 close/discard한다. Resolved-object/plan/user SQL은 실행하지 않는다. |
+| Query lock `NOWAIT` conflict, live fingerprint mismatch, graph/probe non-timeout internal/driver failure | details 없는 existing `QUERY_UNAVAILABLE` (503) | Resolved-object/plan/user SQL 전 rollback/reset한다. Driver state가 복구되지 않으면 connection을 discard한다. |
 | Query transaction의 live attestation이 existing transaction/statement deadline을 초과하거나 DB statement가 timeout/cancel됨 | existing `QUERY_TIMEOUT`과 current operator/shutdown cancellation mapping | Partial attestation/result 없이 rollback하고 pool reset/recovery를 보존한다. |
 | Client의 old metadata/SQL-policy token | existing `METADATA_REVISION_MISMATCH` | Executor 전에 거부하고 context refetch가 필요하다. |
 
@@ -567,12 +677,18 @@ fresh-cache read 자체는 current cache contract대로 허용하지만 query-ti
 
 - **Metadata provider:** recursive discovery/admission/canonical helper, immutable types, relation
   attestation, RLS-specific stored-binding rule, v1/v2 codec/revision과 no-stale classification을
-  소유한다. Guarded Query에서는 public `validate_sql`/`SQL_POLICY_REVISION`만 소비한다.
+  소유한다. Source Catalog의 RLS connection policy와 Guarded Query의 public
+  `validate_sql`/`SQL_POLICY_REVISION`만 소비한다.
 - **Guarded Query consumer:** QueryExecutor required keyword, source-generation second read, tenant
-  authority, lock-first comparison 호출과 query error/rollback 순서를 소유한다.
-- **Source Catalog provider:** common reader settings와 current `SourceProfile`/manifest v2를 보존한다.
-  `TimeZone=UTC`는 lock 뒤 첫 settings statement다. 새 manifest fingerprint/timeout field를 만들지 않고
-  existing metadata statement budget에서 fixed phase deadline을 derive한다.
+  authority, RLS pool startup client UTF8, lock-first comparison 호출과 query error/rollback 순서를
+  소유한다. Encoder policy/shape는 그대로지만 prior non-UTF8 client와 비교한 public value/hash는 바뀌거나
+  새 admission에서 거부될 수 있다.
+- **Source Catalog provider:** `RLS_READER_CLIENT_ENCODING`과 no-SQL
+  `require_rls_reader_connection_policy`를 소유한다. Metadata/Guarded Query pool이 startup client UTF8과
+  checkout/live invariant에 이를 소비하고 common reader settings와 current `SourceProfile`/manifest v2는
+  보존한다. `TimeZone=UTC`는 lock 뒤 첫 settings statement다. 새 manifest fingerprint/timeout field를
+  만들지 않고 existing metadata statement budget에서 fixed phase deadline을 derive한다. Non-RLS pool은
+  이 결정에서 바꾸지 않는다.
 - **Control Plane consumer:** existing JSONB append/pointer transaction으로 v2를 저장하고 isolated
   candidate failure, current/rollback reissue와 verified publish를 조율한다. Control SQL schema migration은
   없다.
@@ -583,9 +699,11 @@ fresh-cache read 자체는 current cache contract대로 허용하지만 query-ti
 - **Assurance verifier:** strict xfail을 fail-closed passing regression으로 바꾸고 provider/consumer,
   race, cache, migration과 cleanup을 검증한다. Offline CLI는 계속 tenant를 공급하지 않는다.
 
-Shared `models.py`, `metadata_store.py`, `query.py`, integration fixture와 contract 문서는 coordinating
-workstream이 single-writer로 직렬화한다. Metadata provider/codec/revision baseline 뒤에 Guarded Query와
-Control/Runtime/Assurance consumer를 갱신한다. 고정된 서로 다른 consumer 구현만 병렬화한다.
+Shared `reader_policy.py`, `catalog.py`, `query.py`, `models.py`, `metadata_store.py`, integration fixture와
+contract 문서는 coordinating workstream이 single-writer로 직렬화한다. Source Catalog reader-connection
+provider baseline을 먼저 동결하고 Metadata graph/snapshot/provider를 그다음 확정한다. 두 baseline 뒤에
+Guarded Query와 Control/Runtime/Assurance consumer를 갱신한다. 고정된 서로 다른 consumer 구현만
+병렬화한다.
 
 ### 8. Migration, cutover and rollback
 
@@ -601,6 +719,16 @@ Protected inventory에서 admin write가 `FOR ALL` policy에 의존하면 권한
 DB owner가 별도 non-SELECT policy/trusted maintenance path와 rollback을 승인할 때까지 중단한다.
 Strict corner sentinel도 현재 FORCE가 없고 default `FOR ALL`이므로 승인 뒤 test fixture를 exact FORCE +
 SELECT grammar로 바꿔야 한다. 이는 단순 test 정리가 아니라 source DB policy migration 영향이다.
+
+RLS connection/identifier identity도 PostgreSQL 18/UTF8로 inventory한다. Non-UTF8 database는 PostgreSQL
+in-place setting 변경으로 전환하지 않고 해당 source를 unroute/deactivate한 채 둔다. DB owner가 data,
+identifier, collation과 credential/connection identity를 보존하는 source별 UTF8 database migration 또는
+re-onboarding plan과 rollback을 별도 제시·승인받은 뒤에만 이 cutover에 다시 넣는다. ADR 0024 승인은
+unknown protected data migration 실행 승인이 아니다. Server는 UTF8이지만 prior client encoding이
+UTF8이 아니었던 source도 startup pin으로 text adaptation, public row/value와 verified hash가 달라질 수
+있다. Encoder policy/response shape를 바꾸지는 않지만 current/rollback verified contract를 모두 새
+connection으로 재실행해 결과를 비교하고 설명·승인되지 않은 value/hash/rejection이면 route 전에
+중단한다.
 
 Fresh bootstrap SQL만 고치는 것은 existing source migration이 아니다. Repository fixture는 versioned
 forward/rollback source-policy SQL artifact와 checksum을 추가하고 fresh init은 forward 결과와 같게
@@ -630,7 +758,9 @@ principal을 existing access-policy schema로 제공할 수 없으면 중단하�
 
 1. Protected source/admin/verified mutation을 freeze한다.
 2. 모든 RLS source의 current 및 지정 rollback generation/revision/L2, credential/artifact와 verified
-   contract, exact tenant column/policy와 admin write dependency를 read-only inventory한다. 각 verified
+   contract, PostgreSQL version/server/client encoding, exact tenant column/policy와 admin write dependency를
+   read-only inventory한다. Non-UTF8 database는 별도 DB-owner migration/re-onboarding 승인 없이 이
+   cutover에서 제외하고 unroute/deactivate한다. 각 verified
    contract의 trusted tenant는 protected external
    change record에 mapping하고 누락 시 중단한다. Tenant를 Control DB schema나 public wire에 새로
    저장하지 않는다.
@@ -643,13 +773,14 @@ principal을 existing access-policy schema로 제공할 수 없으면 중단하�
 5. New release를 route 밖에서 시작한다. Active RLS v1은 available/readiness 근거가 될 수 없다.
 6. 지정 rollback baseline부터 current baseline까지 fresh graph를 검증해 immutable v2
    generation/snapshot/revision을 append한다. 각 verified contract는 protected trusted tenant로 전량
-   재실행하고 새 revision-bound row와 L1/L2를 만든다. 기존 result가 같아도 자동 승계하지 않는다.
+   재실행하고 새 revision-bound row와 L1/L2를 만든다. 기존 result가 같아도 자동 승계하지 않고,
+   startup client UTF8 때문에 달라진 value/hash/rejection은 별도 설명·승인 없이는 중단한다.
 7. 모든 replica가 expected generation/revision, `available`, `drift=[]`, L2에 수렴하고 stale token 409,
    strict RLS regression과 residue 0을 확인한다.
 8. Intended current v2만 active로 두고 route한다. V1/v2 row와 verified history는 삭제하지 않는다.
 
 Functional rollback은 위 과정에서 미리 재발행·검증한 v2 rollback generation에만 수행한다. V1 RLS
-snapshot을 activate/serve하지 않는다. Old binary로 rollback해야 하면 먼저 모든 RLS source를
+snapshot과 non-UTF8 source/rollback counterpart를 activate/serve하지 않는다. Old binary로 rollback해야 하면 먼저 모든 RLS source를
 deactivate/unroute하고 connection을 drain한 뒤 non-RLS source만 old release에서 제공한다. RLS availability를
 포기하는 것이 tenant isolation을 깨는 binary rollback보다 안전하다.
 
@@ -694,6 +825,11 @@ tenant registry comparison을 추가하려면 별도 data contract가 필요하�
 - `_RETURN` exact shape, internal/normal/custom/unknown `pg_depend`, whole/column edge, exact duplicate와
   PostgreSQL-18 initdb-OID visible candidate admission corpus. Lock 앞 tracing/catalog `SELECT`가 없어야
   한다는 first-relation-action event assertion.
+- Policy별 exact table-auto/tenant-column `pg_depend`, PUBLIC empty 또는 exact-reader 단일
+  `pg_shdepend`, duplicate/custom/unknown row와 per-root/provider-call derived bound corpus. Same policy의
+  unexpected `objsubid`는 count/reject하고 unrelated policy row는 무시하며, 두 database의 colliding
+  policy OID/shared row에서 current-DB row만 scope하는 corpus를 포함한다. 여러 root가 같은 policy에
+  도달해도 distinct object 한 번으로 세고 bound/bound+1을 검증한다.
 - ENABLE/FORCE, owner, reader superuser/BYPASS, `row_security_active`, zero/one/multiple SELECT policy,
   PUBLIC/exact-reader/group/multiple role, permissive/restrictive/ALL과 commuted exact C-collated equality corpus.
 - Tenant column nullable/non-text/cast/collation, subquery, boolean wrapper, custom function/operator/type/
@@ -709,13 +845,25 @@ tenant registry comparison을 추가하려면 별도 data contract가 필요하�
   pinned RLS v2와 different live fingerprint의 no-stale `METADATA_UNAVAILABLE`, source
   generation/state/mode reload race와 relationless RLS query tenant requirement.
 - Tenant parallel execution, pool reset, timeout/cancel/disconnect, partial-row 폐기와 raw detail 비노출.
+- RLS pool create/reset/reconnect마다 startup client UTF8가 적용되고 source mode/generation 전환이 old
+  non-RLS/RLS pool을 invalidate하며, pre-BEGIN mismatch는 transaction 없이 discard하고 post-lock
+  mismatch는 rollback 뒤 discard하는 event corpus.
+- PostgreSQL 18 UTF8 libc/ICU/builtin locale별 admission, exact-C tenant result와 같은 DB 반복 호출
+  fingerprint stability, 별도 fixed canonical fixture golden을 검증한다. Cross-DB fingerprint equality는
+  모든 canonical leaf/raw-node bytes가 실제 같음을 먼저 증명한 통제 fixture에만 요구한다. Strict `str`,
+  multibyte byte bound/Unicode non-normalization도 검증한다. SQL_ASCII/non-UTF8 server와 non-UTF8 startup client는
+  relation/catalog SQL 전, fetched unexpected bytes/surrogate는 publish/plan/user SQL 전 candidate·refresh·
+  query no-stale로 거부한다. Raw `e9`/LATIN1와 UTF8 `c3a9`의 same-Python-name/different-relation
+  characterization도 유지한다.
 - V1/v2 strict codec and revision golden, historical old-policy v2 decode와 current-policy serving rejection,
   old decoder incompatibility, current/rollback full verified reissue, replica convergence,
   functional/binary rollback과 immutable history preservation.
 - Fresh init과 existing repository DB의 forward/rollback policy migration artifact/checksum, source-owner
   managed migration reference stop condition. Disposable managed RLS source에서 tenant별 existing-schema
-  operator identity, current/rollback verified reissue, two-replica convergence, v2 standalone 및 direct-v3
-  functional rollback acceptance.
+  operator identity, current/rollback verified reissue, two-replica convergence와 standalone v2 functional/
+  binary rollback acceptance. Direct-v3 acceptance와 v3 rollback은 ADR 0020 `ENC-01` exact 승인 및
+  `ENC-02` cumulative provider baseline 뒤 `RLS-03`/`TIME-03`에서만 실행하며 RLS-02에 skip/xfail
+  placeholder로 선결정하지 않는다.
 - Repository gates `uv run ruff check .`, `uv run mypy src`, `uv run pytest`,
   `uv run pytest -m integration`.
 
@@ -731,10 +879,14 @@ RLS-01-A를 ADR 0024의 ordinary invoker-view/ordinary-table-only recursive grap
 ENABLE+FORCE RLS와 current_user=session_user=configured-reader 및 effective reader non-owner,
 정확히 하나의 PUBLIC 또는 exact-reader permissive SELECT
 tenant-equality policy와 plain non-generated text `tenant_id`, exact `pg_catalog.C` comparison,
+policy별 exact table-auto/tenant-column `pg_depend`와 PUBLIC-empty 또는 named-reader-one
+`pg_shdepend` raw shape·derived bound,
 current SQL_POLICY_REVISION으로 검증한 nested view와 custom/volatile/security-definer/non-allowlisted
 function/operator/type/collation·subquery·partition/foreign/materialized/
 inheritance 거부, exact `_RETURN`/`pg_depend`와 PostgreSQL-18 initdb builtin admission,
-rls_attestation_v1 canonical shape·정렬·per-root/source 고정 bound, relation별 snapshot/revision v2,
+RLS Catalog/Query connection-startup `client_encoding=UTF8`, no-SQL PostgreSQL-18/server/client UTF8
+admission과 strict str-only graph text/bytes fail-closed, rls_attestation_v1 canonical
+shape·정렬·per-root/source 고정 bound, relation별 snapshot/revision v2,
 attestation에 고정한 view SQL policy revision, required RlsQueryAttestation/QueryExecutor 계약,
 BEGIN 직후 ACCESS SHARE NOWAIT lock-first 순서,
 existing metadata statement budget에서 derive한 pre-discovery/authoritative outer deadline과 bounded
@@ -744,12 +896,21 @@ manifest와 Control SQL schema 무변경, existing operator caller를 쓰는 pro
 verified-tenant mapping v1을 승인한다. Standalone RLS 배포는 current/rollback v2를 전량 재발행하고,
 ENC와 통합한 권장 배포는 production v2 row 없이 current/rollback v3로 direct 재발행하며 verified v3
 functional rollback만 허용한다. Mixed fleet 금지와 v1 history-only·old-binary RLS deactivate rollback도
-승인한다.
+승인한다. 이 RLS 승인만으로 v3 provider/codec/test 구현을 시작하지 않고 ADR 0020 `ENC-01` exact
+승인과 `ENC-02` baseline을 별도로 기다린다.
 Repository/managed source의 comparison을 exact C-collated policy로 migration하고 SELECT에 영향을 주는
 admin/group/ALL policy를 제거하되, admin write dependency가 발견되면 별도 승인 전 중단하는 영향도
 승인한다. Fresh init 외에 repository forward/rollback SQL artifact와 managed DB-owner migration
 reference/checksum이 필요하고 source DDL은 application이 자동 실행하지 않는 범위도 승인한다.
+Non-UTF8 RLS database는 자동 변환하지 않고 즉시 unroute/deactivate하며, source별 DB-owner data
+migration/re-onboarding과 rollback을 별도 승인하고 fresh v2를 발행하기 전에는 publish/route하지 않는
+영향도 승인한다. 이 승인은 그 protected data migration 실행 자체의 승인이 아니다.
 각 protected row의 exact `tenant_id` 값은 DB owner가 보장하는 authoritative source-data contract다.
 Source superuser/role-admin/PostgreSQL image는 mutation-free trusted serving boundary이고 이를
 adversarial하게 직렬화하려면 별도 broker 계약이 필요하다는 residual limitation도 수용한다.
+이 UTF8 admission은 RLS v2 pool/source identity에만 적용하고 non-RLS pool과 result encoder policy/
+response shape는 바꾸지 않는다. 다만 prior non-UTF8 client의 RLS public value/hash/rejection은 달라질
+수 있어 current/rollback verified 전량 재실행과 설명되지 않은 차이의 별도 승인이 필요하다.
+Interval/JSON/result OID와 cumulative source-semantics를 포함한 broader encoding 계약은 별도 ADR
+0020/ENC-01 범위라는 경계도 수용한다.
 ```

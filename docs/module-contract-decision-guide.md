@@ -570,7 +570,8 @@ fixture acceptance까지 완료됐다. 이후 plan-only Source Onboarding Skill 
 accepted tenant isolation 위반이므로 완료 DBEDGE로 흡수하지 않고
 [open security finding](verification/2026-08-26-rls-policy-drift.md)과 최우선 `RLS-01`~`RLS-03`으로
 분리했다. Recursive strict policy identity, lock-first query admission, snapshot/revision v2와
-cutover/rollback의 implementation-ready `RLS-01-A`는
+cutover/rollback의 implementation-ready `RLS-01-A`는 후속 5-database probe에서 확인한 exact policy
+normal/shared dependency, client-encoding name collision 및 RLS-only PostgreSQL-18/UTF8 admission까지 보완해
 [proposed ADR 0024](decisions/0024-rls-policy-drift-attestation.md)에 작성했지만 exact 사용자 승인은
 아직 없어 현재 계약이나 구현이 아니다. Reader TimeZone/canonical hash 변경은 별도 승인된
 `TIME-01`과 `TIME-02`에서

@@ -153,11 +153,18 @@ approved ADR 0014의 no-cross-tenant invariant를 strict xfail로 나타낸다.
 [Proposed ADR 0024](../../decisions/0024-rls-policy-drift-attestation.md)의 `RLS-01-A`가 승인되면
 Assurance는 snapshot-before-lock old-catalog/new-policy race, lock-first DDL ordering, nested
 owner-rights/security-definer leak, role inheritance, FORCE RLS, custom function/operator, strict policy
-grammar/bound, cache/reload와 v1/v2 cutover/rollback을 cross-module로 검증한다. `RLS-02` 구현 전에는
+grammar/bound, exact policy `pg_depend`/database-scoped `pg_shdepend`, UTF8 libc/ICU/builtin positive,
+SQL_ASCII/non-UTF8 server/client와 same-Python-name/different-relation negative, startup/checkout/live
+connection policy, str-only graph, cache/reload 및 v1/v2 cutover/rollback을 cross-module로 검증한다.
+Startup UTF8에 따른 value/hash/rejection도 current/rollback verified 전량과 비교한다. `RLS-02` 구현 전에는
 strict xfail을 passing regression으로 바꾸거나 현재 계약을 완료로 기록하지 않는다.
 Acceptance에는 dynamic leak fixture뿐 아니라 disposable managed RLS source의 existing-schema
 tenant별 operator identity, current/rollback verified reissue, two-replica convergence, standalone v2와
-combined direct-v3 rollback 및 migration forward/rollback artifact checksum도 포함한다.
+repository policy migration forward/rollback artifact checksum 및 disposable SQL_ASCII reject/stop/fresh
+UTF8 re-onboarding path도 포함한다. Protected source별 UTF8 data migration/rollback artifact와 실행은
+별도 승인된 `RLS-03` environment evidence다. Combined direct-v3와 v3 rollback은
+ADR 0020 `ENC-01` exact 승인 및 `ENC-02` cumulative provider baseline 뒤 `RLS-03`/`TIME-03` acceptance로
+활성화한다. RLS-02에는 미승인 v3 skip/xfail placeholder를 만들지 않는다.
 
 ### Metadata quality evaluation contract
 

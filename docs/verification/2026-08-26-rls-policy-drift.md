@@ -59,9 +59,10 @@ cross-tenant 결과를 확인한 전용 `_RlsIsolationViolationError`만 XFAIL�
 정확한 provider, fingerprint/admission 위치와 public error는 아직 승인되지 않았으므로 임의의
 `METADATA_UNAVAILABLE` 또는 `QUERY_UNAVAILABLE` 계약을 테스트에 선결정하지 않았다.
 
-## Read-Only Lock And Dependency Follow-Up
+## Disposable Lock And Dependency Follow-Up
 
-후속 PostgreSQL 18.6 disposable probe는 제품 파일을 바꾸지 않고
+후속 PostgreSQL 18.6 disposable characterization은 격리된 test database/role에만 DDL을 실행하고 제품
+파일, production source와 persisted state를 바꾸지 않은 채
 [proposed ADR 0024](../decisions/0024-rls-policy-drift-attestation.md)의 exact 선택지를 작성하기 위한
 근거만 수집했다.
 
@@ -85,6 +86,69 @@ cross-tenant 결과를 확인한 전용 `_RlsIsolationViolationError`만 XFAIL�
   expression hash만 비교해서는 충분하지 않다.
 - 모든 probe 종료 뒤 이 follow-up이 만든 disposable database와 role residue는 각각 `0`, `0`이었다.
 
+## Multi-Database Collation, Policy-Dependency And Text Follow-Up
+
+추가 one-off disposable characterization은 PostgreSQL 18.6에서 다음 5개 UUID test database를 각각 만들었다.
+제품 파일, source configuration과 persisted snapshot은 바꾸지 않았다.
+
+- UTF8, libc `C`
+- UTF8, libc `en_US.utf8`
+- UTF8, ICU `und`
+- UTF8, builtin `C.UTF-8`
+- SQL_ASCII, libc `C`
+
+모든 locale provider에서 explicit `pg_catalog."C"`는 provider `c`, encoding `-1`, deterministic
+`true`, stored/actual version null인 같은 builtin identity였고 policy raw node의 outer
+`inputcollid`도 같았다. Database-default comparison 대조군은 다른 default collation binding으로
+구별됐다. PUBLIC/exact-reader target과 equality의 좌우를 바꾼 네 허용형은 모두 exact tenant 행만
+반환했고 대소문자가 다른 tenant는 제외했다. `pg_get_expr` deparse는 qualification/cast spelling을
+보존하지 않으므로 ADR 0024가 deparsed string equality가 아니라 raw binding과 live catalog를
+authority로 두는 방향도 확인했다.
+
+허용 policy의 PostgreSQL 18 stored dependency는 다음 exact shape였다. Numeric catalog OID는
+실행별 값이므로 contract에 저장하거나 hardcode하지 않는다.
+
+```text
+pg_depend, unordered exact set:
+  (pg_policy, policy_oid, 0, pg_class, table_oid, 0,                 'a')
+  (pg_policy, policy_oid, 0, pg_class, table_oid, tenant_id_attnum, 'n')
+
+pg_shdepend:
+  PUBLIC policy      -> empty set
+  exact-reader policy ->
+    (current_database_oid, pg_policy, policy_oid, 0, pg_authid, reader_oid, 'r')
+```
+
+Pinned `=`, `current_setting`, `text`와 `C`는 `pg_depend` row가 없었다. 따라서 missing builtin row를
+안전성으로 추론할 수 없고 raw node/live catalog 검사가 필요하다. 반대로 다른 dependency row나 role
+shared dependency는 policy text가 같아도 거부해야 한다. 이 결과를 proposed ADR 0024의 exact
+policy-dependency projection과 derived bound에 반영했다.
+
+SQL_ASCII client에서는 catalog name, view definition, deparsed expression과 raw node가 psycopg
+`bytes`로 반환됐다. ASCII-only 값은 strict UTF-8 round-trip과 UTF8 client에서의 `str` 값이 같은
+bytes/hash를 만들었다. Hidden relation name에 invalid UTF-8 byte `ff`가 있으면 SQL_ASCII client는 raw
+bytes를 반환하고 UTF8 client는 `CharacterNotInRepertoire`로 실패했다. 둘 다 fail-closed할 수 있지만
+기존 제안의 단순 `value.encode("utf-8")`만으로는 bytes input과 non-UTF8 client decoding을 exact하게
+다루지 못한다.
+
+별도 exact counterexample은 SQL_ASCII catalog에 raw byte `e9`와 valid UTF-8 bytes `c3a9`인 두 relation/
+comment/view definition을 만들었다. LATIN1 client가 raw `e9`를 읽은 값과 UTF8 client가 raw `c3a9`를
+읽은 값은 둘 다 exact Python `str("é")`와 UTF-8 `c3a9`가 됐다. 더 중요하게 같은 Python identifier
+`private."é"`가 LATIN1 connection에서는 raw-`e9` table을, UTF8 connection에서는 raw-`c3a9` table을
+resolve했다. Fetch 뒤 raw bytes를 복원해 fingerprint만 다르게 해도 lock/identifier resolution이 먼저
+다른 object를 선택할 수 있으므로 graph-local codec만으로는 충분하지 않다.
+
+따라서 proposal은 standalone RLS v2 Catalog/Query pool도 connection startup에서
+`client_encoding=UTF8`을 고정하고 PostgreSQL 18, `server_encoding=UTF8`, `client_encoding=UTF8`과
+psycopg UTF-8 codec을 relation access 전 no-SQL connection info로 admission한다. Lock과 common reader
+probe 뒤 live provider 직전에도 같은 info를 재확인하고 graph text는 exact `str`만 허용한다. Non-UTF8
+RLS source는 UTF8 migration/re-onboarding과 fresh v2 발행 전 publish/route하지 않는다. 이 범위는
+RLS identity를 위한 source/session restriction이며 non-RLS pool은 바꾸지 않는다. Interval/JSON/result
+OID와 broader source-semantics는 proposed ADR 0020에 그대로 남는다.
+
+탐색, 5-database 재실행, exact policy dependency와 encoding-collision 재실행이 만든 prefix를 독립
+조회한 최종 residue는 database `0`, role `0`, cleanup error `0`이었다.
+
 따라서 단순 fingerprint 추가가 아니라 strict graph/policy admission, lock-first order와 custom/role
 잔여 경계를 하나의 계약으로 결정해야 한다. ADR 0024는 제안 상태이고 정확한 사용자 승인 전에는
 현재 snapshot, query order와 strict xfail을 바꾸지 않는다.
@@ -101,7 +165,9 @@ cross-tenant 결과를 확인한 전용 `_RlsIsolationViolationError`만 XFAIL�
 3. Custom function/operator와 nested owner-rights view를 거부할지 또는 transitive하게 attest할지
 4. Metadata publish/revision과 같은 read-only transaction의 query-time drift check를 어떻게 연결하고
    concurrent DDL race를 어떤 lock/order로 닫을지
-5. Drift의 public error, cache/stale 금지, managed snapshot migration, current/rollback reissue와 rollback
+5. Policy `pg_depend`/database-scoped `pg_shdepend`의 exact bound와 RLS source/pool의
+   PostgreSQL-18/UTF8 identity를 어떻게 admission할지
+6. Drift의 public error, cache/stale 금지, managed snapshot migration, current/rollback reissue와 rollback
 
 이 범위는 Metadata snapshot/revision, Guarded Query admission/error와 Control Plane publish/cutover에
 영향을 주는 module contract 변경이다. 사용자가 정확한 proposal을 승인하기 전 제품 코드, schema,

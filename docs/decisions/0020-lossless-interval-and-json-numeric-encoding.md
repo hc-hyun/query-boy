@@ -4,11 +4,17 @@ Status: Proposed — user approval required before implementation
 
 Date: 2026-08-25
 
-Last expanded: 2026-08-26 (`DBEDGE-05` extreme scalar, reader setting, operator and aggregate characterization)
+Last expanded: 2026-08-26 (`DBEDGE-05` characterization and RLS-v2 UTF8 boundary coordination)
 
 Coordination: [Proposed ADR 0024](0024-rls-policy-drift-attestation.md)의 RLS attestation이 snapshot v2를
 먼저 사용하므로 이 ADR의 encoding/source-semantics snapshot은 cumulative v3다. 두 ADR 모두 아직
-승인 대기 제안이며 이 번호 조정 자체가 어느 계약의 승인이 아니다.
+승인 대기 제안이며 이 번호 조정 자체가 어느 계약의 승인이 아니다. RLS v2가 admitted graph의 psycopg
+identity와 relation resolution을 고정하기 위해 PostgreSQL 18/UTF8 server 및 RLS Catalog/Query pool
+startup `client_encoding=UTF8`을 요구하는 것은 ADR 0024의 RLS-only admission이다. 이 ADR은 그
+invariant를 유지하면서 non-RLS source까지 같은 startup/admission을 확대하고 deterministic settings,
+public result loader/encoding과 source-semantics fingerprint를 cumulative v3에 추가한다. 따라서 RLS
+proposal 승인은 broader `ENC-01` 승인이 아니고, 반대로 ENC 구현이 RLS lock/policy attestation을
+대체하지도 않는다.
 
 ## Context
 

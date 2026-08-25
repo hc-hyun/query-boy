@@ -153,11 +153,18 @@ identity, query-time race-free check, codec/revision/error는 `RLS-01` exact 승
 [Proposed ADR 0024](../../decisions/0024-rls-policy-drift-attestation.md)의 `RLS-01-A`가 승인되면
 Metadata는 bounded pre-discovery 뒤 root view를 첫 relation action으로 lock하고 strict recursive
 view/table/policy grammar를 검증해 relation별 `rls_attestation_v1`, snapshot/revision v2와 query-time
-공용 provider를 소유한다. `_RETURN`/`pg_depend` bound-object admission도 Metadata 소유이며 Guarded
-Query private resolved-object SQL을 import하지 않고 public `validate_sql`/`SQL_POLICY_REVISION`만
-소비한다. Pre-discovery/authoritative checkout은 existing metadata statement budget에서 derive한 fixed
-outer phase deadline과 bounded cancel/rollback/discard cleanup을 각각 적용한다. 현재 snapshot/revision
-재료나 lifecycle을 이미 바꾼 설명이 아니다.
+공용 provider를 소유한다. `_RETURN` dependency와 policy별 exact table/tenant-column `pg_depend`,
+database-scoped PUBLIC-empty/exact-reader `pg_shdepend` admission도 Metadata 소유다. Metadata는 Source
+Catalog의 no-SQL RLS connection policy를 소비한다. 이 policy는 PostgreSQL 18, server/client UTF8과
+psycopg UTF-8 codec을 checkout 직후 및 live provider 직전에 요구한다. Metadata는 그 admission 뒤
+graph text를 exact `str`만 strict
+UTF-8 sort/hash/bound/parser/JSON에 사용하고 bytes/다른 type은 candidate/refresh/live query에서
+no-stale로 닫아 공개하지 않는다. 이는 RLS source identity에 한정되며 non-RLS/result/source-semantics를
+바꾸는 broader ADR 0020 `ENC-01`을 선점하지 않는다. Guarded Query
+private resolved-object SQL을 import하지 않고 public `validate_sql`/`SQL_POLICY_REVISION`만 소비한다.
+Pre-discovery/authoritative checkout은 existing metadata statement budget에서 derive한 fixed outer phase
+deadline과 bounded cancel/rollback/discard cleanup을 각각 적용한다. 현재 snapshot/revision 재료나
+lifecycle을 이미 바꾼 설명이 아니다.
 
 ADR 0020의 exact A 제안이 승인되면 Metadata가 bounded source-semantics catalog probe,
 canonical fingerprint, declared domain column/direct custom type pre-erasure admission, strict snapshot codec
