@@ -52,7 +52,9 @@ generation의 마지막 시도와 bounded reason을 제공한다. Gateway는 glo
 accepted `last_report_at`과 같은 상태를 제공하며 source traffic completeness로 해석하지 않는다.
 Missing/failed 값과 빈 hour는 0으로 표시하지 않는다. 이 public projection은 구현됐고
 DB-native/provider monetary collector는 여전히 범위 밖이라 monetary cost는
-`not_configured/PROVIDER_NOT_CONFIGURED`만 표시한다.
+`not_configured/PROVIDER_NOT_CONFIGURED`만 표시한다. DB-native reader-role aggregate 선택지는
+[proposed ADR 0021](decisions/0021-database-native-cost-attribution.md)의 read-only prework일 뿐 현재
+`/usage` 계약이나 수집 동작을 바꾸지 않는다.
 
 ## What Is Measured
 
@@ -64,7 +66,8 @@ DB-native/provider monetary collector는 여전히 범위 밖이라 monetary cos
 - `row_count`, `result_bytes`, `truncated`
 
 운영 rollup은 bounded한
-`source_id + budget_profile + metadata_revision + time bucket`을 기본 key로 사용한다. Budget
+`source_id + budget_profile + metadata_revision + definition_revision + time bucket`을 기본 key로
+사용한다. Budget
 정의는 metadata revision 재료이므로 별도 tier revision entity를 만들지 않는다.
 `pg_stat_statements`의 query ID와 gateway fingerprint는 정확히 대응한다고 가정하지 않는다.
 Caller/tenant는 security audit에는 남을 수 있지만 비용, quota 또는 metric label dimension으로
@@ -91,8 +94,8 @@ serialization을 포함한다. 이 값도 client 수신, decode, tool scheduling
 포함하지 않는다.
 
 통화 단위 source cost projection은 같은 기간의 database/cluster billing을 gateway의 source별
-성공 수, elapsed 합계와 database-native I/O/CPU 지표에 결합할 수 있다. 공유 cluster에서는
-배분 추정일 뿐 query별 정확한 원가가 아니므로 방법과 오차를 함께 표시한다.
+성공 수, elapsed 합계와 database-native execution-time/block/WAL aggregate에 결합할 수 있다. 공유
+cluster에서는 배분 추정일 뿐 query별 정확한 원가가 아니므로 방법과 오차를 함께 표시한다.
 User/organization별 chargeback은 현재 제공하지 않는다.
 
 ## Live Investigation
@@ -130,8 +133,9 @@ User/organization별 chargeback은 현재 제공하지 않는다.
    fingerprint와 직접 연결되지 않는다. Gateway는 connection-local 고정 cursor 이름을 써
    request UUID별 entry 폭증은 막지만, `DECLARE`와 `FETCH` 통계가 원래 SELECT와 분리되거나
    여러 fingerprint 사이에서 합쳐질 수 있다. 따라서 reader/source aggregate 보조 신호로만
-   사용한다. Extension과 monitoring role은 source owner가 별도로 관리하고 query text나
-   통계를 Query Man API에 공개하지 않는다.
+   사용한다. Extension과 monitoring role은 source owner가 별도로 관리하며 raw/queryid 통계는 Query Man
+   API에 공개하지 않는다. 향후 proposed ADR 0021이 정확히 승인될 때만 bounded operator aggregate가
+   별도 예외가 된다.
 
 ### Optional PostgreSQL Aggregate
 
@@ -155,9 +159,11 @@ FROM public.pg_stat_statements_info;
 ```
 
 Application reader에는 `pg_read_all_stats`, `pg_monitor` 또는 `pg_signal_backend`를 부여하지
-않는다. 별도 monitoring identity가 필요하면 source owner가 `CONNECT`, `pg_read_all_stats`와
-extension view의 좁은 조회 권한만 review한다. 이 identity는 다른 session 통계를 볼 수 있는
-민감한 운영 계정이다.
+않는다. 아래 direct-view monitoring identity는 DBA가 수동 조사에만 쓰는 현재 외부 운영 선택지이며
+Query Man collector credential이나 application contract가 아니다. Source owner가 `CONNECT`,
+`pg_read_all_stats`와 extension view의 좁은 조회 권한을 별도로 review해야 하고, 이 identity는 다른
+session 통계를 볼 수 있는 민감한 운영 계정이다. Proposed ADR 0021-A의 network-facing collector는
+이 broad role/direct view를 받지 않고 source-owner sanitized function만 실행한다.
 
 ```sql
 SELECT stats.queryid, stats.calls,
@@ -175,7 +181,8 @@ LIMIT 20;
 ```
 
 이 통계에는 metadata/session-policy/`EXPLAIN`/`DECLARE`/`FETCH`가 함께 섞이고 reset 또는
-entry eviction이 발생할 수 있다. `stats_reset`/`dealloc`과 같이 수집하며 query text는
+entry eviction이 발생할 수 있다. Global `stats_reset`/`dealloc`과 row별 `stats_since`를 같이
+관찰해야 하며 query text는
 literal을 포함할 수 있으므로 dashboard 기본 필드로 저장하지 않는다. PostgreSQL query ID는
 major version이나 object OID 변화에 걸친 stable application identifier가 아니다.
 

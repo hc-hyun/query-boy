@@ -158,9 +158,12 @@ transaction-local `TimeZone=UTC`를 설정하고, 공통 probe가 UTC를 확인�
 planning/query를 실행한다. Role/database default는 source 소유 값 그대로 두며 success,
 rollback, timeout과 cancel 뒤 pool 재사용에서 그 default가 복원돼야 한다.
 
-현재 공통 policy는 `DateStyle`, `IntervalStyle`, `extra_float_digits`를 설정·검사하지 않는다. 실제
-PostgreSQL 18 characterization에서 이 default가 ambiguous date SQL 의미, interval availability와
-finite-float hash를 흔드는 것이 확인됐다. [Proposed ADR 0020](../../decisions/0020-lossless-interval-and-json-numeric-encoding.md)의
+현재 공통 policy는 `DateStyle`, `IntervalStyle`, `extra_float_digits`,
+`standard_conforming_strings`, `transform_null_equals`, `array_nulls`를 설정·검사하지 않는다. 실제
+PostgreSQL 18 characterization에서 이 default가 ambiguous date, backslash string, NULL 비교와 NULL
+array literal의 SQL 의미, interval availability 및 finite-float hash를 흔드는 것이 확인됐다.
+`bytea_output=hex|escape`는 현재 loader/Base64 결과가 같았다.
+[Proposed ADR 0020](../../decisions/0020-lossless-interval-and-json-numeric-encoding.md)의
 `ENC-01-A|B|C`가 정확히 승인되기 전에는 shared `reader_policy.py`나 metadata revision material을
 변경하지 않는다.
 

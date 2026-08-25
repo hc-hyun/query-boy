@@ -164,6 +164,17 @@ rollback은 R2를 같은 순서로 drain한 뒤 보존된 R1 binary/generation/r
   liveness 보장은 아니다.
 - Counter/health는 replica-local이고 restart 후 초기화된다. Control DB authority로 사용하지 않는다.
 
+현재 Runtime operations에는 workflow trace context/scope/counter가 없다. Lower-priority read-only
+prework인 [proposed ADR 0022](../../decisions/0022-w3c-workflow-trace-context.md)의 우선순위와
+`TRACE-01-A|B|C`가 정확히 승인되기 전에는 ContextVar, structured-log field나 counter를 추가하지 않는다.
+승인될 경우에도 Runtime이 최소 process-local provider를 먼저 소유하고 Delivery가 인증 뒤 set/reset하며
+MCP/Guarded Query가 소비한다.
+
+현재 Runtime background task에는 source DB-native statement collector도 없다. Lower-priority
+[proposed ADR 0021](../../decisions/0021-database-native-cost-attribution.md)은 Runtime collector/composition
+선택지를 기록할 뿐, ENC/TIME start gate와 정확한 `COST-01-A|B|C` 승인 전에는 task, source credential,
+Control writer나 operations field를 추가하지 않는다.
+
 ### Managed replica reporting contract (`CTRL-06`)
 
 - Managed mode는 `QUERY_MAN_REPLICA_ID`를 필수로 요구한다. 값은 1~80자의 lowercase stable

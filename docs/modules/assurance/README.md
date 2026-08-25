@@ -121,8 +121,8 @@ Rows는 Guarded Query의 canonical result encoding을 거친 값이어야 한다
 date/time, mapping 또는 non-finite value encoding이 바뀌면 같은 SQL의 verified hash도 바뀐다.
 Aware datetime은 UTC `+00:00`이고 naive datetime/date/time/timetz는 기존 ISO 표현이다. Canonical-time
 policy나 metadata revision이 바뀌면 값이 같은 contract도 새 exact revision에서 다시 실행한다.
-Month-bearing interval, JSONB fractional numeric, empty multirange/array collision과 reader-format
-default drift는
+Month-bearing interval, JSONB fractional numeric, empty unsupported collection, array lower-bound,
+record/unknown result OID collision과 reader semantic/format default drift는
 [DB corner audit](../../verification/2026-08-25-source-database-corners.md)의 open lossless/stability
 gap이며 일반 무손실 evidence로 취급하지 않는다.
 
@@ -173,6 +173,12 @@ aggregate, inclusive 31일 cutoff와 최대 1,000행, missing-to-zero 금지와 
 기존 admin/MCP/health response가 바뀌지 않는지와 code rollback이 migration ledger/table/data를
 보존하는지도 함께 확인한다. 이 evidence는 아래 CTRL-09 recovery fixture acceptance를 대신하지
 않는다.
+
+Lower-priority [proposed ADR 0021](../../decisions/0021-database-native-cost-attribution.md)의 COST
+acceptance가 승인·시작되면 Assurance는 sanitized source projection, reset/deallocation/lease/current-identity,
+bounded operator projection과 recovery의 cross-module acceptance만 소유한다. Collector status 계산,
+Control DTO/table과 monitoring credential lifecycle implementation은 Assurance 소유가 아니며 현재
+`TIME-03`/COST start gate 전에는 test fixture나 accepted contract를 추가하지 않는다.
 
 ### Control recovery acceptance contract (`CTRL-09`)
 

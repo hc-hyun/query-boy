@@ -34,28 +34,31 @@ Status: Active
 - MCP는 현재 지원 버전 `2026-07-28`만 받는다. 이전 handshake와 protocol version을 위한
   compatibility branch는 만들지 않으며 version 변경은 명시적인 upgrade 작업으로 처리한다.
 
-## P2.4 — Lossless Scalar Encoding And Reader Formatting
+## P2.4 — Lossless Scalar Encoding, Reader Formatting And Result Types
 
-목표: PostgreSQL interval의 calendar-month 의미와 JSON/JSONB fractional numeric precision을 public
-row와 verified hash까지 조용한 손실 없이 전달하거나 손실 전에 명시적으로 fail-closed한다. Empty
-multirange의 array 오인도 닫고, finite-float 표현과 date/interval SQL 의미·decode가 role formatting
-default와 무관하게 결정적이어야 한다.
+목표: PostgreSQL interval의 calendar-month 의미, JSON/JSONB fractional numeric precision과 array
+lower bound를 public row와 verified hash까지 조용한 손실 없이 전달하거나 손실 전에 명시적으로
+fail-closed한다. Empty multirange/range-array의 ordinary array 오인도 닫고, finite-float 표현과
+date/interval/string/NULL/array-literal SQL 의미·decode가 role setting default와 무관하게 결정적이어야
+한다. Driver가 tuple/string으로 평탄화한 record/composite와 unknown result OID도 supported SQL type으로
+오인하지 않아야 한다.
 
 | 작업 경계 | 내용 |
 |---|---|
 | Primary module | Guarded Query |
 | Direct consumers | Delivery public result, Assurance verified result hash와 Control Plane verified publish |
 | Affected providers/verifiers | Source Catalog deterministic reader settings, Metadata revision material, Runtime coordinated cutover와 cross-database Assurance acceptance |
-| Contract baseline | psycopg default loader가 month-bearing interval을 30-day `timedelta`로 평탄화하고 JSONB fractional number를 binary float로 읽는다. Empty multirange만 generic Sequence에서 empty array와 같은 value/hash로 성공한다. [`DBEDGE-02`](verification/2026-08-25-source-database-corners.md)가 이 collision, `extra_float_digits`별 finite-float drift, ambiguous `DateStyle`의 같은 SQL error/DMY/MDY 의미·hash와 non-postgres `IntervalStyle` availability 차이를 실제 PostgreSQL 18에서 재현했다. Infinity date, range와 nonempty multirange는 비공개 `QUERY_UNAVAILABLE` 후 rollback/recovery한다. |
-| Approval gate | Loader, `DateStyle`/`IntervalStyle`/`extra_float_digits`, canonical row, SQL policy/metadata revision과 verified migration은 public/policy 계약 변경이다. 사용자가 [ADR 0020](decisions/0020-lossless-interval-and-json-numeric-encoding.md)의 `ENC-01-A`, `ENC-01-B` 또는 위험 수용 `ENC-01-C`를 정확히 선택해야 한다. |
+| Contract baseline | psycopg default loader가 month-bearing interval을 30-day `timedelta`로 평탄화하고 JSONB fractional number를 binary float로 읽는다. Empty multirange/range-array는 empty integer array처럼 성공하고, array lower bound는 list 변환에서 사라진다. Anonymous record는 field count/type을 잃고 unknown OID가 Python string이면 text처럼 성공한다. [`DBEDGE-02`~`DBEDGE-03`](verification/2026-08-25-source-database-corners.md)이 이 collision, allowed-base domain과 user-defined enum/domain-array OID 차이, `extra_float_digits`별 finite-float drift, ambiguous `DateStyle`, non-postgres `IntervalStyle`, `standard_conforming_strings`, `transform_null_equals`와 `array_nulls`의 같은 SQL 의미·hash 차이를 실제 PostgreSQL 18에서 재현했다. Infinity date, range와 nonempty multirange/range-array는 비공개 `QUERY_UNAVAILABLE` 후 rollback/recovery한다. |
+| Approval gate | Loader, `DateStyle`/`IntervalStyle`/`extra_float_digits`와 SQL semantic settings, result OID allowlist, array type/lower-bound policy, canonical row, SQL policy/metadata revision과 verified migration은 public/policy 계약 변경이다. 사용자가 [ADR 0020](decisions/0020-lossless-interval-and-json-numeric-encoding.md)의 implementation 선택 `ENC-01-A|B` 또는 production completion을 block하는 defer `ENC-01-C`를 정확히 선택해야 한다. |
 | Single writer | Coordinating agent가 exact policy material을 동결한 뒤 Source Catalog의 shared `reader_policy.py`, Guarded Query result-cursor loader/encoder, Metadata/Assurance consumer 순으로 직렬화한다. 확정된 서로 다른 consumer 검증만 병렬화한다. |
-| Start gate | `DBEDGE-02` reproduction과 선택지 작성은 완료됐다. `ENC-01`의 정확한 사용자 선택이 다음 순서이며 승인 전 loader/setting/encoder/revision/hash를 바꾸지 않는다. |
-| Verification | Month/sign/day/subsecond interval, large/scale/exponent/nested JSON numeric, empty/nonempty range·multirange, noncanonical reader defaults, ambiguous literal inventory, user-result cursor-only loader와 EXPLAIN/plan_summary 비회귀, pool reset, byte/hash, stale-token rejection, full verified reissue와 rollback |
+| Start gate | `DBEDGE-02`~`DBEDGE-03` reproduction과 선택지 작성은 완료됐다. `ENC-01`의 정확한 사용자 선택이 다음 순서이며 승인 전 loader/setting/encoder/revision/hash를 바꾸지 않는다. |
+| Verification | Month/sign/day/subsecond interval, large/scale/exponent/nested JSON numeric, allowed/unknown result OID, anonymous/named composite, empty/nonempty range·multirange와 그 array, 1/non-1 lower-bound array, noncanonical reader defaults, ambiguous literal inventory, user-result cursor-only loader와 EXPLAIN/plan_summary 비회귀, pool reset, byte/hash, stale-token rejection, full verified reissue와 rollback |
 
-- [ ] `ENC-01` ADR 0020의 lossless 지원 A, 손실 전 거부 B 또는 현재 위험 수용 C 중 exact
+- [ ] `ENC-01` ADR 0020의 lossless 지원 A, 손실 전 거부 B 또는 production 미완료 defer C 중 exact
   canonical contract와 provider/consumer·migration 영향을 사용자 결정으로 확정한다.
 - [ ] `ENC-02` 승인된 A/B를 구현하고 policy/revision/verified migration과 rollback을 검증한다.
-  C를 선택하면 runtime guard가 없다는 production exclusion과 위험 수용을 운영 기록에 고정한다.
+  C를 선택하면 runtime guard가 없으므로 `ENC-02`/`TIME-03`과 production acceptance를 block하고 open
+  defer로 유지한다.
 
 ## P2.5 — Canonical Timestamptz Stability
 
@@ -80,19 +83,21 @@ inventory와 실제 배포·rollback 증거는 환경별 change record로 남겨
 
 ## P3 — Database-Native Cost Attribution
 
-목표: 이미 적용 중인 hard limit에 더해 완료된 query의 실제 DB 자원 사용을 source/resource-tier
-단위부터 측정한다. 통화 단위 청구액은 provider billing 자료가 있을 때만 별도 계산한다.
+목표: 이미 적용 중인 hard limit에 더해 target reader role의 `pg_stat_statements` aggregate를
+source/resource-tier 단위에서 관측한다. 이는 auxiliary statement와 같은 role의 외부 사용도 포함할 수
+있어 Query Man business query별 CPU/비용이 아니다. 통화 단위 청구액은 provider billing 자료가 있을
+때만 별도 계산한다.
 
 | 작업 경계 | 내용 |
 |---|---|
 | Primary module | Control Plane |
 | Direct consumers | Delivery admin projection과 operator workflow |
-| Affected providers/verifiers | Guarded Query/Runtime usage signal, Source Catalog budget 의미, Metadata revision, 완료된 `CTRL-07` observation baseline과 `CTRL-08` projection, Assurance acceptance |
+| Affected providers/verifiers | Runtime collector/composition, Source Catalog budget 의미, Metadata revision, 완료된 `CTRL-07` observation baseline과 `CTRL-08` projection, Assurance acceptance. Guarded Query의 reader-role workload는 관측 대상일 뿐 새 signal API provider가 아니다. |
 | Contract baseline | [ADR 0016](decisions/0016-centralized-source-management-plane.md), [ADR 0017](decisions/0017-shared-source-access-and-resource-tier.md)와 [source management plane](source-management-plane.md), 완료된 `CTRL-07A` observation method/freshness/logical retention과 `CTRL-08` usage/cost state |
-| Approval gate | Monitoring identity, collector/rollup schema, retention, status와 admin projection은 새 persisted/public 계약이므로 각 단계 구현 전 사용자 승인이 필요하다. |
+| Approval gate | Monitoring identity, collector/rollup schema, retention, status와 admin projection은 새 persisted/public 계약이다. Read-only prework인 [proposed ADR 0021](decisions/0021-database-native-cost-attribution.md)의 `COST-01-A|B|C` 중 A는 implementation-ready 제안, C는 exact defer, B는 direction-only다. A 구현 또는 C defer는 exact 범위를 사용자가 승인해야 하며 B는 lifecycle/wire/persistence/rollback을 다시 명시한 별도 승인이 먼저다. ID 선택이나 포괄적 승인은 계약 승인이 아니다. |
 | Single writer | Control Plane owner가 observation 계약을 먼저 확정하고 signal producer와 Delivery consumer는 이후 병렬화한다. |
-| Start gate | 완료된 `CTRL-07` baseline과 `CTRL-08` projection 뒤에도 열린 `TIME-03`이 우선이다. 이를 완료하거나 사용자가 명시적으로 defer한 뒤 `COST-01`의 정확한 monitoring 계약과 영향 범위를 제시하고 별도 승인받는다. 아래의 “다음”은 track-local 순서다. |
-| Verification | 최소 권한 DB integration, reset/eviction/replica/cardinality 경계, redaction과 root gate |
+| Start gate | 완료된 `CTRL-07` baseline과 `CTRL-08` projection 뒤에도 열린 `TIME-03`이 우선이다. 이를 완료하거나 사용자가 명시적으로 defer한 뒤 proposed ADR 0021의 정확한 monitoring 계약과 영향 범위를 별도 승인받는다. 현재 선택지 초안은 lower-track read-only prework일 뿐 `COST-01` 시작/완료가 아니다. 아래의 “다음”은 track-local 순서다. |
+| Verification | 최소 권한 DB integration, reset/server-deallocation/entry/replica/cardinality 경계, redaction과 root gate |
 
 - [ ] `COST-01` 대상 PostgreSQL의 monitoring identity, 최소 권한, 지원 extension과 reset/보존
   정책을 inventory하고 개발·production별 사용 가능 신호를 decision record로 확정한다.
@@ -100,12 +105,15 @@ inventory와 실제 배포·rollback 증거는 환경별 change record로 남겨
   identity별 calls, execution time, rows, shared/local/temp block과 WAL 수치를 수집하되 SQL
   text와 parameter는 저장하지 않는다.
 - [ ] `COST-03` DB-native aggregate를
-  `source_id + budget_profile + metadata_revision + time bucket`의 bounded rollup으로 연결하고
-  reset, eviction, replica 중복과 sampling 오차를 명시한다. PostgreSQL query ID와 gateway
+  `source_id + budget_profile + metadata_revision + definition_revision + time bucket`의 bounded
+  rollup으로 연결하고
+  reset, server-wide deallocation/entry disappearance, replica 중복과 sampling 오차를 명시한다. PostgreSQL query ID와 gateway
   fingerprint의 정확한 대응이나 caller/tenant 비용 dimension을 만들지 않는다.
-- [ ] `COST-04` Source/profile별 비용 급증 threshold, alert, retention과 admin 조회 계약을
-  정의하고 public endpoint·metric label에 source를 노출하지 않는다.
-- [ ] `COST-05` 실제 fixture에서 저비용·CPU·I/O·temp 사용 query를 구분하는 acceptance와
+- [ ] `COST-04` Source/profile별 DB-native usage 급증 threshold, alert, retention과 admin 조회 계약을
+  정의하고 query-facing/non-admin public endpoint·metric label에 source를 노출하지 않는다. Operator-only
+  `/admin/sources/{source_id}/...` path의 source ID는 이 금지에 포함되지 않는다.
+- [ ] `COST-05` 실제 fixture에서 낮은 사용량·execution-time-heavy·block read/write·temp/WAL
+  statement aggregate를 구분하는 acceptance와
   provider 자료가 없거나 user/organization chargeback이 불가능할 때의 운영 판단 절차를
   문서화한다.
 
@@ -114,19 +122,19 @@ inventory와 실제 배포·rollback 증거는 환경별 change record로 남겨
 
 ## P4 — End-to-End Workflow Trace
 
-목표: 한 transport 요청에서 여러 tool call과 retry로 이어지는 사용자 workflow를 민감 입력
+목표: 여러 transport 요청에 걸친 여러 tool call과 retry로 이어지는 사용자 workflow를 민감 입력
 없이 추적한다. 현재 server-generated MCP HTTP request ID는 하나의 POST lifecycle만 연결하며
 여러 POST와 model reasoning을 잇는 workflow trace는 아니다.
 
 | 작업 경계 | 내용 |
 |---|---|
 | Primary module | Delivery |
-| Direct consumers | Runtime operations와 Guarded Query audit |
-| Affected providers/verifiers | 승인될 경우 client trace input, 현재 Delivery auth/HTTP/MCP context, Runtime operations sink와 Assurance end-to-end verification |
+| Direct consumers | Delivery/MCP lifecycle과 Guarded Query audit |
+| Affected providers/verifiers | 승인될 경우 client trace input, Runtime process-local trace scope/counter/log allowlist, 현재 Delivery auth/HTTP/MCP context와 Assurance end-to-end verification |
 | Contract baseline | 현재 HTTP/MCP correlation, audit/redaction과 supported MCP protocol |
-| Approval gate | Client trace input, trust/collision policy, public header/schema와 audit field는 새 wire/observability 계약이다. `TRACE-01`에서 선택지를 제시하고 사용자 승인을 받은 뒤 구현한다. |
-| Single writer | Delivery owner가 wire 계약을 직렬화하고 baseline 확정 뒤 Runtime/Guarded Query propagation을 병렬화한다. |
-| Start gate | 앞선 priority 완료 뒤 `TRACE-01` 조사·결정을 수행하고, 사용자 승인 뒤에만 `TRACE-02`~`TRACE-04`를 구현한다. |
+| Approval gate | Client trace input, trust/collision policy, public header/schema와 audit field는 새 wire/observability 계약이다. Read-only prework인 [proposed ADR 0022](decisions/0022-w3c-workflow-trace-context.md)의 `TRACE-01-A|B|C`와 우선순위를 사용자가 정확히 승인한 뒤 구현한다. |
+| Single writer | Coordinating agent가 Runtime scope와 Delivery wire 의미를 함께 동결한다. Runtime provider를 먼저 확정하고 Delivery set/reset 뒤 Guarded Query consumer를 연결하며, provider baseline 뒤 서로 다른 consumer 검증만 병렬화한다. |
+| Start gate | 앞선 priority 완료 뒤 `TRACE-01` 결정을 수행하고, 사용자 승인 뒤에만 `TRACE-02`~`TRACE-04`를 구현한다. 현재 선택지 초안은 lower-track read-only prework일 뿐 P4 시작/완료가 아니며, 먼저 진행하려면 우선순위 변경도 명시적으로 승인받는다. |
 | Verification | HTTP/MCP contract, redaction/cardinality, parallel/retry/disconnect/multi-replica end-to-end와 root gate |
 
 - [ ] `TRACE-01` client 제공 trace ID의 문자 집합, 길이, 생성·신뢰 경계와 충돌 정책을

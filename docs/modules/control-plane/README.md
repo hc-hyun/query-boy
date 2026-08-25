@@ -316,6 +316,13 @@ success marker와 mandatory/optional sample 또는 freshness가 서로 맞지 �
 `unavailable/OBSERVATION_INCOMPLETE`로 반환한다. Provider billing이 없으므로 monetary
 amount/currency/provenance는 공개 계약에 만들지 않는다.
 
+현재 `CTRL-08` projection에는 DB-native statement usage section이 없다. Lower-priority read-only
+prework인 [proposed ADR 0021](../../decisions/0021-database-native-cost-attribution.md)은 sanitized
+monitoring identity, reset/deallocation-aware target-reader-role aggregate와 sibling `database_native`
+section의 선택지만 기록한다. ENC final baseline 확정, `TIME-03` 완료 또는 명시적 defer와 정확한
+`COST-01-A|B|C` 승인 전에는 source monitoring role/function, Control schema/store나 `/usage` 의미를
+변경하지 않는다.
+
 Delivery는 이 application result만 소비하고 table/private DTO를 읽지 않는다. Unknown source는
 `SourceNotFoundError`, DB/decode/cardinality 오류는 `SourceControlUnavailableError`이며 stale 또는
 unavailable observation 자체는 오류가 아니다. Writer role은 attempt table의 SELECT/INSERT/UPDATE만

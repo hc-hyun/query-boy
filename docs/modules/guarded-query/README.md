@@ -110,14 +110,22 @@ timespec을 그대로 따른다.
 
 현재 default driver 경계에는 known gap이 있다. Month-bearing PostgreSQL interval은 Python
 `timedelta`에서 calendar-month 의미를 잃고, JSON/JSONB fractional number는 float precision을 잃을
-수 있다. 또한 common reader policy가 `extra_float_digits`, `DateStyle`, `IntervalStyle`을 아직
-고정하지 않아 role default에 따라 finite float 결과/hash, ambiguous date SQL 의미가 달라지거나 일부
-driver decode가 실패할 수 있다. Empty psycopg Multirange는 generic Sequence로 오인되어 empty SQL
-array와 같은 `[]`/hash로 성공하지만 nonempty multirange는 실패한다. Day-time interval과 ordinary
-mapping/sequence evidence를 이 범위의 무손실·결정성 보장으로 확대하지 않는다.
+수 있다. 또한 common reader policy가 `extra_float_digits`, `DateStyle`, `IntervalStyle`,
+`standard_conforming_strings`, `transform_null_equals`, `array_nulls`를 아직 고정하지 않아 role
+default에 따라 finite float 결과/hash, date·string·NULL 비교·array literal SQL 의미가 달라지거나
+일부 driver decode가 실패할 수 있다. Empty psycopg Multirange와 empty range array는 element object가
+없어 ordinary empty SQL array와 같은 `[]`/hash로 성공하지만 nonempty 값은 실패한다. Psycopg list는
+array lower bound도 보존하지 않아 0-based와 1-based array가 같은 value/hash가 된다. Day-time
+interval과 ordinary mapping/sequence evidence를 이 범위의 무손실·결정성 보장으로 확대하지 않는다.
+Result cursor column OID도 encoder에 전달하지 않아 validator가 허용한 anonymous `ROW(...)`가 field
+count/type을 잃고, money/XML/geometric 같은 unregistered OID가 Python `str`라는 이유로 PostgreSQL
+`text`처럼 통과한다. 현재 문서의 supported PostgreSQL type과 실제 driver Python type을 같은 것으로
+간주하지 않는다.
 [Proposed ADR 0020](../../decisions/0020-lossless-interval-and-json-numeric-encoding.md)의
-`ENC-01-A|B|C`가 승인되기 전 loader, canonical value, revision과 hash를 변경하지 않는다. Infinity
-date, range와 nonempty multirange 같은 unsupported driver value는 `QUERY_UNAVAILABLE`로 rollback한다.
+`ENC-01-A|B|C`가 승인되기 전 loader, reader setting, canonical value, revision과 hash를 변경하지
+않는다. Infinity date, range와 nonempty multirange/range-array 같은 object-valued unsupported result는
+현재 `QUERY_UNAVAILABLE`로 rollback하지만 record/string-valued unknown OID의 fail-closed gate는 아직
+없다.
 
 `result_bytes`는 compact UTF-8 JSON rows array의 `[]`와 comma까지 포함한다. 다음 행이 byte 또는
 row 상한을 넘으면 그 행을 넣지 않고 `truncated=true`로 반환한다. Duplicate result column은

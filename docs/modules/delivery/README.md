@@ -99,6 +99,12 @@ discovery/serialization은 의도적으로 다를 수 있다.
   identity를 모두 요구한다. Anonymous와 single API token, version 1/scope field는 startup에서
   fail-closed한다.
 
+현재 MCP correlation은 한 POST의 server-generated request ID, 그 아래 call ID와 query ID까지만
+연결한다. 여러 POST workflow용 client trace header/audit field는 아직 계약이 아니다. Lower-priority
+read-only prework인 [proposed ADR 0022](../../decisions/0022-w3c-workflow-trace-context.md)의
+`TRACE-01-A|B|C`와 우선순위를 사용자가 정확히 승인하기 전에는 header parsing, structured field,
+metric이나 propagation을 추가하지 않는다.
+
 ### Public error contract
 
 HTTP 오류는 `{error: {code, message, details?}}` envelope을 사용하고 MCP는 같은 업무 의미를
@@ -186,6 +192,15 @@ Gateway response는 pagination 없이 한 DB snapshot의 inclusive 31일 window�
 Credential/token/connection, observability relation/grain, replica/cursor identity, caller/tenant,
 question/SQL/fingerprint/query ID와 raw error는 response/audit에 포함하지 않는다. Existing admin
 list/detail/history/replica/mutation, `/admin/metrics`, query-facing HTTP와 MCP 세 tool은 바뀌지 않는다.
+
+Lower-priority read-only prework인
+[proposed ADR 0021](../../decisions/0021-database-native-cost-attribution.md)은 현재 Delivery 계약이 아니다.
+정확한 우선순위와 `COST-01-A`를 사용자가 승인하기 전에는 current `/usage` top-level shape,
+`database_native` section, monitoring admin route 또는 error를 추가하지 않는다. A가 승인되면 Delivery는
+operator-first auth/validation, exact monitoring GET/PUT/credential POST/DELETE/rollback POST wire와
+`/usage.database_native` serialization/error mapping을 소유하고 Control Plane의 공개 use case/projection만
+소비한다. Monitoring credential, source function, Control table/lease/baseline을 읽거나 구현하지 않는다.
+Direction-only B는 ID 선택만으로 이 owner 범위를 열지 않으며 별도 exact 계약이 필요하다.
 
 ### MCP contract
 

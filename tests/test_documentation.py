@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import ast
+import hashlib
+import json
 import re
 from pathlib import Path
 from urllib.parse import unquote
@@ -148,6 +150,19 @@ LOSSLESS_SCALAR_ADR = (
     / "decisions"
     / "0020-lossless-interval-and-json-numeric-encoding.md"
 )
+DATABASE_NATIVE_COST_ADR = (
+    ROOT_DIRECTORY
+    / "docs"
+    / "decisions"
+    / "0021-database-native-cost-attribution.md"
+)
+QUERY_COST_CONTROL = ROOT_DIRECTORY / "docs" / "query-cost-control.md"
+WORKFLOW_TRACE_ADR = (
+    ROOT_DIRECTORY
+    / "docs"
+    / "decisions"
+    / "0022-w3c-workflow-trace-context.md"
+)
 EXPECTED_ID_COUNTS = {
     "BASE": 10,
     "DEC": 9,
@@ -214,6 +229,7 @@ EXPECTED_POST_BASELINE_COMPLETED_IDS = (
     "SKILL-06",
     "DBEDGE-01",
     "DBEDGE-02",
+    "DBEDGE-03",
     "TIME-01",
     "TIME-02",
 )
@@ -442,6 +458,18 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
     source_onboarding_skill_audit = SOURCE_ONBOARDING_SKILL_AUDIT.read_text(
         encoding="utf-8"
     )
+    cost_adr = DATABASE_NATIVE_COST_ADR.read_text(encoding="utf-8")
+    query_cost = QUERY_COST_CONTROL.read_text(encoding="utf-8")
+    trace_adr = WORKFLOW_TRACE_ADR.read_text(encoding="utf-8")
+    assurance_contract = (
+        ROOT_DIRECTORY / "docs" / "modules" / "assurance" / "README.md"
+    ).read_text(encoding="utf-8")
+    runtime_contract = (
+        ROOT_DIRECTORY / "docs" / "modules" / "runtime" / "README.md"
+    ).read_text(encoding="utf-8")
+    delivery_contract = (
+        ROOT_DIRECTORY / "docs" / "modules" / "delivery" / "README.md"
+    ).read_text(encoding="utf-8")
     matches = re.findall(r"^- \[([ x])\] `([A-Z]+)-(\d{2})`", todo, re.MULTILINE)
     ids = [f"{prefix}-{number}" for _checked, prefix, number in matches]
 
@@ -467,11 +495,12 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
     assert "## P0.5 — Module Contract Hardening" not in todo
     assert "offline composition `MOD-08`은 모두" in todo
     assert "## P2 — Source Onboarding Skill" not in todo
-    assert "`ENC-01-A`, `ENC-01-B` 또는 위험 수용 `ENC-01-C`" in todo
+    assert "implementation 선택 `ENC-01-A|B`" in todo
+    assert "production completion을 block하는 defer `ENC-01-C`" in todo
     assert "승인 전 loader/setting/encoder/revision/hash를 바꾸지" in todo
     assert "Production inventory·권한·backup·route가 제공되어야" in todo
     assert "명시적으로 defer하기 전에는 `COST-01` 구현을 시작하지" in todo
-    assert "정확한 monitoring 계약과 영향 범위를 제시하고 별도 승인" in todo
+    assert "proposed ADR 0021의 정확한 monitoring 계약과 영향 범위를 별도 승인" in todo
     assert "| `TIME-03` |" not in roadmap
     assert (
         "M14.5의 `ENC-*` 결정·구현과 M14 production 전환 `TIME-03`은 active"
@@ -479,7 +508,207 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
     )
     assert "`CTRL-07A` observation method/freshness/logical retention" in todo
     assert "`CTRL-08` usage/cost state" in todo
-    assert "각 단계 구현 전 사용자 승인이 필요하다" in todo
+    assert "현재 선택지 초안은 lower-track read-only prework" in todo
+    assert "`COST-01-A|B|C`" in todo
+    assert "`TRACE-01-A|B|C`" in todo
+    assert (
+        "Status: Proposed read-only prework — priority gate and user approval required"
+        in cost_adr
+    )
+    assert "`COST-01-A` — dedicated sanitized monitor (recommended)" in cost_adr
+    assert "pg_monitor" in cost_adr
+    assert "query text" in cost_adr
+    assert "row별 `stats_since`" in cost_adr
+    assert "target reader role의 `pg_stat_statements` aggregate" in cost_adr
+    assert "Query Man business query별 측정이나" in cost_adr
+    assert "`sha256:<64 lower hex>`" in cost_adr
+    definition_match = re.search(r"```json\n(.*?)\n   ```", cost_adr, re.DOTALL)
+    assert definition_match is not None
+    definition_text = "\n".join(
+        line[3:] if line.startswith("   ") else line
+        for line in definition_match.group(1).splitlines()
+    )
+    definition_material = json.loads(definition_text)
+    definition_bytes = json.dumps(
+        definition_material,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    assert definition_bytes.isascii()
+    definition_revision = "sha256:" + hashlib.sha256(definition_bytes).hexdigest()
+    assert definition_revision == (
+        "sha256:b4bf6e4400041f51d57cf828ed580100c07b59cdb543268b363989ef64484b77"
+    )
+    assert f"`{definition_revision}`" in cost_adr
+    assert definition_material["attribution"] == {
+        "bucket_start": "date_trunc('hour',accepted_at,'UTC')",
+        "clock": "control_db_clock_timestamp",
+        "delta": "whole",
+        "prorate": False,
+    }
+    assert definition_material["delta"]["stale_control_fence"] == "no_write"
+    assert definition_material["delta"]["counter_regression"] == (
+        "discard_current_complete_rebaseline"
+    )
+    assert definition_material["delta"]["counter_overflow"] == (
+        "discard_invalidate_wait_complete"
+    )
+    assert definition_material["delta"]["mid_scan_target_or_settings_change"] == (
+        "fail_invalidate_wait_complete"
+    )
+    assert definition_material["delta"]["new_target_or_allowed_settings"] == (
+        "baseline_new_observation_identity"
+    )
+    assert definition_material["binding"] == {
+        "database_oid": "current_database_catalog_oid",
+        "info_must_match_bound_source": True,
+        "reader_oid": "to_regrole(active_source_reader_username_parameter)",
+        "statement_rows_must_match_info": True,
+    }
+    assert definition_material["failure_precedence"] == [
+        ["bound_database_or_reader_or_mid_scan_target", "failed_TARGET_MISMATCH"],
+        [
+            "extension_preload_version_or_projection_missing",
+            "failed_EXTENSION_UNAVAILABLE",
+        ],
+        [
+            "unsupported_or_mid_scan_unstable_setting",
+            "failed_SETTINGS_MISMATCH",
+        ],
+        ["statement_rows_over_5000", "discarded_ROW_LIMIT_EXCEEDED"],
+        [
+            "mid_scan_reset_or_dealloc_shape_type_null_info_cardinality_decode_"
+            "nonfinite_nonintegral_statement_binding_or_incomplete",
+            "discarded_OBSERVATION_INCOMPLETE",
+        ],
+        [
+            "finite_integral_counter_negative_or_over_max",
+            "discarded_COUNTER_OVERFLOW",
+        ],
+        [
+            "permission_transport_timeout_or_other_sql_execution",
+            "failed_MONITOR_UNAVAILABLE",
+        ],
+    ]
+    assert definition_material["projection"] == {
+        "info_function": "query_man_monitor.monitor_info_v1()",
+        "overloads": False,
+        "schema": "query_man_monitor",
+        "statement_function": "query_man_monitor.monitor_statements_v1()",
+    }
+    assert definition_material["session"] == {
+        "date_style": "ISO, YMD",
+        "time_zone": "UTC",
+    }
+    assert definition_material["info"]["fields"][0] == [
+        "system_identifier",
+        "text",
+        "unsigned_decimal_ascii",
+        False,
+    ]
+    assert definition_material["statement"]["fields"][-1] == [
+        "wal_bytes",
+        "numeric",
+        "integral_decimal_string_max_38_digits",
+        False,
+    ]
+    assert definition_material["statement"]["fields"][6] == [
+        "execution_time_us",
+        "numeric",
+        "checked_int64_integer",
+        False,
+    ]
+    assert definition_material["observation_identity"]["target_field"] == (
+        "target_instance_id"
+    )
+    assert definition_material["observation_identity"]["settings_fields"] == [
+        "server_version_num",
+        "extension_version",
+        "compute_query_id",
+        "track",
+        "track_planning",
+        "track_utility",
+        "save",
+        "max",
+    ]
+    assert all(
+        len(field) == 4 and field[3] is False
+        for section in ("info", "statement")
+        for field in definition_material[section]["fields"]
+    )
+    assert definition_material["timeouts"] == {
+        "connect_seconds": 5,
+        "idle_in_transaction_ms": 5000,
+        "lock_ms": 250,
+        "statement_ms": 20000,
+        "transaction_ms": 75000,
+    }
+    assert definition_material["target_instance"]["template"].count("\n") == 6
+    assert "`bucket_start=date_trunc('hour', accepted_at, 'UTC')`" in cost_adr
+    assert "`lease_until=now+120 seconds`" in cost_adr
+    assert "Source I/O 중 Control connection이나" in cost_adr
+    assert "source_db_monitoring_revisions" in cost_adr
+    assert "query-man/source/{source_id}/monitoring-revision/{monitoring_revision}" in cost_adr
+    assert "GET    /admin/sources/{source_id}/database-native-monitoring" in cost_adr
+    assert "`X-Expected-Monitoring-State-Version`" in cost_adr
+    assert "monitor_rolled_back" in cost_adr
+    assert "active pointer를 삭제하지 않고 `enabled=false`" in cost_adr
+    assert "same-key/different-secret을 구분하는 in-memory" in cost_adr
+    assert "Source I/O 동안 Control connection/lock은 0개" in cost_adr
+    assert "canonical `failure_precedence`의 first matching outcome/reason" in cost_adr
+    assert "pg_catalog.to_regrole($1::text)::oid" in cost_adr
+    assert "모든 statement row의 `dbid/userid`는 두 info와 같아야" in cost_adr
+    assert "existing `SOURCE_VALIDATION_FAILED` 400" in cost_adr
+    assert "| disabled | rotate | next revision" in cost_adr
+    assert "| disabled | rollback to any valid revision including current pointer |" in cost_adr
+    assert "독립 `source_db_monitoring_history` table은 만들지 않는다" in cost_adr
+    assert "Availability에 사용할 current observation identity" in cost_adr
+    assert "accepted success가 있고 `read_at <= fresh_until`이면" in cost_adr
+    assert "Latest complete `baseline_at`이" in cost_adr
+    assert "baseline/success/committed attempt가 모두 없는 initial configured state" in cost_adr
+    assert "latest committed attempt가 `failed` 또는 `discarded`면" in cost_adr
+    assert "현재 rowset은 baseline 자격이 없다" in cost_adr
+    assert "다음 stable complete scan만" in cost_adr
+    assert "canonical JSON의 `failure_precedence` array 순서" in cost_adr
+    assert "finite `-0.5`는 여기서 끝나며" in cost_adr
+    assert "SERVER_DEALLOCATION_DETECTED" in cost_adr
+    assert "COUNTER_OVERFLOW" in cost_adr
+    assert "read_at <= fresh_until" in cost_adr
+    assert "source_db_usage_rollups" in cost_adr
+    assert "database_native" in cost_adr
+    assert "`database_native` section 자체를 추가하지 않는다" in cost_adr
+    assert "이는 contract 선택이며 열린 ENC/TIME보다 구현을 먼저" in cost_adr
+    assert "B는 direction-only" in cost_adr
+    assert "source_id + budget_profile + metadata_revision + definition_revision" in query_cost
+    assert "DBA가 수동 조사에만 쓰는 현재 외부 운영 선택지" in query_cost
+    assert "Assurance는 sanitized source projection" in assurance_contract
+    assert "현재 Runtime operations에는 workflow trace context/scope/counter가 없다" in runtime_contract
+    assert "source DB-native statement collector도 없다" in runtime_contract
+    assert "current `/usage` top-level shape" in delivery_contract
+    assert "Control Plane의 공개 use case/projection만" in delivery_contract
+    assert (
+        "Status: Proposed read-only prework — priority gate and user approval required"
+        in trace_adr
+    )
+    assert "`TRACE-01-A` — authenticated fail-soft `traceparent` (recommended)" in trace_adr
+    assert "B/C를 선택하면 route, audit/counter" in trace_adr
+    assert "`POST /mcp`, `POST /query`와 operator" in trace_adr
+    assert "`DELETE /queries/{query_id}`뿐이다" in trace_adr
+    assert "DELETE /queries/{query_id}에서만 W3C traceparent" in trace_adr
+    assert "admin source route, MCP GET, authenticated 404/405" in trace_adr
+    assert "accepted | generated_absent | restarted_invalid | restarted_duplicate" in trace_adr
+    assert "Mixed-case duplicate도 duplicate" in trace_adr
+    assert "`current_trace_context() -> TraceContext | None`" in trace_adr
+    assert "ASGI `scope[\"state\"]`" in trace_adr
+    assert "reset된 ContextVar가 아니라" in trace_adr
+    assert "Runtime provider → Delivery parser/set-reset" in trace_adr
+    assert "cancel request의 trace" in trace_adr
+    assert "의미 있는 식별자를 32-hex에 encode해서는" in trace_adr
+    assert "안 된다(MUST NOT)" in trace_adr
+    assert "replica-local, process-restart-reset aggregate counter" in trace_adr
+    assert "P4의 TRACE-01 결정과 승인된" in trace_adr
+    assert "tracestate/baggage/response/outbound propagation" in trace_adr
     assert "`RTSAFE-*`, `MOD-*`" not in todo
 
     for item_id in EXPECTED_POST_BASELINE_COMPLETED_IDS:
@@ -539,6 +768,7 @@ def test_source_database_corner_docs_record_canonical_time_resolution() -> None:
 
     assert "`DBEDGE-01`" in audit
     assert "`DBEDGE-02`" in audit
+    assert "`DBEDGE-03`" in audit
     assert "test_source_database_corners.py" in module_index
     assert SOURCE_DATABASE_CORNERS_AUDIT.name in assurance
     assert "database `0`, role `0`" in audit
@@ -562,20 +792,42 @@ def test_source_database_corner_docs_record_canonical_time_resolution() -> None:
     assert "Status: Proposed — user approval required before implementation" in lossless_adr
     assert "`ENC-01-A` — lossless canonical values (recommended)" in lossless_adr
     assert (
-        "`DateStyle=ISO, YMD`, `IntervalStyle=iso_8601`, `extra_float_digits=1`"
+        "`DateStyle=ISO, YMD`, `IntervalStyle=iso_8601`, `extra_float_digits=1`,"
         in lossless_adr
     )
+    assert "`standard_conforming_strings=on`" in lossless_adr
+    assert "`transform_null_equals=off`" in lossless_adr
+    assert "`array_nulls=on`" in lossless_adr
     assert "user-result cursor scope" in lossless_adr
     assert "`EXPLAIN (FORMAT JSON)`" in lossless_adr
     assert "`IntervalStyle=postgres`를 설정·검사" in lossless_adr
-    assert "data type exclusion이나 setting을 검증하지 못" in lossless_adr
-    assert "Range/Multirange를 generic Sequence보다 먼저" in lossless_adr
+    assert "Runtime이 type/setting exclusion을 강제하지 못" in lossless_adr
+    assert "Range/Multirange 및 그 array" in lossless_adr
+    assert "User-result cursor description의 SQL type OID" in lossless_adr
+    assert "domain-over-approved-array" in lossless_adr
+    assert "array-of-domain/enum" in lossless_adr
+    assert "`bit|varbit`는" in lossless_adr
+    assert "money, XML, geometric, macaddr" in lossless_adr
+    assert "`bool`, `int2|int4|int8`, `text|varchar|bpchar`" in lossless_adr
+    assert "`date|time|timetz|timestamp|timestamptz|interval`" in lossless_adr
+    assert "`pg_lsn`, `tid`, unknown type" in lossless_adr
+    assert "pg_lsn/tid/unknown 및 그 밖의" in lossless_adr
+    assert "non-1 lower bound" in lossless_adr
+    assert "`ENC-02`에서 final encoding baseline을 구현·검증한" in lossless_adr
+    assert "B 또는 C를 선택하면 해당 policy version" in lossless_adr
+    assert "하나의 coordinated `TIME-03`" in lossless_adr
     assert "SQL policy version은 3" in lossless_adr
     assert "sha256:a1d1217174eb9b0ebce121652ec50bec72411619310ca4f1fee427d55f412014" in audit
     assert "sha256:3b05810025aca001615bd4e78fdbb40763f9d3ea1ba257043625796ba3783ced" in audit
     assert "sha256:77f588e368495248abbd8eb87354efadbd31afa38d0ca675154506624470f06a" in audit
+    assert "sha256:0a4513b560854f795950856ddcddcc1a5f8fac4b0341fce951944bbc8ba066dd" in audit
+    assert "sha256:dadd5b0c8d9a51f5db4a5117d804c30dcbcc7f4cfa417a4df154de40d63de4f3" in audit
     assert "`47 passed`, 16 deselected" in audit
     assert "`14 passed`, 1 deselected" in audit
+    assert "`47 passed`, 20 deselected" in audit
+    assert "`18 passed`, 1 deselected" in audit
+    assert "`645 passed`, 85 deselected" in audit
+    assert "`73 passed`, 657 deselected" in audit
 
 
 def test_mutation_receipt_docs_preserve_terminal_and_secret_boundaries() -> None:

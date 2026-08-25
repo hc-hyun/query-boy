@@ -2,10 +2,13 @@
 
 Status: Complete
 
+Last updated: 2026-08-26 (`DBEDGE-03`)
+
 ## Scope
 
-`DBEDGE-01`과 후속 `DBEDGE-02`는 고정 bootstrap fixture를 더 늘리지 않고 test마다 서로 다른 UUID
-database를 만들어 Source Catalog → Metadata → Guarded Query의 실제 PostgreSQL 경계를 검증한다.
+`DBEDGE-01`과 후속 `DBEDGE-02`~`DBEDGE-03`은 고정 bootstrap fixture를 더 늘리지 않고 test마다 서로
+다른 UUID database를 만들어 Source Catalog → Metadata → Guarded Query의 실제 PostgreSQL 경계를
+검증한다.
 각 database는 전용 NOLOGIN view owner와 최소 권한 LOGIN reader를 사용하고, pool 종료 뒤 database와
 두 role을 삭제한다. Production source/configuration, Control DB와 승인된 public contract는 변경하지
 않는다.
@@ -24,10 +27,11 @@ Runnable acceptance는
 - Temporal acceptance는 role default를 `UTC`, `Asia/Seoul`, `America/New_York`로 각각 만들고,
   production과 같은 reader transaction이 database/role default를 바꾸지 않은 채 transaction-local
   UTC를 설정·검사하는지 검증한다.
-- 실패 경로에서도 query/catalog pool을 닫고 active connection을 확인한 뒤 database와 role을
-  정리한다. 각 cleanup target은 앞 단계 실패와 무관하게 독립적으로 시도하고 body/cleanup 오류를
-  함께 보존한다. 별도 unit case가 일부 cleanup action 실패 뒤 후속 action과 오류 집계를, integration
-  case가 fixture body에서 의도적으로 예외를 발생시킨 뒤 같은 database와 두 role이 모두
+- Outer disposable fixture는 실패 경로에서도 active connection을 확인한 뒤 database와 role을
+  정리한다. 이 fixture의 cleanup target은 앞 단계 실패와 무관하게 독립적으로 시도하고 body/cleanup
+  오류를 함께 보존한다. `DBEDGE-03`에서 추가한 multi-resource setup/query cleanup도 같은 방식을
+  사용한다. 별도 unit case가 fixture cleanup action 일부 실패 뒤 후속 action과 오류 집계를,
+  integration case가 fixture body에서 의도적으로 예외를 발생시킨 뒤 같은 database와 두 role이 모두
   사라졌는지 검증한다.
 
 Integration 종료 뒤 다음 residue query 결과는 database `0`, role `0`이었다.
@@ -52,9 +56,9 @@ SELECT
 | Structure/empty result | Partitioned parent와 두 child, composite primary key/index, empty materialized view와 unique index | Allowlisted parent와 materialized view만 catalog에 나타나고 partition child는 숨겨졌다. Numeric/NULL row와 empty result `[]`의 columns, row count, bytes와 plan invariants가 일치했다. |
 | Live view drift | Fresh-cache TTL 뒤 `CREATE OR REPLACE VIEW`로 definition만 변경 | Old metadata token은 query 실행 전에 거부되고 새 definition hash/revision에서만 changed result가 실행됐다. |
 | Catalog hard limits | Cold cache에서 relation 3개/상한 2, column 3개/상한 2, structure 3개/상한 2와 warm cache에서 relation 1개/상한 1 뒤 두 번째 relation grant | 실제 catalog가 partial snapshot을 publish하지 않았고, warm cache도 이전 snapshot을 stale 성공으로 가장하지 않은 채 `METADATA_UNAVAILABLE`로 fail-closed했다. 초과 object를 제거한 뒤 같은 max-one pool은 정상 snapshot을 다시 publish했다. |
-| Unsupported driver values | PostgreSQL infinity date, `int4range`와 nonempty `int4multirange` | 내부 driver/object detail 없이 `QUERY_UNAVAILABLE`로 rollback했고 같은 max-one pool의 다음 supported query가 정상 복구됐다. |
+| Unsupported driver values | PostgreSQL infinity date, `int4range`, nonempty `int4multirange`와 nonempty `int4range[]` | 내부 driver/object detail 없이 `QUERY_UNAVAILABLE`로 rollback했고 같은 max-one pool의 다음 supported query가 정상 복구됐다. |
 | Multibyte byte boundary | 한글과 emoji를 포함한 두 row, 첫 row compact UTF-8 exact boundary | 첫 complete row만 반환하고 두 번째 row를 부분 직렬화하지 않은 채 `truncated=true`, exact byte count를 유지했다. |
-| Open scalar contract characterization | Month interval/30 days, 서로 다른 큰 JSONB fractional numeric, empty multirange/array, `extra_float_digits=1|3|0|-1|-3`, ISO/DMY/MDY DateStyle과 non-postgres IntervalStyle | 현재 세 hash collision, finite-float/date value·hash drift와 driver availability failure를 exact golden으로 재현했다. 의미 수정은 `ENC-01` 승인 전 중단했다. |
+| Open scalar/collection/result-type contract characterization | Month interval/30 days, 서로 다른 큰 JSONB fractional numeric, anonymous record와 string-valued unknown OID, empty multirange/range-array/integer-array, 0/1 lower-bound array, `extra_float_digits=1|3|0|-1|-3`, ISO/DMY/MDY DateStyle, non-postgres IntervalStyle, `standard_conforming_strings`, `transform_null_equals`, `array_nulls`와 `bytea_output` | Silent hash collision, unsupported SQL type의 accidental success, SQL 의미/value/hash drift와 driver availability failure를 exact golden으로 재현했다. `bytea_output=hex|escape`는 같은 Base64/hash라는 negative control이었다. 의미 수정은 `ENC-01` 승인 전 중단했다. |
 
 ## Findings And Changes
 
@@ -122,6 +126,15 @@ PostgreSQL 18/psycopg default loader를 실제 read-only query로 확인한 결�
 | 같은 ambiguous literal `'01/02/2024'::date`, ISO/DMY/MDY `DateStyle` | DB 오류, `2024-02-01`, `2024-01-02` | 같은 SQL의 성공 여부와 날짜 의미/hash가 달라진다. Non-ISO style의 timestamptz output은 추가로 psycopg decode에 실패한다. |
 | 같은 interval, `IntervalStyle=postgres` 대 non-postgres | Loss-prone `timedelta` 또는 psycopg `NotImplementedError` | Role/session default에 따라 silent loss 또는 query availability failure가 달라진다. |
 | `'{}'::int4multirange` 대 `'{}'::integer[]` | 둘 다 public `[]` | Empty multirange만 generic Sequence로 성공해 지원되는 SQL array와 같은 value/hash가 되고, nonempty multirange는 range element에서 비공개 실패한다. |
+| 같은 backslash string literal, `standard_conforming_strings=on|off` | Backslash+`n` 또는 실제 newline | 같은 SQL text의 string value/hash가 달라진다. |
+| `NULL = NULL`, `transform_null_equals=off|on` | `null` 또는 `true` | 같은 SQL predicate 의미/value/hash가 달라진다. |
+| `'{NULL}'::text[]`, `array_nulls=on|off` | `[null]` 또는 `["NULL"]` | 같은 SQL array literal 의미/value/hash가 달라진다. |
+| `'[0:1]={10,20}'::integer[]` 대 `'{10,20}'::integer[]` | 둘 다 public `[10,20]` | PostgreSQL array lower bound가 사라져 다른 배열이 같은 value/hash가 된다. |
+| `'{}'::int4range[]` 대 `'{}'::integer[]` | 둘 다 public `[]` | Empty range array는 accidental success하고 nonempty range array는 비공개 실패한다. |
+| `ROW()` 대 `ROW(NULL::integer)` | 둘 다 public `[]` | Anonymous record의 field count와 NULL이 사라져 같은 hash가 된다. |
+| `ROW(1::integer)` 대 `ROW('1'::text)` | 둘 다 public `["1"]` | Anonymous record field type이 사라져 같은 hash가 된다. |
+| `money`, `point`, `xml` column 대 같은 text | psycopg가 모두 Python `str`로 반환 | Result OID를 보지 않는 encoder가 unsupported SQL type을 text처럼 성공시킨다. |
+| 같은 `bytea`, `bytea_output=hex|escape` | 둘 다 `base64:AP8=` | Psycopg bytes loader와 encoder가 같은 value/hash로 정규화해 pin 필요성은 확인되지 않았다. |
 
 실제로 `interval '1 month'`와 `interval '30 days'`는 같은 Python value/hash로 합쳐지지만 기준 날짜에
 더한 결과는 다를 수 있고, 서로 다른 큰 fractional JSON 숫자도 같은 float/hash로 합쳐진다. 이는
@@ -138,10 +151,36 @@ Runnable characterization의 exact collision hash는 interval 두 값 모두
 `extra_float_digits=1|3`에서 `1.2345678901234567`이지만 0, -1, -3에서 각각
 `1.23456789012346`, `1.2345678901235`, `1.23456789012`로 decode됐다. 같은 ambiguous date literal은
 `ISO,YMD`에서 실패하고 DMY/MDY에서 각각 `2024-02-01`/`2024-01-02`와 서로 다른 exact hash를 냈다.
-Empty multirange와 empty integer array는 모두
-`sha256:77f588e368495248abbd8eb87354efadbd31afa38d0ca675154506624470f06a`가 됐다.
-Raw setting probe는 오류 뒤 rollback과 마지막 rollback에서 transaction `IDLE`, 최초
-`DateStyle`/`IntervalStyle`/`extra_float_digits` default 복원을 함께 확인했다.
+Empty multirange, empty range array와 empty integer array는 모두
+`sha256:77f588e368495248abbd8eb87354efadbd31afa38d0ca675154506624470f06a`가 됐다. Lower bound 0/1의
+두 integer array도 모두
+`sha256:0a4513b560854f795950856ddcddcc1a5f8fac4b0341fce951944bbc8ba066dd`가 됐다.
+`standard_conforming_strings=on|off`는 각각
+`sha256:f485c1c90af20c905bf5097cde301042a8fb8fa1c69cd0d1b087bed7bfbb7e95`/
+`sha256:e96b206dd05fac4069d74fcd73661a9c762e52ca2ce7d1e197589b5a5d1ffe9e`,
+`transform_null_equals=off|on`은
+`sha256:465ac580f981f85b5e0107198603949c8746915297554f1718aacc0e3fc73bee`/
+`sha256:f3b63060353a6de843bdab60cff00570124850083597cbb3ebc09406ddf3af16`,
+`array_nulls=on|off`는
+`sha256:2ceeafc6cdd6acffce2907fafba6a2490f69e992d58c4516cc7ec548e0383242`/
+`sha256:58c554cec2ac89ee75e8ff731df9f8b83ab3511cb79db36e8abda29935e640b0`로 갈렸다.
+`bytea_output=hex|escape`는 둘 다
+`sha256:2aaa378b22694753a5e7cdfd62a8581ebbef77e9a46dedbe71534041aa288947`였다. Raw setting probe는 오류 뒤
+rollback과 마지막 rollback에서 transaction `IDLE`, 최초 reader default 복원을 함께 확인했다.
+별도 public QueryService case는 reader role default를 서로 반대로 설정한 fresh Catalog/Query pool에서
+같은 metadata/SQL-policy revision과 같은 SQL을 실행해 string, NULL comparison과 array의 public
+value와 canonical helper-derived verified hash가 실제로 모두 달라짐을 확인했다. 이 case는 전체 public
+응답의 revision, SQL policy, column/row/count/byte/plan shape도 함께 검증한다. 즉 raw driver 현상에
+한정되지 않고 현재 public query 경계까지 전파된다.
+`ROW()`/`ROW(NULL::integer)`는 empty collection과 같은
+`sha256:77f588e368495248abbd8eb87354efadbd31afa38d0ca675154506624470f06a`,
+`ROW(1::integer)`/`ROW('1'::text)`는
+`sha256:dadd5b0c8d9a51f5db4a5117d804c30dcbcc7f4cfa417a4df154de40d63de4f3`로 합쳐졌다.
+PostgreSQL 18 RowDescription은 scalar integer domain을 `int4`, domain-over-`integer[]`를
+`int4[]` OID로 보고했지만 array-of-domain, scalar enum과 enum array는 각각의 user-defined OID를
+유지했다. 기본 psycopg loader에서 앞의 둘은 `1`/`[1, 2]`, 뒤의 user-defined collection/type은
+`"{1}"`/`"ok"`/`"{ok}"` 문자열로 읽혔다. 이 차이는 승인안의 allowlisted base-domain 보존과
+visible user-defined type fail-closed 경계를 위한 runnable upgrade sentinel이다.
 
 Repository에 versioned된 verified SQL 11개를 read-only inventory한 결과 ambiguous date/time
 literal, interval, range/multirange 결과와 fractional JSON numeric은 없었다. 유일한 explicit
@@ -149,9 +188,10 @@ timestamptz literal은 ISO date와 offset을 사용하고, commerce JSONB fixtur
 string array만 포함한다. 이는 repository fixture의 예상 결과 보존 근거일 뿐 protected managed
 current/rollback inventory를 대신하지 않으며 production cutover 전 외부 전량 확인이 필요하다.
 
-Infinity date, range와 nonempty multirange는 silent conversion이 아니라 현재 지원하지 않는 driver
-value다. 새 public encoding을 만들지 않고 bounded `QUERY_UNAVAILABLE`, rollback과 pool recovery
-acceptance만 추가했다. Empty multirange의 accidental success 수정은 ADR 0020 승인 범위에 남겼다.
+Infinity date, range, nonempty multirange와 nonempty range array는 silent conversion이 아니라 현재
+지원하지 않는 driver value다. 새 public encoding을 만들지 않고 bounded `QUERY_UNAVAILABLE`, rollback과
+pool recovery acceptance만 추가했다. Empty multirange/range-array 및 lower-bound array의 accidental
+success와 record/unknown OID의 type gate 수정은 ADR 0020 승인 범위에 남겼다.
 
 ### No additional product change required for the other edges
 
@@ -161,6 +201,9 @@ acceptance만 추가했다. Empty multirange의 accidental success 수정은 ADR
   result-byte accounting은 현재 계약대로 동작했다.
 - 테스트를 위해 production manifest, source-specific Python branch, dependency 또는 영구 fixture DB를
   추가하지 않았다.
+- Exact golden은 PostgreSQL 18의 현재 wire/driver 경계를 기록하므로 disposable fixture는 연결한 server
+  major가 18이 아니면 DB/role을 만들기 전에 fail-fast한다. PostgreSQL major upgrade는 이 assertion과
+  characterization을 명시적으로 재검토하는 계기다.
 
 ## Verification
 
@@ -173,9 +216,13 @@ acceptance만 추가했다. Empty multirange의 accidental success 수정은 ADR
 | `uv run ruff check src/query_man/catalog.py src/query_man/metadata.py tests/test_catalog.py tests/test_metadata.py tests/test_source_database_corners.py` (`DBEDGE-02`) | PASS |
 | `uv run pytest tests/test_catalog.py tests/test_metadata.py tests/test_source_database_corners.py -m 'not integration' -q` (`DBEDGE-02`) | PASS — rollback 실패와 transient/validation cache 분류 포함 `47 passed`, 16 deselected |
 | `uv run pytest -m integration tests/test_source_database_corners.py -q` (`DBEDGE-02`) | PASS — live drift, cold/warm relation·column·structure limits, scalar characterization, unsupported recovery와 multibyte 포함 `14 passed`, 1 deselected |
+| `uv run ruff check tests/test_documentation.py tests/test_source_database_corners.py` (`DBEDGE-03`) | PASS |
+| `uv run pytest tests/test_catalog.py tests/test_metadata.py tests/test_source_database_corners.py -m 'not integration' -q` (`DBEDGE-03`) | PASS — `47 passed`, 20 deselected |
+| `uv run pytest -m integration tests/test_source_database_corners.py -q` (`DBEDGE-03`) | PASS — public QueryService semantic GUC, array identity, domain/enum OID, record/unknown OID characterization 포함 `18 passed`, 1 deselected |
+| `uv run pytest tests/test_documentation.py -q` (`DBEDGE-03`) | PASS — `16 passed` |
 | `uv run ruff check .` / `uv run mypy src` | PASS — 29 source files, mypy issue 0 |
-| `uv run pytest` | PASS — `645 passed`, 81 deselected |
-| `uv run pytest -m integration` | PASS — `69 passed`, 657 deselected |
+| `uv run pytest` | PASS — `645 passed`, 85 deselected |
+| `uv run pytest -m integration` | PASS — `73 passed`, 657 deselected |
 | Prefix residue query | PASS — database `0`, role `0` |
 
 Root static/unit/integration gate와 전체 revision/hash 재발행 결과는 같은 release acceptance에서

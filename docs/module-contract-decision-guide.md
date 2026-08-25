@@ -565,11 +565,18 @@ Control DB schema, replica observation, freshness와 admin response 계약은 20
 구현됐다. `CTRL-08` latest resource attempt/last-success와 public usage projection도 2026-08-25
 별도 승인을 받아 구현됐고, 기존 계약을 재현한 `CTRL-09` isolated cross-service Control recovery
 fixture acceptance까지 완료됐다. 이후 plan-only Source Onboarding Skill `SKILL-01`~`SKILL-06`도
-독립 forward evaluation과 mutation 0 증거로 완료됐다. 세 disposable source DB의 `DBEDGE-01`도
-완료했다. 이후 reader TimeZone/canonical hash 변경은 별도 승인된 `TIME-01`과 `TIME-02`에서
-결정·구현했고 완료 이력을 roadmap ledger로 옮겼다. Repository fixture와 local cutover까지는
-검증했지만 실제 managed production inventory·재발행·rollback change record인 `TIME-03`은 열려 있다.
-이를 완료하거나 사용자가 명시적으로 defer한 뒤에만 `COST-01` 계약 결정을 시작한다.
+독립 forward evaluation과 mutation 0 증거로 완료됐다. Disposable source DB assurance
+`DBEDGE-01`~`DBEDGE-03`도 완료했다. Reader TimeZone/canonical hash 변경은 별도 승인된
+`TIME-01`과 `TIME-02`에서
+결정·구현했고 완료 이력을 roadmap ledger로 옮겼다. 후속 database corner에서 발견한
+lossless scalar, semantic GUC, result OID와 array identity gap은
+[proposed ADR 0020](decisions/0020-lossless-interval-and-json-numeric-encoding.md)의 `ENC-01` 승인 전
+구현을 동결했다. Repository fixture와 local cutover까지는 검증했지만 final encoding baseline의 실제
+managed production inventory·재발행·rollback change record인 `TIME-03`은 열려 있다. 이를 완료하거나
+사용자가 명시적으로 defer한 뒤에만 `COST-01`을 시작한다. COST/TRACE의
+[ADR 0021](decisions/0021-database-native-cost-attribution.md)과
+[ADR 0022](decisions/0022-w3c-workflow-trace-context.md)는 lower-track read-only 선택지 초안일 뿐
+start/contract 승인이 아니다.
 
 각 단계는 provider contract, 직접 consumer, module 문서와 runnable contract test가 함께
 통과하는 독립 커밋으로 끝낸다. Shared contract file은 single-writer로 편집한다. Provider

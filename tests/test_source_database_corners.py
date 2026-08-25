@@ -171,6 +171,11 @@ async def _disposable_source_database(
     database_created = False
     leaked_connections = 0
     try:
+        server_major = maintenance.info.server_version // 10_000
+        assert server_major == 18, (
+            "Disposable source corner tests require PostgreSQL 18; "
+            f"connected to major {server_major}"
+        )
         await maintenance.execute(
             sql.SQL(
                 "CREATE ROLE {} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS"
@@ -1320,6 +1325,419 @@ async def test_enc_01_characterizes_current_scalar_loss_and_reader_default_drift
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_enc_01_characterizes_sql_semantic_gucs_and_array_identity_loss() -> None:
+    async with _disposable_source_database() as database:
+        connection = await AsyncConnection.connect(
+            make_conninfo(
+                host="127.0.0.1",
+                port=database.port,
+                dbname=database.name,
+                user=database.reader_name,
+                password=database.reader_password,
+                sslmode="disable",
+            )
+        )
+        try:
+            cursor = await connection.execute(
+                "SELECT current_setting('standard_conforming_strings'), "
+                "current_setting('transform_null_equals'), "
+                "current_setting('array_nulls'), "
+                "current_setting('bytea_output')"
+            )
+            original_semantic_settings = await cursor.fetchone()
+            assert original_semantic_settings is not None
+
+            expected_string_values = {"on": "a\\nb", "off": "a\nb"}
+            expected_string_hashes = {
+                "on": "sha256:f485c1c90af20c905bf5097cde301042a8fb8fa1c69cd0d1b087bed7bfbb7e95",
+                "off": "sha256:e96b206dd05fac4069d74fcd73661a9c762e52ca2ce7d1e197589b5a5d1ffe9e",
+            }
+            for setting, expected in expected_string_values.items():
+                await connection.execute(
+                    "SELECT pg_catalog.set_config("
+                    "'standard_conforming_strings', %s, true)",
+                    (setting,),
+                )
+                cursor = await connection.execute("SELECT 'a\\nb'::text")
+                current = await cursor.fetchone()
+                assert current == (expected,)
+                assert create_result_hash(("value",), [{"value": current[0]}]) == (
+                    expected_string_hashes[setting]
+                )
+
+            expected_null_values = {"off": None, "on": True}
+            expected_null_hashes = {
+                "off": "sha256:465ac580f981f85b5e0107198603949c8746915297554f1718aacc0e3fc73bee",
+                "on": "sha256:f3b63060353a6de843bdab60cff00570124850083597cbb3ebc09406ddf3af16",
+            }
+            for setting, expected in expected_null_values.items():
+                await connection.execute(
+                    "SELECT pg_catalog.set_config('transform_null_equals', %s, true)",
+                    (setting,),
+                )
+                cursor = await connection.execute("SELECT NULL = NULL")
+                current = await cursor.fetchone()
+                assert current == (expected,)
+                assert create_result_hash(("value",), [{"value": current[0]}]) == (
+                    expected_null_hashes[setting]
+                )
+
+            expected_array_values = {"on": [None], "off": ["NULL"]}
+            expected_array_hashes = {
+                "on": "sha256:2ceeafc6cdd6acffce2907fafba6a2490f69e992d58c4516cc7ec548e0383242",
+                "off": "sha256:58c554cec2ac89ee75e8ff731df9f8b83ab3511cb79db36e8abda29935e640b0",
+            }
+            for setting, expected in expected_array_values.items():
+                await connection.execute(
+                    "SELECT pg_catalog.set_config('array_nulls', %s, true)",
+                    (setting,),
+                )
+                cursor = await connection.execute("SELECT '{NULL}'::text[]")
+                current = await cursor.fetchone()
+                assert current == (expected,)
+                assert create_result_hash(("value",), [{"value": current[0]}]) == (
+                    expected_array_hashes[setting]
+                )
+
+            for setting in ("hex", "escape"):
+                await connection.execute(
+                    "SELECT pg_catalog.set_config('bytea_output', %s, true)",
+                    (setting,),
+                )
+                cursor = await connection.execute("SELECT decode('00ff', 'hex')")
+                current = await cursor.fetchone()
+                assert current == (b"\x00\xff",)
+                public_value = encode_result_value(current[0])
+                assert public_value == "base64:AP8="
+                assert create_result_hash(
+                    ("value",), [{"value": public_value}]
+                ) == (
+                    "sha256:2aaa378b22694753a5e7cdfd62a8581ebbef77e9a46dedbe71534041aa288947"
+                )
+
+            cursor = await connection.execute(
+                "SELECT '[0:1]={10,20}'::integer[], '{10,20}'::integer[]"
+            )
+            arrays = await cursor.fetchone()
+            assert arrays is not None
+            public_arrays = tuple(encode_result_value(value) for value in arrays)
+            # ponytail: defect characterization; list shape cannot retain lower bounds.
+            assert public_arrays[0] == public_arrays[1] == [10, 20]
+            assert create_result_hash(
+                ("value",), [{"value": public_arrays[0]}]
+            ) == create_result_hash(("value",), [{"value": public_arrays[1]}]) == (
+                "sha256:0a4513b560854f795950856ddcddcc1a5f8fac4b0341fce951944bbc8ba066dd"
+            )
+
+            await connection.rollback()
+            assert connection.info.transaction_status is TransactionStatus.IDLE
+            cursor = await connection.execute(
+                "SELECT current_setting('standard_conforming_strings'), "
+                "current_setting('transform_null_equals'), "
+                "current_setting('array_nulls'), "
+                "current_setting('bytea_output')"
+            )
+            assert await cursor.fetchone() == original_semantic_settings
+            await connection.rollback()
+            assert connection.info.transaction_status is TransactionStatus.IDLE
+        finally:
+            active_error = sys.exception()
+            cleanup_errors = await _attempt_cleanup_steps(
+                (
+                    ("rollback raw semantic probe", connection.rollback),
+                    ("close raw semantic probe", connection.close),
+                )
+            )
+            if cleanup_errors:
+                if active_error is not None:
+                    raise BaseExceptionGroup(
+                        "Raw semantic probe and cleanup failed",
+                        [active_error, *cleanup_errors],
+                    )
+                raise BaseExceptionGroup(
+                    "Raw semantic probe cleanup failed", cleanup_errors
+                )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_enc_01_characterizes_domain_and_enum_row_description_oids() -> None:
+    async with _disposable_source_database() as database:
+        admin = await AsyncConnection.connect(database.admin_dsn, autocommit=True)
+        try:
+            await admin.execute("CREATE SCHEMA analytics")
+            await admin.execute(
+                "CREATE DOMAIN analytics.positive_integer AS integer "
+                "CHECK (VALUE > 0)"
+            )
+            await admin.execute(
+                "CREATE DOMAIN analytics.integer_list AS integer[]"
+            )
+            await admin.execute(
+                "CREATE TYPE analytics.mood AS ENUM ('ok', 'bad')"
+            )
+            await admin.execute(
+                sql.SQL("GRANT USAGE ON SCHEMA analytics TO {}").format(
+                    sql.Identifier(database.reader_name)
+                )
+            )
+            await admin.execute(
+                sql.SQL(
+                    "GRANT USAGE ON TYPE analytics.positive_integer, "
+                    "analytics.integer_list, analytics.mood TO {}"
+                ).format(sql.Identifier(database.reader_name))
+            )
+            cursor = await admin.execute(
+                "SELECT 'integer'::regtype::oid, 'integer[]'::regtype::oid, "
+                "'analytics.positive_integer[]'::regtype::oid, "
+                "'analytics.mood'::regtype::oid, "
+                "'analytics.mood[]'::regtype::oid"
+            )
+            expected_oids = await cursor.fetchone()
+            assert expected_oids is not None
+        finally:
+            active_error = sys.exception()
+            cleanup_errors = await _attempt_cleanup_steps(
+                (("close domain and enum setup admin", admin.close),)
+            )
+            if cleanup_errors:
+                if active_error is not None:
+                    raise BaseExceptionGroup(
+                        "Domain and enum setup and cleanup failed",
+                        [active_error, *cleanup_errors],
+                    )
+                raise BaseExceptionGroup(
+                    "Domain and enum setup cleanup failed", cleanup_errors
+                )
+
+        connection = await AsyncConnection.connect(
+            make_conninfo(
+                host="127.0.0.1",
+                port=database.port,
+                dbname=database.name,
+                user=database.reader_name,
+                password=database.reader_password,
+                sslmode="disable",
+            )
+        )
+        try:
+            cursor = await connection.execute(
+                "SELECT 1::analytics.positive_integer AS scalar_domain, "
+                "ARRAY[1, 2]::analytics.integer_list AS domain_over_array, "
+                "ARRAY[1::analytics.positive_integer] AS array_of_domain, "
+                "'ok'::analytics.mood AS enum_value, "
+                "ARRAY['ok'::analytics.mood] AS enum_array"
+            )
+            assert cursor.description is not None
+            # ponytail: RowDescription erases allowed-base domain identity, while
+            # enum and arrays with user-defined elements retain user-defined OIDs.
+            assert tuple(column.type_code for column in cursor.description) == (
+                expected_oids[0],
+                expected_oids[1],
+                expected_oids[2],
+                expected_oids[3],
+                expected_oids[4],
+            )
+            assert await cursor.fetchone() == (1, [1, 2], "{1}", "ok", "{ok}")
+            await connection.rollback()
+            assert connection.info.transaction_status is TransactionStatus.IDLE
+        finally:
+            active_error = sys.exception()
+            cleanup_errors = await _attempt_cleanup_steps(
+                (
+                    ("rollback domain and enum probe", connection.rollback),
+                    ("close domain and enum probe", connection.close),
+                )
+            )
+            if cleanup_errors:
+                if active_error is not None:
+                    raise BaseExceptionGroup(
+                        "Domain and enum probe and cleanup failed",
+                        [active_error, *cleanup_errors],
+                    )
+                raise BaseExceptionGroup(
+                    "Domain and enum probe cleanup failed", cleanup_errors
+                )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_enc_01_characterizes_public_query_semantic_guc_drift() -> None:
+    async with _disposable_source_database() as database:
+        admin = await AsyncConnection.connect(database.admin_dsn, autocommit=True)
+        try:
+            await admin.execute("CREATE SCHEMA analytics")
+            await admin.execute(
+                "CREATE TABLE analytics.semantic_edges (record_id bigint PRIMARY KEY)"
+            )
+            await admin.execute("INSERT INTO analytics.semantic_edges VALUES (1)")
+            await admin.execute(
+                sql.SQL("GRANT USAGE ON SCHEMA analytics TO {}").format(
+                    sql.Identifier(database.reader_name)
+                )
+            )
+            await admin.execute(
+                sql.SQL("GRANT SELECT ON analytics.semantic_edges TO {}").format(
+                    sql.Identifier(database.reader_name)
+                )
+            )
+        finally:
+            active_error = sys.exception()
+            cleanup_errors = await _attempt_cleanup_steps(
+                (("close semantic GUC setup admin", admin.close),)
+            )
+            if cleanup_errors:
+                if active_error is not None:
+                    raise BaseExceptionGroup(
+                        "Semantic GUC setup and cleanup failed",
+                        [active_error, *cleanup_errors],
+                    )
+                raise BaseExceptionGroup(
+                    "Semantic GUC setup cleanup failed", cleanup_errors
+                )
+
+        async def set_reader_defaults(
+            *,
+            standard_conforming_strings: str,
+            transform_null_equals: str,
+            array_nulls: str,
+        ) -> None:
+            connection = await AsyncConnection.connect(
+                database.admin_dsn, autocommit=True
+            )
+            try:
+                for name, value in (
+                    ("standard_conforming_strings", standard_conforming_strings),
+                    ("transform_null_equals", transform_null_equals),
+                    ("array_nulls", array_nulls),
+                ):
+                    await connection.execute(
+                        sql.SQL("ALTER ROLE {} SET {} TO {}").format(
+                            sql.Identifier(database.reader_name),
+                            sql.Identifier(name),
+                            sql.Literal(value),
+                        )
+                    )
+            finally:
+                active_error = sys.exception()
+                cleanup_errors = await _attempt_cleanup_steps(
+                    (("close semantic role-default admin", connection.close),)
+                )
+                if cleanup_errors:
+                    if active_error is not None:
+                        raise BaseExceptionGroup(
+                            "Semantic role-default update and cleanup failed",
+                            [active_error, *cleanup_errors],
+                        )
+                    raise BaseExceptionGroup(
+                        "Semantic role-default cleanup failed", cleanup_errors
+                    )
+
+        async def read_public_results() -> tuple[str, dict[str, tuple[object, str]]]:
+            source = _source_profile(database, "semantic-guc-edges", ("table",))
+            catalog, executor, metadata, query = _open_services(source)
+            try:
+                published = await metadata.get_published(source.source_id)
+                results: dict[str, tuple[object, str]] = {}
+                for label, statement in (
+                    (
+                        "string",
+                        "SELECT 'a\\nb'::text AS value "
+                        "FROM analytics.semantic_edges",
+                    ),
+                    (
+                        "null_comparison",
+                        "SELECT NULL = NULL AS value FROM analytics.semantic_edges",
+                    ),
+                    (
+                        "array",
+                        "SELECT '{NULL}'::text[] AS value "
+                        "FROM analytics.semantic_edges",
+                    ),
+                ):
+                    result = await query.query(
+                        source.source_id,
+                        statement,
+                        published.revision,
+                        SQL_POLICY_REVISION,
+                    )
+                    value = result["rows"][0]["value"]
+                    _assert_canonical_result(
+                        result,
+                        published.revision,
+                        ["value"],
+                        [{"value": value}],
+                    )
+                    results[label] = (
+                        value,
+                        create_result_hash(("value",), result["rows"]),
+                    )
+                return published.revision, results
+            finally:
+                active_error = sys.exception()
+                cleanup_errors = await _attempt_cleanup_steps(
+                    (
+                        ("close semantic GUC query executor", executor.close),
+                        ("close semantic GUC catalog", catalog.close),
+                    )
+                )
+                if cleanup_errors:
+                    if active_error is not None:
+                        raise BaseExceptionGroup(
+                            "Semantic GUC public query and cleanup failed",
+                            [active_error, *cleanup_errors],
+                        )
+                    raise BaseExceptionGroup(
+                        "Semantic GUC public query cleanup failed", cleanup_errors
+                    )
+
+        await set_reader_defaults(
+            standard_conforming_strings="off",
+            transform_null_equals="on",
+            array_nulls="off",
+        )
+        drift_revision, drift_results = await read_public_results()
+        assert drift_results == {
+            "string": (
+                "a\nb",
+                "sha256:e96b206dd05fac4069d74fcd73661a9c762e52ca2ce7d1e197589b5a5d1ffe9e",
+            ),
+            "null_comparison": (
+                True,
+                "sha256:f3b63060353a6de843bdab60cff00570124850083597cbb3ebc09406ddf3af16",
+            ),
+            "array": (
+                ["NULL"],
+                "sha256:58c554cec2ac89ee75e8ff731df9f8b83ab3511cb79db36e8abda29935e640b0",
+            ),
+        }
+
+        await set_reader_defaults(
+            standard_conforming_strings="on",
+            transform_null_equals="off",
+            array_nulls="on",
+        )
+        baseline_revision, baseline_results = await read_public_results()
+        # ponytail: defect characterization; semantic role defaults are not revision material.
+        assert baseline_revision == drift_revision
+        assert baseline_results == {
+            "string": (
+                "a\\nb",
+                "sha256:f485c1c90af20c905bf5097cde301042a8fb8fa1c69cd0d1b087bed7bfbb7e95",
+            ),
+            "null_comparison": (
+                None,
+                "sha256:465ac580f981f85b5e0107198603949c8746915297554f1718aacc0e3fc73bee",
+            ),
+            "array": (
+                [None],
+                "sha256:2ceeafc6cdd6acffce2907fafba6a2490f69e992d58c4516cc7ec548e0383242",
+            ),
+        }
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_enc_01_characterizes_empty_multirange_and_unsupported_recovery() -> None:
     async with _disposable_source_database() as database:
         admin = await AsyncConnection.connect(database.admin_dsn, autocommit=True)
@@ -1329,12 +1747,17 @@ async def test_enc_01_characterizes_empty_multirange_and_unsupported_recovery() 
                 "CREATE TABLE analytics.driver_edges "
                 "(record_id bigint PRIMARY KEY, active_span int4range, "
                 "active_spans int4multirange, empty_spans int4multirange, "
-                "empty_numbers integer[], forever date)"
+                "active_range_array int4range[], empty_range_array int4range[], "
+                "empty_numbers integer[], shifted_numbers integer[], "
+                "ordinary_numbers integer[], forever date)"
             )
             await admin.execute(
                 "INSERT INTO analytics.driver_edges VALUES "
                 "(1, int4range(1, 5, '[)'), '{[1,5)}'::int4multirange, "
-                "'{}'::int4multirange, '{}'::integer[], 'infinity'::date)"
+                "'{}'::int4multirange, ARRAY[int4range(1, 5, '[)')], "
+                "'{}'::int4range[], '{}'::integer[], "
+                "'[0:1]={10,20}'::integer[], '{10,20}'::integer[], "
+                "'infinity'::date)"
             )
             await admin.execute(
                 sql.SQL("GRANT USAGE ON SCHEMA analytics TO {}").format(
@@ -1347,7 +1770,19 @@ async def test_enc_01_characterizes_empty_multirange_and_unsupported_recovery() 
                 )
             )
         finally:
-            await admin.close()
+            active_error = sys.exception()
+            cleanup_errors = await _attempt_cleanup_steps(
+                (("close driver-edge setup admin", admin.close),)
+            )
+            if cleanup_errors:
+                if active_error is not None:
+                    raise BaseExceptionGroup(
+                        "Driver-edge setup and cleanup failed",
+                        [active_error, *cleanup_errors],
+                    )
+                raise BaseExceptionGroup(
+                    "Driver-edge setup cleanup failed", cleanup_errors
+                )
 
         source = _source_profile(database, "driver-edges", ("table",))
         catalog, executor, metadata, query = _open_services(source)
@@ -1359,37 +1794,59 @@ async def test_enc_01_characterizes_empty_multirange_and_unsupported_recovery() 
                 ("active_span", "int4range"),
                 ("active_spans", "int4multirange"),
                 ("empty_spans", "int4multirange"),
+                ("active_range_array", "int4range[]"),
+                ("empty_range_array", "int4range[]"),
                 ("empty_numbers", "integer[]"),
+                ("shifted_numbers", "integer[]"),
+                ("ordinary_numbers", "integer[]"),
                 ("forever", "date"),
             ]
 
-            empty_multirange = await query.query(
-                source.source_id,
-                "SELECT empty_spans AS value FROM analytics.driver_edges",
-                published.revision,
-                SQL_POLICY_REVISION,
-            )
-            empty_array = await query.query(
-                source.source_id,
-                "SELECT empty_numbers AS value FROM analytics.driver_edges",
-                published.revision,
-                SQL_POLICY_REVISION,
-            )
-            # ponytail: defect characterization; empty multirange must follow ENC-01.
-            assert empty_multirange["rows"] == empty_array["rows"] == [{"value": []}]
-            empty_collection_hash = create_result_hash(
-                ("value",), empty_multirange["rows"]
-            )
-            assert empty_collection_hash == create_result_hash(
-                ("value",), empty_array["rows"]
-            )
-            assert empty_collection_hash == (
+            empty_results = []
+            for column in ("empty_spans", "empty_range_array", "empty_numbers"):
+                empty_results.append(
+                    await query.query(
+                        source.source_id,
+                        f"SELECT {column} AS value FROM analytics.driver_edges",
+                        published.revision,
+                        SQL_POLICY_REVISION,
+                    )
+                )
+            # ponytail: defect characterization; unsupported empty collections follow ENC-01.
+            assert all(result["rows"] == [{"value": []}] for result in empty_results)
+            empty_hashes = {
+                create_result_hash(("value",), result["rows"])
+                for result in empty_results
+            }
+            assert empty_hashes == {
                 "sha256:77f588e368495248abbd8eb87354efadbd31afa38d0ca675154506624470f06a"
+            }
+
+            array_results = []
+            for column in ("shifted_numbers", "ordinary_numbers"):
+                array_results.append(
+                    await query.query(
+                        source.source_id,
+                        f"SELECT {column} AS value FROM analytics.driver_edges",
+                        published.revision,
+                        SQL_POLICY_REVISION,
+                    )
+                )
+            assert all(
+                result["rows"] == [{"value": [10, 20]}]
+                for result in array_results
             )
+            assert {
+                create_result_hash(("value",), result["rows"])
+                for result in array_results
+            } == {
+                "sha256:0a4513b560854f795950856ddcddcc1a5f8fac4b0341fce951944bbc8ba066dd"
+            }
 
             for unsupported_sql in (
                 "SELECT active_span FROM analytics.driver_edges",
                 "SELECT active_spans FROM analytics.driver_edges",
+                "SELECT active_range_array FROM analytics.driver_edges",
                 "SELECT forever FROM analytics.driver_edges",
             ):
                 with pytest.raises(QueryUnavailableError) as unavailable:
@@ -1419,8 +1876,154 @@ async def test_enc_01_characterizes_empty_multirange_and_unsupported_recovery() 
                     "UTC",
                 )
         finally:
-            await executor.close()
-            await catalog.close()
+            active_error = sys.exception()
+            cleanup_errors = await _attempt_cleanup_steps(
+                (
+                    ("close driver-edge query executor", executor.close),
+                    ("close driver-edge catalog", catalog.close),
+                )
+            )
+            if cleanup_errors:
+                if active_error is not None:
+                    raise BaseExceptionGroup(
+                        "Driver-edge query and cleanup failed",
+                        [active_error, *cleanup_errors],
+                    )
+                raise BaseExceptionGroup(
+                    "Driver-edge query cleanup failed", cleanup_errors
+                )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_enc_01_characterizes_record_and_unknown_oid_passthrough() -> None:
+    async with _disposable_source_database() as database:
+        admin = await AsyncConnection.connect(database.admin_dsn, autocommit=True)
+        try:
+            await admin.execute("CREATE SCHEMA analytics")
+            await admin.execute(
+                "CREATE TABLE analytics.exotic_edges "
+                "(record_id bigint PRIMARY KEY, cash money, cash_text text, "
+                "location point, location_text text, payload xml, payload_text text)"
+            )
+            await admin.execute(
+                "INSERT INTO analytics.exotic_edges VALUES "
+                "(1, 12.34::money, 12.34::money::text, "
+                "point(1, 2), point(1, 2)::text, "
+                "xmlparse(document '<a> x </a>'), '<a> x </a>')"
+            )
+            await admin.execute(
+                sql.SQL("GRANT USAGE ON SCHEMA analytics TO {}").format(
+                    sql.Identifier(database.reader_name)
+                )
+            )
+            await admin.execute(
+                sql.SQL("GRANT SELECT ON analytics.exotic_edges TO {}").format(
+                    sql.Identifier(database.reader_name)
+                )
+            )
+        finally:
+            active_error = sys.exception()
+            cleanup_errors = await _attempt_cleanup_steps(
+                (("close exotic-edge setup admin", admin.close),)
+            )
+            if cleanup_errors:
+                if active_error is not None:
+                    raise BaseExceptionGroup(
+                        "Exotic-edge setup and cleanup failed",
+                        [active_error, *cleanup_errors],
+                    )
+                raise BaseExceptionGroup(
+                    "Exotic-edge setup cleanup failed", cleanup_errors
+                )
+
+        source = _source_profile(database, "exotic-edges", ("table",))
+        catalog, executor, metadata, query = _open_services(source)
+        try:
+            published = await metadata.get_published(source.source_id)
+            relation = published.snapshot.relations[0]
+            assert [(column.name, column.data_type) for column in relation.columns] == [
+                ("record_id", "bigint"),
+                ("cash", "money"),
+                ("cash_text", "text"),
+                ("location", "point"),
+                ("location_text", "text"),
+                ("payload", "xml"),
+                ("payload_text", "text"),
+            ]
+
+            for unknown_column, text_column in (
+                ("cash", "cash_text"),
+                ("location", "location_text"),
+                ("payload", "payload_text"),
+            ):
+                unknown_result = await query.query(
+                    source.source_id,
+                    f"SELECT {unknown_column} AS value FROM analytics.exotic_edges",
+                    published.revision,
+                    SQL_POLICY_REVISION,
+                )
+                text_result = await query.query(
+                    source.source_id,
+                    f"SELECT {text_column} AS value FROM analytics.exotic_edges",
+                    published.revision,
+                    SQL_POLICY_REVISION,
+                )
+                # ponytail: defect characterization; driver str hides the SQL type OID.
+                assert unknown_result["rows"] == text_result["rows"]
+                assert create_result_hash(
+                    ("value",), unknown_result["rows"]
+                ) == create_result_hash(("value",), text_result["rows"])
+
+            record_results = []
+            for expression in (
+                "ROW()",
+                "ROW(NULL::integer)",
+                "ROW(1::integer)",
+                "ROW('1'::text)",
+            ):
+                record_results.append(
+                    await query.query(
+                        source.source_id,
+                        f"SELECT {expression} AS value FROM analytics.exotic_edges",
+                        published.revision,
+                        SQL_POLICY_REVISION,
+                    )
+                )
+
+            assert record_results[0]["rows"] == record_results[1]["rows"] == [
+                {"value": []}
+            ]
+            assert record_results[2]["rows"] == record_results[3]["rows"] == [
+                {"value": ["1"]}
+            ]
+            assert create_result_hash(
+                ("value",), record_results[0]["rows"]
+            ) == create_result_hash(("value",), record_results[1]["rows"]) == (
+                "sha256:77f588e368495248abbd8eb87354efadbd31afa38d0ca675154506624470f06a"
+            )
+            assert create_result_hash(
+                ("value",), record_results[2]["rows"]
+            ) == create_result_hash(("value",), record_results[3]["rows"]) == (
+                "sha256:dadd5b0c8d9a51f5db4a5117d804c30dcbcc7f4cfa417a4df154de40d63de4f3"
+            )
+        finally:
+            active_error = sys.exception()
+            cleanup_errors = await _attempt_cleanup_steps(
+                (
+                    ("close exotic-edge query executor", executor.close),
+                    ("close exotic-edge catalog", catalog.close),
+                )
+            )
+            if cleanup_errors:
+                if active_error is not None:
+                    raise BaseExceptionGroup(
+                        "Exotic-edge query and cleanup failed",
+                        [active_error, *cleanup_errors],
+                    )
+                raise BaseExceptionGroup(
+                    "Exotic-edge query cleanup failed", cleanup_errors
+                )
 
 
 @pytest.mark.integration
