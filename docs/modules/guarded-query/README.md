@@ -77,6 +77,8 @@ SQL_POLICY_REVISION -> current immutable policy identity
   통과할 때만 유효하며 table function이나 다른 schema의 동명 함수를 허용하지 않는다.
 - Client가 보낸 metadata/SQL policy revision이 현재 published 값과 다르면 실행하지 않는다.
 - Policy 재료가 바뀌면 revision도 함께 바뀌어 오래된 client 계획을 fail-closed한다.
+- SQL policy version 2는 `result_encoding.py`의 immutable canonical-time policy material version 1을
+  digest에 포함한다. Metadata는 같은 object/material을 자신의 revision에 포함한다.
 
 ### Query application contract
 
@@ -102,6 +104,9 @@ Canonical scalar는 `null/bool/int/text/finite float`를 JSON scalar로, `numeri
 `bytea`를 `base64:` standard Base64, date/time/interval/UUID/network를 stable string으로,
 non-finite float를 `NaN|Infinity|-Infinity` string으로 표현한다. Sequence/mapping은 재귀적으로
 encoding하고 mapping key는 string만 허용한다. 지원하지 않는 type은 fail-closed한다.
+Aware Python datetime은 UTC `+00:00` ISO 문자열로 정규화하고 `Z`를 쓰지 않는다. Naive datetime,
+date, time과 timetz는 기존 `isoformat()` 표현을 보존한다. Microseconds는 Python의 automatic
+timespec을 그대로 따른다.
 
 `result_bytes`는 compact UTF-8 JSON rows array의 `[]`와 comma까지 포함한다. 다음 행이 byte 또는
 row 상한을 넘으면 그 행을 넣지 않고 `truncated=true`로 반환한다. Duplicate result column은
@@ -151,8 +156,9 @@ resolved-object 검증과 commit에서 같은 SQLSTATE가 발생해도 사용자
 2. Published metadata/SQL policy revision 확인
 3. SQL AST와 relation/function/operator/type 검증
 4. Source별 concurrency slot 획득
-5. Repeatable-read read-only transaction 시작과 transaction-local limit 적용
-6. Reader role/privilege/RLS/tenant session과 resolved function/operator 재검증; relation은
+5. Repeatable-read read-only transaction 시작, 첫 settings statement의 transaction-local
+   `TimeZone=UTC`, 나머지 limit 적용
+6. Reader role/privilege/RLS/tenant/UTC session과 resolved function/operator 재검증; relation은
    published-name allowlist, reader privilege와 planning에서 제한
 7. `EXPLAIN` plan budget admission
 8. Cursor로 row/byte limit 안에서 fetch하고 canonical encoding

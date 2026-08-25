@@ -112,6 +112,10 @@ resume metadata publish -> current pinned metadata revision unpinned
 publish verified query -> immutable revision-bound expected result
 ```
 
+같은 query ID도 metadata revision이 다르면 별도 immutable contract row다. Global policy 전환은
+current와 rollback-preserved contract 전체를 새 revision에서 재실행하고, 이전 snapshot/generation/
+verified row를 update/delete하지 않는다.
+
 Operation result status는 `published`, `deactivated`, `rolled_back`, `resumed`, `verified`다. 성공
 public response는 이를 담은 authoritative terminal receipt이며 actor/reason, request hash,
 expected/resulting state, outcome과 HTTP 의미를 함께 제공한다. 결정적 rejection은 safe public error로
@@ -122,6 +126,8 @@ state를 남기면 안 된다. Commit 뒤 runtime apply 의미는 아래 acknowl
 ### Persistence contract
 
 - Source generation, metadata snapshot과 verified contract는 append-only/immutable이다.
+- Canonical-time처럼 Control schema shape를 바꾸지 않는 global revision migration도 새 snapshot,
+  generation과 verified row를 append하고 rollback 대상 old row를 보존한다.
 - Active pointer만 명시된 transaction과 CAS 아래 변경한다.
 - Numbered migration은 filename/checksum과 적용 이력을 immutable ledger에 남기고 advisory apply
   lock 아래 순서대로 실행한다. 과거 migration을 수정하거나 번호를 건너뛰지 않는다.
@@ -319,6 +325,8 @@ unavailable observation 자체는 오류가 아니다. Writer role은 attempt ta
 
 Control DB commit은 desired-state 원자성을 보장하지만 모든 process의 in-memory 적용까지 하나의
 분산 transaction으로 만들지는 않는다. 각 replica의 `SourceReloader`가 polling으로 수렴한다.
+SQL policy/metadata revision을 함께 바꾸는 cutover에서는 old fleet를 완전히 drain한 뒤 route 밖의
+new fleet에서 source별 L1→all verified→L2를 완료하고, replica convergence 뒤에만 route한다.
 `SourceReloader`는 Source Catalog의 `SourceProjectionWriter`를 받아 read와 `upsert/remove` capability를
 함께 소비하는 유일한 runtime projector다.
 Pool/cache adapter에는 Control Plane 소유의 작은 `SourcePoolInvalidator.invalidate(source_id)` port만

@@ -11,6 +11,10 @@ class ReaderSessionPolicyError(RuntimeError):
     pass
 
 
+READER_SESSION_TIMEZONE_SETTER = (
+    "SELECT pg_catalog.set_config('TimeZone', 'UTC', true)"
+)
+
 READER_SESSION_BUDGET_SETTERS = """
   pg_catalog.set_config('work_mem', %s, true),
   pg_catalog.set_config('temp_file_limit', %s, true),
@@ -25,6 +29,7 @@ _READER_SESSION_POLICY_QUERY = """
     pg_catalog.current_setting('transaction_read_only') = 'on' AS read_only,
     pg_catalog.current_setting('transaction_isolation') = 'repeatable read'
       AS repeatable_read,
+    pg_catalog.current_setting('TimeZone') = 'UTC' AS utc_timezone,
     pg_catalog.current_setting('default_transaction_read_only') = 'on'
       AS defaults_read_only,
     role.rolcanlogin

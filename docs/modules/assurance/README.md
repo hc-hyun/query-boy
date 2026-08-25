@@ -118,6 +118,8 @@ Guarded Query의 safety path를 우회하지 않는다.
 
 Rows는 Guarded Query의 canonical result encoding을 거친 값이어야 한다. Numeric, binary,
 date/time, mapping 또는 non-finite value encoding이 바뀌면 같은 SQL의 verified hash도 바뀐다.
+Aware datetime은 UTC `+00:00`이고 naive datetime/date/time/timetz는 기존 ISO 표현이다. Canonical-time
+policy나 metadata revision이 바뀌면 값이 같은 contract도 새 exact revision에서 다시 실행한다.
 
 ### Metadata quality evaluation contract
 
@@ -152,6 +154,8 @@ managed mode는 empty map에서 시작해 Control DB verified contract만 반영
 Control Plane은 public administration input을 Assurance의 Verified DTO로 변환하고 그 DTO/hash를
 소비해 immutable contract를 publish한다. Delivery는 Assurance DTO를 직접 만들지 않으며 Assurance
 core는 Control DB implementation을 import하지 않는다.
+Global revision 전환은 bootstrap fixture 전체와 managed current/rollback-preserved membership 전체를
+inventory해 재실행한다. 이전 revision membership을 삭제하거나 새 revision으로 자동 승계하지 않는다.
 
 ### Usage projection acceptance contract (`CTRL-08`)
 

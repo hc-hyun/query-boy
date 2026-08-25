@@ -22,6 +22,9 @@ Snapshot에는 reader가 볼 수 있는 relation, column, type, comment와 view 
 저장한다. Source DSN, credential, runtime budget과 caller policy는 저장하지 않는다. 읽을
 때 현재 source manifest로 revision을 다시 계산하고 저장된 revision과 다르면 fail-closed
 한다. 따라서 과거 manifest의 권한 범위를 현재 runtime에 암묵적으로 복원하지 않는다.
+Revision digest에는 Guarded Query가 소유한 immutable canonical-time policy material도 포함한다.
+Material이 바뀌면 snapshot JSON이나 Control table shape가 같아도 모든 source에 새 revision row를
+append하고 이전 row는 rollback을 위해 보존한다.
 Row estimate, storage, growth와 usage는 metadata revision 재료가 아니며
 [ADR 0016](0016-centralized-source-management-plane.md)의 별도 operational observation으로
 관리한다. Observation 갱신은 source generation이나 metadata revision을 만들지 않는다.
@@ -73,6 +76,8 @@ Bootstrap mode는 Control DB 설정을 거부한다. Login은
   replica의 즉시 invalidation은 observability/control-plane 후속 범위다.
 - Snapshot은 immutable하므로 보존 기간과 archive 정책 없이 무기한 증가한다. 운영
   retention은 활성/rollback 대상 revision을 삭제하지 않는 별도 절차가 필요하다.
+- Canonical-time 전환의 verified reissue와 보존형 rollback은
+  [ADR 0019](0019-canonical-time-stability.md)를 따른다.
 - Metadata store와 source store는 process당 각각 최대 2개, 합계 최대 4개의 control
   connection을 사용한다. Dedicated LOGIN의 유한 connection limit는 replica 수 × 4로 계산하며
   source reader의 별도 query/metadata connection budget과 섞지 않는다.

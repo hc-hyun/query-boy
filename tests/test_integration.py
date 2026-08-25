@@ -2504,6 +2504,18 @@ async def test_live_query_concurrency_cancel_and_source_isolation() -> None:
                 relation.qualified_name for relation in development_metadata.snapshot.relations
             ),
         )
+
+        async def pooled_reader_timezone() -> str:
+            pool = await executor._get_pool(limited_development)
+            async with pool.connection() as connection:
+                cursor = await connection.execute(
+                    "SELECT pg_catalog.current_setting('TimeZone') AS timezone"
+                )
+                row = await cursor.fetchone()
+            assert row is not None
+            return str(row["timezone"])
+
+        default_reader_timezone = await pooled_reader_timezone()
         warmed = await executor.execute(
             warm_development,
             dev_count_sql,
@@ -2511,6 +2523,7 @@ async def test_live_query_concurrency_cancel_and_source_isolation() -> None:
             dev_count_validated,
         )
         assert warmed["rows"] == [{"issue_count": 600}]
+        assert await pooled_reader_timezone() == default_reader_timezone
         slow_task = asyncio.create_task(
             executor.execute(
                 limited_development,
@@ -2545,6 +2558,7 @@ async def test_live_query_concurrency_cancel_and_source_isolation() -> None:
         slow_task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await slow_task
+        assert await pooled_reader_timezone() == default_reader_timezone
 
         recovered = await executor.execute(
             limited_development,
@@ -2587,6 +2601,7 @@ async def test_live_query_concurrency_cancel_and_source_isolation() -> None:
         assert await executor.cancel(operator_query_id)
         with pytest.raises(QueryTimeoutError):
             await slow_task
+        assert await pooled_reader_timezone() == default_reader_timezone
 
         recovered_after_operator_cancel = await executor.execute(
             limited_development,

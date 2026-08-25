@@ -107,6 +107,10 @@ Managed cold-start scan이 실패하면 empty inventory로 unavailable이며 fil
 않는다. Bootstrap은 Control DSN/encryption key를 거부하고 managed는 둘과 version 2 access policy를
 요구한다.
 
+SQL policy와 모든 metadata revision을 함께 바꾸는 release는 mixed serving fleet를 허용하지 않는다.
+Startup 자체가 old/new contract를 번역하지 않으며, 운영자는 old fleet drain과 source connection 0,
+route 밖 new fleet의 L1→verified→L2 및 replica convergence를 먼저 증명해야 한다.
+
 필수 configuration 또는 dependency 초기화가 실패하면 ready로 전환하지 않는다. Control
 sync/probe와 reload task 생성 뒤 MCP child lifespan `enter` 자체가 실패하면 Runtime은 진입 전에
 parent가 만든 resource를 다음 고정 순서로 정리한다.
@@ -146,6 +150,8 @@ Runtime은 정상 shutdown에서 optional method 탐색 없이 `RuntimeQueryExec
 직접 호출한 뒤 query executor와 catalog를 기존 순서로 close한다. Managed reloader에는 검증된
 catalog와 query executor를 같은 순서의 두 `SourcePoolInvalidator`로 빠짐없이 주입한다. Capability
 검사용 `getattr`는 required method의 callable 존재 확인일 뿐 optional lifecycle skip이 아니다.
+Transaction-local UTC는 commit, rollback과 shutdown cancel 뒤 pool에 남지 않는다. Canonical-time
+rollback은 R2를 같은 순서로 drain한 뒤 보존된 R1 binary/generation/revision/L2를 복구하고 route한다.
 
 ### Health and operations contract
 

@@ -122,6 +122,7 @@ HTTP/MCP application result와 JSON은 기존 array/object shape를 유지한다
 Revision은 다음 current source/catalog material의 canonical JSON SHA-256(`sha256:` prefix)이다.
 
 - `source_id`, allowed schemas/relation kinds와 non-default tenant isolation
+- Guarded Query가 소유한 immutable canonical-time policy material version 1
 - 전체 execution budget과 semantic overlay
 - Relation schema/name/kind/comment/definition hash/security-invoker
 - Ordered primary/foreign key와 index definition
@@ -138,6 +139,8 @@ Canonicalizer는 list와 tuple, dict와 immutable mapping을 같은 canonical ar
 ### Metadata lifecycle contract
 
 - Fresh candidate를 validate하고 source definition과 함께 revision을 계산한다.
+- Catalog transaction은 Source Catalog의 UTC-first reader-session safety를 통과한 뒤에만 physical
+  catalog를 읽는다.
 - Store가 있으면 append-only persisted snapshot을 publish하고 committed active value만 cache한다.
 - Rollback pin, resume와 stale activation provenance를 보존한다.
 - Source generation 교체 시 epoch와 current profile을 함께 확인하여 지연 refresh를 거부한다.
@@ -224,6 +227,7 @@ array/object document를 새 immutable graph로 decode한다. Persisted JSON sha
   semantic overlay와 budget
 - Source Catalog의 reader-session safety contract
 - [Guarded Query](../guarded-query/README.md)의 SQL policy revision/capability descriptor
+  와 immutable canonical-time policy material
 - [Control Plane](../control-plane/README.md)이 구현하는 MetadataStore persistence capability
 - [Runtime](../runtime/README.md)의 operations reporting contract
 - Runtime composition이 source mode에 따라 단일 authority에서 주입하는 immutable verified-revision

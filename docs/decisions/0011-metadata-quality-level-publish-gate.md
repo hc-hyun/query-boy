@@ -28,6 +28,8 @@ snapshot active pointer를 갱신하지 않는다. `POST /meta`와 MCP context�
 Verified contract는 startup에 strict schema로 load하고 source별 revision set으로
 MetadataService에 전달한다. Control-plane에서 복구하거나 rollback한 snapshot도 현재
 manifest와 verified revision에 대해 같은 gate를 다시 통과해야 한다.
+Global canonical-time/SQL policy가 바뀌면 모든 source metadata revision이 바뀌므로 값이 같아 보이는
+contract도 새 exact revision에서 다시 실행·발행해야 L2가 된다.
 
 ## Consequences
 
@@ -36,3 +38,4 @@ manifest와 verified revision에 대해 같은 gate를 다시 통과해야 한�
 - Schema revision이 바뀌면 기존 verified SQL이 있어도 L2가 아니며 새 contract 검증 전
   active publish가 중단된다.
 - No-deploy onboarding의 staging/publish 단계는 같은 assessor를 재사용해야 한다.
+- Canonical-time coordinated cutover는 [ADR 0019](0019-canonical-time-stability.md)를 따른다.

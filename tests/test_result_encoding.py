@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from ipaddress import ip_address
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 import pytest
 
-from query_man.result_encoding import ResultEncodingError, encode_result_value
+from query_man.result_encoding import (
+    CANONICAL_TIME_POLICY_MATERIAL,
+    ResultEncodingError,
+    encode_result_value,
+)
 
 
 def test_encodes_exact_and_binary_postgres_scalars_as_stable_strings() -> None:
@@ -44,6 +49,74 @@ def test_encodes_non_finite_floats_without_nonstandard_json_numbers() -> None:
         "Infinity",
         "-Infinity",
     ]
+
+
+def test_normalizes_aware_datetimes_and_nested_dst_values_to_utc() -> None:
+    encoded = encode_result_value(
+        {
+            "seoul": datetime(
+                2026,
+                8,
+                25,
+                12,
+                34,
+                tzinfo=ZoneInfo("Asia/Seoul"),
+            ),
+            "new_york_dst": [
+                datetime(
+                    2024,
+                    3,
+                    10,
+                    3,
+                    tzinfo=ZoneInfo("America/New_York"),
+                ),
+                datetime(
+                    2024,
+                    11,
+                    3,
+                    1,
+                    30,
+                    0,
+                    123456,
+                    tzinfo=ZoneInfo("America/New_York"),
+                    fold=1,
+                ),
+            ],
+        }
+    )
+
+    assert encoded == {
+        "seoul": "2026-08-25T03:34:00+00:00",
+        "new_york_dst": [
+            "2024-03-10T07:00:00+00:00",
+            "2024-11-03T06:30:00.123456+00:00",
+        ],
+    }
+
+
+def test_preserves_naive_datetime_date_time_and_timetz_isoformat() -> None:
+    values = [
+        datetime(2026, 8, 25, 1, 2, 3, 456789),
+        date(2026, 8, 25),
+        time(1, 2, 3, 456789),
+        time(1, 2, 3, 456789, tzinfo=timezone(timedelta(hours=9))),
+    ]
+
+    assert encode_result_value(values) == [value.isoformat() for value in values]
+
+
+def test_canonical_time_policy_material_is_exact_and_immutable() -> None:
+    assert dict(CANONICAL_TIME_POLICY_MATERIAL) == {
+        "version": 1,
+        "reader_session_timezone": "UTC",
+        "aware_datetime": "utc_isoformat_plus_00_00",
+        "naive_datetime": "preserve_isoformat",
+        "date": "preserve_isoformat",
+        "time": "preserve_isoformat",
+        "timetz": "preserve_isoformat",
+    }
+    with pytest.raises(TypeError):
+        CANONICAL_TIME_POLICY_MATERIAL["version"] = 2  # type: ignore[index]
 
 
 def test_rejects_unsupported_values_and_non_string_object_keys() -> None:

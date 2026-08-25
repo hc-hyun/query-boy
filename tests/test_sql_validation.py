@@ -26,8 +26,12 @@ def test_parser_matches_postgresql_18_grammar() -> None:
 
 
 def test_sql_policy_revision_is_a_stable_digest() -> None:
-    assert len(SQL_POLICY_REVISION) == len("sha256:") + 64
-    assert SQL_POLICY_REVISION.removeprefix("sha256:").isalnum()
+    assert SQL_POLICY_REVISION == (
+        "sha256:6b68458319a21416e51bf4be059fc55c4e053b45e38e7219956c4ac3725637a6"
+    )
+    assert SQL_POLICY_REVISION != (
+        "sha256:83729139d7ccedbe8e299b0c4a8bdefb97d42ca870d5fc3b9c227578c65855d9"
+    )
 
 
 def test_accepts_question_answering_select_and_extracts_dependencies() -> None:

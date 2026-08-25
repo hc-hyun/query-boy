@@ -25,6 +25,10 @@ overload가 선택될 가능성을 독립적으로 차단하지 못한다. Curat
 - Query transaction은 `search_path=pg_catalog`를 transaction-local로 강제한다.
   Physical relation은 AST 정책상 항상 schema-qualified이므로 `ai`를 search path에 둘
   필요가 없다.
+- Catalog와 Query transaction은 `BEGIN ... REPEATABLE READ READ ONLY` 직후 첫 settings
+  statement로 transaction-local `TimeZone=UTC`를 설정한다. 공통 reader probe가 UTC를 확인한
+  뒤에만 catalog, resolved-object, `EXPLAIN`과 사용자 SQL을 실행한다. Role/database default는
+  바꾸지 않으며 commit, rollback과 cancel 뒤 pool에서 원래 default가 복원돼야 한다.
 - AST에서 승인한 함수와 operator 이름마다 현재 session에서 visible한 candidate OID를
   `pg_proc`와 `pg_operator`에서 조회한다. 모든 candidate와 operator 구현 함수는
   `pg_catalog` namespace이고, `VOLATILE` 또는 `SECURITY DEFINER`가 아니며 reader가
@@ -54,3 +58,5 @@ overload가 선택될 가능성을 독립적으로 차단하지 못한다. Curat
   volatility, privilege와 resource 특성을 별도 ADR로 승인해야 한다.
 - RLS onboarding의 caller/tenant authorization과 pool reset은
   [ADR 0014](0014-trusted-rls-tenant-context.md)에서 구현·검증한다.
+- Canonical time과 business calendar 결정은
+  [ADR 0019](0019-canonical-time-stability.md)를 따른다.

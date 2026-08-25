@@ -25,6 +25,9 @@ Operator는 question, SQL, expected relations, columns, row count와 canonical r
 `control.verified_query_contracts`는 source, query ID와 metadata revision으로 식별하며 update와
 delete를 금지한다. [ADR 0016](0016-centralized-source-management-plane.md)의 명시적 runtime mode가
 contract authority도 process 전체에서 한 번 선택한다.
+같은 query ID를 새 metadata revision에 재발행하면 새 immutable row가 생기며 이전 revision row는
+rollback evidence로 남는다. Global policy 전환 때는 변경된 hash의 contract만이 아니라 current와
+rollback-preserved inventory 전체를 새 revision에서 재실행한다.
 
 - `bootstrap` mode는 filesystem contract만 사용하고 Control DB 설정을 거부한다.
 - `managed` mode는 empty verified map으로 시작해 Control DB contract revision만 load한다.
@@ -55,3 +58,5 @@ managed quality gate를 통과하는 no-deploy 특성은 유지한다.
   monitoring 절차로 수행한다.
 - Managed runtime은 filesystem contract가 Control DB에 없다는 이유로 자동 import하거나 L2
   evidence로 인정하지 않는다.
+- Canonical-time migration의 protected inventory, L1→verified→L2 cutover와 보존형 rollback은
+  [ADR 0019](0019-canonical-time-stability.md)를 따른다.

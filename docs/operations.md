@@ -218,6 +218,29 @@ process의 이후 poll이 실패하면 마지막 verified registry를 유지하�
 이 절차는 startup import나 새 bulk endpoint가 아니다. Seed digest/import marker와 repository
 write-back을 만들지 않는다.
 
+### Canonical-Time Coordinated Cutover
+
+[ADR 0019](decisions/0019-canonical-time-stability.md)의 R2는 rolling mixed fleet로 배포하지 않는다.
+
+1. Source/admin/verified mutation을 동결하고 Control backup, R1 image/binary/key와 source별 active 및
+   rollback generation/revision을 change record에 고정한다.
+2. Public API가 verified payload를 열거하지 않으므로 보호된 migration/admin identity로
+   `control.verified_query_contracts`의 current/rollback-preserved question, SQL, relations와 expected를
+   제한된 offline export한다. Inventory 완전성을 증명하지 못하면 중단한다.
+3. R1 business-calendar source DB migration을 적용하고 managed manifest의
+   `database_migration_ref`가 실제 artifact를 가리키게 갱신한다. R1 runtime에서 source별
+   L1→모든 contract 재실행·재발행→L2와 rollback baseline을 확인한다.
+4. Old fleet admission/route를 닫고 graceful drain을 완료한다. `pg_stat_activity`에서 old
+   query/catalog application connection이 0임을 확인한 뒤에만 R2를 route 밖에서 시작한다.
+5. R2에서 source별 L1→current와 rollback-preserved contract 전체 재실행·재발행→L2를 수행하고,
+   replica `available`, `drift=[]`, stale metadata/SQL policy 409와 `/ready`를 확인한 뒤 route한다.
+6. Rollback은 mutation freeze를 유지한 채 R2를 drain하고 R1 image를 시작해 captured CAS/generation,
+   revision, verified/L2와 ready를 복구한 뒤 route한다. R2 snapshot/generation/verified row는 삭제하지
+   않는다.
+
+Repository fixture 검증은 production inventory, backup, old fleet connection 0 또는 실제 route 전환을
+증명하지 않는다. 환경별 change record가 별도로 필요하다.
+
 ### Admin Mutation And Timeout Reconciliation
 
 모든 source mutation에는 canonical lowercase UUID `Idempotency-Key`, ticket/change reference인
@@ -447,3 +470,5 @@ Uvicorn graceful timeout은 `QUERY_MAN_SHUTDOWN_GRACE_MS`를 초 단위로 올�
 PostgreSQL cancel과 rollback을 수행한다. Lifespan의 drain/close는 남은 queue·pool wait·active
 query를 정리하는 마지막 안전 경계다. Orchestrator termination grace는 이 값과 process 종료
 overhead보다 길게 설정한다.
+Reader `TimeZone=UTC`는 transaction-local이므로 정상 commit뿐 아니라 timeout, disconnect와 강제
+cancel rollback 뒤에도 pool에 남지 않아야 한다. Role/database default는 배포에서 바꾸지 않는다.

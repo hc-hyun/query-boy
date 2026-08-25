@@ -228,6 +228,8 @@ Registry와 metadata refresh는 다음 조건을 만족하지 않으면 source�
 - 존재하는 budget profile과 secret 환경 변수
 - overlay relation이 allowed schema 안에 있음
 - Reader 세션의 database, session user와 read-only 상태가 profile과 일치함
+- Reader transaction의 첫 settings statement가 local `TimeZone=UTC`를 설정하고 공통 probe가
+  catalog/query 전에 이를 확인함; role/database default는 변경하지 않음
 - Reader 세션의 work memory, temporary file, parallel worker와 JIT가 budget과 정확히 일치함
 - Grain key, 대표 시간 column과 column alias 대상이 실제 catalog에 존재함
 - 승인된 join 양쪽 column이 존재하고 data type이 같음
@@ -341,13 +343,16 @@ Observation 실패는 registry, query, readiness나 mutation receipt를 바꾸�
    이름으로 명시하고, 없으면 query 생성기가 추측하지 않게 한다. Calendar bucket에도 같은
    timezone을 적용한다. Minimum을 L1으로 설정해 publish하고 새 `metadata_revision`을 기록한다.
 3. 실제 사용자 질문과 deterministic SQL을 준비한다. SQL의 expected relation, ordered
-   columns, row count와 canonical result hash를 별도 review한다.
+   columns, row count와 canonical result hash를 별도 review한다. Aware datetime은 UTC `+00:00`,
+   naive datetime/date/time/timetz는 저장된 ISO 표현을 사용한다.
 4. 현재 L1 revision을 포함한 contract를 verified-query admin endpoint에 제출한다. Gateway
    budget, AST/object policy, 결과 invariant 중 하나라도 실패하면 contract는 저장되지 않는다.
 5. Semantic overlay는 그대로 두고 `minimum_quality_level`만 L2로 바꿔 다시 publish한다.
    Quality minimum은 revision hash 재료가 아니므로 2단계와 같은 revision이 L2 gate를 통과한다.
    반면 source profile의 execution budget과 revision-scoped policy 변경은 revision 재료이므로
    새 revision에서 verified query를 다시 실행·승인해야 한다.
+   Canonical-time/SQL policy처럼 모든 metadata revision이 바뀌는 전환은 current와 rollback-preserved
+   contract 전체를 새 revision에서 재실행하며 이전 immutable row를 삭제하지 않는다.
 6. `/meta`와 MCP `get_context`의 `quality_level=L2`, 실제 query 결과, `/sources` visibility를
    확인한다. Replica endpoint에서 다른 replica도 report cadence 뒤 같은 generation/state/metadata
    revision으로 `available`, `drift=[]`인지 확인한다.

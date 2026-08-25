@@ -719,6 +719,97 @@ async def test_source_store_publishes_rotates_rolls_back_and_deactivates(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_verified_contract_reissue_preserves_old_revision_through_rollback(
+    disposable_control_dsn: str,
+) -> None:
+    validated, current_metadata = _source_fixture("time-contract-history")
+    source = validated.profile
+    old_metadata = PreparedMetadata(
+        current_metadata.snapshot,
+        f"sha256:{'1' * 64}",
+    )
+    cipher = SourceSecretCipher(b"t" * 32)
+    store = PostgresSourceStore(disposable_control_dsn)
+    expected = ExpectedResult(
+        columns=("status", "count"),
+        row_count=1,
+        result_hash=create_result_hash(
+            ("status", "count"),
+            [{"status": "OPEN", "count": 1}],
+        ),
+    )
+
+    def contract(metadata_revision: str) -> VerifiedQuery:
+        return VerifiedQuery(
+            query_id="time-policy-history",
+            source_id=source.source_id,
+            question="상태별 건수를 보여줘",
+            sql="SELECT status, count(*) FROM ai.issue_overview GROUP BY status",
+            metadata_revision=metadata_revision,
+            relations=("ai.issue_overview",),
+            expected=expected,
+        )
+
+    try:
+        first_generation = await store.next_generation(source.source_id)
+        first = await store.publish(
+            source.source_id,
+            0,
+            first_generation,
+            validated.document,
+            cipher.encrypt(source.source_id, first_generation, "reader-secret"),
+            old_metadata,
+            expected_state_version=0,
+        )
+        await store.publish_verified_query(contract(old_metadata.revision))
+
+        second_generation = await store.next_generation(source.source_id)
+        second = await store.publish(
+            source.source_id,
+            first.generation,
+            second_generation,
+            validated.document,
+            cipher.encrypt(source.source_id, second_generation, "reader-secret"),
+            current_metadata,
+            expected_state_version=first.state_version,
+        )
+        await store.publish_verified_query(contract(current_metadata.revision))
+
+        expected_revisions = frozenset(
+            {old_metadata.revision, current_metadata.revision}
+        )
+        assert (await store.verified_revision_map())[source.source_id] == (
+            expected_revisions
+        )
+
+        rolled_back = await store.rollback(
+            source.source_id,
+            first.generation,
+            second.generation,
+            expected_state_version=second.state_version,
+        )
+        assert rolled_back.metadata_revision == old_metadata.revision
+        assert (await store.verified_revision_map())[source.source_id] == (
+            expected_revisions
+        )
+
+        connection = await AsyncConnection.connect(disposable_control_dsn)
+        try:
+            cursor = await connection.execute(
+                "SELECT metadata_revision FROM control.verified_query_contracts "
+                "WHERE source_id = %s AND query_id = %s ORDER BY metadata_revision",
+                (source.source_id, "time-policy-history"),
+            )
+            rows = await cursor.fetchall()
+        finally:
+            await connection.close()
+        assert {str(row[0]) for row in rows} == set(expected_revisions)
+    finally:
+        await store.close()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_source_mutation_receipts_are_atomic_idempotent_and_append_only(
     disposable_control_dsn: str,
 ) -> None:

@@ -133,6 +133,15 @@ SOURCE_DATABASE_CORNERS_AUDIT = (
     / "verification"
     / "2026-08-25-source-database-corners.md"
 )
+CANONICAL_TIME_AUDIT = (
+    ROOT_DIRECTORY
+    / "docs"
+    / "verification"
+    / "2026-08-25-canonical-time-stability.md"
+)
+CANONICAL_TIME_ADR = (
+    ROOT_DIRECTORY / "docs" / "decisions" / "0019-canonical-time-stability.md"
+)
 EXPECTED_ID_COUNTS = {
     "BASE": 10,
     "DEC": 9,
@@ -150,7 +159,6 @@ EXPECTED_ID_COUNTS = {
     "MCPX": 8,
 }
 EXPECTED_OPEN_TODO_IDS = (
-    "TIME-02",
     "TIME-03",
     "COST-01",
     "COST-02",
@@ -198,6 +206,7 @@ EXPECTED_POST_BASELINE_COMPLETED_IDS = (
     "SKILL-06",
     "DBEDGE-01",
     "TIME-01",
+    "TIME-02",
 )
 CRITICAL_NON_PYTHON_MODULE_MAPPINGS = (
     "| `config/sources/`, `config/budget-profiles.yaml` | Source Catalog |",
@@ -449,8 +458,11 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
     assert "## P0.5 — Module Contract Hardening" not in todo
     assert "offline composition `MOD-08`은 모두" in todo
     assert "## P2 — Source Onboarding Skill" not in todo
-    assert "`TIME-02` 구현이 다음 순서" in todo
-    assert "`TIME-*` 완료 뒤 `COST-01`부터 진행" in todo
+    assert "`TIME-03`은 production inventory" in todo
+    assert "명시적으로 defer하기 전에는 `COST-01` 구현을 시작하지" in todo
+    assert "정확한 monitoring 계약과 영향 범위를 제시하고 별도 승인" in todo
+    assert "| `TIME-03` |" not in roadmap
+    assert "M14의 production\n전환 `TIME-03`은 active" in roadmap
     assert "`CTRL-07A` observation method/freshness/logical retention" in todo
     assert "`CTRL-08` usage/cost state" in todo
     assert "각 단계 구현 전 사용자 승인이 필요하다" in todo
@@ -501,8 +513,10 @@ def test_source_onboarding_skill_docs_record_plan_only_adoption_and_evidence() -
     assert "mutation_count: 0" in audit
 
 
-def test_source_database_corner_docs_record_isolation_findings_and_contract_stop() -> None:
+def test_source_database_corner_docs_record_canonical_time_resolution() -> None:
     audit = SOURCE_DATABASE_CORNERS_AUDIT.read_text(encoding="utf-8")
+    canonical_audit = CANONICAL_TIME_AUDIT.read_text(encoding="utf-8")
+    canonical_adr = CANONICAL_TIME_ADR.read_text(encoding="utf-8")
     module_index = MODULE_INDEX.read_text(encoding="utf-8")
     assurance = (
         ROOT_DIRECTORY / "docs" / "modules" / "assurance" / "README.md"
@@ -512,8 +526,19 @@ def test_source_database_corner_docs_record_isolation_findings_and_contract_stop
     assert "test_source_database_corners.py" in module_index
     assert SOURCE_DATABASE_CORNERS_AUDIT.name in assurance
     assert "database `0`, role `0`" in audit
-    assert "reader-session/canonical-result/verified-hash 계약 변경" in audit
-    assert "사용자가 승인하기 전에는 구현하지" in audit
+    assert "### Resolved follow-up: canonical `timestamptz`" in audit
+    assert "role default `UTC`, `Asia/Seoul`, `America/New_York`" in audit
+    assert CANONICAL_TIME_AUDIT.name in audit
+    assert (
+        "Repository implementation: Complete — production cutover remains an "
+        "environment-specific change"
+    ) in canonical_adr
+    assert (
+        "Status: Repository acceptance complete; production cutover pending "
+        "environment evidence"
+    ) in canonical_audit
+    assert "production external state를 완료로 주장하지 않는다" in canonical_audit
+    assert "열린 `TIME-03`" in audit
 
 
 def test_mutation_receipt_docs_preserve_terminal_and_secret_boundaries() -> None:
@@ -788,6 +813,8 @@ def test_module_contract_decision_guide_records_approval_and_implementation_stat
     assert "D5 offline CLI composition 격리 (`MOD-08`) — 완료" in guide
     assert "### D5-A 구현 결과 (`MOD-08` 완료)" in guide
     assert "7. 전체 dependency/contract audit — 완료 (2026-08-25)" in guide
+    assert "`TIME-01`과 `TIME-02`에서\n결정·구현" in guide
+    assert "`TIME-03`은 열려 있다" in guide
     assert (
         guide.count(
             "Source/Metadata ──> 외부 JSON은 유지하면서 published graph를 deep immutable로 제공"

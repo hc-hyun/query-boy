@@ -352,6 +352,7 @@ client와 실제 PostgreSQL fixture를 사용해야 한다. 실행 결과와 남
 | `SKILL-06` | Skill validator, 정적 회귀, 운영 문서와 기본 onboarding planning workflow 채택 기록을 완료했다. | [Skill acceptance](verification/2026-08-25-source-onboarding-skill.md), [source onboarding](source-onboarding.md) |
 | `DBEDGE-01` | 세 UUID별 disposable PostgreSQL source에서 wide/untrusted metadata, temporal/rich scalar, partition/materialized/empty result와 leak-free cleanup을 검증하고 기존 ADR을 위반한 wide-match overflow를 수정했다. TimeZone canonicalization gap은 계약 승인 전 미구현으로 분리했다. | [source database corner acceptance](verification/2026-08-25-source-database-corners.md), [`test_source_database_corners.py`](../tests/test_source_database_corners.py), [`test_metadata.py`](../tests/test_metadata.py) |
 | `TIME-01` | Reader session UTC, aware datetime UTC `+00:00`, business calendar `Asia/Seoul`, SQL-policy/metadata revision 재료, full verified reissue, coordinated cutover와 immutable rollback 보존을 하나의 정확한 계약으로 확정하고 사용자 승인을 받았다. R1에서 업무 날짜 SQL을 명시하고 dev/market 9개 계약의 기존 결과를 보존했다. | [ADR 0019](decisions/0019-canonical-time-stability.md), [canonical time verification](verification/2026-08-25-canonical-time-stability.md) |
+| `TIME-02` | Catalog와 Query가 transaction 시작 직후 UTC를 local 설정·검사하고 aware datetime만 UTC `+00:00`으로 정규화한다. Canonical-time material을 metadata와 SQL-policy revision에 넣어 이전 token을 실행 전에 거부하면서 naive datetime/date/time/timetz 의미는 보존했다. | [ADR 0019](decisions/0019-canonical-time-stability.md), [canonical time verification](verification/2026-08-25-canonical-time-stability.md), [`test_catalog.py`](../tests/test_catalog.py), [`test_query.py`](../tests/test_query.py), [`test_result_encoding.py`](../tests/test_result_encoding.py) |
 
 Ledger의 완료 결과 column은 찾기 쉬운 요약일 뿐 acceptance를 축소하지 않는다. 각 ID에 연결된
 evidence가 해당 완료 작업의 상세 경계와 실행 증거를 보존한다. Audit가 연결된 row에서 각 audit는
@@ -379,5 +380,6 @@ evidence가 해당 완료 작업의 상세 경계와 실행 증거를 보존한�
 | M15 Cost Attribution | `COST-*` | DB-native 사용량을 source/resource-tier time bucket으로 bounded 집계하고 운영 threshold를 고정한다. |
 | M16 Workflow Trace | `TRACE-*` | 여러 tool call과 retry를 bounded trace ID로 안전하게 연결한다. |
 
-M1부터 M13과 별도 assurance `DBEDGE-01`은 완료됐다. M14 이후는 approval-gated active plan이다. 새로운 기능은 기존 완료 ID나 설명을
-소급 변경하지 않고 별도 roadmap 항목과 검증 가능한 exit condition을 추가한다.
+M1부터 M13, `TIME-01`~`TIME-02`와 별도 assurance `DBEDGE-01`은 완료됐다. M14의 production
+전환 `TIME-03`은 active이며 M15와 M16은 각각 정확한 계약을 다시 승인받아야 한다. 새로운 기능은
+기존 완료 ID나 설명을 소급 변경하지 않고 별도 roadmap 항목과 검증 가능한 exit condition을 추가한다.

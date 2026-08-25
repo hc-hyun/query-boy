@@ -17,7 +17,7 @@ from psycopg import AsyncConnection, errors, sql
 from psycopg.conninfo import make_conninfo
 
 from query_man.catalog import PostgresCatalog
-from query_man.errors import QueryRejectedError
+from query_man.errors import QueryInvalidError, QueryRejectedError, QueryTimeoutError
 from query_man.metadata import MetadataService
 from query_man.models import (
     AllowedRelationKind,
@@ -29,7 +29,8 @@ from query_man.models import (
 )
 from query_man.query import PostgresQueryExecutor, QueryService
 from query_man.registry import SourceRegistry
-from query_man.sql_validation import SQL_POLICY_REVISION
+from query_man.sql_validation import SQL_POLICY_REVISION, validate_sql
+from query_man.verified import create_result_hash
 from tests.helpers import ROOT_DIRECTORY
 
 _DATABASE_PREFIX = "query_man_corner_db_"
@@ -38,6 +39,7 @@ _VIEW_OWNER_PREFIX = "query_man_corner_owner_"
 _DATABASE_NAME = re.compile(rf"^{_DATABASE_PREFIX}[0-9a-f]{{32}}$")
 _READER_NAME = re.compile(rf"^{_READER_PREFIX}[0-9a-f]{{32}}$")
 _VIEW_OWNER_NAME = re.compile(rf"^{_VIEW_OWNER_PREFIX}[0-9a-f]{{32}}$")
+_READER_TIMEZONES = ("UTC", "Asia/Seoul", "America/New_York")
 
 _BUDGET = BudgetProfile(
     name="corner-integration",
@@ -119,10 +121,15 @@ async def _attempt_cleanup_steps(
 
 
 @asynccontextmanager
-async def _disposable_source_database() -> AsyncIterator[_DisposableSourceDatabase]:
+async def _disposable_source_database(
+    *,
+    reader_timezone: str = "UTC",
+) -> AsyncIterator[_DisposableSourceDatabase]:
     environment = _postgres_environment()
     if environment is None:
         pytest.skip("local PostgreSQL administrator credentials are not configured")
+    if reader_timezone not in _READER_TIMEZONES:
+        raise ValueError("Unsupported disposable reader timezone")
 
     suffix = uuid.uuid4().hex
     database_name = f"{_DATABASE_PREFIX}{suffix}"
@@ -198,8 +205,6 @@ async def _disposable_source_database() -> AsyncIterator[_DisposableSourceDataba
             "max_parallel_workers_per_gather = 0",
             "jit = off",
             "search_path = pg_catalog",
-            # This fixture is deterministic in UTC; it does not assert a runtime-wide timezone.
-            "timezone = 'UTC'",
         ):
             await maintenance.execute(
                 sql.SQL("ALTER ROLE {} IN DATABASE {} SET ").format(
@@ -208,6 +213,13 @@ async def _disposable_source_database() -> AsyncIterator[_DisposableSourceDataba
                 )
                 + sql.SQL(setting)
             )
+        await maintenance.execute(
+            sql.SQL("ALTER ROLE {} IN DATABASE {} SET timezone = {}").format(
+                sql.Identifier(reader_name),
+                sql.Identifier(database_name),
+                sql.Literal(reader_timezone),
+            )
+        )
 
         fixture_admin = await AsyncConnection.connect(database.admin_dsn, autocommit=True)
         try:
@@ -393,6 +405,20 @@ def _open_services(
     executor = PostgresQueryExecutor()
     metadata = MetadataService(registry, catalog, cache_ttl_ms=30_000)
     return catalog, executor, metadata, QueryService(registry, metadata, executor)
+
+
+async def _assert_pool_restored_reader_timezone(
+    provider: PostgresCatalog | PostgresQueryExecutor,
+    source: SourceProfile,
+    expected: str,
+) -> None:
+    pool = await provider._get_pool(source)  # type: ignore[attr-defined]
+    async with pool.connection() as connection:
+        cursor = await connection.execute(
+            "SELECT pg_catalog.current_setting('TimeZone') AS timezone"
+        )
+        row = await cursor.fetchone()
+    assert row == {"timezone": expected}
 
 
 def _assert_canonical_result(
@@ -597,8 +623,13 @@ async def test_wide_curated_view_bounds_context_and_denies_sensitive_base_table(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_utc_temporal_and_rich_scalars_have_canonical_half_open_results() -> None:
-    async with _disposable_source_database() as database:
+@pytest.mark.parametrize("reader_timezone", _READER_TIMEZONES)
+async def test_temporal_results_are_canonical_across_reader_timezones(
+    reader_timezone: str,
+) -> None:
+    async with _disposable_source_database(
+        reader_timezone=reader_timezone,
+    ) as database:
         admin = await AsyncConnection.connect(database.admin_dsn, autocommit=True)
         try:
             await admin.execute("CREATE SCHEMA private")
@@ -608,6 +639,9 @@ async def test_utc_temporal_and_rich_scalars_have_canonical_half_open_results() 
                 CREATE TABLE private.temporal_records (
                   event_id bigint PRIMARY KEY,
                   observed_at timestamp with time zone NOT NULL,
+                  local_timestamp timestamp without time zone NOT NULL,
+                  local_date date NOT NULL,
+                  local_time time without time zone NOT NULL,
                   local_clock time with time zone NOT NULL,
                   elapsed interval NOT NULL,
                   host inet NOT NULL,
@@ -621,17 +655,22 @@ async def test_utc_temporal_and_rich_scalars_have_canonical_half_open_results() 
             await admin.execute(
                 """
                 INSERT INTO private.temporal_records VALUES
-                  (1, '2024-03-10 01:59:59-05', '01:59:59-05', '1 day 02:03:04.5',
+                  (1, '2024-03-10 01:59:59-05', '2024-03-10 01:59:59.123456',
+                   '2024-03-10', '01:59:59.123456', '01:59:59-05', '1 day 02:03:04.5',
                    '192.0.2.10/24', '192.0.2.0/24', ARRAY['spring', 'before'], 'NaN', NULL),
-                  (2, '2024-03-10 03:00:00-04', '03:00:00-04', '00:00:01',
+                  (2, '2024-03-10 03:00:00-04', '2024-03-10 03:00:00',
+                   '2024-03-10', '03:00:00', '03:00:00-04', '00:00:01',
                    '2001:db8::10/64', '2001:db8::/64', ARRAY['spring', 'after'], 'Infinity',
                    'after jump'),
-                  (3, '2024-11-03 01:30:00-04', '01:30:00-04', '00:00:00',
+                  (3, '2024-11-03 01:30:00-04', '2024-11-03 01:30:00',
+                   '2024-11-03', '01:30:00', '01:30:00-04', '00:00:00',
                    '198.51.100.7', '198.51.100.0/24', ARRAY['fall', 'first'], '-Infinity',
                    NULL),
-                  (4, '2024-11-03 01:30:00-05', '01:30:00-05', '2 days',
+                  (4, '2024-11-03 01:30:00-05', '2024-11-03 01:30:00',
+                   '2024-11-03', '01:30:00', '01:30:00-05', '2 days',
                    '203.0.113.9/28', '203.0.113.0/28', ARRAY['fall', 'second'], NULL, NULL),
-                  (5, '2024-11-04 00:00:00+00', '00:00:00+00', '00:00:00',
+                  (5, '2024-11-04 00:00:00+00', '2024-11-04 00:00:00',
+                   '2024-11-04', '00:00:00', '00:00:00+00', '00:00:00',
                    '203.0.113.10', '203.0.113.0/28', ARRAY['exclusive', 'boundary'], 1.0,
                    'must not be returned')
                 """
@@ -639,8 +678,8 @@ async def test_utc_temporal_and_rich_scalars_have_canonical_half_open_results() 
             await admin.execute(
                 """
                 CREATE VIEW analytics.temporal_records AS
-                SELECT event_id, observed_at, local_clock, elapsed, host, network, tags, score,
-                       optional_note
+                SELECT event_id, observed_at, local_timestamp, local_date, local_time,
+                       local_clock, elapsed, host, network, tags, score, optional_note
                 FROM private.temporal_records
                 """
             )
@@ -677,6 +716,9 @@ async def test_utc_temporal_and_rich_scalars_have_canonical_half_open_results() 
             assert {column.name: column.data_type for column in relation.columns} == {
                 "event_id": "bigint",
                 "observed_at": "timestamp with time zone",
+                "local_timestamp": "timestamp without time zone",
+                "local_date": "date",
+                "local_time": "time without time zone",
                 "local_clock": "time with time zone",
                 "elapsed": "interval",
                 "host": "inet",
@@ -687,8 +729,8 @@ async def test_utc_temporal_and_rich_scalars_have_canonical_half_open_results() 
             }
 
             query_sql = """
-                SELECT event_id, observed_at, local_clock, elapsed, host, network, tags, score,
-                       optional_note
+                SELECT event_id, observed_at, local_timestamp, local_date, local_time,
+                       local_clock, elapsed, host, network, tags, score, optional_note
                 FROM analytics.temporal_records
                 WHERE observed_at >= '2024-03-10 06:59:59+00'
                   AND observed_at < '2024-11-04 00:00:00+00'
@@ -703,6 +745,9 @@ async def test_utc_temporal_and_rich_scalars_have_canonical_half_open_results() 
             columns = [
                 "event_id",
                 "observed_at",
+                "local_timestamp",
+                "local_date",
+                "local_time",
                 "local_clock",
                 "elapsed",
                 "host",
@@ -715,6 +760,9 @@ async def test_utc_temporal_and_rich_scalars_have_canonical_half_open_results() 
                 {
                     "event_id": 1,
                     "observed_at": "2024-03-10T06:59:59+00:00",
+                    "local_timestamp": "2024-03-10T01:59:59.123456",
+                    "local_date": "2024-03-10",
+                    "local_time": "01:59:59.123456",
                     "local_clock": "01:59:59-05:00",
                     "elapsed": "1 day, 2:03:04.500000",
                     "host": "192.0.2.10/24",
@@ -726,6 +774,9 @@ async def test_utc_temporal_and_rich_scalars_have_canonical_half_open_results() 
                 {
                     "event_id": 2,
                     "observed_at": "2024-03-10T07:00:00+00:00",
+                    "local_timestamp": "2024-03-10T03:00:00",
+                    "local_date": "2024-03-10",
+                    "local_time": "03:00:00",
                     "local_clock": "03:00:00-04:00",
                     "elapsed": "0:00:01",
                     "host": "2001:db8::10/64",
@@ -737,6 +788,9 @@ async def test_utc_temporal_and_rich_scalars_have_canonical_half_open_results() 
                 {
                     "event_id": 3,
                     "observed_at": "2024-11-03T05:30:00+00:00",
+                    "local_timestamp": "2024-11-03T01:30:00",
+                    "local_date": "2024-11-03",
+                    "local_time": "01:30:00",
                     "local_clock": "01:30:00-04:00",
                     "elapsed": "0:00:00",
                     "host": "198.51.100.7",
@@ -748,6 +802,9 @@ async def test_utc_temporal_and_rich_scalars_have_canonical_half_open_results() 
                 {
                     "event_id": 4,
                     "observed_at": "2024-11-03T06:30:00+00:00",
+                    "local_timestamp": "2024-11-03T01:30:00",
+                    "local_date": "2024-11-03",
+                    "local_time": "01:30:00",
                     "local_clock": "01:30:00-05:00",
                     "elapsed": "2 days, 0:00:00",
                     "host": "203.0.113.9/28",
@@ -762,6 +819,70 @@ async def test_utc_temporal_and_rich_scalars_have_canonical_half_open_results() 
                 published.revision,
                 columns,
                 expected_rows,
+            )
+            assert create_result_hash(tuple(columns), expected_rows) == (
+                "sha256:20c9ca4c43400d44c101727ec987b0ae379e086146db1f092da13ac737676549"
+            )
+            await _assert_pool_restored_reader_timezone(
+                catalog,
+                source,
+                reader_timezone,
+            )
+            await _assert_pool_restored_reader_timezone(
+                executor,
+                source,
+                reader_timezone,
+            )
+
+            with pytest.raises(QueryInvalidError):
+                await query.query(
+                    source.source_id,
+                    "SELECT 1 / 0 AS failure FROM analytics.temporal_records LIMIT 1",
+                    published.revision,
+                    SQL_POLICY_REVISION,
+                )
+            await _assert_pool_restored_reader_timezone(
+                executor,
+                source,
+                reader_timezone,
+            )
+
+            slow_sql = (
+                "SELECT count(*) FROM analytics.temporal_records AS a "
+                "CROSS JOIN analytics.temporal_records AS b "
+                "CROSS JOIN analytics.temporal_records AS c "
+                "CROSS JOIN analytics.temporal_records AS d "
+                "CROSS JOIN analytics.temporal_records AS e "
+                "CROSS JOIN analytics.temporal_records AS f "
+                "CROSS JOIN analytics.temporal_records AS g "
+                "CROSS JOIN analytics.temporal_records AS h "
+                "CROSS JOIN analytics.temporal_records AS i "
+                "CROSS JOIN analytics.temporal_records AS j"
+            )
+            timeout_source = replace(
+                source,
+                budget=replace(
+                    source.budget,
+                    query_statement_timeout_ms=1,
+                    max_plan_total_cost=2_147_483_647,
+                    max_plan_rows=2_147_483_647,
+                ),
+            )
+            validated = validate_sql(
+                slow_sql,
+                allowed_relations=("analytics.temporal_records",),
+            )
+            with pytest.raises(QueryTimeoutError):
+                await executor.execute(
+                    timeout_source,
+                    slow_sql,
+                    published.revision,
+                    validated,
+                )
+            await _assert_pool_restored_reader_timezone(
+                executor,
+                source,
+                reader_timezone,
             )
         finally:
             await executor.close()

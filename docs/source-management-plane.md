@@ -349,6 +349,12 @@ latest current/previous, gateway는 hourly rollup과 source당 1,000행 cap만 �
 8. **Complete:** Usage availability와 cardinality/logical retention
 9. **Complete:** Backup/restore, encryption-key recovery와 multi-replica end-to-end acceptance
 
+Canonical-time policy v2의 repository implementation과 fixture acceptance는 완료됐다. Production
+적용은 이 checklist의 일반 rolling 단계가 아니라
+[canonical-time coordinated cutover](operations.md#canonical-time-coordinated-cutover)를 사용한다.
+Protected managed verified inventory, 실제 R1 DB migration reference, old fleet connection 0과
+rollback drill을 환경별 change record로 남기기 전에는 production 완료로 표시하지 않는다.
+
 DB-native collector와 provider connector는 rollout의 선행 조건이 아니다. 연결되지 않은 값은
 `not_configured`로 표시하고 `COST-*`가 이후 aggregate를 추가한다.
 첫 단계의 실행 증거는
@@ -398,6 +404,9 @@ logical retention, zero-bootstrap와 두 replica 복구 결과는
 - 서로 다른 격리 Compose PostgreSQL service의 18.4→18.6 archive restore에서 13개 Control table,
   별도 key와 LOGIN, logical retention, receipt replay, source/verified file 없는 두 managed replica 및
   guarded query가 함께 복구된다.
+- Canonical-time repository acceptance는 같은 instant를 UTC/서울/뉴욕 reader default와 DST에서
+  같은 UTC `+00:00` value/hash로 만들고, 같은 query ID의 old/new revision contract가 rollback 뒤에도
+  공존함을 검증한다. 이는 production fleet drain이나 inventory 증거를 대신하지 않는다.
 
 이 fixture는 물리적으로 다른 production host/network, 실제 backup age와 storage access,
 secret-manager/TLS/IAM, source business DB 또는 production RPO/RTO를 증명하지 않는다. 해당 항목은

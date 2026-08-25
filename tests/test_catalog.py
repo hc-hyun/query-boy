@@ -26,7 +26,11 @@ from query_man.models import (
     RuntimeCatalogProvider,
     SourceProfile,
 )
-from query_man.reader_policy import ReaderSessionPolicyError
+from query_man.reader_policy import (
+    READER_SESSION_TIMEZONE_SETTER,
+    ReaderSessionPolicyError,
+    require_reader_session_policy,
+)
 from tests.helpers import (
     ROOT_DIRECTORY,
     column,
@@ -90,10 +94,12 @@ class _ResourceConnection:
         *,
         query_error: Exception | None = None,
         settings_error: Exception | None = None,
+        timezone_error: Exception | None = None,
     ) -> None:
         self._row = row
         self._query_error = query_error
         self._settings_error = settings_error
+        self._timezone_error = timezone_error
         self.executions: list[tuple[str, object | None]] = []
         self.rolled_back = False
 
@@ -104,6 +110,11 @@ class _ResourceConnection:
     ) -> object:
         self.executions.append((statement, parameters))
         if (
+            statement == READER_SESSION_TIMEZONE_SETTER
+            and self._timezone_error is not None
+        ):
+            raise self._timezone_error
+        if (
             statement == catalog_module._CATALOG_SESSION_SETTINGS
             and self._settings_error is not None
         ):
@@ -111,6 +122,8 @@ class _ResourceConnection:
         if statement == catalog_module.RESOURCE_OBSERVATION_QUERY:
             if self._query_error is not None:
                 raise self._query_error
+            return _ResourceCursor(self._row)
+        if "current_setting('transaction_read_only')" in statement:
             return _ResourceCursor(self._row)
         return object()
 
@@ -220,14 +233,15 @@ async def test_resource_observation_uses_exact_bounded_catalog_query_without_new
         "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
         None,
     )
-    settings_statement, settings_parameters = connection.executions[1]
+    assert connection.executions[1] == (READER_SESSION_TIMEZONE_SETTER, None)
+    settings_statement, settings_parameters = connection.executions[2]
     assert settings_statement == catalog_module._CATALOG_SESSION_SETTINGS
     assert isinstance(settings_parameters, tuple)
     assert settings_parameters[:2] == (
         f"{source.budget.metadata_statement_timeout_ms}ms",
         f"{source.budget.lock_timeout_ms}ms",
     )
-    assert connection.executions[2] == (
+    assert connection.executions[3] == (
         catalog_module.RESOURCE_OBSERVATION_QUERY,
         (
             ["development", "development"],
@@ -235,7 +249,7 @@ async def test_resource_observation_uses_exact_bounded_catalog_query_without_new
             2,
         ),
     )
-    assert connection.executions[3] == ("COMMIT", None)
+    assert connection.executions[4] == ("COMMIT", None)
     assert not connection.rolled_back
 
     normalized_query = " ".join(
@@ -299,7 +313,7 @@ async def test_resource_observation_accepts_sixteen_storage_relations(
 
     await catalog.observe_resources(source)
 
-    query_parameters = connection.executions[2][1]
+    query_parameters = connection.executions[3][1]
     assert isinstance(query_parameters, tuple)
     assert query_parameters == (
         ["application"] * 16,
@@ -420,6 +434,41 @@ async def test_resource_observation_rolls_back_session_budget_failure(
         statement == catalog_module.RESOURCE_OBSERVATION_QUERY
         for statement, _ in connection.executions
     )
+
+
+@pytest.mark.asyncio
+async def test_resource_observation_stops_after_timezone_setter_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _source_with_observability()
+    connection = _ResourceConnection(
+        None,
+        timezone_error=RuntimeError("private timezone failure"),
+    )
+    catalog = _catalog_with_resource_connection(monkeypatch, source, connection)
+
+    with pytest.raises(
+        ReaderSessionPolicyError,
+        match="Source reader session budget could not be applied",
+    ):
+        await catalog.observe_resources(source)
+
+    assert connection.rolled_back
+    assert connection.executions == [
+        ("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY", None),
+        (READER_SESSION_TIMEZONE_SETTER, None),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_common_reader_policy_rejects_non_utc_timezone() -> None:
+    source = _source_with_observability()
+    connection = _ResourceConnection({"utc_timezone": False})
+
+    with pytest.raises(ReaderSessionPolicyError, match="session policy mismatch"):
+        await require_reader_session_policy(connection, source)  # type: ignore[arg-type]
+
+    assert "current_setting('TimeZone') = 'UTC'" in connection.executions[0][0]
 
 
 def test_published_catalog_graph_is_recursively_immutable_and_alias_free() -> None:

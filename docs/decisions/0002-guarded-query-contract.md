@@ -46,9 +46,10 @@ queue_ms, elapsed_ms, plan_summary
    `409 METADATA_REVISION_MISMATCH`로 거부한다.
 3. ADR 0001의 AST validation으로 현재 snapshot relation allowlist를 검사한다.
 4. Source별 concurrency slot을 제한 시간 안에 획득한다.
-5. Reader connection에서 명시적인 `REPEATABLE READ READ ONLY` transaction과
-   transaction-local timeout을 적용한다.
-6. Database, session user, isolation과 read-only 상태를 재검증한다.
+5. Reader connection에서 명시적인 `REPEATABLE READ READ ONLY` transaction을 시작하고 첫
+   settings statement로 transaction-local `TimeZone=UTC`를 적용한 뒤 timeout/resource setting을
+   적용한다.
+6. Database, session user, isolation, read-only와 `TimeZone=UTC` 상태를 재검증한다.
 7. `EXPLAIN (FORMAT JSON)`의 total cost, 최대 plan rows와 node 수를 profile 상한과 비교한다.
 8. 결과 column 이름이 중복되면 `QUERY_DUPLICATE_RESULT_COLUMN`으로 거부한다.
 9. Named cursor로 작은 bounded batch를 fetch하고 row/UTF-8 byte 상한에서 결과를 truncate한다.
@@ -62,7 +63,9 @@ JSON scalar 계약은 HTTP와 MCP에서 동일하다.
 - PostgreSQL integer, boolean, text와 finite floating point는 JSON의 대응 scalar를 사용한다.
 - `numeric`은 precision과 scale을 잃지 않도록 decimal 문자열로 반환한다.
 - `bytea`는 `base64:<standard-base64>` 문자열로 반환한다.
-- Date/time, interval, UUID와 network type은 안정적인 ISO/text 문자열로 반환한다.
+- Aware datetime은 UTC로 정규화한 ISO 문자열(`+00:00`, `Z` 아님)로 반환한다. Naive datetime,
+  date, time과 timetz는 기존 ISO 표현을 보존하고 interval, UUID와 network type은 안정적인
+  text 문자열로 반환한다.
 - 비유한 float는 JSON number로 내보내지 않고 `NaN`, `Infinity`, `-Infinity` 문자열로
   반환한다.
 - 지원하지 않는 driver value와 string이 아닌 object key는 비공개 `QUERY_UNAVAILABLE`로
@@ -139,6 +142,8 @@ Privilege, connection, server shutdown, 알 수 없는 SQLSTATE와 driver/serial
 - Process-local semaphore는 단일 replica 안에서만 concurrency를 제한한다.
   `ponytail:` replica가 source quota를 공유해야 할 때 distributed limiter로 교체한다.
 - Function/operator의 resolved candidate와 volatility 검증은 ADR 0003을 따른다.
+- Reader UTC, canonical-time policy material, revision 전환과 business calendar 분리는
+  [ADR 0019](0019-canonical-time-stability.md)를 따른다.
 - Query ID는 실행 전에 생성되어 audit log와 PostgreSQL `application_name`에 동일하게
   기록된다. 완료 audit는 query ID, caller/tenant/source, fingerprint, queue/elapsed,
   row/byte/truncation과 plan cost를 남기고 실패 audit는 공개 가능한 application error code만

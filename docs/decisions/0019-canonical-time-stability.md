@@ -4,6 +4,8 @@ Status: Accepted
 
 Date: 2026-08-25
 
+Repository implementation: Complete — production cutover remains an environment-specific change
+
 ## Context
 
 PostgreSQL `timestamptz`는 같은 instant도 reader session `TimeZone`에 따라 다른 offset의
@@ -108,3 +110,15 @@ production cutover 전에는 승인된 operator가 Control DB migration identity
   배포 대신 짧은 coordinated downtime이 필요하다.
 - Verified hash가 실제로 달라지는 contract뿐 아니라 current와 rollback-preserved contract 전체를
   새 revision에서 재실행하여 stale evidence를 재사용하지 않는다.
+
+## Implementation Evidence
+
+R1은 별도 commit에서 한국 업무 달력을 SQL에 명시하고 bootstrap 9개 contract의 기존 result hash를
+보존했다. R2는 SQL policy version 2와 모든 source의 새 metadata revision을 발행하고 repository
+fixture 11개를 모두 재실행했다. UTC/서울/뉴욕 role default, DST, pool reset, old/new immutable
+Control row 공존과 local two-replica coordinated cutover 결과는
+[canonical time verification](../verification/2026-08-25-canonical-time-stability.md)에 기록한다.
+
+이 evidence는 production의 protected contract inventory, 실제 R1 `database_migration_ref`, backup,
+route와 old-fleet drain을 증명하지 않는다. 운영자는 [operations runbook](../operations.md#canonical-time-coordinated-cutover)의
+stop condition을 환경별 change record로 충족한 뒤에만 production cutover를 수행한다.

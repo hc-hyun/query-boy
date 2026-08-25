@@ -29,6 +29,8 @@ Transaction-local setting은 commit, rollback, timeout과 cancel 뒤 자동 rese
 각 transaction에서 setting을 덮어쓰고 identity probe로 expected tenant와 `row_security=on`을
 확인한 뒤에만 EXPLAIN/query를 실행한다. RLS source에 server tenant context가 없으면
 `TENANT_CONTEXT_REQUIRED`로 거부한다.
+같은 reset 경계는 첫 settings statement의 transaction-local `TimeZone=UTC`에도 적용한다.
+Reader probe는 tenant와 UTC를 모두 확인하며 어느 값도 pool의 다음 caller에게 남기지 않는다.
 
 Authentication과 authorization deny audit는 token, requested source와 credential을 기록하지
 않고 caller/tenant와 operation만 기록한다. 허용되지 않은 source와 존재하지 않는 source의

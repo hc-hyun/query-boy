@@ -160,11 +160,18 @@ class _PlanCursor:
 class _ResultCursor:
     description: tuple[object, ...] = ()
 
-    def __init__(self, phase: str, database_error: errors.DatabaseError) -> None:
+    def __init__(
+        self,
+        phase: str,
+        database_error: errors.DatabaseError,
+        events: list[str],
+    ) -> None:
         self._phase = phase
         self._database_error = database_error
+        self._events = events
 
     async def execute(self, _sql: str) -> None:
+        self._events.append("query")
         if self._phase == "cursor_execute":
             raise self._database_error
 
@@ -182,12 +189,28 @@ class _PhaseConnection:
         self.phase = phase
         self.database_error = database_error
         self.rolled_back = False
+        self.events: list[str] = []
 
     async def execute(
         self,
         statement: str,
         _parameters: object | None = None,
     ) -> object:
+        if statement == "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY":
+            self.events.append("begin")
+        elif statement == query_module.READER_SESSION_TIMEZONE_SETTER:
+            self.events.append("timezone")
+        elif statement == query_module._QUERY_SESSION_SETTINGS:
+            self.events.append("settings")
+        elif statement.startswith("EXPLAIN"):
+            self.events.append("explain")
+        elif statement == "COMMIT":
+            self.events.append("commit")
+        if (
+            self.phase == "timezone"
+            and statement == query_module.READER_SESSION_TIMEZONE_SETTER
+        ):
+            raise self.database_error
         if self.phase == "session" and "set_config('statement_timeout'" in statement:
             raise self.database_error
         if self.phase == "explain" and statement.startswith("EXPLAIN"):
@@ -199,7 +222,7 @@ class _PhaseConnection:
         return object()
 
     def cursor(self, **_options: object) -> _ResultCursor:
-        return _ResultCursor(self.phase, self.database_error)
+        return _ResultCursor(self.phase, self.database_error, self.events)
 
     async def rollback(self) -> None:
         self.rolled_back = True
@@ -229,12 +252,17 @@ def _stub_internal_query_checks(
     monkeypatch: pytest.MonkeyPatch,
     phase: str,
     database_error: errors.DatabaseError,
+    events: list[str] | None = None,
 ) -> None:
     async def require_reader_policy(*_args: object) -> None:
+        if events is not None:
+            events.append("reader_policy")
         if phase == "reader_policy":
             raise database_error
 
     async def validate_resolved_objects(*_args: object) -> None:
+        if events is not None:
+            events.append("resolved_object")
         if phase == "resolved_object":
             raise database_error
 
@@ -494,13 +522,18 @@ async def test_gateway_usage_recorder_failure_never_changes_query_outcome(
 
 @pytest.mark.asyncio
 async def test_rejects_stale_revision_before_execution() -> None:
-    service, _metadata, executor = query_service()
+    service, metadata, executor = query_service()
+    published = await metadata.get_published("development-issues")
+    old_metadata_revision = (
+        "sha256:753f2d1e3f1e5f62de423e9180cb71dc2aed1869d5e4a9b5bd8da9955bad632b"
+    )
+    assert published.revision != old_metadata_revision
 
     with pytest.raises(MetadataRevisionMismatchError):
         await service.query(
             "development-issues",
             "SELECT 1",
-            f"sha256:{'0' * 64}",
+            old_metadata_revision,
             SQL_POLICY_REVISION,
         )
 
@@ -511,13 +544,17 @@ async def test_rejects_stale_revision_before_execution() -> None:
 async def test_rejects_stale_sql_policy_revision_before_execution() -> None:
     service, metadata, executor = query_service()
     published = await metadata.get_published("development-issues")
+    old_sql_policy_revision = (
+        "sha256:83729139d7ccedbe8e299b0c4a8bdefb97d42ca870d5fc3b9c227578c65855d9"
+    )
+    assert SQL_POLICY_REVISION != old_sql_policy_revision
 
     with pytest.raises(MetadataRevisionMismatchError):
         await service.query(
             "development-issues",
             "SELECT 1",
             published.revision,
-            f"sha256:{'0' * 64}",
+            old_sql_policy_revision,
         )
 
     assert executor.calls == []
@@ -779,7 +816,7 @@ async def test_executor_maps_result_cursor_database_errors_to_query_invalid(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "phase",
-    ["session", "reader_policy", "resolved_object", "commit"],
+    ["timezone", "session", "reader_policy", "resolved_object", "commit"],
 )
 async def test_executor_keeps_internal_invalid_parameter_errors_unavailable(
     phase: str,
@@ -815,6 +852,51 @@ async def test_executor_keeps_internal_invalid_parameter_errors_unavailable(
             metric["name"] == "query_invalid"
             for metric in operations.snapshot()["metrics"]
         )
+    finally:
+        await executor.close()
+        operations.reset()
+
+
+@pytest.mark.asyncio
+async def test_executor_applies_timezone_and_policy_before_planning_and_sql(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+    database_error = errors.InvalidParameterValue("unused")
+    connection = _PhaseConnection("success", database_error)
+    executor = PostgresQueryExecutor()
+
+    async def get_pool(_source: SourceProfile) -> _PhasePool:
+        return _PhasePool(connection)
+
+    _stub_internal_query_checks(
+        monkeypatch,
+        "success",
+        database_error,
+        connection.events,
+    )
+    executor._get_pool = get_pool  # type: ignore[method-assign]
+    operations.reset()
+    try:
+        result = await executor.execute(
+            source,
+            "SELECT 1",
+            "test-revision",
+            ValidatedSql("private-fingerprint", (), (), ()),
+        )
+
+        assert result["rows"] == []
+        assert connection.events == [
+            "begin",
+            "timezone",
+            "settings",
+            "reader_policy",
+            "resolved_object",
+            "explain",
+            "query",
+            "commit",
+        ]
     finally:
         await executor.close()
         operations.reset()

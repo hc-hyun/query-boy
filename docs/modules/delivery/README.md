@@ -76,6 +76,8 @@ HTTP와 MCP의 세 data operation은 동일한 `GatewayService`와 `CallerContex
 
 양쪽은 동일한 shared active source inventory, metadata와 SQL policy revision, Metadata/Query 성공
 payload, `AppError` code/message/safe detail 및 disconnect-to-cancel 의미를 유지한다.
+Aware datetime은 Guarded Query가 만든 UTC `+00:00` canonical value를 양 transport가 그대로
+직렬화한다. Delivery는 timezone을 다시 변환하거나 old revision을 호환 처리하지 않는다.
 
 Transport별 HTTP status 대 MCP `isError`, validation issue 형식, health/admin/cancel endpoint와 MCP
 discovery/serialization은 의도적으로 다를 수 있다.

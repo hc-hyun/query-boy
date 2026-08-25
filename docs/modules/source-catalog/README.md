@@ -153,6 +153,10 @@ Bootstrap mode는 process 시작 시 filesystem manifest로 initial registry를 
 Metadata catalog와 Guarded Query executor는 같은 reader database/user, read-only isolation,
 role restriction, schema privilege, resource setting, search path, RLS와 tenant context 검사를
 사용한다. 한쪽만 완화하거나 별도 구현으로 복제하지 않는다.
+두 경로 모두 `BEGIN ... REPEATABLE READ READ ONLY` 다음 첫 settings statement로
+transaction-local `TimeZone=UTC`를 설정하고, 공통 probe가 UTC를 확인한 뒤에만 catalog 또는
+planning/query를 실행한다. Role/database default는 source 소유 값 그대로 두며 success,
+rollback, timeout과 cancel 뒤 pool 재사용에서 그 default가 복원돼야 한다.
 
 ## 소비 계약
 

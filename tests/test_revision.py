@@ -1,7 +1,12 @@
 from dataclasses import replace
 from types import MappingProxyType
 
+import pytest
+
+import query_man.revision as revision_module
+import query_man.sql_validation as sql_validation_module
 from query_man.models import CatalogForeignKey, CatalogIndex
+from query_man.result_encoding import CANONICAL_TIME_POLICY_MATERIAL
 from query_man.revision import _canonicalize, create_metadata_revision
 from tests.helpers import load_test_registry, minimal_development_snapshot
 
@@ -119,12 +124,39 @@ def test_revision_preserves_physical_key_and_index_column_order() -> None:
     assert create_metadata_revision(source, reversed_index) != revision
 
 
-def test_revision_matches_pre_immutability_golden() -> None:
+def test_revision_matches_canonical_time_policy_golden() -> None:
     source = load_test_registry().get("development-issues")
     assert source is not None
 
     assert create_metadata_revision(source, minimal_development_snapshot()) == (
-        "sha256:753f2d1e3f1e5f62de423e9180cb71dc2aed1869d5e4a9b5bd8da9955bad632b"
+        "sha256:6cc893fe5c58917428771ba848d70393b7432848e4c2bd16224b0e0602d20c96"
+    )
+
+
+def test_revision_changes_with_canonical_time_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+    snapshot = minimal_development_snapshot()
+    baseline = create_metadata_revision(source, snapshot)
+    changed = dict(revision_module.CANONICAL_TIME_POLICY_MATERIAL)
+    changed["reader_session_timezone"] = "Asia/Seoul"
+    monkeypatch.setattr(
+        revision_module,
+        "CANONICAL_TIME_POLICY_MATERIAL",
+        MappingProxyType(changed),
+    )
+
+    assert create_metadata_revision(source, snapshot) != baseline
+
+
+def test_sql_and_metadata_revisions_share_one_canonical_time_material() -> None:
+    assert revision_module.CANONICAL_TIME_POLICY_MATERIAL is (
+        CANONICAL_TIME_POLICY_MATERIAL
+    )
+    assert sql_validation_module.CANONICAL_TIME_POLICY_MATERIAL is (
+        CANONICAL_TIME_POLICY_MATERIAL
     )
 
 

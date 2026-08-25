@@ -20,8 +20,9 @@ Runnable acceptance는
 - Reader는 `CONNECT`, curated schema `USAGE`, curated relation `SELECT`만 받고 base relation 권한은
   제거한다.
 - Reader session은 기존 read-only timeout/memory/temp/parallel/JIT/search-path contract를 사용한다.
-- 모든 disposable reader는 fixture 전체의 결정성을 위해 자신의 test database에서만 UTC를
-  설정한다. Production global timezone 계약으로 확대하지 않는다.
+- Temporal acceptance는 role default를 `UTC`, `Asia/Seoul`, `America/New_York`로 각각 만들고,
+  production과 같은 reader transaction이 database/role default를 바꾸지 않은 채 transaction-local
+  UTC를 설정·검사하는지 검증한다.
 - 실패 경로에서도 query/catalog pool을 닫고 active connection을 확인한 뒤 database와 role을
   정리한다. 각 cleanup target은 앞 단계 실패와 무관하게 독립적으로 시도하고 body/cleanup 오류를
   함께 보존한다. 별도 unit case가 일부 cleanup action 실패 뒤 후속 action과 오류 집계를, integration
@@ -67,7 +68,7 @@ profile target을 초과했다. Unit reproduction에서는 target 6에 15개가 
 Target 6은 필수 3개와 match 3개, target 2는 필수 3개만 반환하는 unit regression을 추가했다.
 Public response field, metadata revision, persisted/wire shape와 budget 의미는 바꾸지 않았다.
 
-### Approval required: `timestamptz` depends on reader `TimeZone`
+### Resolved follow-up: canonical `timestamptz`
 
 같은 PostgreSQL instant도 reader session timezone에 따라 Python datetime offset과 canonical result hash가
 달라진다. Read-only reproduction은 다음과 같았다.
@@ -77,10 +78,16 @@ Public response field, metadata revision, persisted/wire shape와 budget 의미�
 | `UTC` | `2024-03-10T07:00:00+00:00` | `sha256:6d3a744b1171f1b1265a4c6138c01d3cc82f3a2b049a15dab6beddbfb590f6ad` |
 | `Asia/Seoul` | `2024-03-10T16:00:00+09:00` | `sha256:35b7f6f1bed58e7e04bd50f50d8f491c6aa85883f6bf2623cc8ea6f42f55844c` |
 
-이번 test는 fixture role만 UTC로 고정했다. Production reader validation에서 UTC를 강제하거나 result
-encoder가 UTC로 정규화하는 것은 reader-session/canonical-result/verified-hash 계약 변경이다. 정확한
-정책, rolling compatibility와 기존 verified result migration을 사용자가 승인하기 전에는 구현하지
-않는다.
+이 finding의 repository contract는 사용자가 [ADR 0019](../decisions/0019-canonical-time-stability.md)의
+정확한 정책과 영향을 승인한 뒤 `TIME-01`~`TIME-02`에서 해결했다. Catalog/Query는
+transaction-local UTC를 먼저 설정·검사하고 aware datetime을 UTC `+00:00`으로 정규화한다. 현재
+disposable acceptance는
+role default `UTC`, `Asia/Seoul`, `America/New_York`, spring/fall DST, naive/date/time/timetz 비변경과
+exact verified hash
+`sha256:20c9ca4c43400d44c101727ec987b0ae379e086146db1f092da13ac737676549`,
+success/rollback/timeout pool reset을 검증한다. 상세 revision/verified migration 결과는
+[canonical-time evidence](2026-08-25-canonical-time-stability.md)에 있다. 실제 managed production
+재발행과 rollback change record는 열린 `TIME-03`이다.
 
 ### No product change required
 
@@ -98,7 +105,8 @@ encoder가 UTC로 정규화하는 것은 reader-session/canonical-result/verifie
 | `uv run ruff check src/query_man/metadata.py tests/test_metadata.py tests/test_source_database_corners.py` | PASS |
 | `uv run pytest tests/test_metadata.py -q` | PASS — metadata regression 포함 |
 | `uv run pytest -m integration tests/test_source_database_corners.py -q` | PASS — 3 data corner + 1 failure-cleanup, `4 passed` |
+| `uv run pytest -m integration tests/test_source_database_corners.py -q` (TIME follow-up) | PASS — UTC/서울/뉴욕 temporal 3 + other corners/cleanup, `6 passed` |
 | Prefix residue query | PASS — database `0`, role `0` |
 
-Root static/unit/integration gate는 같은 release acceptance에서 별도로 실행하고
-[source onboarding Skill acceptance](2026-08-25-source-onboarding-skill.md)에 최종 결과를 기록한다.
+Root static/unit/integration gate와 전체 revision/hash 재발행 결과는 같은 release acceptance에서
+별도로 실행하고 [canonical-time evidence](2026-08-25-canonical-time-stability.md)에 기록한다.

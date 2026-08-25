@@ -7,11 +7,13 @@ from dataclasses import fields, is_dataclass
 from typing import Any
 
 from query_man.models import CatalogSnapshot, SourceProfile
+from query_man.result_encoding import CANONICAL_TIME_POLICY_MATERIAL
 
 
 def create_metadata_revision(source: SourceProfile, catalog: CatalogSnapshot) -> str:
     value = {
         "source_id": source.source_id,
+        "canonical_time_policy": CANONICAL_TIME_POLICY_MATERIAL,
         "allowed_schemas": source.allowed_schemas,
         "allowed_relation_kinds": source.allowed_relation_kinds,
         **(

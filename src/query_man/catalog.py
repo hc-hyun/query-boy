@@ -22,6 +22,7 @@ from query_man.models import (
 )
 from query_man.reader_policy import (
     READER_SESSION_BUDGET_SETTERS,
+    READER_SESSION_TIMEZONE_SETTER,
     ReaderSessionPolicyError,
     reader_session_budget_values,
     require_reader_session_policy,
@@ -304,6 +305,7 @@ async def _begin_catalog_transaction(
 ) -> None:
     await connection.execute("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
     try:
+        await connection.execute(READER_SESSION_TIMEZONE_SETTER)
         await connection.execute(
             _CATALOG_SESSION_SETTINGS,
             (

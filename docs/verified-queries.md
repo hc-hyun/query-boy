@@ -20,6 +20,11 @@ scale을 보존한 문자열이고 `bytea`는 `base64:` 문자열이므로 float
 hash를 다시 만들지 않는다. Source execution budget이나 revision-scoped source policy가
 바뀌어도 revision이 바뀌며 새 경계 안에서 contract를 다시 실행해야 한다. Application 전역
 SQL policy code 변경은 release regression으로 별도 검증한다.
+Aware datetime은 UTC `+00:00` ISO 문자열이며 `Z`를 쓰지 않는다. Naive datetime, date, time과
+timetz는 기존 ISO 표현을 유지한다. Canonical-time policy material은 SQL policy와 모든 metadata
+revision에 함께 들어가므로 global 변경 시 bootstrap 전체와 managed current/rollback-preserved
+contract 전체를 새 exact revision에서 재실행한다. 기존 immutable contract를 수정·삭제하거나
+membership을 자동 승계하지 않는다.
 
 ```bash
 uv run query-man-verify

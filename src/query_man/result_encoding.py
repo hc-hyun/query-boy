@@ -3,15 +3,29 @@ from __future__ import annotations
 import base64
 import math
 from collections.abc import Mapping, Sequence
-from datetime import date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from enum import Enum
 from ipaddress import IPv4Address, IPv4Interface, IPv4Network, IPv6Address, IPv6Interface, IPv6Network
+from types import MappingProxyType
 from uuid import UUID
 
 
 class ResultEncodingError(ValueError):
     pass
+
+
+CANONICAL_TIME_POLICY_MATERIAL: Mapping[str, object] = MappingProxyType(
+    {
+        "version": 1,
+        "reader_session_timezone": "UTC",
+        "aware_datetime": "utc_isoformat_plus_00_00",
+        "naive_datetime": "preserve_isoformat",
+        "date": "preserve_isoformat",
+        "time": "preserve_isoformat",
+        "timetz": "preserve_isoformat",
+    }
+)
 
 
 def encode_result_value(value: object) -> object:
@@ -28,7 +42,11 @@ def encode_result_value(value: object) -> object:
     if isinstance(value, bytes | bytearray | memoryview):
         encoded = base64.b64encode(bytes(value)).decode("ascii")
         return f"base64:{encoded}"
-    if isinstance(value, datetime | date | time):
+    if isinstance(value, datetime):
+        if value.utcoffset() is not None:
+            return value.astimezone(UTC).isoformat()
+        return value.isoformat()
+    if isinstance(value, date | time):
         return value.isoformat()
     if isinstance(value, timedelta):
         return str(value)

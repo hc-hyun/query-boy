@@ -28,6 +28,7 @@ from query_man.models import SourceProfile
 from query_man.operations import GatewayUsageOutcome, operations
 from query_man.reader_policy import (
     READER_SESSION_BUDGET_SETTERS,
+    READER_SESSION_TIMEZONE_SETTER,
     reader_session_budget_values,
     require_reader_session_policy,
 )
@@ -606,6 +607,7 @@ class PostgresQueryExecutor:
         started_at = time.monotonic()
         try:
             await connection.execute("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            await connection.execute(READER_SESSION_TIMEZONE_SETTER)
             trusted_tenant = (
                 tenant_id
                 if source.tenant_isolation == "rls" and tenant_id is not None

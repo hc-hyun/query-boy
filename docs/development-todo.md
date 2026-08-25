@@ -37,25 +37,23 @@ Status: Active
 ## P2.5 — Canonical Timestamptz Stability
 
 목표: 같은 PostgreSQL instant가 reader session `TimeZone`과 무관하게 같은 public canonical value와
-verified result hash를 갖도록 정확한 정책, migration과 rollback을 확정한다. Business calendar
-timezone은 별도 의미이므로 UTC transport/session 정책과 혼동하지 않는다.
+verified result hash를 갖게 한다. Repository 구현과 격리 acceptance는 끝났지만 protected production
+inventory와 실제 배포·rollback 증거는 환경별 change record로 남겨야 한다.
 
 | 작업 경계 | 내용 |
 |---|---|
 | Primary module | Guarded Query |
 | Direct consumers | Delivery public result, Assurance verified result hash와 Control Plane verified publish |
-| Affected providers/verifiers | Source Catalog reader-session policy, Metadata catalog/revision, Runtime composition, cross-timezone Assurance acceptance |
-| Contract baseline | 공통 reader policy는 `TimeZone`을 설정·검사하지 않고 aware datetime은 psycopg가 반환한 offset을 `isoformat()`으로 보존한다. [`DBEDGE-01`](verification/2026-08-25-source-database-corners.md)이 같은 instant의 UTC/Asia-Seoul canonical value와 hash 차이를 재현했다. |
-| Approval gate | Reader `TimeZone` 강제, aware datetime 정규화, metadata/SQL policy revision 재료와 verified migration은 public/policy 계약 변경이다. 사용자가 2026-08-25 [`TIME-01` 결정](decisions/0019-canonical-time-stability.md)의 정확한 정책·영향·cutover·rollback을 승인했다. 승인 범위를 넘는 의미 변경은 다시 승인받는다. |
-| Single writer | Coordinating agent가 Guarded Query canonical contract와 revision 전환을 먼저 직렬화하고, 확정된 baseline 뒤 provider/consumer 구현과 검증을 분리한다. |
-| Start gate | `DBEDGE-01`과 `TIME-01` 결정·승인이 완료되어 `TIME-02` 구현이 다음 순서다. `TIME-02`~`TIME-03` 완료 전 낮은 priority track은 read-only prework만 한다. |
-| Verification | UTC/non-UTC의 같은 instant/hash, DST와 calendar 함수, naive timestamp/date/time/timetz 비변경, revision fail-closed, verified migration/rollback과 root integration gate |
+| Affected providers/verifiers | Source Catalog reader-session policy, Metadata catalog/revision, Runtime composition, production Control/source operator |
+| Contract baseline | 승인된 [`TIME-01` 결정](decisions/0019-canonical-time-stability.md)과 완료된 `TIME-02`가 UTC-first reader policy, aware datetime UTC `+00:00`, policy v2와 새 metadata revision을 고정한다. Repository fixture 11개, UTC/서울/뉴욕·DST, old/new Control row 공존과 local coordinated cutover는 통과했다. |
+| Approval gate | 사용자가 2026-08-25 `TIME-01`의 정확한 정책·영향·cutover·rollback을 승인했다. 그 범위의 production 전환은 승인됐지만 환경 권한과 stop condition 증거 없이 실행하지 않으며, 승인 범위를 넘는 의미 변경은 다시 승인받는다. |
+| Single writer | Production operator가 coordinating agent와 함께 protected inventory, DB migration ref, fleet drain, 재발행과 rollback change record를 하나의 직렬 전환으로 관리한다. |
+| Start gate | `TIME-01`과 `TIME-02`는 완료됐다. `TIME-03`은 production inventory·권한·backup·route가 제공된 환경에서만 진행한다. 완료하거나 사용자가 명시적으로 defer하기 전에는 `COST-01` 구현을 시작하지 않는다. |
+| Verification | Managed current/rollback-preserved contract 전량 재실행·재발행, 실제 R1 migration ref, old connection 0, replica convergence, R2→R1 rollback과 environment change record |
 
-- [ ] `TIME-02` 승인된 reader-session 설정·검사와 result encoding을 Metadata/Guarded Query에
-  구현하고 Delivery, Control Plane과 Assurance 직접 consumer를 새 revision baseline에 맞춘다.
-- [ ] `TIME-03` Repository fixture 11개와 managed current/rollback-preserved verified contract 전체를
-  새 revision/hash로 재실행·재발행하고 UTC/non-UTC·DST·cutover/rollback integration과 운영 절차를
-  검증한다.
+- [ ] `TIME-03` Repository에서 이미 검증한 전환 절차를 실제 managed environment에 적용해
+  current/rollback-preserved verified contract 전체를 새 revision/hash로 재실행·재발행하고,
+  R1 migration ref·fleet drain·route·rollback을 환경별 change record로 증명한다.
 
 ## P3 — Database-Native Cost Attribution
 
@@ -70,7 +68,7 @@ timezone은 별도 의미이므로 UTC transport/session 정책과 혼동하지 
 | Contract baseline | [ADR 0016](decisions/0016-centralized-source-management-plane.md), [ADR 0017](decisions/0017-shared-source-access-and-resource-tier.md)와 [source management plane](source-management-plane.md), 완료된 `CTRL-07A` observation method/freshness/logical retention과 `CTRL-08` usage/cost state |
 | Approval gate | Monitoring identity, collector/rollup schema, retention, status와 admin projection은 새 persisted/public 계약이므로 각 단계 구현 전 사용자 승인이 필요하다. |
 | Single writer | Control Plane owner가 observation 계약을 먼저 확정하고 signal producer와 Delivery consumer는 이후 병렬화한다. |
-| Start gate | 완료된 `CTRL-07` baseline과 `CTRL-08` projection 및 `TIME-*` 완료 뒤 `COST-01`부터 진행; 아래의 “다음”은 track-local 순서다. |
+| Start gate | 완료된 `CTRL-07` baseline과 `CTRL-08` projection 뒤에도 열린 `TIME-03`이 우선이다. 이를 완료하거나 사용자가 명시적으로 defer한 뒤 `COST-01`의 정확한 monitoring 계약과 영향 범위를 제시하고 별도 승인받는다. 아래의 “다음”은 track-local 순서다. |
 | Verification | 최소 권한 DB integration, reset/eviction/replica/cardinality 경계, redaction과 root gate |
 
 - [ ] `COST-01` 대상 PostgreSQL의 monitoring identity, 최소 권한, 지원 extension과 reset/보존
