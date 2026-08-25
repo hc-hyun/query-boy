@@ -378,7 +378,7 @@ def test_bootstrap_mode_does_not_construct_control_plane_stores(
 def _development_source() -> SourceProfile:
     source = load_test_registry().get("development-issues")
     assert source is not None
-    return source
+    return replace(source, control_generation=1, control_state_version=1)
 
 
 def _expected_definition_revision(material: dict[str, object]) -> str:
@@ -465,15 +465,18 @@ async def test_resource_collection_omits_missing_estimate_and_unconfigured_sourc
 
     class Writer:
         def __init__(self) -> None:
-            self.calls: list[tuple[str, str, tuple[ResourceObservationSample, ...]]] = []
+            self.calls: list[
+                tuple[str, int, str, tuple[ResourceObservationSample, ...]]
+            ] = []
 
         async def report_resource_observations(
             self,
             source_id: str,
+            generation: int,
             metadata_revision: str,
             samples: tuple[ResourceObservationSample, ...],
         ) -> None:
-            self.calls.append((source_id, metadata_revision, samples))
+            self.calls.append((source_id, generation, metadata_revision, samples))
 
     metadata = Metadata()
     catalog = Catalog()
@@ -489,8 +492,12 @@ async def test_resource_collection_omits_missing_estimate_and_unconfigured_sourc
     assert metadata.source_ids == [source.source_id]
     assert catalog.sources == [source]
     assert len(writer.calls) == 1
-    source_id, metadata_revision, samples = writer.calls[0]
-    assert (source_id, metadata_revision) == (source.source_id, revision)
+    source_id, generation, metadata_revision, samples = writer.calls[0]
+    assert (source_id, generation, metadata_revision) == (
+        source.source_id,
+        1,
+        revision,
+    )
     assert [sample.metric for sample in samples] == [
         "table_bytes",
         "index_bytes",
@@ -536,16 +543,17 @@ async def test_resource_reporting_is_immediate_for_initial_and_new_profile_ident
 
     class Writer:
         def __init__(self) -> None:
-            self.calls: list[tuple[str, str]] = []
+            self.calls: list[tuple[str, int, str]] = []
             self.reported = asyncio.Event()
 
         async def report_resource_observations(
             self,
             source_id: str,
+            generation: int,
             metadata_revision: str,
             _samples: tuple[ResourceObservationSample, ...],
         ) -> None:
-            self.calls.append((source_id, metadata_revision))
+            self.calls.append((source_id, generation, metadata_revision))
             if len(self.calls) == 2:
                 self.reported.set()
 
@@ -565,8 +573,8 @@ async def test_resource_reporting_is_immediate_for_initial_and_new_profile_ident
         await asyncio.wait_for(writer.reported.wait(), timeout=1)
         assert catalog.sources == [initial, updated]
         assert writer.calls == [
-            (initial.source_id, f"sha256:{'1' * 64}"),
-            (updated.source_id, f"sha256:{'2' * 64}"),
+            (initial.source_id, 1, f"sha256:{'1' * 64}"),
+            (updated.source_id, 2, f"sha256:{'2' * 64}"),
         ]
     finally:
         task.cancel()
@@ -602,6 +610,7 @@ async def test_resource_reporting_repeats_on_fixed_twenty_four_hour_cadence(
         async def report_resource_observations(
             self,
             _source_id: str,
+            _generation: int,
             _metadata_revision: str,
             _samples: tuple[ResourceObservationSample, ...],
         ) -> None:
@@ -637,6 +646,7 @@ async def test_new_profile_gets_its_own_full_resource_cadence(
     development = _development_source()
     market = load_test_registry().get("market-voc")
     assert market is not None
+    market = replace(market, control_generation=1, control_state_version=1)
     registry = SourceRegistry([development])
 
     class Metadata:
@@ -659,6 +669,7 @@ async def test_new_profile_gets_its_own_full_resource_cadence(
         async def report_resource_observations(
             self,
             source_id: str,
+            _generation: int,
             _metadata_revision: str,
             _samples: tuple[ResourceObservationSample, ...],
         ) -> None:
@@ -706,6 +717,7 @@ async def test_new_profile_gets_its_own_full_resource_cadence(
 @pytest.mark.asyncio
 async def test_resource_failures_are_isolated_and_cancellation_propagates(
     caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     caplog.set_level(logging.WARNING, logger="query_man")
     source = _development_source()
@@ -716,12 +728,38 @@ async def test_resource_failures_are_isolated_and_cancellation_propagates(
             operations.set_replica_metadata_revision(source_id, f"sha256:{'f' * 64}")
             return PreparedMetadata(CatalogSnapshot(), f"sha256:{'a' * 64}")
 
+    class FailingMetadata:
+        async def get_published(self, _source_id: str) -> PreparedMetadata:
+            raise RuntimeError("credential=private-metadata-secret")
+
+    class CancelledMetadata:
+        async def get_published(self, _source_id: str) -> PreparedMetadata:
+            raise asyncio.CancelledError
+
     class Writer:
         def __init__(self) -> None:
-            self.calls = 0
+            self.success_calls = 0
+            self.failure_calls: list[tuple[str, int, str]] = []
+            self.fail_success = False
+            self.fail_failure = False
+            self.cancel_failure = False
 
         async def report_resource_observations(self, *_args: object) -> None:
-            self.calls += 1
+            self.success_calls += 1
+            if self.fail_success:
+                raise RuntimeError("credential=private-control-success-secret")
+
+        async def report_resource_observation_failure(
+            self,
+            source_id: str,
+            generation: int,
+            reason_code: str,
+        ) -> None:
+            self.failure_calls.append((source_id, generation, reason_code))
+            if self.cancel_failure:
+                raise asyncio.CancelledError
+            if self.fail_failure:
+                raise RuntimeError("credential=private-control-failure-secret")
 
     class FailingCatalog:
         async def observe_resources(self, _source: SourceProfile) -> ResourceObservation:
@@ -730,6 +768,10 @@ async def test_resource_failures_are_isolated_and_cancellation_propagates(
     class CancelledCatalog:
         async def observe_resources(self, _source: SourceProfile) -> ResourceObservation:
             raise asyncio.CancelledError
+
+    class Catalog:
+        async def observe_resources(self, _source: SourceProfile) -> ResourceObservation:
+            return ResourceObservation(1, 2, 3, 5)
 
     operations.reset()
     try:
@@ -742,15 +784,89 @@ async def test_resource_failures_are_isolated_and_cancellation_propagates(
         replica_before = operations.replica_runtime_snapshot()
         await app_module._collect_resource_observations(  # type: ignore[arg-type]
             (source,),
+            Catalog(),
+            FailingMetadata(),
+            writer,
+        )
+        await app_module._collect_resource_observations(  # type: ignore[arg-type]
+            (source,),
             FailingCatalog(),
             Metadata(),
             writer,
         )
+        original_samples = app_module._resource_observation_samples
 
-        assert writer.calls == 0
+        def fail_samples(
+            _source: SourceProfile,
+            _observation: ResourceObservation,
+        ) -> tuple[ResourceObservationSample, ...]:
+            raise RuntimeError("credential=private-sample-secret")
+
+        monkeypatch.setattr(app_module, "_resource_observation_samples", fail_samples)
+        await app_module._collect_resource_observations(  # type: ignore[arg-type]
+            (source,),
+            Catalog(),
+            Metadata(),
+            writer,
+        )
+        monkeypatch.setattr(
+            app_module,
+            "_resource_observation_samples",
+            original_samples,
+        )
+
+        writer.fail_failure = True
+        await app_module._collect_resource_observations(  # type: ignore[arg-type]
+            (source,),
+            FailingCatalog(),
+            Metadata(),
+            writer,
+        )
+        writer.fail_failure = False
+
+        writer.fail_success = True
+        failure_count = len(writer.failure_calls)
+        await app_module._collect_resource_observations(  # type: ignore[arg-type]
+            (source,),
+            Catalog(),
+            Metadata(),
+            writer,
+        )
+
+        assert writer.success_calls == 1
+        assert writer.failure_calls == [
+            (source.source_id, 1, "METADATA_UNAVAILABLE"),
+            (source.source_id, 1, "RESOURCE_READ_FAILED"),
+            (source.source_id, 1, "RESOURCE_READ_FAILED"),
+            (source.source_id, 1, "RESOURCE_READ_FAILED"),
+        ]
+        assert len(writer.failure_calls) == failure_count
         assert operations.snapshot() == public_before
         assert operations.replica_runtime_snapshot() == replica_before
-        assert "private-resource-secret" not in caplog.text
+        for secret in (
+            "private-metadata-secret",
+            "private-resource-secret",
+            "private-sample-secret",
+            "private-control-success-secret",
+            "private-control-failure-secret",
+        ):
+            assert secret not in caplog.text
+        writer.cancel_failure = True
+        with pytest.raises(asyncio.CancelledError):
+            await app_module._collect_resource_observations(  # type: ignore[arg-type]
+                (source,),
+                FailingCatalog(),
+                Metadata(),
+                writer,
+            )
+        writer.cancel_failure = False
+        with pytest.raises(asyncio.CancelledError):
+            await app_module._collect_resource_observations(  # type: ignore[arg-type]
+                (source,),
+                Catalog(),
+                CancelledMetadata(),
+                writer,
+            )
         with pytest.raises(asyncio.CancelledError):
             await app_module._collect_resource_observations(  # type: ignore[arg-type]
                 (source,),

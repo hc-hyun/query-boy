@@ -21,6 +21,7 @@ membership과 offline 품질 증거를 제공하고 동일 기준을 회귀 검�
 - Ordered columns와 canonical rows를 묶는 verified result hash와 별도 exact row-count 비교
 - `query-man-evaluate`와 `query-man-verify` command의 exit/result contract
 - Bootstrap/acceptance quality 및 verified configuration
+- CTRL-08 resource/gateway projection의 migration, state, cutoff, redaction과 기존 surface 회귀 증거
 
 ## 소유하지 않는 책임
 
@@ -138,6 +139,18 @@ managed mode는 empty map에서 시작해 Control DB verified contract만 반영
 Control Plane은 public administration input을 Assurance의 Verified DTO로 변환하고 그 DTO/hash를
 소비해 immutable contract를 publish한다. Delivery는 Assurance DTO를 직접 만들지 않으며 Assurance
 core는 Control DB implementation을 import하지 않는다.
+
+### Usage projection acceptance contract (`CTRL-08`)
+
+Assurance는 Control Plane/Runtime/Delivery가 승인된 CTRL-08 계약을 함께 만족하는지 검증하되 public
+status를 다시 계산하는 production helper나 별도 DTO를 소유하지 않는다. Acceptance는 migration 5
+upgrade/least privilege, current-generation success/failure fencing, fresh last-success 보존,
+`not_configured|pending|available|stale|unavailable`, exact freshness boundary, gateway live/current-cursor
+aggregate, inclusive 31일 cutoff와 최대 1,000행, missing-to-zero 금지와 response redaction을 포함한다.
+
+기존 admin/MCP/health response가 바뀌지 않는지와 code rollback이 migration ledger/table/data를
+보존하는지도 함께 확인한다. Full authority backup/key/zero-bootstrap multi-replica recovery는
+`CTRL-09`가 소유하며 CTRL-08 evidence를 완료 근거로 대신하지 않는다.
 
 ## 소비 계약
 

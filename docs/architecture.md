@@ -11,9 +11,9 @@ Status: Production ready
 
 이 문서의 `Production ready` 상태는 완료된 query/data-plane baseline을 뜻한다. 중앙
 management plane은 단계적으로 구현 중이다. Source inventory/history, mutation receipt, replica
-convergence와 내부 규모·gateway usage observation은 `CTRL-01`~`CTRL-07`로 구현됐다. Public
-availability/cost projection과 전체 recovery acceptance는
-[active development TODO](development-todo.md)의 `CTRL-08`~`CTRL-09` 목표다.
+convergence, 내부 규모·gateway usage observation과 public availability projection은
+`CTRL-01`~`CTRL-08`로 구현됐다. DB-native/provider cost와 전체 recovery acceptance는
+[active development TODO](development-todo.md)의 이후 목표다.
 
 완전한 무설정 자동화를 목표로 하지 않는다. 자동으로 알 수 없는 비즈니스 의미는
 희소한 선언형 metadata와 curated view로 제공한다.
@@ -69,7 +69,8 @@ Managed replica의 실제 convergence 관측 증거는
 [runtime replica observation audit](verification/2026-08-25-runtime-replica-observations.md)에 기록한다.
 Resource/gateway observation의 실행 증거는
 [resource and gateway observation audit](verification/2026-08-25-resource-and-gateway-observations.md)에
-기록한다.
+기록하고, latest attempt와 operator usage projection의 실행 증거는
+[usage projection audit](verification/2026-08-25-usage-projection.md)에 기록한다.
 
 ## Development Module Boundaries
 
@@ -169,7 +170,9 @@ API는 raw manifest, encrypted secret, question/SQL을 읽지 않는 explicit pr
 generation revision과 현재 active metadata revision을 구분한다. 별도 replica endpoint는 managed
 slot별 desired/applied generation·state·metadata drift와 DB-clock freshness를 bounded하게 제공한다.
 Optional manifest target의 daily record/storage current/previous와 privacy-safe hourly gateway usage는
-Control DB에 내부 수집한다. Public size/usage availability와 cost 상태는 이후 `CTRL-08`이 추가한다.
+Control DB에 내부 수집한다. 전용 operator usage endpoint는 latest resource attempt/last-success,
+global reporter health와 inclusive 31일 lower-bound rollup을 제공하고 provider monetary cost는
+`not_configured`로 명시한다.
 
 초기 management 권한은 query user와 Query Man admin 두 종류다. 기존 boolean operator를 admin
 capability superset으로 재사용하고 역할 계층, caller grant와 별도 `cost_tier`를 만들지 않는다.

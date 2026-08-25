@@ -45,6 +45,7 @@ from query_man.source_admin import (
     GatewayUsageWriter,
     ReplicaObservationWriter,
     ReplicaSourceObservation,
+    ResourceObservationFailureReason,
     ResourceObservationSample,
     ResourceObservationWriter,
     SourceAdminService,
@@ -1027,24 +1028,58 @@ async def _collect_resource_observations(
     for source in sources:
         if source.observability is None:
             continue
+        generation = source.control_generation
+        if generation is None:
+            logger.warning(
+                "resource_observation_report_failed",
+                extra={"source_id": source.source_id},
+            )
+            continue
         try:
             with operations.suppress_source_health_updates():
                 prepared = await metadata.get_published(source.source_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            await _report_resource_observation_failure(
+                writer,
+                source.source_id,
+                generation,
+                "METADATA_UNAVAILABLE",
+                write_lock,
+            )
+            continue
+        try:
+            with operations.suppress_source_health_updates():
                 observation = await catalog.observe_resources(source)
-                samples = _resource_observation_samples(source, observation)
-                if write_lock is None:
+            samples = _resource_observation_samples(source, observation)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            await _report_resource_observation_failure(
+                writer,
+                source.source_id,
+                generation,
+                "RESOURCE_READ_FAILED",
+                write_lock,
+            )
+            continue
+        try:
+            if write_lock is None:
+                await writer.report_resource_observations(
+                    source.source_id,
+                    generation,
+                    prepared.revision,
+                    samples,
+                )
+            else:
+                async with write_lock:
                     await writer.report_resource_observations(
                         source.source_id,
+                        generation,
                         prepared.revision,
                         samples,
                     )
-                else:
-                    async with write_lock:
-                        await writer.report_resource_observations(
-                            source.source_id,
-                            prepared.revision,
-                            samples,
-                        )
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -1052,6 +1087,40 @@ async def _collect_resource_observations(
                 "resource_observation_report_failed",
                 extra={"source_id": source.source_id},
             )
+
+
+async def _report_resource_observation_failure(
+    writer: ResourceObservationWriter,
+    source_id: str,
+    generation: int,
+    reason_code: ResourceObservationFailureReason,
+    write_lock: asyncio.Lock | None,
+) -> None:
+    logger.warning(
+        "resource_observation_failed",
+        extra={"source_id": source_id, "reason_code": reason_code},
+    )
+    try:
+        if write_lock is None:
+            await writer.report_resource_observation_failure(
+                source_id,
+                generation,
+                reason_code,
+            )
+        else:
+            async with write_lock:
+                await writer.report_resource_observation_failure(
+                    source_id,
+                    generation,
+                    reason_code,
+                )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.warning(
+            "resource_observation_failure_report_failed",
+            extra={"source_id": source_id, "reason_code": reason_code},
+        )
 
 
 async def _report_gateway_usage(

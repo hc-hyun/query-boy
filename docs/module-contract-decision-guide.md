@@ -562,7 +562,8 @@ type, 성능 상한, consumer와 rollback 범위를 후속 승인안으로 작�
 최종 audit에서 당시 contract 위반이나 migration 필요성은 발견되지 않았다. 이후 `CTRL-06A`의
 Control DB schema, replica observation, freshness와 admin response 계약은 2026-08-25 별도 사용자
 승인을 받아 구현됐다. `CTRL-07A` resource/gateway observation도 2026-08-25 별도 승인을 받아
-구현됐으며 Active TODO의 다음 순서는 public projection 계약 승인이 필요한 `CTRL-08`이다.
+구현됐다. `CTRL-08` latest resource attempt/last-success와 public usage projection도 2026-08-25
+별도 승인을 받아 구현됐으며 Active TODO의 다음 순서는 recovery acceptance `CTRL-09`다.
 
 각 단계는 provider contract, 직접 consumer, module 문서와 runnable contract test가 함께
 통과하는 독립 커밋으로 끝낸다. Shared contract file은 single-writer로 편집한다. Provider

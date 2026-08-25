@@ -269,6 +269,7 @@ class RecordingSourceAdmin:
         self.detail_calls: list[str] = []
         self.history_calls: list[tuple[object, ...]] = []
         self.replica_calls: list[tuple[object, ...]] = []
+        self.usage_calls: list[str] = []
         self.receipt_calls: list[str] = []
         self.source_mutation_calls: list[tuple[object, ...]] = []
         self.mutation_calls: list[tuple[object, ...]] = []
@@ -395,6 +396,42 @@ class RecordingSourceAdmin:
             },
             "replicas": replicas,
             "next_after_replica_id": None,
+        }
+
+    async def source_usage(self, source_id: str) -> dict[str, object]:
+        self.usage_calls.append(source_id)
+        if source_id == "unknown-source":
+            raise SourceNotFoundError
+        if source_id == "unavailable-source":
+            raise SourceControlUnavailableError from RuntimeError(
+                "private usage projection detail"
+            )
+        return {
+            "source_id": source_id,
+            "enabled": True,
+            "read_at": "2026-08-25T12:00:00+00:00",
+            "resource": {
+                "status": "pending",
+                "reason_code": "NOT_OBSERVED",
+                "last_attempt": None,
+                "fresh_until": None,
+                "metrics": [],
+            },
+            "gateway": {
+                "status": "pending",
+                "reason_code": "NOT_REPORTED",
+                "last_report_at": None,
+                "fresh_until": None,
+                "lower_bound": True,
+                "window_start": "2026-07-25T12:00:00+00:00",
+                "window_end": "2026-08-25T12:00:00+00:00",
+                "rollups": [],
+            },
+            "monetary_cost": {
+                "status": "not_configured",
+                "reason_code": "PROVIDER_NOT_CONFIGURED",
+                "last_attempt": None,
+            },
         }
 
     async def get_mutation(self, idempotency_key: str) -> dict[str, object]:
@@ -1026,6 +1063,7 @@ async def test_query_credentials_reject_every_admin_operation_and_cancel(
         ("GET", "/admin/sources/unknown-source", None),
         ("GET", "/admin/sources/unknown-source/history", None),
         ("GET", "/admin/sources/INVALID_SOURCE/replicas?limit=0", None),
+        ("GET", "/admin/sources/INVALID_SOURCE/usage?unexpected=value", None),
         ("GET", "/admin/sources/unknown-source/mutations?before_event_id=0", None),
         ("GET", f"/admin/mutations/{_MUTATION_KEYS[0]}", None),
         ("GET", "/admin/mutations/not-a-canonical-uuid", None),
@@ -1373,6 +1411,136 @@ async def test_operator_replica_admin_returns_bounded_errors(tmp_path: Path) -> 
     assert unavailable.status_code == 503
     assert unavailable.json()["error"]["code"] == "SOURCE_CONTROL_UNAVAILABLE"
     assert "private replica observation detail" not in unavailable.text
+
+
+@pytest.mark.asyncio
+async def test_usage_admin_authenticates_and_authorizes_before_validation(
+    tmp_path: Path,
+) -> None:
+    app = build_app(
+        runtime_config(),
+        registry=load_test_registry(),
+        catalog=NeverCalledCatalog(),
+        access_policy=_shared_access_policy(tmp_path),
+    )
+    admin = RecordingSourceAdmin()
+    app.state.source_admin = admin
+    invalid_path = "/admin/sources/INVALID_SOURCE/usage?unexpected=value"
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://test",
+    ) as session:
+        unauthenticated = await session.get(invalid_path)
+        query_caller = await session.get(
+            invalid_path,
+            headers={"authorization": f"Bearer {_QUERY_A_TOKEN}"},
+        )
+
+    assert unauthenticated.status_code == 401
+    assert unauthenticated.json()["error"]["code"] == "UNAUTHORIZED"
+    assert query_caller.status_code == 403
+    assert query_caller.json()["error"]["code"] == "OPERATOR_REQUIRED"
+    assert admin.usage_calls == []
+
+
+@pytest.mark.asyncio
+async def test_operator_usage_admin_preserves_control_projection(
+    tmp_path: Path,
+) -> None:
+    app = build_app(
+        runtime_config(),
+        registry=load_test_registry(),
+        catalog=NeverCalledCatalog(),
+        access_policy=_shared_access_policy(tmp_path),
+    )
+    admin = RecordingSourceAdmin()
+    app.state.source_admin = admin
+    headers = {"authorization": f"Bearer {_ADMIN_TOKEN}"}
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://test",
+    ) as session:
+        response = await session.get(
+            "/admin/sources/known-source/usage",
+            headers=headers,
+        )
+
+    assert response.status_code == 200
+    assert admin.usage_calls == ["known-source"]
+    assert response.json() == {
+        "source_id": "known-source",
+        "enabled": True,
+        "read_at": "2026-08-25T12:00:00+00:00",
+        "resource": {
+            "status": "pending",
+            "reason_code": "NOT_OBSERVED",
+            "last_attempt": None,
+            "fresh_until": None,
+            "metrics": [],
+        },
+        "gateway": {
+            "status": "pending",
+            "reason_code": "NOT_REPORTED",
+            "last_report_at": None,
+            "fresh_until": None,
+            "lower_bound": True,
+            "window_start": "2026-07-25T12:00:00+00:00",
+            "window_end": "2026-08-25T12:00:00+00:00",
+            "rollups": [],
+        },
+        "monetary_cost": {
+            "status": "not_configured",
+            "reason_code": "PROVIDER_NOT_CONFIGURED",
+            "last_attempt": None,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_operator_usage_admin_returns_bounded_errors(tmp_path: Path) -> None:
+    app = build_app(
+        runtime_config(),
+        registry=load_test_registry(),
+        catalog=NeverCalledCatalog(),
+        access_policy=_shared_access_policy(tmp_path),
+    )
+    admin = RecordingSourceAdmin()
+    app.state.source_admin = admin
+    headers = {"authorization": f"Bearer {_ADMIN_TOKEN}"}
+    invalid_paths = [
+        "/admin/sources/known-source/usage?unexpected=value",
+        "/admin/sources/known-source/usage?limit=50",
+        "/admin/sources/known-source/usage?unexpected=a&unexpected=b",
+        "/admin/sources/INVALID_SOURCE/usage",
+    ]
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://test",
+    ) as session:
+        invalid = [
+            await session.get(path, headers=headers) for path in invalid_paths
+        ]
+        unknown = await session.get(
+            "/admin/sources/unknown-source/usage",
+            headers=headers,
+        )
+        unavailable = await session.get(
+            "/admin/sources/unavailable-source/usage",
+            headers=headers,
+        )
+
+    assert all(response.status_code == 400 for response in invalid)
+    assert all(
+        response.json()["error"]["code"] == "INVALID_REQUEST"
+        for response in invalid
+    )
+    assert all(len(response.content) < 4_096 for response in invalid)
+    assert admin.usage_calls == ["unknown-source", "unavailable-source"]
+    assert unknown.status_code == 404
+    assert unknown.json()["error"]["code"] == "SOURCE_NOT_FOUND"
+    assert unavailable.status_code == 503
+    assert unavailable.json()["error"]["code"] == "SOURCE_CONTROL_UNAVAILABLE"
+    assert "private usage projection detail" not in unavailable.text
 
 
 @pytest.mark.asyncio

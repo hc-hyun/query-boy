@@ -90,6 +90,10 @@ class SourceReplicaQuery(BaseModel):
     after_replica_id: StableSlug | None = None
 
 
+class SourceUsageQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
 class SourceDetailQuery(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -370,6 +374,17 @@ async def admin_source_replicas(
         limit=parameters.limit,
         after_replica_id=parameters.after_replica_id,
     )
+
+
+@_router.get("/admin/sources/{source_id}/usage")
+async def admin_source_usage(
+    source_id: str,
+    request: Request,
+) -> dict[str, object]:
+    require_operator(request)
+    source_id = _parse_source_id(source_id)
+    _parse_query_parameters(request, SourceUsageQuery)
+    return await _source_admin(request).source_usage(source_id)
 
 
 @_router.get("/admin/sources/{source_id}/mutations")

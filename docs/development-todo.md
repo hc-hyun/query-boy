@@ -37,8 +37,8 @@ Status: Active
 ## P1 — Centralized Source Management Plane
 
 목표: Production managed source의 authority, replica 상태, 규모와 비용 projection을 Control DB와
-하나의 admin surface에서 관리한다. `CTRL-01`~`CTRL-07`의 완료 이력은 roadmap ledger에 있고,
-현재 track은 `CTRL-08`부터 시작한다. 상세 목표는
+하나의 admin surface에서 관리한다. `CTRL-01`~`CTRL-08`의 완료 이력은 roadmap ledger에 있고,
+현재 track은 `CTRL-09`부터 시작한다. 상세 목표는
 [source management plane](source-management-plane.md), authority 경계는
 [ADR 0016](decisions/0016-centralized-source-management-plane.md), shared access/resource tier는
 [ADR 0017](decisions/0017-shared-source-access-and-resource-tier.md)을 따른다.
@@ -48,16 +48,12 @@ Status: Active
 | Primary module | Control Plane |
 | Direct consumers | Delivery admin API와 Runtime authority/recovery composition |
 | Affected providers/verifiers | Runtime replica heartbeat/reloader, Source Catalog/Metadata/Guarded Query observation signal과 Assurance integration/recovery acceptance |
-| Contract baseline | `CTRL-01`~`CTRL-07` ledger와 ADR 0016/0017, 현재 Control Plane/Delivery/Runtime module contract |
-| Approval gate | `CTRL-06A` replica observation 계약과 `CTRL-07A`의 resource/gateway observation 계약은 2026-08-25 사용자 승인을 받아 완료됐다. `CTRL-07A`의 31일은 logical visibility/input window이고 age-only physical delete는 하지 않으며 source당 최신 1,000행 cap을 유지한다. 이 exact 범위를 바꾸거나 `CTRL-08`의 public availability/admin response를 구현하기 전에는 다시 승인받는다. `CTRL-09`가 기존 backup/restore 절차만 재현하면 새 승인이 없지만 schema·retention·key recovery 의미를 바꾸면 승인받는다. |
+| Contract baseline | `CTRL-01`~`CTRL-08` ledger와 ADR 0016/0017, 현재 Control Plane/Delivery/Runtime module contract |
+| Approval gate | `CTRL-06A` replica observation, `CTRL-07A` resource/gateway observation과 `CTRL-08` latest-attempt/public usage projection 계약은 2026-08-25 사용자 승인을 받아 완료됐다. 31일은 logical visibility/input window이고 age-only physical delete는 하지 않으며 source당 최신 1,000행 cap을 유지한다. 이 exact 상태·wire·schema 범위를 바꾸면 다시 승인받는다. `CTRL-09`가 기존 backup/restore 절차만 재현하면 새 승인이 없지만 schema·retention·key recovery 의미를 바꾸면 승인받는다. |
 | Single writer | Control Plane owner가 schema/contract를 직렬화하고 baseline 확정 뒤 Runtime reporter와 Delivery projection을 병렬화한다. |
-| Start gate | 완료 ledger의 `RTSAFE-01`, `MOD-04`~`MOD-08`과 `CTRL-07` 완료 뒤 `CTRL-08`부터 순서대로 진행 |
+| Start gate | 완료 ledger의 `RTSAFE-01`, `MOD-04`~`MOD-08`과 `CTRL-08` 완료 뒤 `CTRL-09` 진행 |
 | Verification | Provider와 직접 consumer contract test, root gate, Control DB integration, migration/rollback/recovery와 scoped verification record |
 
-- [ ] `CTRL-08` Usage/cost projection의
-  `not_configured|pending|available|stale|unavailable` 상태, last-attempt time과 bounded reason을
-  구현해 missing/failed 값을 0으로 표시하지 않는다. DB-native/provider connector 없이도
-  완료할 수 있게 하고 31일 logical cutoff와 source당 1,000행 cardinality 계약을 검증한다.
 - [ ] `CTRL-09` 전체 authority table의 backup/restore와 retention, encryption-key recovery,
   zero-bootstrap 복구 및 multi-replica management-plane release acceptance를 재현한다.
 
@@ -112,7 +108,7 @@ Production mutation executor는 이 track에 없다. 필요해지면 credential 
 | Contract baseline | ADR 0016/0017, 완료된 `CTRL-07A` observation method/freshness/logical retention과 `CTRL-08` usage/cost state |
 | Approval gate | Monitoring identity, collector/rollup schema, retention, status와 admin projection은 새 persisted/public 계약이므로 각 단계 구현 전 사용자 승인이 필요하다. |
 | Single writer | Control Plane owner가 observation 계약을 먼저 확정하고 signal producer와 Delivery consumer는 이후 병렬화한다. |
-| Start gate | 완료된 `CTRL-07` baseline, 승인·구현될 `CTRL-08` projection과 앞선 priority 완료 뒤 `COST-01`부터 진행; 아래의 “다음”은 track-local 순서다. |
+| Start gate | 완료된 `CTRL-07` baseline과 `CTRL-08` projection 및 앞선 priority 완료 뒤 `COST-01`부터 진행; 아래의 “다음”은 track-local 순서다. |
 | Verification | 최소 권한 DB integration, reset/eviction/replica/cardinality 경계, redaction과 root gate |
 
 - [ ] `COST-01` 대상 PostgreSQL의 monitoring identity, 최소 권한, 지원 extension과 reset/보존
@@ -130,8 +126,8 @@ Production mutation executor는 이 track에 없다. 필요해지면 credential 
   provider 자료가 없거나 user/organization chargeback이 불가능할 때의 운영 판단 절차를
   문서화한다.
 
-완료된 `CTRL-07` 입력을 바꾸거나 `CTRL-08` projection 계약 없이 collector schema나 통화 단위 비용을 추정해서 구현하지
-않는다.
+완료된 `CTRL-07` 입력과 `CTRL-08` projection 계약을 바꾸거나, 별도 승인 없이 collector schema나
+통화 단위 비용을 추정해서 구현하지 않는다.
 
 ## P4 — End-to-End Workflow Trace
 

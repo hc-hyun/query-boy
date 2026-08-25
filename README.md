@@ -62,8 +62,9 @@ receipt 증거는 각각
 [source mutation receipt audit](docs/verification/2026-08-23-source-mutation-receipts.md), replica convergence
 증거는 [runtime replica observation audit](docs/verification/2026-08-25-runtime-replica-observations.md),
 내부 resource/gateway usage 수집 증거는
-[resource and gateway observation audit](docs/verification/2026-08-25-resource-and-gateway-observations.md)을
-참고합니다. 각 audit는
+[resource and gateway observation audit](docs/verification/2026-08-25-resource-and-gateway-observations.md),
+operator usage projection 증거는
+[usage projection audit](docs/verification/2026-08-25-usage-projection.md)을 참고합니다. 각 audit는
 적힌 scope의 실행 시점 증거이며, 나중 audit을 모두 포괄하는 단일 “현재 최종” 증거로
 해석하지 않습니다.
 
@@ -258,3 +259,6 @@ receipt lookup과 source-state 대조 뒤 같은 key로만 재시도합니다. �
 Operator는 `GET /admin/sources/{source_id}/replicas`에서 ever-registered replica별 desired/applied
 drift와 freshness를 확인할 수 있습니다. Observation 실패나 stale 상태는 기존 data plane,
 readiness, source health 또는 mutation receipt를 바꾸지 않습니다.
+`GET /admin/sources/{source_id}/usage`는 query parameter 없이 resource latest-attempt/last-success와
+Control DB clock 기준 31일 gateway lower-bound를 조회합니다. Missing metric/hour는 0이 아니며
+provider monetary cost는 연결 전까지 `not_configured`입니다.

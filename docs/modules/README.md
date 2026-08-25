@@ -80,11 +80,11 @@ owner는 주의점에 기록하며 primary owner와 같은 뜻으로 해석하�
 | `catalog.py`, `metadata.py`, `relevance.py`, `revision.py`, `quality_level.py` | Metadata | Catalog는 private mutable builder를 public boundary 전에 freeze한다. `MetadataService`는 immutable graph와 `SourceReader`를 소비하고 wire projection은 list/dict를 유지한다. `reader_policy.py`와 SQL capability는 cross-module 계약이다. |
 | `query.py`, `sql_validation.py`, `result_encoding.py` | Guarded Query | `QueryService`는 `SourceReader`와 작은 `QueryExecutor`를 소비하고 Runtime에는 이를 확장하는 `RuntimeQueryExecutor`를 제공한다. Trusted terminal outcome은 Runtime usage recorder에만 전달하며 result dictionary 의미는 별도 application contract다. |
 | `reader_policy.py` | Source Catalog | Metadata와 Guarded Query가 소비하며 두 DB 경로가 같은 safety policy를 사용해야 한다. |
-| `source_admin.py`, `source_store.py`, `secrets.py` | Control Plane | `SourceReloader`는 `SourceProjectionWriter`와 작은 `SourcePoolInvalidator`, isolated staging은 `SourceReader`/`RuntimeCatalogProvider`를 소비한다. `source_admin.py`는 public administration input/sequence, replica/resource/gateway observation writer와 use case를 제공하고 `source_store.py`는 persistence-private type/transaction을 소유한다. Source projection, management catalog, mutation receipt, observation freshness/fencing와 logical retention 의미를 함께 보존한다. |
+| `source_admin.py`, `source_store.py`, `secrets.py` | Control Plane | `SourceReloader`는 `SourceProjectionWriter`와 작은 `SourcePoolInvalidator`, isolated staging은 `SourceReader`/`RuntimeCatalogProvider`를 소비한다. `source_admin.py`는 public administration input/sequence, replica/resource/gateway observation writer, usage projection과 use case를 제공하고 `source_store.py`는 persistence-private type/transaction을 소유한다. Source projection, management catalog, mutation receipt, attempt/success freshness/fencing와 logical retention 의미를 함께 보존한다. |
 | `metadata_store.py` Protocol/codec | Metadata contract | Immutable Python graph와 기존 persisted JSON array/object를 상호 변환한다. PostgreSQL store와 Control DB transaction ownership은 Control Plane이다. |
 | `metadata_store.py` PostgreSQL implementation | Control Plane | Metadata가 implementation을 알지 않도록 한다. |
 | `gateway.py`, `access.py`, `mcp_server.py`, `http_validation.py` | Delivery | `GatewayService`는 `SourceReader`를 소비한다. Public caller/application/transport와 bounded validation contract다. |
-| `source_admin_routes.py` | Delivery | Control Plane의 public `CONTROL_SEQUENCE_MAX`, verified-publish input/use case와 Source Catalog의 `SourceEnvironment`, `Identifier`, `StableSlug` validation type을 소비하는 public admin HTTP/validation contract다. Control persistence와 Assurance DTO를 import하지 않는다. |
+| `source_admin_routes.py` | Delivery | Control Plane의 public `CONTROL_SEQUENCE_MAX`, verified-publish input/use case와 source-usage projection, Source Catalog의 `SourceEnvironment`, `Identifier`, `StableSlug` validation type을 소비하는 public admin HTTP/validation contract다. Control persistence와 Assurance DTO를 import하지 않는다. |
 | `errors.py`의 `AppError` carrier field | Delivery | Delivery가 HTTP/MCP public envelope와 `status_code/code/message/details` rendering compatibility를 소유한다. Domain subclass를 생성하는 module은 자신의 오류 발생 조건과 의미를 소유하며 file은 coordinating agent가 single-writer로 편집한다. |
 | `errors.py`의 `SourceNotFoundError` | Source Catalog | Source 존재 의미는 Source Catalog 계약이다. Metadata, Guarded Query와 Delivery가 생산·소비하고 public status/code/message rendering은 Delivery가 소유한다. |
 | `errors.py`의 `MetadataUnavailableError`, `MetadataRevisionMismatchError` | Metadata | Metadata availability와 published revision 의미를 Metadata가 소유한다. Guarded Query와 Control Plane이 소비하고 public envelope는 Delivery가 소유한다. |
@@ -219,8 +219,9 @@ lifecycle Protocol과 offline composition 선택지는
 [module contract decision guide](../module-contract-decision-guide.md)에 설명한다. 사용자는
 2026-08-24 `D0-A`~`D5-A`와 공통 불변조건을 승인했다. `D0-A`/`RTSAFE-01`,
 `D1-A`/`MOD-04`, `D2-A`/`MOD-05`, `D4-A`/`MOD-06`, `D3-A`/`MOD-07`과
-`D5-A`/`MOD-08`은 모두 구현 완료됐다. 이후 작업은 확정된 provider contract를 기준으로 서로 다른
-module implementation을 병렬화한다.
+`D5-A`/`MOD-08`은 모두 구현 완료됐다. `CTRL-07A` observation과 2026-08-25 승인된 `CTRL-08`
+latest-attempt/usage projection도 provider와 consumer 계약을 고정해 구현했다. 이후 작업은 확정된
+provider contract를 기준으로 서로 다른 module implementation을 병렬화한다.
 
 ## Agent 작업 절차
 

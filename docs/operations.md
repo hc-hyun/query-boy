@@ -95,7 +95,24 @@ reader/catalog pool로 관측하고, 기존 Control source store max-two pool �
 Migration 4 application rollback은 table, ledger와 이미 집계된 data를 남긴다. 31일은 logical
 visibility/input window여서 age-only DELETE를 하지 않고, source당 최신 1,000행 cap을 넘긴 rollup만
 writer가 DELETE할 수 있다. Resource/cursor에는 DELETE가 없고 rollup에도 TRUNCATE는 없다. 새 HTTP/MCP
-또는 availability status는 `CTRL-08` 전까지 없으므로 rollout 중 기존 public surface는 동일하다.
+또는 availability status는 migration 4만 적용한 application에는 없으므로 기존 public surface는
+동일하다.
+
+`0005_source_usage_projection.sql`은 source당 latest resource attempt/last-success row 하나만
+추가하는 additive migration이다. Schema를 먼저 적용한 뒤 CTRL-08 application을 순차 교체한다.
+이전 application은 새 table과 `/usage` endpoint를 모르며 기존 resource success write를 계속할 수
+있지만 attempt row를 만들지 않으므로 새 projection은 current-generation report 전까지 pending일 수
+있다. 새 attempt가 생긴 뒤 이전 application이 resource row만 다시 쓰는 mixed-version 구간에는 marker와
+sample time이 달라져 usage resource가 일시적으로 `unavailable/OBSERVATION_INCOMPLETE`가 될 수 있다.
+새 Runtime의 다음 atomic success가 이를 복구하며 query data plane/readiness에는 영향이 없다. 새
+Runtime은 success에 generation을 전달하고 metadata/resource failure만 bounded reason으로 best-effort
+기록한다.
+
+Migration 5 application rollback은 table, ledger, attempt와 기존 resource/rollup data를 남긴다.
+Writer는 attempt table의 SELECT/INSERT/UPDATE만 갖고 DELETE/TRUNCATE는 없다. Rollback 뒤 old
+application은 attempt를 갱신하지 않으므로 값을 삭제하거나 0으로 바꾸지 말고 freshness가
+stale로 수렴하거나 legacy sample 갱신과 marker가 달라지면 `OBSERVATION_INCOMPLETE`로 닫히도록 둔다.
+31일 age-only delete 금지와 source당 rollup 1,000행 cap도 바뀌지 않는다.
 
 Schema migration과 global `query_man_control_writer`/DB ACL은 의도적으로 분리돼 있다.
 `reconcile-security.sql`은 매 실행마다 role을 harden하고 현재 DB의 최소 권한을 복구한다. 따라서
@@ -220,6 +237,7 @@ Public endpoint는 inventory를 노출하지 않는다.
 | `GET /admin/health` | Query Man admin | source별 `initializing`, `healthy`, `stale`, `unavailable` |
 | `GET /admin/metrics` | Query Man admin | source/component health와 bounded counter/total snapshot |
 | `GET /admin/sources/{source_id}/replicas` | Query Man admin | ever-registered replica별 desired/applied drift와 freshness |
+| `GET /admin/sources/{source_id}/usage` | Query Man admin | resource attempt/last-success와 31일 gateway lower-bound projection |
 
 Replica endpoint는 `limit` 1~100과 exclusive `after_replica_id` cursor를 받는다. 알려진 source는
 replica가 `pending`, `stale` 또는 `unavailable`이어도 200이며 다음을 확인한다.
@@ -238,6 +256,21 @@ Observation registration/report 실패는 이 endpoint의 freshness에만 나타
 source health, query data plane과 mutation receipt를 바꾸지 않는다. Process log의
 `replica_observation_registration_failed` 또는 `replica_observation_report_failed`를 조사하되 같은
 process에서 수동 재등록하거나 ID를 바꾸지 않는다.
+
+Usage endpoint는 query parameter 없이 한 DB snapshot의 최대 1,000 gateway row를 반환한다.
+Resource의 latest attempt가 실패해도 last success가 72시간 freshness 안이면 `available`이며
+`last_attempt`에서 실패를 확인한다. Last success가 없으면 `pending` 또는 bounded failure의
+`unavailable`, 만료되면 `stale`다. Gateway는 source별 traffic 완전성이 아니라 reporter pipeline
+health다. Heartbeat가 fresh한 모든 live replica의 current-incarnation cursor가 fresh해야
+`available`이며 하나라도 absent/expired면 `REPORTER_UNAVAILABLE`이다. Live replica가 없으면 과거
+accepted cursor 유무에 따라 `stale` 또는 `pending`이다. Startup 직후 첫 empty report 전의 짧은
+`unavailable`은 정상이며 data plane/readiness를 바꾸지 않는다.
+
+Gateway window는 Control DB clock 기준 현재 UTC hour부터 31일 전 hour까지 양 끝 포함이다. Empty
+rollup, missing metric과 failed observation을 0으로 해석하지 않는다. Monetary cost는 provider가
+연결되지 않아 `PROVIDER_NOT_CONFIGURED`만 표시하고 amount/currency를 제공하지 않는다. 이 endpoint의
+credential/connection, observability relation/grain, replica/cursor identity, caller/tenant,
+question/SQL/fingerprint/query ID 또는 raw 오류 노출은 incident로 취급한다.
 
 Startup은 authority mode에서 등록된 source별 published-metadata 제공 경로를 각 metadata
 statement timeout 안에서 병렬 확인한다. Managed mode는 이 probe 전에 Control lifecycle scan을

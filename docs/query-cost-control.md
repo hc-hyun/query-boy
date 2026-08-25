@@ -47,9 +47,12 @@ user/organization별 tier, host cgroup CPU/memory quota와 일·월 통화 budge
 종료 조건은 [active development TODO](development-todo.md)의 `COST-*`에서 관리한다. Source
 규모·증가량의 측정 방법과 gateway usage lower-bound 수집은 `CTRL-07`에서 구현됐고, 최종 운영 projection은
 [source management plane](source-management-plane.md)의 한 management surface에서 제공한다.
-`CTRL-08`은 비용 신호를 `not_configured|pending|available|stale|unavailable`로 구분하고 마지막
-시도 시각과 bounded reason을 제공하며, missing/failed 값을 0으로 표시하지 않는다. 이 항목들은
-public projection 구현 목표이며 DB-native/provider monetary collector는 여전히 범위 밖이다.
+`CTRL-08`은 resource를 `not_configured|pending|available|stale|unavailable`로 구분하고 current
+generation의 마지막 시도와 bounded reason을 제공한다. Gateway는 global reporter pipeline의
+accepted `last_report_at`과 같은 상태를 제공하며 source traffic completeness로 해석하지 않는다.
+Missing/failed 값과 빈 hour는 0으로 표시하지 않는다. 이 public projection은 구현됐고
+DB-native/provider monetary collector는 여전히 범위 밖이라 monetary cost는
+`not_configured/PROVIDER_NOT_CONFIGURED`만 표시한다.
 
 ## What Is Measured
 

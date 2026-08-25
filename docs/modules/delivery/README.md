@@ -147,6 +147,43 @@ Replica item은 `replica_id`, `status`, nullable `source_health`, nullable `appl
 unavailable replica가 있어도 known source 조회는 200이다. Existing admin list/detail/history,
 `GET /sources`, `/health`, `/ready`, `/admin/metrics`와 MCP inventory/response는 변경하지 않는다.
 
+### Resource and usage HTTP contract (`CTRL-08`)
+
+Delivery는 Control Plane의 `SourceAdminService.source_usage(source_id)`만 호출해 다음 operator-only
+endpoint를 제공한다.
+
+```text
+GET /admin/sources/{source_id}/usage
+```
+
+Query parameter는 하나도 받지 않는다. Authentication/authorization을 path/query validation보다
+먼저 수행하며 authenticated non-operator는 invalid source/query라도 403이다. Unknown source는 404,
+Control read/decode/cardinality failure는 bounded `SOURCE_CONTROL_UNAVAILABLE` 503이고 resource/gateway
+status가 stale/unavailable인 known source는 200이다.
+
+Response는 다음 exact top-level과 section field만 직렬화한다.
+
+```text
+source_id, enabled, read_at
+resource: status, reason_code, last_attempt, fresh_until, metrics
+gateway: status, reason_code, last_report_at, fresh_until, lower_bound,
+         window_start, window_end, rollups
+monetary_cost: status, reason_code, last_attempt
+```
+
+Resource `last_attempt`는 null 또는 `{attempted_at,outcome,reason_code}`다. Metric item은
+`metric,unit,method,definition_revision,current,previous`이고 current는 value, metadata revision,
+sample bucket, observed/fresh time을 가지며 previous는 null 또는 같은 value/time projection이다.
+Gateway rollup은 budget profile, metadata/definition revision, bucket/observed time과 승인된 fixed
+terminal counter/sum만 가진다. Missing metric/gap/failed report를 0 row로 만들지 않는다.
+
+Gateway response는 pagination 없이 한 DB snapshot의 inclusive 31일 window와 최대 1,000행을 그대로
+전달한다. `lower_bound`는 항상 true다. `monetary_cost`는 exact
+`not_configured/PROVIDER_NOT_CONFIGURED/null`이며 amount/currency/provider field를 만들지 않는다.
+Credential/token/connection, observability relation/grain, replica/cursor identity, caller/tenant,
+question/SQL/fingerprint/query ID와 raw error는 response/audit에 포함하지 않는다. Existing admin
+list/detail/history/replica/mutation, `/admin/metrics`, query-facing HTTP와 MCP 세 tool은 바뀌지 않는다.
+
 ### MCP contract
 
 - Protocol version은 현재 `2026-07-28`이다.
@@ -224,6 +261,8 @@ Metadata/Source Catalog의 runtime tuple/read-only mapping 전환은 Delivery HT
 - Bearer/header, Host/Origin, body size와 unauthenticated endpoint 정책 변경
 - Source summary projection과 admin/cancel surface 변경
 - Replica observation path/query/response/status/reason/pagination 또는 stale/unavailable HTTP 의미 변경
+- Usage path/response field, no-query/1,000행 bound, status/reason/freshness/lower-bound 또는
+  monetary-cost placeholder 의미 변경
 - Admin idempotency/expected-state header, query/path/body limit, validation issue 또는 receipt/catalog
   projection 변경
 - Transport audit에 기록 가능한 request/caller/source field 또는 disconnect/cancel 의미 변경

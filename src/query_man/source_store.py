@@ -60,6 +60,10 @@ class GatewayUsageConflictError(Exception):
     pass
 
 
+class ResourceObservationConflictError(Exception):
+    pass
+
+
 @dataclass(frozen=True)
 class StoredSource:
     source_id: str
@@ -230,6 +234,77 @@ class ReplicaObservationPage:
     next_after_replica_id: str | None
 
 
+@dataclass(frozen=True)
+class ResourceObservationAttemptRecord:
+    generation: int
+    last_attempt_at: datetime
+    last_attempt_outcome: str
+    last_attempt_reason_code: str | None
+    last_success_at: datetime | None
+    last_success_has_representative: bool | None
+
+
+@dataclass(frozen=True)
+class ResourceObservationValueRecord:
+    value: int
+    metadata_revision: str
+    sample_bucket_start: datetime
+    observed_at: datetime
+    fresh_until: datetime
+
+
+@dataclass(frozen=True)
+class ResourceObservationRecord:
+    metric: str
+    unit: str
+    method: str
+    definition_revision: str
+    current: ResourceObservationValueRecord
+    previous: ResourceObservationValueRecord | None
+
+
+@dataclass(frozen=True)
+class GatewayUsageRollupRecord:
+    source_id: str
+    budget_profile: str
+    metadata_revision: str
+    definition_revision: str
+    bucket_start: datetime
+    query_count: int
+    success_count: int
+    rejected_count: int
+    timeout_count: int
+    overloaded_count: int
+    cancelled_count: int
+    failed_count: int
+    queue_ms_sum: int
+    elapsed_ms_sum: int
+    returned_rows_sum: int
+    result_bytes_sum: int
+    truncated_count: int
+    observed_at: datetime
+
+
+@dataclass(frozen=True)
+class SourceUsageProjection:
+    source_id: str
+    enabled: bool
+    generation: int
+    resource_configured: bool
+    read_at: datetime
+    resource_attempt: ResourceObservationAttemptRecord | None
+    resource_observations: tuple[ResourceObservationRecord, ...]
+    live_reporter_count: int
+    live_current_cursor_count: int
+    live_fresh_cursor_count: int
+    accepted_cursor_count: int
+    last_report_at: datetime | None
+    reporter_fresh_until: datetime | None
+    window_start: datetime
+    window_end: datetime
+    gateway_rollups: tuple[GatewayUsageRollupRecord, ...]
+
+
 _CATALOG_PROJECTION = (
     "active.source_id, revision.generation, active.enabled, active.state_version, "
     "active.activated_at, revision.created_at AS generation_created_at, "
@@ -324,6 +399,12 @@ _RESOURCE_METRIC_CONTRACT = {
     "index_bytes": ("bytes", "postgres_relation_size"),
     "total_storage_bytes": ("bytes", "postgres_relation_size"),
 }
+_RESOURCE_MANDATORY_METRICS = frozenset(
+    {"table_bytes", "index_bytes", "total_storage_bytes"}
+)
+_RESOURCE_ATTEMPT_FAILURE_REASONS = frozenset(
+    {"METADATA_UNAVAILABLE", "RESOURCE_READ_FAILED"}
+)
 _RESOURCE_FRESHNESS = timedelta(hours=72)
 _GATEWAY_USAGE_MAX_BATCH = 100
 _GATEWAY_USAGE_MAX_ROWS_PER_SOURCE = 1_000
@@ -566,13 +647,15 @@ class PostgresSourceStore:
     async def report_resource_observations(
         self,
         source_id: str,
+        generation: int,
         metadata_revision: str,
         observations: tuple[_ResourceObservationWrite, ...],
     ) -> None:
         _validate_source_id(source_id)
+        _validate_positive_bigint(generation, "Resource observation generation")
         if not _is_revision(metadata_revision):
             raise ValueError("Resource observation metadata revision is invalid")
-        if not 1 <= len(observations) <= len(_RESOURCE_METRIC_CONTRACT):
+        if not 3 <= len(observations) <= len(_RESOURCE_METRIC_CONTRACT):
             raise ValueError("Resource observation batch size is invalid")
         metrics: set[str] = set()
         for observation in observations:
@@ -580,10 +663,18 @@ class PostgresSourceStore:
             if observation.metric in metrics:
                 raise ValueError("Resource observation metrics must be unique")
             metrics.add(observation.metric)
+        if not _RESOURCE_MANDATORY_METRICS.issubset(metrics):
+            raise ValueError("Resource observation mandatory metrics are missing")
 
         pool = await self._get_pool()
         async with pool.connection() as connection, connection.transaction():
             await _lock_resource_observation(connection, source_id)
+            await _require_resource_observation_generation(
+                connection,
+                source_id,
+                generation,
+                metadata_revision=metadata_revision,
+            )
             clock_cursor = await connection.execute(
                 "WITH read_clock AS MATERIALIZED ("
                 "SELECT clock_timestamp() AS observed_at"
@@ -689,6 +780,77 @@ class PostgresSourceStore:
                         fresh_until,
                     ),
                 )
+            await connection.execute(
+                "INSERT INTO control.source_resource_observation_attempts "
+                "(source_id, generation, last_attempt_at, last_attempt_outcome, "
+                "last_attempt_reason_code, last_success_at, "
+                "last_success_has_representative) "
+                "VALUES (%s, %s, %s, 'succeeded', NULL, %s, %s) "
+                "ON CONFLICT (source_id) DO UPDATE SET "
+                "generation = EXCLUDED.generation, "
+                "last_attempt_at = EXCLUDED.last_attempt_at, "
+                "last_attempt_outcome = EXCLUDED.last_attempt_outcome, "
+                "last_attempt_reason_code = NULL, "
+                "last_success_at = EXCLUDED.last_success_at, "
+                "last_success_has_representative = "
+                "EXCLUDED.last_success_has_representative",
+                (
+                    source_id,
+                    generation,
+                    observed_at,
+                    observed_at,
+                    "representative_records" in metrics,
+                ),
+            )
+
+    async def report_resource_observation_failure(
+        self,
+        source_id: str,
+        generation: int,
+        reason_code: str,
+    ) -> None:
+        _validate_source_id(source_id)
+        _validate_positive_bigint(generation, "Resource observation generation")
+        if reason_code not in _RESOURCE_ATTEMPT_FAILURE_REASONS:
+            raise ValueError("Resource observation failure reason is invalid")
+
+        pool = await self._get_pool()
+        async with pool.connection() as connection, connection.transaction():
+            await _lock_resource_observation(connection, source_id)
+            await _require_resource_observation_generation(
+                connection,
+                source_id,
+                generation,
+            )
+            clock_cursor = await connection.execute(
+                "SELECT clock_timestamp() AS attempted_at"
+            )
+            clock_row = await clock_cursor.fetchone()
+            if clock_row is None:
+                raise RuntimeError("Control resource observation clock is unavailable")
+            attempted_at = _required_timestamp(clock_row, "attempted_at")
+            await connection.execute(
+                "INSERT INTO control.source_resource_observation_attempts "
+                "(source_id, generation, last_attempt_at, last_attempt_outcome, "
+                "last_attempt_reason_code, last_success_at, "
+                "last_success_has_representative) "
+                "VALUES (%s, %s, %s, 'failed', %s, NULL, NULL) "
+                "ON CONFLICT (source_id) DO UPDATE SET "
+                "generation = EXCLUDED.generation, "
+                "last_attempt_at = EXCLUDED.last_attempt_at, "
+                "last_attempt_outcome = EXCLUDED.last_attempt_outcome, "
+                "last_attempt_reason_code = EXCLUDED.last_attempt_reason_code, "
+                "last_success_at = CASE WHEN "
+                "control.source_resource_observation_attempts.generation = "
+                "EXCLUDED.generation THEN "
+                "control.source_resource_observation_attempts.last_success_at END, "
+                "last_success_has_representative = CASE WHEN "
+                "control.source_resource_observation_attempts.generation = "
+                "EXCLUDED.generation THEN "
+                "control.source_resource_observation_attempts."
+                "last_success_has_representative END",
+                (source_id, generation, attempted_at, reason_code),
+            )
 
     async def report_gateway_usage(
         self,
@@ -929,6 +1091,164 @@ class PostgresSourceStore:
             items=records,
             next_after_replica_id=(
                 records[-1].replica_id if len(replica_rows) > limit else None
+            ),
+        )
+
+    async def get_source_usage(self, source_id: str) -> SourceUsageProjection | None:
+        _validate_source_id(source_id)
+        pool = await self._get_pool()
+        async with pool.connection() as connection, connection.transaction():
+            await connection.execute(
+                "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"
+            )
+            source_cursor = await connection.execute(
+                "SELECT active.source_id, active.enabled, active.generation, "
+                "revision.manifest ? 'observability' "
+                "AS resource_observability_present, "
+                "jsonb_typeof(revision.manifest -> 'observability') "
+                "AS resource_observability_type, clock_timestamp() AS read_at "
+                "FROM control.active_source_profiles AS active "
+                "JOIN control.source_profile_revisions AS revision "
+                "ON revision.source_id = active.source_id "
+                "AND revision.generation = active.generation "
+                "WHERE active.source_id = %s",
+                (source_id,),
+            )
+            source_row = await source_cursor.fetchone()
+            if source_row is None:
+                return None
+            read_at = _required_timestamp(source_row, "read_at")
+            window_end = _utc_hour(read_at)
+            window_start = window_end - _GATEWAY_USAGE_RETENTION
+
+            attempt_cursor = await connection.execute(
+                "SELECT generation, last_attempt_at, last_attempt_outcome, "
+                "last_attempt_reason_code, last_success_at, "
+                "last_success_has_representative "
+                "FROM control.source_resource_observation_attempts "
+                "WHERE source_id = %s",
+                (source_id,),
+            )
+            attempt_row = await attempt_cursor.fetchone()
+
+            resource_cursor = await connection.execute(
+                "SELECT metric, unit, method, definition_revision, value, "
+                "metadata_revision, sample_bucket_start, observed_at, fresh_until, "
+                "previous_value, previous_metadata_revision, "
+                "previous_sample_bucket_start, previous_observed_at, "
+                "previous_fresh_until "
+                "FROM control.source_resource_observations "
+                "WHERE source_id = %s "
+                "ORDER BY CASE metric "
+                "WHEN 'representative_records' THEN 1 "
+                "WHEN 'table_bytes' THEN 2 WHEN 'index_bytes' THEN 3 "
+                "WHEN 'total_storage_bytes' THEN 4 ELSE 5 END",
+                (source_id,),
+            )
+            resource_rows = await resource_cursor.fetchall()
+            if len(resource_rows) > len(_RESOURCE_METRIC_CONTRACT):
+                raise RuntimeError("Resource observation cardinality is invalid")
+
+            reporter_cursor = await connection.execute(
+                "WITH read_clock(read_at) AS (VALUES (%s::timestamptz)) "
+                "SELECT "
+                "count(*) FILTER (WHERE read_clock.read_at <= "
+                "replica.observed_at + replica.heartbeat_interval_ms * "
+                "interval '3 milliseconds') AS live_reporter_count, "
+                "count(*) FILTER (WHERE read_clock.read_at <= "
+                "replica.observed_at + replica.heartbeat_interval_ms * "
+                "interval '3 milliseconds' "
+                "AND cursor.incarnation = replica.incarnation) "
+                "AS live_current_cursor_count, "
+                "count(*) FILTER (WHERE read_clock.read_at <= "
+                "replica.observed_at + replica.heartbeat_interval_ms * "
+                "interval '3 milliseconds' "
+                "AND cursor.incarnation = replica.incarnation "
+                "AND read_clock.read_at <= cursor.fresh_until) "
+                "AS live_fresh_cursor_count, "
+                "count(cursor.replica_id) AS accepted_cursor_count, "
+                "max(cursor.observed_at) AS last_report_at, "
+                "min(cursor.fresh_until) FILTER (WHERE read_clock.read_at <= "
+                "replica.observed_at + replica.heartbeat_interval_ms * "
+                "interval '3 milliseconds' "
+                "AND cursor.incarnation = replica.incarnation) "
+                "AS reporter_fresh_until "
+                "FROM control.runtime_replicas AS replica "
+                "LEFT JOIN control.gateway_usage_report_cursors AS cursor "
+                "ON cursor.replica_id = replica.replica_id "
+                "CROSS JOIN read_clock",
+                (read_at,),
+            )
+            reporter_row = await reporter_cursor.fetchone()
+            if reporter_row is None:
+                raise RuntimeError("Gateway reporter projection is unavailable")
+
+            usage_cursor = await connection.execute(
+                "SELECT source_id, budget_profile, metadata_revision, "
+                "definition_revision, bucket_start, query_count, success_count, "
+                "rejected_count, timeout_count, overloaded_count, cancelled_count, "
+                "failed_count, queue_ms_sum, elapsed_ms_sum, returned_rows_sum, "
+                "result_bytes_sum, truncated_count, observed_at "
+                "FROM control.gateway_usage_rollups "
+                "WHERE source_id = %s AND bucket_start >= %s AND bucket_start <= %s "
+                "ORDER BY bucket_start DESC, observed_at DESC, "
+                "budget_profile COLLATE \"C\" ASC, metadata_revision ASC, "
+                "definition_revision ASC LIMIT %s",
+                (
+                    source_id,
+                    window_start,
+                    window_end,
+                    _GATEWAY_USAGE_MAX_ROWS_PER_SOURCE + 1,
+                ),
+            )
+            usage_rows = await usage_cursor.fetchall()
+            if len(usage_rows) > _GATEWAY_USAGE_MAX_ROWS_PER_SOURCE:
+                raise RuntimeError("Gateway usage cardinality is invalid")
+
+        return SourceUsageProjection(
+            source_id=_stable_slug(source_row, "source_id"),
+            enabled=_required_bool(source_row, "enabled"),
+            generation=_bounded_int(
+                source_row,
+                "generation",
+                1,
+                POSTGRES_BIGINT_MAX,
+            ),
+            resource_configured=_decode_resource_observability_configured(source_row),
+            read_at=read_at,
+            resource_attempt=(
+                None
+                if attempt_row is None
+                else _decode_resource_observation_attempt(attempt_row)
+            ),
+            resource_observations=tuple(
+                _decode_resource_observation(row) for row in resource_rows
+            ),
+            live_reporter_count=_projection_count(
+                reporter_row,
+                "live_reporter_count",
+            ),
+            live_current_cursor_count=_projection_count(
+                reporter_row,
+                "live_current_cursor_count",
+            ),
+            live_fresh_cursor_count=_projection_count(
+                reporter_row,
+                "live_fresh_cursor_count",
+            ),
+            accepted_cursor_count=_projection_count(
+                reporter_row,
+                "accepted_cursor_count",
+            ),
+            last_report_at=_optional_timestamp(reporter_row, "last_report_at"),
+            reporter_fresh_until=_optional_timestamp(
+                reporter_row,
+                "reporter_fresh_until",
+            ),
+            window_start=window_start,
+            window_end=window_end,
+            gateway_rollups=tuple(
+                _decode_gateway_usage_rollup(row) for row in usage_rows
             ),
         )
 
@@ -1584,6 +1904,45 @@ async def _lock_resource_observation(connection: Any, source_id: str) -> None:
     )
 
 
+async def _require_resource_observation_generation(
+    connection: Any,
+    source_id: str,
+    generation: int,
+    *,
+    metadata_revision: str | None = None,
+) -> None:
+    if metadata_revision is None:
+        cursor = await connection.execute(
+            "SELECT active.generation "
+            "FROM control.active_source_profiles AS active "
+            "JOIN control.source_profile_revisions AS revision "
+            "ON revision.source_id = active.source_id "
+            "AND revision.generation = active.generation "
+            "WHERE active.source_id = %s AND active.enabled "
+            "AND active.generation = %s "
+            "AND jsonb_typeof(revision.manifest -> 'observability') = 'object' "
+            "FOR SHARE OF active",
+            (source_id, generation),
+        )
+    else:
+        cursor = await connection.execute(
+            "SELECT active.generation "
+            "FROM control.active_source_profiles AS active "
+            "JOIN control.source_profile_revisions AS revision "
+            "ON revision.source_id = active.source_id "
+            "AND revision.generation = active.generation "
+            "JOIN control.active_metadata_revisions AS metadata "
+            "ON metadata.source_id = active.source_id "
+            "WHERE active.source_id = %s AND active.enabled "
+            "AND active.generation = %s AND metadata.revision = %s "
+            "AND jsonb_typeof(revision.manifest -> 'observability') = 'object' "
+            "FOR SHARE OF active, metadata",
+            (source_id, generation, metadata_revision),
+        )
+    if await cursor.fetchone() is None:
+        raise ResourceObservationConflictError
+
+
 async def _lock_gateway_reporter(connection: Any, replica_id: str) -> None:
     await connection.execute(
         "SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(%s, 0))",
@@ -2158,6 +2517,166 @@ def _decode_replica_observation(row: dict[str, Any]) -> ReplicaObservationRecord
         source_health=source.source_health,
         reason_code=source.reason_code,
     )
+
+
+def _decode_resource_observability_configured(row: dict[str, Any]) -> bool:
+    present = _required_bool(row, "resource_observability_present")
+    observability_type = row.get("resource_observability_type")
+    if not present:
+        if observability_type is not None:
+            raise RuntimeError("Source observability configuration is invalid")
+        return False
+    if observability_type != "object":
+        raise RuntimeError("Source observability configuration is invalid")
+    return True
+
+
+def _decode_resource_observation_attempt(
+    row: dict[str, Any],
+) -> ResourceObservationAttemptRecord:
+    generation = _bounded_int(row, "generation", 1, POSTGRES_BIGINT_MAX)
+    last_attempt_at = _required_timestamp(row, "last_attempt_at")
+    outcome = _required_text(row, "last_attempt_outcome", 16)
+    reason_code = _optional_text(row, "last_attempt_reason_code", 64)
+    last_success_at = _optional_timestamp(row, "last_success_at")
+    has_representative = _optional_bool(
+        row,
+        "last_success_has_representative",
+    )
+    if outcome == "succeeded":
+        if (
+            reason_code is not None
+            or last_success_at != last_attempt_at
+            or has_representative is None
+        ):
+            raise RuntimeError("Resource observation attempt is invalid")
+    elif outcome == "failed":
+        if reason_code not in _RESOURCE_ATTEMPT_FAILURE_REASONS:
+            raise RuntimeError("Resource observation attempt is invalid")
+    else:
+        raise RuntimeError("Resource observation attempt is invalid")
+    if (last_success_at is None) != (has_representative is None):
+        raise RuntimeError("Resource observation attempt is invalid")
+    if last_success_at is not None and last_success_at > last_attempt_at:
+        raise RuntimeError("Resource observation attempt is invalid")
+    return ResourceObservationAttemptRecord(
+        generation=generation,
+        last_attempt_at=last_attempt_at,
+        last_attempt_outcome=outcome,
+        last_attempt_reason_code=reason_code,
+        last_success_at=last_success_at,
+        last_success_has_representative=has_representative,
+    )
+
+
+def _decode_resource_observation(
+    row: dict[str, Any],
+) -> ResourceObservationRecord:
+    metric = _required_text(row, "metric", 64)
+    unit = _required_text(row, "unit", 16)
+    method = _required_text(row, "method", 64)
+    if _RESOURCE_METRIC_CONTRACT.get(metric) != (unit, method):
+        raise RuntimeError("Resource observation metric is invalid")
+    current = ResourceObservationValueRecord(
+        value=_bounded_int(row, "value", 0, POSTGRES_BIGINT_MAX),
+        metadata_revision=_required_revision(row, "metadata_revision"),
+        sample_bucket_start=_required_timestamp(row, "sample_bucket_start"),
+        observed_at=_required_timestamp(row, "observed_at"),
+        fresh_until=_required_timestamp(row, "fresh_until"),
+    )
+    if current.fresh_until != current.observed_at + _RESOURCE_FRESHNESS:
+        raise RuntimeError("Resource observation freshness is invalid")
+
+    previous_value = _optional_bounded_int(
+        row,
+        "previous_value",
+        0,
+        POSTGRES_BIGINT_MAX,
+    )
+    previous_revision = _optional_revision(row, "previous_metadata_revision")
+    previous_bucket = _optional_timestamp(row, "previous_sample_bucket_start")
+    previous_observed_at = _optional_timestamp(row, "previous_observed_at")
+    previous_fresh_until = _optional_timestamp(row, "previous_fresh_until")
+    previous_fields = (
+        previous_value,
+        previous_revision,
+        previous_bucket,
+        previous_observed_at,
+        previous_fresh_until,
+    )
+    if all(value is None for value in previous_fields):
+        previous = None
+    elif any(value is None for value in previous_fields):
+        raise RuntimeError("Previous resource observation is invalid")
+    else:
+        assert previous_value is not None
+        assert previous_revision is not None
+        assert previous_bucket is not None
+        assert previous_observed_at is not None
+        assert previous_fresh_until is not None
+        if previous_fresh_until != previous_observed_at + _RESOURCE_FRESHNESS:
+            raise RuntimeError("Previous resource observation freshness is invalid")
+        previous = ResourceObservationValueRecord(
+            value=previous_value,
+            metadata_revision=previous_revision,
+            sample_bucket_start=previous_bucket,
+            observed_at=previous_observed_at,
+            fresh_until=previous_fresh_until,
+        )
+    return ResourceObservationRecord(
+        metric=metric,
+        unit=unit,
+        method=method,
+        definition_revision=_required_revision(row, "definition_revision"),
+        current=current,
+        previous=previous,
+    )
+
+
+def _decode_gateway_usage_rollup(row: dict[str, Any]) -> GatewayUsageRollupRecord:
+    delta = _GatewayUsageDeltaWrite(
+        source_id=_stable_slug(row, "source_id"),
+        budget_profile=_identifier(row, "budget_profile"),
+        metadata_revision=_required_revision(row, "metadata_revision"),
+        definition_revision=_required_revision(row, "definition_revision"),
+        bucket_start=_required_timestamp(row, "bucket_start"),
+        query_count=_bounded_int(row, "query_count", 0, POSTGRES_BIGINT_MAX),
+        success_count=_bounded_int(row, "success_count", 0, POSTGRES_BIGINT_MAX),
+        rejected_count=_bounded_int(row, "rejected_count", 0, POSTGRES_BIGINT_MAX),
+        timeout_count=_bounded_int(row, "timeout_count", 0, POSTGRES_BIGINT_MAX),
+        overloaded_count=_bounded_int(row, "overloaded_count", 0, POSTGRES_BIGINT_MAX),
+        cancelled_count=_bounded_int(row, "cancelled_count", 0, POSTGRES_BIGINT_MAX),
+        failed_count=_bounded_int(row, "failed_count", 0, POSTGRES_BIGINT_MAX),
+        queue_ms_sum=_bounded_int(row, "queue_ms_sum", 0, POSTGRES_BIGINT_MAX),
+        elapsed_ms_sum=_bounded_int(row, "elapsed_ms_sum", 0, POSTGRES_BIGINT_MAX),
+        returned_rows_sum=_bounded_int(
+            row,
+            "returned_rows_sum",
+            0,
+            POSTGRES_BIGINT_MAX,
+        ),
+        result_bytes_sum=_bounded_int(
+            row,
+            "result_bytes_sum",
+            0,
+            POSTGRES_BIGINT_MAX,
+        ),
+        truncated_count=_bounded_int(
+            row,
+            "truncated_count",
+            0,
+            POSTGRES_BIGINT_MAX,
+        ),
+    )
+    _validate_gateway_usage_delta(delta)
+    return GatewayUsageRollupRecord(
+        **vars(delta),
+        observed_at=_required_timestamp(row, "observed_at"),
+    )
+
+
+def _projection_count(row: dict[str, Any], key: str) -> int:
+    return _bounded_int(row, key, 0, POSTGRES_BIGINT_MAX)
 
 
 def _decode(row: dict[str, Any]) -> StoredSource:

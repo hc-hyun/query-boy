@@ -51,8 +51,8 @@ ownership, state, history, size와 cost를 조회하는 목표 계약은
 | Owner, environment and DB migration reference | Control DB immutable manifest generation |
 | Mutation audit and authoritative receipt | Control DB management plane; implemented |
 | Replica desired/applied drift and freshness | Control DB latest observation; implemented |
-| Size/growth observation | Control DB current/previous observation; implemented, public projection pending |
-| Gateway usage/cost projection | Control DB internal usage rollup implemented; public cost projection pending |
+| Size/growth observation | Control DB current/previous와 latest-attempt; operator projection implemented |
+| Gateway usage/cost projection | Operator usage/lower-bound status implemented; provider monetary cost remains not configured |
 | Bootstrap and acceptance input | Repository YAML seed/fixture only |
 
 `config/sources/*.yaml`은 local/CI bootstrap seed이고 `config/onboarding/*.yaml`은 integration
@@ -172,6 +172,7 @@ capability superset이다.
 | Generation history | `GET /admin/sources/{source_id}/history` | 불변 generation을 내림차순으로 조회; lifecycle event audit은 별도 |
 | Mutation history | `GET /admin/sources/{source_id}/mutations` | Actor/change reference와 expected/resulting state의 secret-free chronology |
 | Replica convergence | `GET /admin/sources/{source_id}/replicas` | Ever-registered slot별 desired/applied drift와 DB-clock freshness; stale도 200 |
+| Resource and usage | `GET /admin/sources/{source_id}/usage` | Query 없이 latest resource attempt/last-success와 inclusive 31일 gateway lower-bound 조회; missing은 0이 아님 |
 | Receipt lookup | `GET /admin/mutations/{idempotency_key}` | Timeout 뒤 terminal success/rejection을 authoritative하게 조회 |
 | Stage + publish | `PUT /admin/sources/{source_id}` | Body의 `manifest`, `credential`을 분리하고 path ID 일치 검증 |
 | Credential rotation | `POST /admin/sources/{source_id}/credential` | Enabled/unpinned source에서 새 credential staging 후 generation 교체 |

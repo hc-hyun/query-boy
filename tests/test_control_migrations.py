@@ -37,12 +37,18 @@ GRANT SELECT, INSERT, UPDATE ON control.runtime_replicas
 GRANT SELECT, INSERT, UPDATE ON control.runtime_source_observations
   TO query_man_control_writer;
 """
-_V4_WRITER_GRANTS = """\
+_V4_RESOURCE_WRITER_GRANT = """\
 GRANT SELECT, INSERT, UPDATE ON control.source_resource_observations
   TO query_man_control_writer;
+"""
+_V4_GATEWAY_WRITER_GRANTS = """\
 GRANT SELECT, INSERT, UPDATE, DELETE ON control.gateway_usage_rollups
   TO query_man_control_writer;
 GRANT SELECT, INSERT, UPDATE ON control.gateway_usage_report_cursors
+  TO query_man_control_writer;
+"""
+_V5_WRITER_GRANTS = """\
+GRANT SELECT, INSERT, UPDATE ON control.source_resource_observation_attempts
   TO query_man_control_writer;
 """
 
@@ -64,11 +70,15 @@ def _copy_v1_migrations(tmp_path: Path) -> Path:
     security_sql = security_path.read_text(encoding="utf-8")
     assert _V2_WRITER_GRANTS in security_sql
     assert _V3_WRITER_GRANTS in security_sql
-    assert _V4_WRITER_GRANTS in security_sql
+    assert _V4_RESOURCE_WRITER_GRANT in security_sql
+    assert _V4_GATEWAY_WRITER_GRANTS in security_sql
+    assert _V5_WRITER_GRANTS in security_sql
     security_path.write_text(
         security_sql.replace(_V2_WRITER_GRANTS, "")
         .replace(_V3_WRITER_GRANTS, "")
-        .replace(_V4_WRITER_GRANTS, ""),
+        .replace(_V4_RESOURCE_WRITER_GRANT, "")
+        .replace(_V4_GATEWAY_WRITER_GRANTS, "")
+        .replace(_V5_WRITER_GRANTS, ""),
         encoding="utf-8",
     )
     return migration_directory
@@ -91,10 +101,15 @@ def _copy_v2_migrations(tmp_path: Path) -> Path:
     security_path = migration_directory / "reconcile-security.sql"
     security_sql = security_path.read_text(encoding="utf-8")
     assert _V3_WRITER_GRANTS in security_sql
-    assert _V4_WRITER_GRANTS in security_sql
+    assert _V4_RESOURCE_WRITER_GRANT in security_sql
+    assert _V4_GATEWAY_WRITER_GRANTS in security_sql
+    assert _V5_WRITER_GRANTS in security_sql
     security_path.write_text(
         security_sql.replace(_V3_WRITER_GRANTS, "").replace(
-            _V4_WRITER_GRANTS,
+            _V4_RESOURCE_WRITER_GRANT,
+            "",
+        ).replace(_V4_GATEWAY_WRITER_GRANTS, "").replace(
+            _V5_WRITER_GRANTS,
             "",
         ),
         encoding="utf-8",
@@ -119,9 +134,43 @@ def _copy_v3_migrations(tmp_path: Path) -> Path:
 
     security_path = migration_directory / "reconcile-security.sql"
     security_sql = security_path.read_text(encoding="utf-8")
-    assert _V4_WRITER_GRANTS in security_sql
+    assert _V4_RESOURCE_WRITER_GRANT in security_sql
+    assert _V4_GATEWAY_WRITER_GRANTS in security_sql
+    assert _V5_WRITER_GRANTS in security_sql
     security_path.write_text(
-        security_sql.replace(_V4_WRITER_GRANTS, ""),
+        security_sql.replace(_V4_RESOURCE_WRITER_GRANT, "").replace(
+            _V4_GATEWAY_WRITER_GRANTS,
+            "",
+        ).replace(
+            _V5_WRITER_GRANTS,
+            "",
+        ),
+        encoding="utf-8",
+    )
+    return migration_directory
+
+
+def _copy_v4_migrations(tmp_path: Path) -> Path:
+    migration_directory = tmp_path / "v4-control-migrations"
+    shutil.copytree(_MIGRATION_DIRECTORY, migration_directory)
+    numbered_migrations = sorted(
+        migration_directory.glob("[0-9][0-9][0-9][0-9]_*.sql")
+    )
+    assert [path.name for path in numbered_migrations[:5]] == [
+        "0001_baseline.sql",
+        "0002_source_mutation_receipts.sql",
+        "0003_runtime_replica_observations.sql",
+        "0004_source_resource_and_gateway_usage.sql",
+        "0005_source_usage_projection.sql",
+    ]
+    for migration_path in numbered_migrations[4:]:
+        migration_path.unlink()
+
+    security_path = migration_directory / "reconcile-security.sql"
+    security_sql = security_path.read_text(encoding="utf-8")
+    assert _V5_WRITER_GRANTS in security_sql
+    security_path.write_text(
+        security_sql.replace(_V5_WRITER_GRANTS, ""),
         encoding="utf-8",
     )
     return migration_directory
@@ -208,6 +257,23 @@ async def v3_control_database_fixture(
     assert await authority_fingerprint(development_dsn) == development_before
 
 
+@pytest.fixture
+async def v4_control_database_fixture(
+    tmp_path: Path,
+) -> AsyncIterator[DisposableControlDatabase]:
+    environment = postgres_environment()
+    if environment is None:
+        pytest.skip("local PostgreSQL control-plane credentials are not configured")
+    development_dsn = postgres_dsn(environment, environment["POSTGRES_DB"])
+    development_before = await authority_fingerprint(development_dsn)
+    async with disposable_control_database(
+        environment,
+        _copy_v4_migrations(tmp_path),
+    ) as database:
+        yield database
+    assert await authority_fingerprint(development_dsn) == development_before
+
+
 async def _control_contract(connection: AsyncConnection[object]) -> tuple[object, ...]:
     cursor = await connection.execute(
         "SELECT "
@@ -270,8 +336,8 @@ async def test_control_migrations_are_versioned_idempotent_and_fail_on_drift(
             f"{version}:{filename}:{checksum}"
             for version, filename, checksum in expected_migrations
         ]
-        assert first_contract[2:] == (14, 4, True, True, True)
-        assert len(first_contract[1]) == 12
+        assert first_contract[2:] == (15, 4, True, True, True)
+        assert len(first_contract[1]) == 13
 
         await connection.execute(
             "INSERT INTO control.metadata_snapshots (source_id, revision, snapshot) "
@@ -314,7 +380,7 @@ async def test_control_migrations_reject_a_database_ahead_of_the_checkout(
     try:
         await connection.execute(
             "INSERT INTO control.schema_migrations (version, filename, checksum) "
-            "VALUES (5, '0005_future.sql', %s)",
+            "VALUES (6, '0006_future.sql', %s)",
             (f"sha256:{'0' * 64}",),
         )
         await connection.commit()
@@ -328,7 +394,8 @@ async def test_control_migrations_reject_a_database_ahead_of_the_checkout(
             (2, "0002_source_mutation_receipts.sql"),
             (3, "0003_runtime_replica_observations.sql"),
             (4, "0004_source_resource_and_gateway_usage.sql"),
-            (5, "0005_future.sql"),
+            (5, "0005_source_usage_projection.sql"),
+            (6, "0006_future.sql"),
         ]
     finally:
         await connection.close()
@@ -536,6 +603,7 @@ async def test_v2_to_v3_upgrade_is_additive_and_observation_acl_is_mutable_only(
 @pytest.mark.integration
 async def test_v3_to_v4_upgrade_is_additive_idempotent_and_least_privilege(
     v3_control_database_fixture: DisposableControlDatabase,
+    tmp_path: Path,
 ) -> None:
     database = v3_control_database_fixture
     revision = f"sha256:{'8' * 64}"
@@ -582,7 +650,8 @@ async def test_v3_to_v4_upgrade_is_additive_idempotent_and_least_privilege(
     finally:
         await connection.close()
 
-    apply_control_migrations(database)
+    migration_directory = _copy_v4_migrations(tmp_path)
+    apply_control_migrations(database, migration_directory)
     assert await authority_fingerprint(database.dsn) == authority_before
 
     connection = await AsyncConnection.connect(database.dsn)
@@ -725,6 +794,119 @@ async def test_v3_to_v4_upgrade_is_additive_idempotent_and_least_privilege(
     finally:
         await connection.close()
 
+    apply_control_migrations(database, migration_directory)
+    connection = await AsyncConnection.connect(database.dsn)
+    try:
+        assert await _control_contract(connection) == first_contract
+    finally:
+        await connection.close()
+
+
+@pytest.mark.integration
+async def test_v4_to_v5_upgrade_adds_bounded_resource_attempt_state(
+    v4_control_database_fixture: DisposableControlDatabase,
+) -> None:
+    database = v4_control_database_fixture
+    revision = f"sha256:{'7' * 64}"
+    connection = await AsyncConnection.connect(database.dsn)
+    try:
+        await connection.execute(
+            "INSERT INTO control.metadata_snapshots (source_id, revision, snapshot) "
+            "VALUES ('projection-upgrade', %s, '{\"relations\": []}'::jsonb)",
+            (revision,),
+        )
+        await connection.execute(
+            "INSERT INTO control.source_profile_revisions "
+            "(source_id, generation, manifest, secret_nonce, secret_ciphertext, "
+            "metadata_revision) VALUES "
+            "('projection-upgrade', 1, '{\"schema_version\": 2}'::jsonb, "
+            "%s, %s, %s)",
+            (b"n" * 12, b"c" * 17, revision),
+        )
+        await connection.execute(
+            "INSERT INTO control.active_source_profiles "
+            "(source_id, generation, enabled, state_version) "
+            "VALUES ('projection-upgrade', 1, true, 1)"
+        )
+        await connection.commit()
+    finally:
+        await connection.close()
+
+    authority_before = await authority_fingerprint(database.dsn)
+    apply_control_migrations(database)
+    assert await authority_fingerprint(database.dsn) == authority_before
+
+    connection = await AsyncConnection.connect(database.dsn)
+    try:
+        cursor = await connection.execute(
+            "SELECT version, filename FROM control.schema_migrations ORDER BY version"
+        )
+        assert await cursor.fetchall() == [
+            (1, "0001_baseline.sql"),
+            (2, "0002_source_mutation_receipts.sql"),
+            (3, "0003_runtime_replica_observations.sql"),
+            (4, "0004_source_resource_and_gateway_usage.sql"),
+            (5, "0005_source_usage_projection.sql"),
+        ]
+        cursor = await connection.execute(
+            "SELECT array_agg(column_name::text ORDER BY ordinal_position) "
+            "FROM information_schema.columns WHERE table_schema = 'control' "
+            "AND table_name = 'source_resource_observation_attempts'"
+        )
+        assert await cursor.fetchone() == (
+            [
+                "source_id",
+                "generation",
+                "last_attempt_at",
+                "last_attempt_outcome",
+                "last_attempt_reason_code",
+                "last_success_at",
+                "last_success_has_representative",
+            ],
+        )
+        cursor = await connection.execute(
+            "SELECT ARRAY["
+            "has_table_privilege('query_man_control_writer', "
+            "'control.source_resource_observation_attempts', 'SELECT'), "
+            "has_table_privilege('query_man_control_writer', "
+            "'control.source_resource_observation_attempts', 'INSERT'), "
+            "has_table_privilege('query_man_control_writer', "
+            "'control.source_resource_observation_attempts', 'UPDATE'), "
+            "has_table_privilege('query_man_control_writer', "
+            "'control.source_resource_observation_attempts', 'DELETE'), "
+            "has_table_privilege('query_man_control_writer', "
+            "'control.source_resource_observation_attempts', 'TRUNCATE')]"
+        )
+        assert await cursor.fetchone() == ([True, True, True, False, False],)
+
+        with pytest.raises(errors.CheckViolation):
+            await connection.execute(
+                "INSERT INTO control.source_resource_observation_attempts "
+                "(source_id, generation, last_attempt_at, last_attempt_outcome, "
+                "last_success_at) VALUES "
+                "('projection-upgrade', 1, clock_timestamp(), 'succeeded', "
+                "clock_timestamp())"
+            )
+        await connection.rollback()
+        with pytest.raises(errors.CheckViolation):
+            await connection.execute(
+                "INSERT INTO control.source_resource_observation_attempts "
+                "(source_id, generation, last_attempt_at, last_attempt_outcome) "
+                "VALUES ('projection-upgrade', 1, clock_timestamp(), 'failed')"
+            )
+        await connection.rollback()
+        await connection.execute(
+            "INSERT INTO control.source_resource_observation_attempts "
+            "(source_id, generation, last_attempt_at, last_attempt_outcome, "
+            "last_attempt_reason_code) VALUES "
+            "('projection-upgrade', 1, clock_timestamp(), 'failed', "
+            "'RESOURCE_READ_FAILED')"
+        )
+        await connection.commit()
+        first_contract = await _control_contract(connection)
+    finally:
+        await connection.close()
+
     apply_control_migrations(database)
     connection = await AsyncConnection.connect(database.dsn)
     try:
@@ -741,7 +923,7 @@ async def test_failed_pending_migration_rolls_back_ddl_data_and_ledger(
     database = disposable_control_database_fixture
     failing_directory = tmp_path / "failing-control-migrations"
     shutil.copytree(_MIGRATION_DIRECTORY, failing_directory)
-    (failing_directory / "0005_transaction_probe.sql").write_text(
+    (failing_directory / "0006_transaction_probe.sql").write_text(
         "CREATE TABLE control.failed_migration_probe (value integer NOT NULL);\n"
         "INSERT INTO control.failed_migration_probe VALUES (1);\n"
         "INSERT INTO control.metadata_snapshots (source_id, revision, snapshot)\n"
@@ -763,7 +945,7 @@ async def test_failed_pending_migration_rolls_back_ddl_data_and_ledger(
             "WHERE source_id = 'failed-migration'), "
             "array_agg(version ORDER BY version) FROM control.schema_migrations"
         )
-        assert await cursor.fetchone() == (None, False, [1, 2, 3, 4])
+        assert await cursor.fetchone() == (None, False, [1, 2, 3, 4, 5])
     finally:
         await connection.close()
 
@@ -872,7 +1054,7 @@ async def test_old_checkout_cannot_reconcile_after_newer_ledger_commit(
             "'control.source_mutation_receipts_event_id_seq', 'USAGE') "
             "FROM control.schema_migrations"
         )
-        assert await cursor.fetchone() == ([1, 2, 3, 4], True, True, True)
+        assert await cursor.fetchone() == ([1, 2, 3, 4, 5], True, True, True)
     finally:
         await connection.rollback()
         try:
@@ -1268,7 +1450,7 @@ async def test_security_reconciliation_fails_closed_on_writer_owned_objects(
         )
         assert await cursor.fetchone() == (
             "query_man_control_writer",
-            [1, 2, 3, 4],
+            [1, 2, 3, 4, 5],
         )
     finally:
         await connection.close()

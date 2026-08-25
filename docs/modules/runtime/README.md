@@ -211,6 +211,28 @@ replica heartbeat, mutation receipt와 shutdown 성공을 바꾸지 않으며 ca
 Bootstrap mode에는 Control observation writer/task가 없다. Existing `operations.snapshot()`,
 `/admin/metrics`, health/readiness와 MCP output도 바뀌지 않는다.
 
+`CTRL-08`은 resource report에 current `SourceProfile.control_generation`을 추가하고 실패 capability를
+다음처럼 확정했다.
+
+```text
+report_resource_observations(source_id, generation, metadata_revision, samples)
+report_resource_observation_failure(
+  source_id, generation, METADATA_UNAVAILABLE | RESOURCE_READ_FAILED
+)
+```
+
+Published metadata를 얻지 못하면 `METADATA_UNAVAILABLE`, catalog observation 또는 bounded sample
+assembly가 실패하면 `RESOURCE_READ_FAILED`만 best-effort report한다. Raw exception, relation/grain,
+credential과 source connection은 payload에 넣지 않는다. Control writer 호출 자체가 실패하면 같은
+unavailable Control DB에 실패를 억지로 기록하거나 다른 health/readiness 의미로 승격하지 않고
+sanitized warning만 남긴다. Success는 storage metric 세 개와 optional representative를 전달하며
+Control Plane이 generation/active metadata를 fence한다.
+
+Latest resource failure와 success report는 기존 process-local Control write lock 안에서 gateway write와
+계속 직렬화한다. 이 추가 report도 startup, data plane, source health, replica heartbeat, mutation
+receipt와 shutdown 성공을 바꾸지 않고 cancellation은 전파한다. Runtime은 CTRL-08 public status를
+계산하거나 Control table을 읽지 않으며 Delivery가 Control Plane projection을 소비한다.
+
 ### Runtime authentication configuration contract
 
 - Bootstrap loopback에서 token/access-policy 설정이 없으면 Delivery의 anonymous query-only local
@@ -270,6 +292,8 @@ Bootstrap mode에는 Control observation writer/task가 없다. Existing `operat
 - Environment variable, required/optional/default와 secure-mode validation 변경
 - Managed replica ID validation/ignore, registration 횟수, report cadence/failure 격리 또는
   shutdown deregistration 의미 변경
+- Resource success generation/metadata fencing, bounded failure 분류, report cadence 또는
+  shared Control write serialization 변경
 - Bootstrap/managed authority, filesystem non-read/fallback와 access-policy requirement 변경
 - Startup, reloader sync/probe와 shutdown admission/drain/close 순서 변경
 - `RuntimeQueryExecutor`/`RuntimeCatalogProvider` required capability, callable validation 시점,

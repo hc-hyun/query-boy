@@ -77,5 +77,5 @@ source generation publish도 허용하지 않는다.
 - 다른 endpoint로 전환하려면 별도 source ID와 새 verified contract를 사용해야 한다.
 - Owner/환경/DB migration provenance와 secret-free generation read API는 같은 immutable manifest를
   재사용한다. Actor/reason/receipt audit와 replica 상태는 ADR 0016의 `CTRL-05`/`CTRL-06`으로
-  구현됐으며 내부 규모/사용량 observation은 `CTRL-07A`로 구현됐다. Public availability와 비용
-  projection은 같은 ADR의 `CTRL-08` 후속 범위다.
+  구현됐으며 내부 규모/사용량 observation은 `CTRL-07A`, public availability/usage projection은
+  `CTRL-08`로 구현됐다. Provider monetary cost는 이후 별도 범위다.

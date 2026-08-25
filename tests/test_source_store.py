@@ -35,6 +35,7 @@ from query_man.source_store import (
     MutationRequest,
     PostgresSourceStore,
     ReplicaObservationConflictError,
+    ResourceObservationConflictError,
     SourceGenerationConflictError,
     SourcePublishPinnedError,
     _decode_catalog,
@@ -70,7 +71,11 @@ def _mutation_fixture(
     )
 
 
-def _source_fixture(source_id: str) -> tuple[ValidatedSourceManifest, PreparedMetadata]:
+def _source_fixture(
+    source_id: str,
+    *,
+    resource_observability: bool = True,
+) -> tuple[ValidatedSourceManifest, PreparedMetadata]:
     raw = yaml.safe_load(
         (ROOT_DIRECTORY / "config" / "sources" / "development-issues.yaml").read_text(
             encoding="utf-8"
@@ -81,6 +86,8 @@ def _source_fixture(source_id: str) -> tuple[ValidatedSourceManifest, PreparedMe
         f"{source_id.replace('-', '_').upper()}_READER_PASSWORD"
     )
     raw["minimum_quality_level"] = "L0"
+    if not resource_observability:
+        raw.pop("observability", None)
     validated = validate_source_manifest(
         raw,
         load_budget_profiles(ROOT_DIRECTORY / "config" / "budget-profiles.yaml"),
@@ -156,6 +163,45 @@ def _gateway_usage_delta(
         result_bytes_sum=5,
         truncated_count=0,
     )
+
+
+def _resource_observation_batch(
+    definition_revision: str,
+    *,
+    include_representative: bool = True,
+    value_offset: int = 0,
+) -> tuple[_ResourceObservationWrite, ...]:
+    observations = (
+        _ResourceObservationWrite(
+            "representative_records",
+            100 + value_offset,
+            "rows",
+            "postgres_catalog_estimate",
+            definition_revision,
+        ),
+        _ResourceObservationWrite(
+            "table_bytes",
+            10 + value_offset,
+            "bytes",
+            "postgres_relation_size",
+            definition_revision,
+        ),
+        _ResourceObservationWrite(
+            "index_bytes",
+            2 + value_offset,
+            "bytes",
+            "postgres_relation_size",
+            definition_revision,
+        ),
+        _ResourceObservationWrite(
+            "total_storage_bytes",
+            12 + value_offset,
+            "bytes",
+            "postgres_relation_size",
+            definition_revision,
+        ),
+    )
+    return observations if include_representative else observations[1:]
 
 
 @pytest.mark.asyncio
@@ -1431,13 +1477,15 @@ async def test_resource_observations_coalesce_shift_and_reset_definition(
     try:
         await store.report_resource_observations(
             source_id,
+            1,
             metadata_revision,
             initial,
         )
         await store.report_resource_observations(
             source_id,
+            1,
             metadata_revision,
-            (replace(table_sample, value=20),),
+            (replace(table_sample, value=20), initial[2], initial[3]),
         )
 
         connection = await AsyncConnection.connect(disposable_control_dsn)
@@ -1472,8 +1520,9 @@ async def test_resource_observations_coalesce_shift_and_reset_definition(
 
         await store.report_resource_observations(
             source_id,
+            1,
             metadata_revision,
-            (replace(table_sample, value=30),),
+            (replace(table_sample, value=30), initial[2], initial[3]),
         )
         connection = await AsyncConnection.connect(disposable_control_dsn)
         try:
@@ -1502,6 +1551,7 @@ async def test_resource_observations_coalesce_shift_and_reset_definition(
         changed_definition = f"sha256:{'b' * 64}"
         await store.report_resource_observations(
             source_id,
+            1,
             metadata_revision,
             (
                 replace(
@@ -1509,6 +1559,8 @@ async def test_resource_observations_coalesce_shift_and_reset_definition(
                     value=40,
                     definition_revision=changed_definition,
                 ),
+                replace(initial[2], definition_revision=changed_definition),
+                replace(initial[3], definition_revision=changed_definition),
             ),
         )
         connection = await AsyncConnection.connect(disposable_control_dsn)
@@ -1532,6 +1584,187 @@ async def test_resource_observations_coalesce_shift_and_reset_definition(
             )
         finally:
             await connection.close()
+    finally:
+        await store.close()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_resource_attempt_preserves_current_generation_success_and_fences_generation(
+    disposable_control_dsn: str,
+) -> None:
+    source_id = "resource-attempt-source"
+    store, metadata_revision = await _publish_observation_source(
+        disposable_control_dsn,
+        source_id,
+    )
+    definition = f"sha256:{'8' * 64}"
+    try:
+        await store.report_resource_observations(
+            source_id,
+            1,
+            metadata_revision,
+            _resource_observation_batch(definition),
+        )
+        succeeded = await store.get_source_usage(source_id)
+        assert succeeded is not None
+        assert succeeded.resource_attempt is not None
+        success_at = succeeded.resource_attempt.last_success_at
+        assert success_at is not None
+        assert succeeded.resource_attempt.last_attempt_outcome == "succeeded"
+        assert succeeded.resource_attempt.last_success_has_representative is True
+        assert {row.current.observed_at for row in succeeded.resource_observations} == {
+            success_at
+        }
+        assert {row.current.fresh_until for row in succeeded.resource_observations} == {
+            success_at + timedelta(hours=72)
+        }
+
+        with pytest.raises(ResourceObservationConflictError):
+            await store.report_resource_observations(
+                source_id,
+                1,
+                f"sha256:{'0' * 64}",
+                _resource_observation_batch(definition, value_offset=1),
+            )
+        unchanged = await store.get_source_usage(source_id)
+        assert unchanged is not None
+        assert unchanged.resource_attempt == succeeded.resource_attempt
+        assert unchanged.resource_observations == succeeded.resource_observations
+
+        await store.report_resource_observation_failure(
+            source_id,
+            1,
+            "RESOURCE_READ_FAILED",
+        )
+        failed = await store.get_source_usage(source_id)
+        assert failed is not None
+        assert failed.resource_attempt is not None
+        assert failed.resource_attempt.last_attempt_outcome == "failed"
+        assert failed.resource_attempt.last_attempt_reason_code == "RESOURCE_READ_FAILED"
+        assert failed.resource_attempt.last_attempt_at >= success_at
+        assert failed.resource_attempt.last_success_at == success_at
+        assert failed.resource_attempt.last_success_has_representative is True
+
+        validated, metadata = _source_fixture(source_id)
+        generation = await store.next_generation(source_id)
+        assert generation == 2
+        await store.publish(
+            source_id,
+            1,
+            generation,
+            validated.document,
+            SourceSecretCipher(b"v" * 32).encrypt(
+                source_id,
+                generation,
+                "rotated-reader-secret",
+            ),
+            metadata,
+            expected_state_version=1,
+        )
+        with pytest.raises(ResourceObservationConflictError):
+            await store.report_resource_observation_failure(
+                source_id,
+                1,
+                "METADATA_UNAVAILABLE",
+            )
+
+        await store.report_resource_observation_failure(
+            source_id,
+            generation,
+            "METADATA_UNAVAILABLE",
+        )
+        reset = await store.get_source_usage(source_id)
+        assert reset is not None
+        assert reset.generation == generation
+        assert reset.resource_attempt is not None
+        assert reset.resource_attempt.generation == generation
+        assert reset.resource_attempt.last_attempt_outcome == "failed"
+        assert reset.resource_attempt.last_success_at is None
+        assert reset.resource_attempt.last_success_has_representative is None
+
+        await store.report_resource_observations(
+            source_id,
+            generation,
+            metadata_revision,
+            _resource_observation_batch(
+                definition,
+                include_representative=False,
+                value_offset=10,
+            ),
+        )
+        current = await store.get_source_usage(source_id)
+        assert current is not None
+        assert current.resource_attempt is not None
+        current_success_at = current.resource_attempt.last_success_at
+        assert current_success_at is not None
+        assert current.resource_attempt.last_success_has_representative is False
+        matching_metrics = {
+            row.metric
+            for row in current.resource_observations
+            if row.current.observed_at == current_success_at
+        }
+        assert matching_metrics == {
+            "table_bytes",
+            "index_bytes",
+            "total_storage_bytes",
+        }
+    finally:
+        await store.close()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_source_usage_distinguishes_absent_from_malformed_observability(
+    disposable_control_dsn: str,
+) -> None:
+    source_id = "resource-config-shape"
+    validated, metadata = _source_fixture(
+        source_id,
+        resource_observability=False,
+    )
+    store = PostgresSourceStore(disposable_control_dsn)
+    await store.publish(
+        source_id,
+        0,
+        1,
+        validated.document,
+        SourceSecretCipher(b"w" * 32).encrypt(
+            source_id,
+            1,
+            "reader-secret",
+        ),
+        metadata,
+        expected_state_version=0,
+    )
+    try:
+        absent = await store.get_source_usage(source_id)
+        assert absent is not None
+        assert absent.resource_configured is False
+
+        for index, malformed in enumerate((None, [], "invalid"), start=1):
+            malformed_source_id = f"resource-config-malformed-{index}"
+            malformed_validated, malformed_metadata = _source_fixture(
+                malformed_source_id,
+                resource_observability=False,
+            )
+            malformed_manifest = dict(malformed_validated.document)
+            malformed_manifest["observability"] = malformed
+            await store.publish(
+                malformed_source_id,
+                0,
+                1,
+                malformed_manifest,
+                SourceSecretCipher(b"x" * 32).encrypt(
+                    malformed_source_id,
+                    1,
+                    "reader-secret",
+                ),
+                malformed_metadata,
+                expected_state_version=0,
+            )
+            with pytest.raises(RuntimeError, match="configuration is invalid"):
+                await store.get_source_usage(malformed_source_id)
     finally:
         await store.close()
 
@@ -1562,6 +1795,7 @@ async def test_resource_observation_batch_rolls_back_atomically(
         with pytest.raises(Error):
             await store.report_resource_observations(
                 source_id,
+                1,
                 metadata_revision,
                 (
                     _ResourceObservationWrite(
@@ -1578,12 +1812,26 @@ async def test_resource_observation_batch_rolls_back_atomically(
                         "postgres_relation_size",
                         definition,
                     ),
+                    _ResourceObservationWrite(
+                        "total_storage_bytes",
+                        12,
+                        "bytes",
+                        "postgres_relation_size",
+                        definition,
+                    ),
                 ),
             )
         connection = await AsyncConnection.connect(disposable_control_dsn)
         try:
             cursor = await connection.execute(
                 "SELECT count(*) FROM control.source_resource_observations "
+                "WHERE source_id = %s",
+                (source_id,),
+            )
+            assert await cursor.fetchone() == (0,)
+            cursor = await connection.execute(
+                "SELECT count(*) "
+                "FROM control.source_resource_observation_attempts "
                 "WHERE source_id = %s",
                 (source_id,),
             )
@@ -1635,6 +1883,7 @@ async def test_concurrent_resource_reports_preserve_latest_db_clock_sample(
         first_task = asyncio.create_task(
             store_a.report_resource_observations(
                 source_id,
+                1,
                 metadata_revision,
                 (
                     _ResourceObservationWrite(
@@ -1651,6 +1900,13 @@ async def test_concurrent_resource_reports_preserve_latest_db_clock_sample(
                         "postgres_relation_size",
                         definition,
                     ),
+                    _ResourceObservationWrite(
+                        "total_storage_bytes",
+                        12,
+                        "bytes",
+                        "postgres_relation_size",
+                        definition,
+                    ),
                 ),
             )
         )
@@ -1658,6 +1914,7 @@ async def test_concurrent_resource_reports_preserve_latest_db_clock_sample(
         second_task = asyncio.create_task(
             store_b.report_resource_observations(
                 source_id,
+                1,
                 metadata_revision,
                 (
                     _ResourceObservationWrite(
@@ -1670,6 +1927,13 @@ async def test_concurrent_resource_reports_preserve_latest_db_clock_sample(
                     _ResourceObservationWrite(
                         "table_bytes",
                         20,
+                        "bytes",
+                        "postgres_relation_size",
+                        definition,
+                    ),
+                    _ResourceObservationWrite(
+                        "total_storage_bytes",
+                        24,
                         "bytes",
                         "postgres_relation_size",
                         definition,
@@ -1694,6 +1958,7 @@ async def test_concurrent_resource_reports_preserve_latest_db_clock_sample(
             assert await cursor.fetchall() == [
                 ("index_bytes", 4, None, timedelta(hours=72)),
                 ("table_bytes", 20, None, timedelta(hours=72)),
+                ("total_storage_bytes", 24, None, timedelta(hours=72)),
             ]
         finally:
             await connection.close()
@@ -1745,6 +2010,182 @@ async def test_empty_gateway_report_advances_and_replays_cursor_without_rollup(
         assert advanced[0] == []
         assert advanced[1][0][0:3] == (replica_id, incarnation, 2)
         assert advanced[1][0][5] - advanced[1][0][4] == timedelta(seconds=180)
+    finally:
+        await store.close()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_source_usage_projection_uses_global_live_reporter_health_and_fixed_order(
+    disposable_control_dsn: str,
+) -> None:
+    source_id = "source-usage-projection"
+    store, metadata_revision = await _publish_observation_source(
+        disposable_control_dsn,
+        source_id,
+    )
+    replica_a = "source-usage-reporter-a"
+    replica_b = "source-usage-reporter-b"
+    try:
+        incarnation_a = await store.register_replica(replica_a, 300_000)
+        incarnation_b = await store.register_replica(replica_b, 300_000)
+        current_bucket = datetime.now(UTC).replace(
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+        current_delta = _gateway_usage_delta(
+            source_id,
+            metadata_revision,
+            bucket_start=current_bucket,
+        )
+        previous_delta = replace(
+            current_delta,
+            budget_profile="batch",
+            definition_revision=f"sha256:{'e' * 64}",
+            bucket_start=current_bucket - timedelta(hours=1),
+        )
+        await store.report_gateway_usage(
+            replica_a,
+            incarnation_a,
+            1,
+            (previous_delta, current_delta),
+        )
+        await store.report_gateway_usage(replica_b, incarnation_b, 1, ())
+        connection = await AsyncConnection.connect(disposable_control_dsn)
+        try:
+            await connection.execute(
+                "INSERT INTO control.gateway_usage_rollups "
+                "(source_id, budget_profile, metadata_revision, "
+                "definition_revision, bucket_start) VALUES "
+                "(%s, 'window_start', %s, %s, "
+                "date_trunc('hour', clock_timestamp()) - interval '31 days'), "
+                "(%s, 'window_end', %s, %s, "
+                "date_trunc('hour', clock_timestamp())), "
+                "(%s, 'before_window', %s, %s, "
+                "date_trunc('hour', clock_timestamp()) - "
+                "interval '31 days 1 hour'), "
+                "(%s, 'after_window', %s, %s, "
+                "date_trunc('hour', clock_timestamp()) + interval '1 hour')",
+                (
+                    source_id,
+                    metadata_revision,
+                    f"sha256:{'1' * 64}",
+                    source_id,
+                    metadata_revision,
+                    f"sha256:{'2' * 64}",
+                    source_id,
+                    metadata_revision,
+                    f"sha256:{'3' * 64}",
+                    source_id,
+                    metadata_revision,
+                    f"sha256:{'4' * 64}",
+                ),
+            )
+            await connection.commit()
+        finally:
+            await connection.close()
+
+        available = await store.get_source_usage(source_id)
+        assert available is not None
+        assert available.read_at.tzinfo is not None
+        assert available.window_end == available.read_at.replace(
+            minute=0,
+            second=0,
+            microsecond=0,
+        )
+        assert available.window_start == available.window_end - timedelta(days=31)
+        assert (
+            available.live_reporter_count,
+            available.live_current_cursor_count,
+            available.live_fresh_cursor_count,
+            available.accepted_cursor_count,
+        ) == (2, 2, 2, 2)
+        assert available.last_report_at is not None
+        assert available.reporter_fresh_until is not None
+        rollups = list(available.gateway_rollups)
+        ordered = list(rollups)
+        ordered.sort(key=lambda row: row.definition_revision)
+        ordered.sort(key=lambda row: row.metadata_revision)
+        ordered.sort(key=lambda row: row.budget_profile)
+        ordered.sort(key=lambda row: row.observed_at, reverse=True)
+        ordered.sort(key=lambda row: row.bucket_start, reverse=True)
+        assert rollups == ordered
+        by_budget = {row.budget_profile: row for row in rollups}
+        assert by_budget["window_start"].bucket_start == available.window_start
+        assert by_budget["window_end"].bucket_start == available.window_end
+        assert "before_window" not in by_budget
+        assert "after_window" not in by_budget
+
+        restarted_incarnation = await store.register_replica(replica_b, 300_000)
+        assert restarted_incarnation == incarnation_b + 1
+        unavailable = await store.get_source_usage(source_id)
+        assert unavailable is not None
+        assert (
+            unavailable.live_reporter_count,
+            unavailable.live_current_cursor_count,
+            unavailable.live_fresh_cursor_count,
+            unavailable.accepted_cursor_count,
+        ) == (2, 1, 1, 2)
+
+        connection = await AsyncConnection.connect(disposable_control_dsn)
+        try:
+            await connection.execute(
+                "UPDATE control.runtime_replicas "
+                "SET observed_at = clock_timestamp() - interval '16 minutes' "
+                "WHERE replica_id IN (%s, %s)",
+                (replica_a, replica_b),
+            )
+            await connection.commit()
+        finally:
+            await connection.close()
+        stale = await store.get_source_usage(source_id)
+        assert stale is not None
+        assert (
+            stale.live_reporter_count,
+            stale.live_current_cursor_count,
+            stale.live_fresh_cursor_count,
+            stale.accepted_cursor_count,
+        ) == (0, 0, 0, 2)
+        assert stale.last_report_at is not None
+        assert stale.reporter_fresh_until is None
+    finally:
+        await store.close()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_source_usage_projection_fails_closed_above_rollup_bound(
+    disposable_control_dsn: str,
+) -> None:
+    source_id = "source-usage-cardinality"
+    store, metadata_revision = await _publish_observation_source(
+        disposable_control_dsn,
+        source_id,
+    )
+    connection = await AsyncConnection.connect(disposable_control_dsn)
+    try:
+        await connection.execute(
+            "INSERT INTO control.gateway_usage_rollups "
+            "(source_id, budget_profile, metadata_revision, "
+            "definition_revision, bucket_start) "
+            "SELECT %s, budget_profile, %s, %s, "
+            "date_trunc('hour', clock_timestamp()) - hour_offset * interval '1 hour' "
+            "FROM generate_series(0, 500) AS hour_offset "
+            "CROSS JOIN unnest(ARRAY['batch', 'interactive']) AS budget_profile",
+            (
+                source_id,
+                metadata_revision,
+                f"sha256:{'9' * 64}",
+            ),
+        )
+        await connection.commit()
+    finally:
+        await connection.close()
+
+    try:
+        with pytest.raises(RuntimeError, match="cardinality"):
+            await store.get_source_usage(source_id)
     finally:
         await store.close()
 
@@ -2537,12 +2978,14 @@ async def test_resource_and_gateway_reports_reject_batches_above_contract_limits
     with pytest.raises(ValueError, match="batch size"):
         await store.report_resource_observations(
             "bounded-source",
+            1,
             f"sha256:{'f' * 64}",
             (),
         )
     with pytest.raises(ValueError, match="batch size"):
         await store.report_resource_observations(
             "bounded-source",
+            1,
             f"sha256:{'f' * 64}",
             (sample,) * 5,
         )

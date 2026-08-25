@@ -53,11 +53,14 @@ from query_man.source_store import (
     MutationRequest,
     ReplicaObservationPage,
     ReplicaObservationRecord,
+    ResourceObservationRecord,
+    ResourceObservationValueRecord,
     SourceCatalogPage,
     SourceCatalogRecord,
     SourceGenerationConflictError,
     SourceGenerationPage,
     SourcePublishPinnedError,
+    SourceUsageProjection,
     StoredSource,
     StoredSourceNotFoundError,
     _GatewayUsageDeltaWrite,
@@ -87,6 +90,10 @@ ResourceMetric = Literal[
 ]
 ResourceUnit = Literal["rows", "bytes"]
 ResourceMethod = Literal["postgres_catalog_estimate", "postgres_relation_size"]
+ResourceObservationFailureReason = Literal[
+    "METADATA_UNAVAILABLE",
+    "RESOURCE_READ_FAILED",
+]
 
 
 @dataclass(frozen=True)
@@ -148,8 +155,16 @@ class ResourceObservationWriter(Protocol):
     async def report_resource_observations(
         self,
         source_id: str,
+        generation: int,
         metadata_revision: str,
         samples: tuple[ResourceObservationSample, ...],
+    ) -> None: ...
+
+    async def report_resource_observation_failure(
+        self,
+        source_id: str,
+        generation: int,
+        reason_code: ResourceObservationFailureReason,
     ) -> None: ...
 
 
@@ -222,8 +237,16 @@ class SourceStore(Protocol):
     async def report_resource_observations(
         self,
         source_id: str,
+        generation: int,
         metadata_revision: str,
         observations: tuple[_ResourceObservationWrite, ...],
+    ) -> None: ...
+
+    async def report_resource_observation_failure(
+        self,
+        source_id: str,
+        generation: int,
+        reason_code: str,
     ) -> None: ...
 
     async def report_gateway_usage(
@@ -241,6 +264,11 @@ class SourceStore(Protocol):
         after_replica_id: str | None = None,
         limit: int = 50,
     ) -> ReplicaObservationPage | None: ...
+
+    async def get_source_usage(
+        self,
+        source_id: str,
+    ) -> SourceUsageProjection | None: ...
 
     async def list_generation_history(
         self,
@@ -372,11 +400,13 @@ class ControlResourceObservationWriter:
     async def report_resource_observations(
         self,
         source_id: str,
+        generation: int,
         metadata_revision: str,
         samples: tuple[ResourceObservationSample, ...],
     ) -> None:
         await self._store.report_resource_observations(
             source_id,
+            generation,
             metadata_revision,
             tuple(
                 _ResourceObservationWrite(
@@ -388,6 +418,18 @@ class ControlResourceObservationWriter:
                 )
                 for sample in samples
             ),
+        )
+
+    async def report_resource_observation_failure(
+        self,
+        source_id: str,
+        generation: int,
+        reason_code: ResourceObservationFailureReason,
+    ) -> None:
+        await self._store.report_resource_observation_failure(
+            source_id,
+            generation,
+            reason_code,
         )
 
 
@@ -766,6 +808,25 @@ class SourceAdminService:
             }
         except Exception as error:
             raise SourceControlUnavailableError from error
+
+    async def source_usage(self, source_id: str) -> dict[str, object]:
+        unavailable = False
+        try:
+            projection = await self._store.get_source_usage(source_id)
+        except Exception:
+            unavailable = True
+            projection = None
+        if unavailable:
+            raise SourceControlUnavailableError
+        if projection is None:
+            raise SourceNotFoundError
+        try:
+            response = _source_usage_response(projection)
+        except Exception:
+            pass
+        else:
+            return response
+        raise SourceControlUnavailableError
 
     async def source_history(
         self,
@@ -1681,6 +1742,243 @@ def _replica_observation_response(
         "fresh_until": observation.fresh_until.isoformat(),
         "stale_age_ms": stale_age_ms,
         "reason_code": reason_code,
+    }
+
+
+_RESOURCE_METRIC_ORDER = (
+    "representative_records",
+    "table_bytes",
+    "index_bytes",
+    "total_storage_bytes",
+)
+_RESOURCE_STORAGE_METRICS = frozenset(
+    {"table_bytes", "index_bytes", "total_storage_bytes"}
+)
+
+
+def _source_usage_response(projection: SourceUsageProjection) -> dict[str, object]:
+    if projection.window_start > projection.window_end:
+        raise ValueError("Gateway usage window is invalid")
+    return {
+        "source_id": projection.source_id,
+        "enabled": projection.enabled,
+        "read_at": projection.read_at.isoformat(),
+        "resource": _resource_usage_response(projection),
+        "gateway": _gateway_usage_response(projection),
+        "monetary_cost": {
+            "status": "not_configured",
+            "reason_code": "PROVIDER_NOT_CONFIGURED",
+            "last_attempt": None,
+        },
+    }
+
+
+def _resource_usage_response(
+    projection: SourceUsageProjection,
+) -> dict[str, object]:
+    attempt = projection.resource_attempt
+    if attempt is not None and attempt.generation != projection.generation:
+        attempt = None
+    last_attempt: dict[str, object] | None = None
+    if attempt is not None:
+        last_attempt = {
+            "attempted_at": attempt.last_attempt_at.isoformat(),
+            "outcome": attempt.last_attempt_outcome,
+            "reason_code": attempt.last_attempt_reason_code,
+        }
+
+    if not projection.resource_configured:
+        return {
+            "status": "not_configured",
+            "reason_code": "NOT_CONFIGURED",
+            "last_attempt": None,
+            "fresh_until": None,
+            "metrics": [],
+        }
+    if not projection.enabled:
+        return {
+            "status": "unavailable",
+            "reason_code": "SOURCE_DISABLED",
+            "last_attempt": last_attempt,
+            "fresh_until": None,
+            "metrics": [],
+        }
+    if attempt is None:
+        return {
+            "status": "pending",
+            "reason_code": "NOT_OBSERVED",
+            "last_attempt": None,
+            "fresh_until": None,
+            "metrics": [],
+        }
+
+    last_success_at = attempt.last_success_at
+    if last_success_at is None:
+        if attempt.last_attempt_outcome != "failed":
+            raise ValueError("Resource success state is invalid")
+        return {
+            "status": "unavailable",
+            "reason_code": (
+                "SOURCE_DISABLED"
+                if not projection.enabled
+                else attempt.last_attempt_reason_code
+            ),
+            "last_attempt": last_attempt,
+            "fresh_until": None,
+            "metrics": [],
+        }
+
+    expected_metrics = set(_RESOURCE_STORAGE_METRICS)
+    if attempt.last_success_has_representative:
+        expected_metrics.add("representative_records")
+    current_observations = {
+        observation.metric: observation
+        for observation in projection.resource_observations
+        if observation.current.observed_at == last_success_at
+    }
+    if set(current_observations) != expected_metrics:
+        return {
+            "status": "unavailable",
+            "reason_code": "OBSERVATION_INCOMPLETE",
+            "last_attempt": last_attempt,
+            "fresh_until": None,
+            "metrics": [],
+        }
+    fresh_until_values = {
+        observation.current.fresh_until
+        for observation in current_observations.values()
+    }
+    if len(fresh_until_values) != 1:
+        return {
+            "status": "unavailable",
+            "reason_code": "OBSERVATION_INCOMPLETE",
+            "last_attempt": last_attempt,
+            "fresh_until": None,
+            "metrics": [],
+        }
+    fresh_until = next(iter(fresh_until_values))
+    metrics = [
+        _resource_metric_response(current_observations[metric])
+        for metric in _RESOURCE_METRIC_ORDER
+        if metric in current_observations
+    ]
+    if projection.read_at <= fresh_until:
+        status = "available"
+        reason_code = None
+    else:
+        status = "stale"
+        reason_code = "OBSERVATION_EXPIRED"
+    return {
+        "status": status,
+        "reason_code": reason_code,
+        "last_attempt": last_attempt,
+        "fresh_until": fresh_until.isoformat(),
+        "metrics": metrics,
+    }
+
+
+def _resource_metric_response(
+    observation: ResourceObservationRecord,
+) -> dict[str, object]:
+    return {
+        "metric": observation.metric,
+        "unit": observation.unit,
+        "method": observation.method,
+        "definition_revision": observation.definition_revision,
+        "current": _resource_value_response(observation.current),
+        "previous": (
+            None
+            if observation.previous is None
+            else _resource_value_response(observation.previous)
+        ),
+    }
+
+
+def _resource_value_response(
+    resource_value: ResourceObservationValueRecord,
+) -> dict[str, object]:
+    return {
+        "value": resource_value.value,
+        "metadata_revision": resource_value.metadata_revision,
+        "sample_bucket_start": resource_value.sample_bucket_start.isoformat(),
+        "observed_at": resource_value.observed_at.isoformat(),
+        "fresh_until": resource_value.fresh_until.isoformat(),
+    }
+
+
+def _gateway_usage_response(projection: SourceUsageProjection) -> dict[str, object]:
+    live = projection.live_reporter_count
+    current = projection.live_current_cursor_count
+    fresh = projection.live_fresh_cursor_count
+    accepted = projection.accepted_cursor_count
+    if not 0 <= fresh <= current <= live or accepted < current:
+        raise ValueError("Gateway reporter cardinality is invalid")
+    if accepted == 0 and projection.last_report_at is not None:
+        raise ValueError("Gateway reporter last report is invalid")
+    if accepted > 0 and projection.last_report_at is None:
+        raise ValueError("Gateway reporter last report is invalid")
+
+    if live > 0 and fresh == live:
+        status = "available"
+        reason_code = None
+    elif live > 0:
+        status = "unavailable"
+        reason_code = "REPORTER_UNAVAILABLE"
+    elif accepted > 0:
+        status = "stale"
+        reason_code = "REPORTER_EXPIRED"
+    else:
+        status = "pending"
+        reason_code = "NOT_REPORTED"
+
+    reporter_fresh_until = None
+    if live > 0 and current == live:
+        if projection.reporter_fresh_until is None:
+            raise ValueError("Gateway reporter freshness is invalid")
+        reporter_fresh_until = projection.reporter_fresh_until.isoformat()
+
+    rollups: list[dict[str, object]] = []
+    for rollup in projection.gateway_rollups:
+        if (
+            rollup.source_id != projection.source_id
+            or rollup.bucket_start < projection.window_start
+            or rollup.bucket_start > projection.window_end
+        ):
+            raise ValueError("Gateway usage projection is invalid")
+        rollups.append(
+            {
+                "budget_profile": rollup.budget_profile,
+                "metadata_revision": rollup.metadata_revision,
+                "definition_revision": rollup.definition_revision,
+                "bucket_start": rollup.bucket_start.isoformat(),
+                "query_count": rollup.query_count,
+                "success_count": rollup.success_count,
+                "rejected_count": rollup.rejected_count,
+                "timeout_count": rollup.timeout_count,
+                "overloaded_count": rollup.overloaded_count,
+                "cancelled_count": rollup.cancelled_count,
+                "failed_count": rollup.failed_count,
+                "queue_ms_sum": rollup.queue_ms_sum,
+                "elapsed_ms_sum": rollup.elapsed_ms_sum,
+                "returned_rows_sum": rollup.returned_rows_sum,
+                "result_bytes_sum": rollup.result_bytes_sum,
+                "truncated_count": rollup.truncated_count,
+                "observed_at": rollup.observed_at.isoformat(),
+            }
+        )
+    return {
+        "status": status,
+        "reason_code": reason_code,
+        "last_report_at": (
+            None
+            if projection.last_report_at is None
+            else projection.last_report_at.isoformat()
+        ),
+        "fresh_until": reporter_fresh_until,
+        "lower_bound": True,
+        "window_start": projection.window_start.isoformat(),
+        "window_end": projection.window_end.isoformat(),
+        "rollups": rollups,
     }
 
 

@@ -46,6 +46,7 @@ from query_man.source_admin import (
     PublishVerifiedQueryInput,
     ReplicaObservationWriter,
     ReplicaSourceObservation,
+    ResourceObservationFailureReason,
     ResourceObservationSample,
     ResourceObservationWriter,
     SourceAdminService,
@@ -53,6 +54,7 @@ from query_man.source_admin import (
     VerifiedExpectedInput,
 )
 from query_man.source_store import (
+    GatewayUsageRollupRecord,
     MutationIdempotencyConflictError,
     MutationPage,
     MutationReceipt,
@@ -60,12 +62,16 @@ from query_man.source_store import (
     MutationRequest,
     ReplicaObservationPage,
     ReplicaObservationRecord,
+    ResourceObservationAttemptRecord,
+    ResourceObservationRecord,
+    ResourceObservationValueRecord,
     SourceCatalogConnection,
     SourceCatalogPage,
     SourceCatalogRecord,
     SourceGenerationConflictError,
     SourceGenerationPage,
     SourcePublishPinnedError,
+    SourceUsageProjection,
     StoredSource,
     StoredSourceNotFoundError,
     _ReplicaSourceObservationWrite,
@@ -212,8 +218,17 @@ def test_resource_and_gateway_write_inputs_are_frozen_control_contracts() -> Non
         ResourceObservationWriter.report_resource_observations
     ) == {
         "source_id": str,
+        "generation": int,
         "metadata_revision": str,
         "samples": tuple[ResourceObservationSample, ...],
+        "return": type(None),
+    }
+    assert get_type_hints(
+        ResourceObservationWriter.report_resource_observation_failure
+    ) == {
+        "source_id": str,
+        "generation": int,
+        "reason_code": ResourceObservationFailureReason,
         "return": type(None),
     }
     assert get_type_hints(GatewayUsageWriter.report_gateway_usage) == {
@@ -278,6 +293,7 @@ class MemorySourceStore:
             ]
         ] = []
         self.replica_queries: list[tuple[str, str | None, int]] = []
+        self.source_usage_projection: SourceUsageProjection | None = None
 
     async def list_active(self) -> list[StoredSource]:
         return list(self.active.values())
@@ -352,6 +368,12 @@ class MemorySourceStore:
     ) -> ReplicaObservationPage | None:
         self.replica_queries.append((source_id, after_replica_id, limit))
         return self.replica_page
+
+    async def get_source_usage(
+        self,
+        _source_id: str,
+    ) -> SourceUsageProjection | None:
+        return self.source_usage_projection
 
     async def list_generation_history(
         self,
@@ -918,6 +940,85 @@ def _replica_record(
     )
 
 
+def _resource_usage_records(
+    observed_at: datetime,
+    fresh_until: datetime,
+    *,
+    include_representative: bool = True,
+) -> tuple[ResourceObservationRecord, ...]:
+    definition_revision = f"sha256:{'4' * 64}"
+    metadata_revision = f"sha256:{'5' * 64}"
+    values = (
+        (
+            "representative_records",
+            100,
+            "rows",
+            "postgres_catalog_estimate",
+        ),
+        ("table_bytes", 10, "bytes", "postgres_relation_size"),
+        ("index_bytes", 2, "bytes", "postgres_relation_size"),
+        ("total_storage_bytes", 12, "bytes", "postgres_relation_size"),
+    )
+    return tuple(
+        ResourceObservationRecord(
+            metric=metric,
+            unit=unit,
+            method=method,
+            definition_revision=definition_revision,
+            current=ResourceObservationValueRecord(
+                value=value,
+                metadata_revision=metadata_revision,
+                sample_bucket_start=observed_at.replace(
+                    hour=0,
+                    minute=0,
+                    second=0,
+                    microsecond=0,
+                ),
+                observed_at=observed_at,
+                fresh_until=fresh_until,
+            ),
+            previous=None,
+        )
+        for metric, value, unit, method in values
+        if include_representative or metric != "representative_records"
+    )
+
+
+def _source_usage_projection(
+    *,
+    enabled: bool = True,
+    resource_configured: bool = True,
+    resource_attempt: ResourceObservationAttemptRecord | None = None,
+    resource_observations: tuple[ResourceObservationRecord, ...] = (),
+    live_reporter_count: int = 0,
+    live_current_cursor_count: int = 0,
+    live_fresh_cursor_count: int = 0,
+    accepted_cursor_count: int = 0,
+    last_report_at: datetime | None = None,
+    reporter_fresh_until: datetime | None = None,
+    gateway_rollups: tuple[GatewayUsageRollupRecord, ...] = (),
+) -> SourceUsageProjection:
+    read_at = datetime(2026, 8, 25, 12, tzinfo=UTC)
+    return SourceUsageProjection(
+        source_id="third-source",
+        enabled=enabled,
+        generation=2,
+        resource_configured=resource_configured,
+        read_at=read_at,
+        resource_attempt=resource_attempt,
+        resource_observations=resource_observations,
+        live_reporter_count=live_reporter_count,
+        live_current_cursor_count=live_current_cursor_count,
+        live_fresh_cursor_count=live_fresh_cursor_count,
+        accepted_cursor_count=accepted_cursor_count,
+        last_report_at=last_report_at,
+        reporter_fresh_until=reporter_fresh_until,
+        window_start=read_at - timedelta(days=31),
+        window_end=read_at,
+        gateway_rollups=gateway_rollups,
+    )
+
+
 def _mutation_context(
     key_suffix: int,
     *,
@@ -935,6 +1036,370 @@ def _mutation_context(
         expected_state_version=expected_state_version,
         expected_metadata_revision=expected_metadata_revision,
     )
+
+
+@pytest.mark.asyncio
+async def test_source_usage_returns_exact_bounded_projection_shape() -> None:
+    admin, _registry, store, _invalidator, _cipher, _reloader = _services()
+    read_at = datetime(2026, 8, 25, 12, tzinfo=UTC)
+    success_at = read_at - timedelta(hours=72)
+    last_attempt_at = read_at - timedelta(minutes=5)
+    last_report_at = read_at - timedelta(seconds=10)
+    reporter_fresh_until = read_at + timedelta(seconds=170)
+    bucket_start = read_at - timedelta(hours=1)
+    observations = _resource_usage_records(success_at, read_at)
+    rollup = GatewayUsageRollupRecord(
+        source_id="third-source",
+        budget_profile="interactive",
+        metadata_revision=f"sha256:{'5' * 64}",
+        definition_revision=f"sha256:{'6' * 64}",
+        bucket_start=bucket_start,
+        query_count=3,
+        success_count=2,
+        rejected_count=1,
+        timeout_count=0,
+        overloaded_count=0,
+        cancelled_count=0,
+        failed_count=0,
+        queue_ms_sum=4,
+        elapsed_ms_sum=5,
+        returned_rows_sum=6,
+        result_bytes_sum=7,
+        truncated_count=1,
+        observed_at=last_report_at,
+    )
+    store.source_usage_projection = _source_usage_projection(
+        resource_attempt=ResourceObservationAttemptRecord(
+            generation=2,
+            last_attempt_at=last_attempt_at,
+            last_attempt_outcome="failed",
+            last_attempt_reason_code="RESOURCE_READ_FAILED",
+            last_success_at=success_at,
+            last_success_has_representative=True,
+        ),
+        resource_observations=observations,
+        live_reporter_count=2,
+        live_current_cursor_count=2,
+        live_fresh_cursor_count=2,
+        accepted_cursor_count=2,
+        last_report_at=last_report_at,
+        reporter_fresh_until=reporter_fresh_until,
+        gateway_rollups=(rollup,),
+    )
+
+    response = await admin.source_usage("third-source")
+
+    metric_values = (100, 10, 2, 12)
+    metric_contracts = (
+        ("representative_records", "rows", "postgres_catalog_estimate"),
+        ("table_bytes", "bytes", "postgres_relation_size"),
+        ("index_bytes", "bytes", "postgres_relation_size"),
+        ("total_storage_bytes", "bytes", "postgres_relation_size"),
+    )
+    assert response == {
+        "source_id": "third-source",
+        "enabled": True,
+        "read_at": read_at.isoformat(),
+        "resource": {
+            "status": "available",
+            "reason_code": None,
+            "last_attempt": {
+                "attempted_at": last_attempt_at.isoformat(),
+                "outcome": "failed",
+                "reason_code": "RESOURCE_READ_FAILED",
+            },
+            "fresh_until": read_at.isoformat(),
+            "metrics": [
+                {
+                    "metric": metric,
+                    "unit": unit,
+                    "method": method,
+                    "definition_revision": f"sha256:{'4' * 64}",
+                    "current": {
+                        "value": value,
+                        "metadata_revision": f"sha256:{'5' * 64}",
+                        "sample_bucket_start": success_at.replace(
+                            hour=0,
+                            minute=0,
+                            second=0,
+                            microsecond=0,
+                        ).isoformat(),
+                        "observed_at": success_at.isoformat(),
+                        "fresh_until": read_at.isoformat(),
+                    },
+                    "previous": None,
+                }
+                for (metric, unit, method), value in zip(
+                    metric_contracts,
+                    metric_values,
+                    strict=True,
+                )
+            ],
+        },
+        "gateway": {
+            "status": "available",
+            "reason_code": None,
+            "last_report_at": last_report_at.isoformat(),
+            "fresh_until": reporter_fresh_until.isoformat(),
+            "lower_bound": True,
+            "window_start": (read_at - timedelta(days=31)).isoformat(),
+            "window_end": read_at.isoformat(),
+            "rollups": [
+                {
+                    "budget_profile": "interactive",
+                    "metadata_revision": f"sha256:{'5' * 64}",
+                    "definition_revision": f"sha256:{'6' * 64}",
+                    "bucket_start": bucket_start.isoformat(),
+                    "query_count": 3,
+                    "success_count": 2,
+                    "rejected_count": 1,
+                    "timeout_count": 0,
+                    "overloaded_count": 0,
+                    "cancelled_count": 0,
+                    "failed_count": 0,
+                    "queue_ms_sum": 4,
+                    "elapsed_ms_sum": 5,
+                    "returned_rows_sum": 6,
+                    "result_bytes_sum": 7,
+                    "truncated_count": 1,
+                    "observed_at": last_report_at.isoformat(),
+                }
+            ],
+        },
+        "monetary_cost": {
+            "status": "not_configured",
+            "reason_code": "PROVIDER_NOT_CONFIGURED",
+            "last_attempt": None,
+        },
+    }
+    assert "source_id" not in response["gateway"]["rollups"][0]  # type: ignore[index]
+
+
+@pytest.mark.asyncio
+async def test_source_usage_resource_status_precedence_and_incomplete_state() -> None:
+    admin, _registry, store, _invalidator, _cipher, _reloader = _services()
+    read_at = datetime(2026, 8, 25, 12, tzinfo=UTC)
+    success_at = read_at - timedelta(hours=72)
+    success = ResourceObservationAttemptRecord(
+        generation=2,
+        last_attempt_at=success_at,
+        last_attempt_outcome="succeeded",
+        last_attempt_reason_code=None,
+        last_success_at=success_at,
+        last_success_has_representative=True,
+    )
+    failure = ResourceObservationAttemptRecord(
+        generation=2,
+        last_attempt_at=read_at - timedelta(minutes=1),
+        last_attempt_outcome="failed",
+        last_attempt_reason_code="METADATA_UNAVAILABLE",
+        last_success_at=None,
+        last_success_has_representative=None,
+    )
+    fresh = _resource_usage_records(success_at, read_at)
+    stale_at = success_at - timedelta(seconds=1)
+    stale = _resource_usage_records(stale_at, read_at - timedelta(seconds=1))
+    inconsistent = list(fresh)
+    mismatched_current = inconsistent[-1].current
+    inconsistent[-1] = replace(
+        inconsistent[-1],
+        current=replace(
+            mismatched_current,
+            observed_at=mismatched_current.observed_at - timedelta(seconds=1),
+            fresh_until=mismatched_current.fresh_until - timedelta(seconds=1),
+        ),
+    )
+    cases = (
+        (
+            _source_usage_projection(
+                enabled=False,
+                resource_configured=False,
+                resource_attempt=success,
+                resource_observations=fresh,
+            ),
+            "not_configured",
+            "NOT_CONFIGURED",
+            None,
+        ),
+        (
+            _source_usage_projection(),
+            "pending",
+            "NOT_OBSERVED",
+            None,
+        ),
+        (
+            _source_usage_projection(
+                enabled=False,
+                resource_attempt=success,
+                resource_observations=fresh,
+            ),
+            "unavailable",
+            "SOURCE_DISABLED",
+            None,
+        ),
+        (
+            _source_usage_projection(resource_attempt=failure),
+            "unavailable",
+            "METADATA_UNAVAILABLE",
+            None,
+        ),
+        (
+            _source_usage_projection(
+                resource_attempt=replace(
+                    success,
+                    last_attempt_at=stale_at,
+                    last_success_at=stale_at,
+                ),
+                resource_observations=stale,
+            ),
+            "stale",
+            "OBSERVATION_EXPIRED",
+            read_at - timedelta(seconds=1),
+        ),
+        (
+            _source_usage_projection(
+                resource_attempt=success,
+                resource_observations=fresh[:-1],
+            ),
+            "unavailable",
+            "OBSERVATION_INCOMPLETE",
+            None,
+        ),
+        (
+            _source_usage_projection(
+                resource_attempt=success,
+                resource_observations=tuple(inconsistent),
+            ),
+            "unavailable",
+            "OBSERVATION_INCOMPLETE",
+            None,
+        ),
+    )
+
+    for projection, status, reason_code, fresh_until in cases:
+        store.source_usage_projection = projection
+        resource = (await admin.source_usage("third-source"))["resource"]
+        assert isinstance(resource, dict)
+        assert resource["status"] == status
+        assert resource["reason_code"] == reason_code
+        assert resource["fresh_until"] == (
+            None if fresh_until is None else fresh_until.isoformat()
+        )
+        if status in {"not_configured", "pending", "unavailable"}:
+            assert resource["metrics"] == []
+
+    store.source_usage_projection = _source_usage_projection(
+        enabled=False,
+        resource_attempt=success,
+        resource_observations=fresh,
+    )
+    disabled = (await admin.source_usage("third-source"))["resource"]
+    assert isinstance(disabled, dict)
+    assert disabled["last_attempt"] == {
+        "attempted_at": success_at.isoformat(),
+        "outcome": "succeeded",
+        "reason_code": None,
+    }
+
+    store.source_usage_projection = _source_usage_projection(
+        resource_attempt=replace(success, last_success_has_representative=False),
+        resource_observations=fresh,
+    )
+    optional_mismatch = (await admin.source_usage("third-source"))["resource"]
+    assert isinstance(optional_mismatch, dict)
+    assert optional_mismatch["status"] == "unavailable"
+    assert optional_mismatch["reason_code"] == "OBSERVATION_INCOMPLETE"
+    assert optional_mismatch["metrics"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    (
+        "live",
+        "current",
+        "fresh",
+        "accepted",
+        "status",
+        "reason_code",
+        "has_fresh_until",
+    ),
+    [
+        (2, 2, 2, 2, "available", None, True),
+        (2, 2, 1, 2, "unavailable", "REPORTER_UNAVAILABLE", True),
+        (2, 1, 1, 1, "unavailable", "REPORTER_UNAVAILABLE", False),
+        (0, 0, 0, 1, "stale", "REPORTER_EXPIRED", False),
+        (0, 0, 0, 0, "pending", "NOT_REPORTED", False),
+    ],
+)
+async def test_source_usage_gateway_uses_all_live_current_reporters(
+    live: int,
+    current: int,
+    fresh: int,
+    accepted: int,
+    status: str,
+    reason_code: str | None,
+    has_fresh_until: bool,
+) -> None:
+    admin, _registry, store, _invalidator, _cipher, _reloader = _services()
+    read_at = datetime(2026, 8, 25, 12, tzinfo=UTC)
+    last_report_at = read_at - timedelta(seconds=1) if accepted else None
+    store.source_usage_projection = _source_usage_projection(
+        live_reporter_count=live,
+        live_current_cursor_count=current,
+        live_fresh_cursor_count=fresh,
+        accepted_cursor_count=accepted,
+        last_report_at=last_report_at,
+        reporter_fresh_until=(
+            read_at + timedelta(seconds=1) if current == live and live else None
+        ),
+    )
+
+    gateway = (await admin.source_usage("third-source"))["gateway"]
+
+    assert isinstance(gateway, dict)
+    assert gateway["status"] == status
+    assert gateway["reason_code"] == reason_code
+    assert (gateway["fresh_until"] is not None) is has_fresh_until
+
+
+@pytest.mark.asyncio
+async def test_source_usage_maps_missing_and_malformed_projection_safely(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    admin, _registry, store, _invalidator, _cipher, _reloader = _services()
+
+    with pytest.raises(SourceNotFoundError):
+        await admin.source_usage("unknown-source")
+
+    store.source_usage_projection = _source_usage_projection(
+        live_reporter_count=1,
+        live_current_cursor_count=2,
+        live_fresh_cursor_count=2,
+        accepted_cursor_count=2,
+    )
+    with pytest.raises(SourceControlUnavailableError) as malformed:
+        await admin.source_usage("third-source")
+    assert malformed.value.__cause__ is None
+    assert malformed.value.__context__ is None
+
+    store.source_usage_projection = _source_usage_projection(
+        live_reporter_count=2,
+        live_current_cursor_count=1,
+        live_fresh_cursor_count=1,
+        accepted_cursor_count=0,
+    )
+    with pytest.raises(SourceControlUnavailableError):
+        await admin.source_usage("third-source")
+
+    async def fail_usage(_source_id: str) -> SourceUsageProjection | None:
+        raise RuntimeError("private control database detail")
+
+    monkeypatch.setattr(store, "get_source_usage", fail_usage)
+    with pytest.raises(SourceControlUnavailableError) as failure:
+        await admin.source_usage("third-source")
+    assert failure.value.details is None
+    assert failure.value.__cause__ is None
+    assert failure.value.__context__ is None
 
 
 @pytest.mark.asyncio

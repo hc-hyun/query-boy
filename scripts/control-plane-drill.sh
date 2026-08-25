@@ -74,6 +74,7 @@ for table_name in \
   runtime_replicas \
   runtime_source_observations \
   source_resource_observations \
+  source_resource_observation_attempts \
   gateway_usage_rollups \
   gateway_usage_report_cursors
 do
@@ -194,6 +195,14 @@ schema_contract="$(docker compose exec -T postgres psql \
         'DELETE,TRUNCATE'
       )
       AND has_table_privilege(
+        'query_man_control_writer', 'control.source_resource_observation_attempts',
+        'SELECT,INSERT,UPDATE'
+      )
+      AND NOT has_table_privilege(
+        'query_man_control_writer', 'control.source_resource_observation_attempts',
+        'DELETE,TRUNCATE'
+      )
+      AND has_table_privilege(
         'query_man_control_writer', 'control.gateway_usage_rollups',
         'SELECT,INSERT,UPDATE,DELETE'
       )
@@ -209,7 +218,7 @@ schema_contract="$(docker compose exec -T postgres psql \
         'DELETE,TRUNCATE'
       );")"
 
-if [[ "$schema_contract" != "14|4|t|t" ]]; then
+if [[ "$schema_contract" != "15|4|t|t" ]]; then
   echo "Restored control schema contract mismatch: $schema_contract" >&2
   exit 1
 fi
@@ -278,4 +287,4 @@ docker compose exec -T postgres psql \
     END;
     \$\$;" >/dev/null
 
-echo "control-plane restore drill: PASS (custom archive, 12 tables, migration ledger, 14 FKs, 4 triggers, immutable history/receipts, observations, writer ACL)"
+echo "control-plane restore drill: PASS (custom archive, 13 tables, migration ledger, 15 FKs, 4 triggers, immutable history/receipts, observations, writer ACL)"

@@ -91,6 +91,8 @@ GRANT SELECT, INSERT, UPDATE ON control.runtime_source_observations
   TO query_man_control_writer;
 GRANT SELECT, INSERT, UPDATE ON control.source_resource_observations
   TO query_man_control_writer;
+GRANT SELECT, INSERT, UPDATE ON control.source_resource_observation_attempts
+  TO query_man_control_writer;
 GRANT SELECT, INSERT, UPDATE, DELETE ON control.gateway_usage_rollups
   TO query_man_control_writer;
 GRANT SELECT, INSERT, UPDATE ON control.gateway_usage_report_cursors
@@ -307,6 +309,7 @@ BEGIN
             'runtime_replicas',
             'runtime_source_observations',
             'source_resource_observations',
+            'source_resource_observation_attempts',
             'gateway_usage_rollups',
             'gateway_usage_report_cursors'
           )
@@ -320,6 +323,7 @@ BEGIN
             'runtime_replicas',
             'runtime_source_observations',
             'source_resource_observations',
+            'source_resource_observation_attempts',
             'gateway_usage_rollups',
             'gateway_usage_report_cursors'
           )
@@ -329,6 +333,7 @@ BEGIN
             'runtime_replicas',
             'runtime_source_observations',
             'source_resource_observations',
+            'source_resource_observation_attempts',
             'gateway_usage_rollups',
             'gateway_usage_report_cursors'
           )
@@ -364,6 +369,7 @@ BEGIN
               'runtime_replicas',
               'runtime_source_observations',
               'source_resource_observations',
+              'source_resource_observation_attempts',
               'gateway_usage_rollups',
               'gateway_usage_report_cursors'
             )
@@ -377,6 +383,7 @@ BEGIN
               'runtime_replicas',
               'runtime_source_observations',
               'source_resource_observations',
+              'source_resource_observation_attempts',
               'gateway_usage_rollups',
               'gateway_usage_report_cursors'
             )
@@ -386,6 +393,7 @@ BEGIN
               'runtime_replicas',
               'runtime_source_observations',
               'source_resource_observations',
+              'source_resource_observation_attempts',
               'gateway_usage_rollups',
               'gateway_usage_report_cursors'
             )

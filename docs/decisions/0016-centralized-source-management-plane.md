@@ -137,7 +137,7 @@ Stable replica ID와 incarnation, monotonic sequence와 canonical payload SHA-25
 Same sequence/hash replay는 no-op이고 different hash, sequence gap과 old incarnation은 거부한다.
 Reporter cursor freshness는 Control DB clock의 180초다. 2026-08-25 추가 승인에 따라 31일은
 물리 삭제 기한이 아니라 DB clock 기준 logical visibility/input window다. Writer는 window 밖의
-오래된/future bucket을 거부하고, 향후 `CTRL-08` 조회는 31일 초과 row를 반환하지 않는다. 나이만으로
+오래된/future bucket을 거부하고, `CTRL-08` 조회는 31일 초과 row를 반환하지 않는다. 나이만으로
 row를 삭제하지 않지만 source당 최신 1,000행 physical cap은 유지한다. Common Control writer는
 이 cap을 넘긴 non-authoritative rollup row만 정리하도록 rollup table에만 DELETE를 가지며 authority,
 receipt, replica observation, resource/cursor table에는 DELETE를 얻지 않는다.
@@ -151,9 +151,111 @@ write를 process 안에서 직렬화해 source store의 두 connection을 동시
 rollback은 migration ledger/table/data를 drop하지 않는다.
 
 `CTRL-07A`는 새 HTTP/MCP endpoint와 availability status, last attempt/reason을 추가하지 않는다.
-`not_configured|pending|available|stale|unavailable` 및 exact admin response는 `CTRL-08`에서 별도
-승인한다. DB-native statistics, provider billing, monetary cost, exact counter view와 caller/tenant
-allocation도 이 계약 밖이다.
+`not_configured|pending|available|stale|unavailable` 및 exact admin response는 아래 `CTRL-08`에서
+별도 승인됐다. DB-native statistics, provider billing, monetary cost와 caller/tenant allocation은
+계속 이 계약 밖이다.
+
+### CTRL-08 usage and availability projection contract
+
+`CTRL-08`의 구현 계약은 2026-08-25에 승인됐다. 기존 성공 resource 값과 latest attempt를 서로 다른
+책임으로 유지한다. Additive migration 5의
+`source_resource_observation_attempts`는 source당 한 row에서 current generation의 latest attempt
+outcome/reason/DB-clock time과 last successful attempt time, 그 성공에 optional representative estimate가
+있었는지만 저장한다. 기존 `source_resource_observations`가 값과 comparable previous를 계속 소유한다.
+같은 generation의 refresh failure는 last success를 지우지 않고 generation이 바뀐 failure는 이전
+success 연결을 null로 초기화한다.
+
+Runtime이 소비하는 exact write capability는 다음과 같다.
+
+```text
+ResourceObservationWriter.report_resource_observations(
+  source_id, generation, metadata_revision, samples
+)
+ResourceObservationWriter.report_resource_observation_failure(
+  source_id, generation, reason_code
+)
+reason_code = METADATA_UNAVAILABLE | RESOURCE_READ_FAILED
+```
+
+Success는 `table_bytes|index_bytes|total_storage_bytes` 세 sample을 모두 요구하고
+`representative_records`만 optional이다. Resource advisory lock과 active-row lock 아래 current enabled
+generation을 확인하며 success는 current active metadata revision도 확인한다. Success samples, latest
+attempt와 last-success marker는 같은 DB clock/transaction에 기록한다. 이전 generation 또는 revision의
+지연 report는 전체 거부한다. Control write 자체가 실패하면 raw exception을 attempt reason으로 저장하지
+못하며 기존 값, freshness와 safe log 경계를 유지한다.
+
+Operator-only public read는 기존 detail/replica/metrics/MCP response를 확장하지 않고 다음 전용
+endpoint 하나로 제공한다.
+
+```text
+GET /admin/sources/{source_id}/usage
+```
+
+Query parameter는 받지 않는다. 한 DB read clock/snapshot에서 `source_id`, `enabled`, `read_at`과 다음
+세 section을 반환한다.
+
+```text
+resource:
+  status, reason_code, last_attempt, fresh_until, metrics[]
+gateway:
+  status, reason_code, last_report_at, fresh_until, lower_bound=true,
+  window_start, window_end, rollups[]
+monetary_cost:
+  status=not_configured, reason_code=PROVIDER_NOT_CONFIGURED, last_attempt=null
+```
+
+Resource `last_attempt`는 nullable `{attempted_at,outcome,reason_code}`다. Metric은 고정 순서
+`representative_records|table_bytes|index_bytes|total_storage_bytes`이며 method/definition revision과
+current value/metadata revision/bucket/observed/fresh time, nullable comparable previous만 공개한다.
+Current generation last success가 없으면 metric은 empty이고 missing/failed value를 0으로 합성하지
+않는다. 최신 attempt가 실패해도 last success가 fresh하면 resource는 `available`이고 failure는
+`last_attempt`에 남는다. Last success가 만료되면 `stale`, last success 없이 실패했으면
+`unavailable`이다. Exact status reason은 다음 bounded set이다.
+
+```text
+NOT_CONFIGURED | NOT_OBSERVED | SOURCE_DISABLED |
+METADATA_UNAVAILABLE | RESOURCE_READ_FAILED | OBSERVATION_INCOMPLETE |
+OBSERVATION_EXPIRED | null
+```
+
+`read_at == fresh_until`은 fresh다. Success marker와 같은 observed time의 mandatory storage 세 row가
+없거나 optional-presence marker, observed/freshness가 서로 충돌하면
+`unavailable/OBSERVATION_INCOMPLETE`와 empty metrics/null fresh time으로 fail-closed한다. Status 우선순위는
+observability 미설정 `not_configured/NOT_CONFIGURED`, configured disabled
+`unavailable/SOURCE_DISABLED`, current-generation attempt 없음 `pending/NOT_OBSERVED`, last success 없는
+실패 `unavailable/<attempt reason>`, 불완전 success marker, fresh success `available/null`, expired success
+`stale/OBSERVATION_EXPIRED` 순서다. Disabled projection은 current-generation `last_attempt`만 보존하고
+metrics는 empty, `fresh_until`은 null이다.
+
+Gateway status는 source별 traffic completeness가 아니라 global managed reporter pipeline의 상태다.
+같은 read clock에서 `read_at <= replica observed_at + 3 * heartbeat interval`인 replica만 live이고,
+cursor incarnation이 current replica incarnation과 같아야 current다. Live replica가 하나 이상이고
+모든 current cursor가 fresh하면 `available`; 하나라도 없거나 expired면 startup grace 없이
+`unavailable/REPORTER_UNAVAILABLE`이다. Live replica가 없고 accepted cursor가 있으면
+`stale/REPORTER_EXPIRED`, accepted cursor도 없으면 `pending/NOT_REPORTED`다. Ever-registered stale
+replica는 이 live-set 계산에서만 제외하며 delete/retire하지 않는다. `last_report_at`은 Control이
+받아들인 가장 최근 cursor 시각이지 관측할 수 없는 failed attempt 시각이 아니다.
+
+Rollup은 migration 4의 fixed key/counter만 반환하며 gap이나 missing reporter를 0으로 채우지 않는다.
+한 source의 physical cap 1,000행을 한 snapshot에서 다음 순서로 전부 반환하고 pagination/cursor를
+추가하지 않는다.
+
+```text
+bucket_start DESC, observed_at DESC, budget_profile COLLATE C ASC,
+metadata_revision ASC, definition_revision ASC
+```
+
+Visible window는 DB clock 기준 양 끝을 포함한
+`[UTC-hour(read_at) - 31 days, UTC-hour(read_at)]`다. Window 밖 row는 response에서 제외하지만 나이만을
+이유로 삭제하지 않고 기존 source당 최신 1,000행 physical cap만 유지한다. Provider connector가
+없으므로 monetary amount/currency/method/provenance field를 미리 만들지 않는다.
+
+Authentication/authorization은 path/query validation보다 먼저 수행한다. Unknown source는 404,
+Control read/decode/cardinality failure는 secret-free 503이며 관측된 stale/unavailable은 200이다.
+Credential/token/connection, relation/grain, replica identity/cursor internals, caller/tenant,
+question/SQL/fingerprint/query ID와 raw error는 response/audit에 넣지 않는다. Migration-first rolling
+deploy를 사용하고 code rollback은 migration 5 table/ledger/data를 drop하지 않는다. Writer는 새
+attempt table에 SELECT/INSERT/UPDATE만 가지며 DELETE/TRUNCATE는 갖지 않는다.
 
 ### CTRL-06 replica observation contract
 
@@ -259,9 +361,9 @@ metadata snapshot과 verified query를 읽거나 반환하지 않는다. 이 단
 
 ## Consequences
 
-- 운영자는 Git checkout 없이 모든 managed source의 상태, 이력, resource tier와 replica
-  convergence를 한곳에서 확인한다. 내부 규모/사용량 수집은 `CTRL-07A`로 구현됐고 public
-  availability와 비용 projection은 후속 `CTRL-08`이 같은 surface에 추가한다.
+- 운영자는 Git checkout 없이 모든 managed source의 상태, 이력, resource tier, replica convergence와
+  bounded resource/gateway usage projection을 한곳에서 확인한다. 내부 수집은 `CTRL-07A`, public
+  availability projection은 `CTRL-08`로 구현됐다.
 - Git은 platform schema와 fixture authority이며 production source catalog가 아니다.
 - 단일 관리 화면을 위해 business data, plaintext secret 또는 raw metric을 Control DB에
   복제하지 않는다.
@@ -269,6 +371,7 @@ metadata snapshot과 verified query를 읽거나 반환하지 않는다. 이 단
 - 관리자 한 종류와 기존 `budget_profile`만 사용하므로 초기 schema와 API가 작다.
 - Control DB availability, backup, audit integrity와 admin credential 분리는 production-critical
   boundary가 된다.
-- Replica convergence는 구현됐고 size/cost projection과 production 복구 검증은 남은 구현 gap이다.
+- Replica convergence와 resource/gateway usage projection은 구현됐고 DB-native/provider cost와
+  production 복구 검증은 남은 구현 gap이다.
 - Future per-user/org ACL, quota, tier override, multi-role approval, automated credential broker와
   chargeback은 실제 요구와 threat model이 생길 때 별도 결정으로 추가한다.
