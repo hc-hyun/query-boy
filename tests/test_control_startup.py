@@ -72,6 +72,7 @@ def _managed_runtime(
         control_dsn=control_dsn,
         source_encryption_key=encryption_key,
         source_reload_interval_ms=60_000,
+        replica_id="control-startup-runtime",
     )
 
 

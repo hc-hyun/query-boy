@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +16,7 @@ _DEFAULT_MCP_ALLOWED_ORIGINS = (
     "http://localhost:*",
     "http://[::1]:*",
 )
+_REPLICA_ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
 class _Environment(BaseModel):
@@ -46,6 +48,7 @@ class _Environment(BaseModel):
         min_length=43,
         max_length=64,
     )
+    replica_id: str | None = Field(None, alias="QUERY_MAN_REPLICA_ID")
     source_reload_interval_ms: int = Field(
         5_000,
         alias="QUERY_MAN_SOURCE_RELOAD_INTERVAL_MS",
@@ -103,6 +106,7 @@ class RuntimeConfig:
     source_mode: Literal["bootstrap", "managed"] = "bootstrap"
     control_dsn: str | None = None
     source_encryption_key: str | None = None
+    replica_id: str | None = None
     source_reload_interval_ms: int = 5_000
     shutdown_grace_ms: int = 10_000
     mcp_allowed_hosts: tuple[str, ...] = _DEFAULT_MCP_ALLOWED_HOSTS
@@ -126,6 +130,15 @@ class RuntimeConfig:
             raise ValueError(
                 "QUERY_MAN_CONTROL_DSN and QUERY_MAN_SOURCE_ENCRYPTION_KEY are required "
                 "when QUERY_MAN_SOURCE_MODE=managed"
+            )
+        if (
+            self.replica_id is None
+            or not 1 <= len(self.replica_id) <= 80
+            or _REPLICA_ID.fullmatch(self.replica_id) is None
+        ):
+            raise ValueError(
+                "QUERY_MAN_REPLICA_ID is required in managed mode and must be a "
+                "1-80 character lowercase stable slug"
             )
 
 
@@ -172,6 +185,7 @@ def load_runtime_config(
             if parsed.source_encryption_key is not None
             else None
         ),
+        replica_id=parsed.replica_id if parsed.source_mode == "managed" else None,
         source_reload_interval_ms=parsed.source_reload_interval_ms,
         shutdown_grace_ms=parsed.shutdown_grace_ms,
         mcp_allowed_hosts=_split_allowlist(parsed.mcp_allowed_hosts),

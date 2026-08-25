@@ -10,10 +10,9 @@ Status: Production ready
 않는 것을 최종 성공 기준으로 삼는다.
 
 이 문서의 `Production ready` 상태는 완료된 query/data-plane baseline을 뜻한다. 중앙
-management plane은 단계적으로 구현 중이다. Source inventory/history와 mutation receipt는
-`CTRL-01`~`CTRL-05`로 구현됐고, replica convergence, 규모·사용량·비용 freshness와 전체
-recovery acceptance는 [active development TODO](development-todo.md)의 `CTRL-06`~`CTRL-09`
-목표다.
+management plane은 단계적으로 구현 중이다. Source inventory/history, mutation receipt와 replica
+convergence는 `CTRL-01`~`CTRL-06`으로 구현됐고, 규모·사용량·비용 freshness와 전체 recovery
+acceptance는 [active development TODO](development-todo.md)의 `CTRL-07`~`CTRL-09` 목표다.
 
 완전한 무설정 자동화를 목표로 하지 않는다. 자동으로 알 수 없는 비즈니스 의미는
 희소한 선언형 metadata와 curated view로 제공한다.
@@ -41,7 +40,8 @@ Query Gateway + Source Registry <--- validated hot reload --- Control Plane
   |-- Semantic Overlay                                  |-- Active State/History
   |-- Resource Tier (budget_profile)                    |-- Metadata/Verified Contracts
   |                                                     |-- Mutation Receipts/Audit
-  `-- guarded connection                                `-- Replica/Measurements (target)
+    `-- guarded connection                                |-- Replica Observations
+                                                          `-- Measurements (target)
         |
 PostgreSQL Reader / Analytics Replica
 ```
@@ -64,6 +64,8 @@ MCP contract와 병렬·포화·취소·비노출 경계의 실제 server 검증
 [MCP server assurance](verification/2026-08-23-mcp-server-assurance.md)에, 두 replica session
 내구성과 resource 경계는
 [multi-replica soak audit](verification/2026-08-23-mcp-multi-replica-soak.md)에 기록한다.
+Managed replica의 실제 convergence 관측 증거는
+[runtime replica observation audit](verification/2026-08-25-runtime-replica-observations.md)에 기록한다.
 
 ## Development Module Boundaries
 
@@ -129,8 +131,8 @@ Runtime은 `QUERY_MAN_SOURCE_MODE=bootstrap|managed`로 process 전체 source au
 contract를 읽고 Control DSN/key를 거부한다. Credential 값은 manifest에 저장하지 않고 환경 변수
 이름만 참조한다.
 
-Production managed mode는 Control DSN/key를 모두 요구하고 empty registry/verified map에서 Control
-DB lifecycle과 contract만 load한다. Source/verified file을 열거나 합치지 않으므로 lifecycle row가
+Production managed mode는 Control DSN/key와 stable replica ID를 모두 요구하고 empty
+registry/verified map에서 Control DB lifecycle과 contract만 load한다. Source/verified file을 열거나 합치지 않으므로 lifecycle row가
 없는 file source는 absent이고 restart 뒤 rollback/deactivate가 유지된다. Budget profile과 access
 policy는 versioned deployment configuration에 남는다. Source publish가 repository YAML이나 commit을
 만들지 않으며 양방향 sync, startup import와 file fallback도 없다. 일회성 admin-API cutover와
@@ -160,8 +162,9 @@ mutation은 expected state, authenticated actor/change reference와 keyed canoni
 사용하며 source/contract 변경과 terminal receipt를 원자적으로 commit한다. 별도 operator-only
 receipt lookup과 source mutation history가 timeout reconciliation과 lifecycle chronology를 제공한다.
 API는 raw manifest, encrypted secret, question/SQL을 읽지 않는 explicit projection이며 published
-generation revision과 현재 active metadata revision을 구분한다. Replica/size/cost 상태는 이후
-`CTRL-*` 단계가 추가한다.
+generation revision과 현재 active metadata revision을 구분한다. 별도 replica endpoint는 managed
+slot별 desired/applied generation·state·metadata drift와 DB-clock freshness를 bounded하게 제공한다.
+Size/cost 상태는 이후 `CTRL-*` 단계가 추가한다.
 
 초기 management 권한은 query user와 Query Man admin 두 종류다. 기존 boolean operator를 admin
 capability superset으로 재사용하고 역할 계층, caller grant와 별도 `cost_tier`를 만들지 않는다.

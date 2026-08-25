@@ -45,11 +45,10 @@ tier를 정한다. 이 문서는 현재 공백과 `CTRL-*` 구현 순서를 관�
 - Secret-free admin source inventory, effective detail와 generation history read API
 - 여섯 direct admin mutation의 공통 idempotency/state precondition과 immutable terminal receipt
 - Operator-only receipt lookup과 source별 lifecycle event keyset history
+- Ever-registered managed replica별 desired/applied drift, DB-clock freshness와 bounded failure projection
 
 현재 구현 중이거나 남은 공백:
 
-- `CTRL-06`: Control DB provider/schema는 구현됐고 Runtime reporter, Delivery route와 end-to-end
-  acceptance는 진행 중
 - Bounded record/storage/growth observation과 source/profile별 usage/cost projection
 - Authority table backup/restore, retention과 encryption-key recovery 검증
 
@@ -70,6 +69,7 @@ tier를 정한다. 이 문서는 현재 공백과 `CTRL-*` 구현 순서를 관�
 | Shared source access policy | ADR 0017/platform configuration | Control DB caller-grant table 없음 |
 | Budget profile catalog | `config/budget-profiles.yaml` and release | Source는 승인된 이름만 참조 |
 | Mutation audit and authoritative receipt | Control DB | Sanitized export는 사본 |
+| Replica target/latest observation | Control DB operational projection | Source desired/data-plane authority 아님 |
 | Raw metrics/provider bill | External system when configured | Bounded rollup/provenance만 연결 |
 | Unified sanitized projection | Admin management API | 실제 authority를 대체하지 않음 |
 
@@ -83,7 +83,7 @@ source를 다시 활성화하거나 L2 gate를 충족하지 못한다.
 | `QUERY_MAN_SOURCE_MODE` | Source/verified authority | Control settings |
 |---|---|---|
 | `bootstrap` (default) | `config/sources` and filesystem verified contract | Control DSN/key 모두 금지 |
-| `managed` | Control DB lifecycle, metadata and verified contract only | Control DSN/key 모두 필수 |
+| `managed` | Control DB lifecycle, metadata and verified contract only | Control DSN/key와 stable replica ID 모두 필수 |
 
 Mode는 process 전체에 적용하며 runtime 중 바뀌지 않는다. `auto`, per-source hybrid와 Control DB
 장애 시 file fallback은 없다. Budget profile catalog와 access policy는 두 mode에서 모두 deployment
@@ -99,8 +99,10 @@ directory와 filesystem verified contract가 없어도 시작할 수 있다.
    확인한다.
 3. Reviewed filesystem contract를 같은 revision의 verified-query admin endpoint로 실행·저장한다.
 4. `minimum_quality_level: L2` generation을 publish하고 metadata/query invariant를 확인한다.
-5. 필요한 source/contract coverage와 inactive state를 확인한 뒤 serving replica를 managed mode로
-   재시작한다. 이후 repository seed는 제거하거나 남겨도 runtime authority가 아니다.
+5. 필요한 source/contract coverage와 inactive state를 확인한 뒤 각 deployment slot에 고유한 stable
+   replica ID를 배정하고 serving replica를 managed mode로 재시작한다. Replica endpoint에서 시작한
+   모든 slot의 convergence를 확인한다. 이후 repository seed는 제거하거나 남겨도 runtime authority가
+   아니다.
 
 Reader plaintext credential은 admin이 external secret boundary에서 직접 전달한다. Startup importer,
 bulk import endpoint, seed digest/marker와 filesystem write-back은 만들지 않는다. 모든 mutation은
@@ -121,10 +123,10 @@ Host/database/user는 mutation 검토에 필요한 admin에게만 제한적으�
 bearer, master key, provider secret path, raw database error, ad-hoc question과 SQL은 response와
 audit에서 제외한다.
 
-아래 replica contract는 승인돼 구현 중이고, data-size와 usage/cost 투영은 `CTRL-07`~`CTRL-08`의
+아래 replica contract는 구현됐고, data-size와 usage/cost 투영은 `CTRL-07`~`CTRL-08`의
 후속 목표다.
 
-### Accepted Replica State (`CTRL-06`, implementation in progress)
+### Implemented Replica State (`CTRL-06`)
 
 - Managed-only `QUERY_MAN_REPLICA_ID`: 1~80자 lowercase stable slug. Bootstrap은 값이 있어도
   무시하고 검증하지 않는다.
@@ -203,7 +205,7 @@ idempotency/audit 계약을 적용한 현재 관리 표면이다.
 | `GET /admin/sources/{source_id}` | Implemented: effective source/resource tier와 published/active metadata revision을 구분한 detail |
 | `GET /admin/sources/{source_id}/history` | Implemented: generation-descending immutable manifest history |
 | `GET /admin/sources/{source_id}/mutations` | Implemented: event-ID keyset pagination의 sanitized lifecycle receipt history |
-| `GET /admin/sources/{source_id}/replicas` | In progress: Control provider/projection 구현 완료, Runtime report와 Delivery HTTP wiring 진행 중 |
+| `GET /admin/sources/{source_id}/replicas` | Implemented: ever-registered replica의 desired/applied drift와 DB-clock freshness를 조회 |
 | Existing `PUT/POST/DELETE /admin/...` | Implemented: admin-only staged validation, expected-state CAS와 atomic success receipt |
 | `GET /admin/mutations/{idempotency_key}` | Implemented: timeout 뒤 terminal result/rejection reconciliation 조회 |
 
@@ -280,8 +282,8 @@ managed authority를 모두 표현한다. 따라서 mode, origin 또는 bootstra
 - **Implemented:** migration ledger의 version, immutable filename/checksum, applied time과 migration identity
 - **Implemented:** minimal catalog의 owner, environment와 DB migration provenance
 - **Implemented:** mutation event/receipt의 idempotency, actor, reason, request hash와 outcome
-- **In progress (`CTRL-06`):** migration 3과 Control provider의 replica별 latest desired/applied
-  state, DB-clock freshness 및 bounded projection 구현 완료; Runtime/Delivery integration pending
+- **Implemented (`CTRL-06`):** migration 3과 replica별 latest desired/applied state, DB-clock
+  freshness, Runtime report 및 bounded Delivery projection
 - **Planned (`CTRL-07`):** source observation의 record/storage/growth method, definition revision과 snapshot
 - **Planned (`CTRL-07`, `CTRL-08`):** usage/cost rollup의 bounded source/profile time bucket,
   availability와 provider provenance
@@ -291,9 +293,9 @@ managed authority를 모두 표현한다. 따라서 mode, origin 또는 bootstra
 
 ## Rollout Checklist
 
-완료된 `CTRL-01`~`CTRL-05` 상태는
+완료된 `CTRL-01`~`CTRL-06` 상태는
 [implementation roadmap ledger](implementation-roadmap.md#14-post-baseline-completion-ledger-and-active-development),
-열린 `CTRL-06`~`CTRL-09`는 [active development TODO](development-todo.md)가 관리한다.
+열린 `CTRL-07`~`CTRL-09`는 [active development TODO](development-todo.md)가 관리한다.
 
 1. **Complete:** versioned migration과 disposable test-store isolation
 2. **Complete:** mutually exclusive source mode, Control DB precedence, zero-bootstrap과
@@ -301,7 +303,7 @@ managed authority를 모두 표현한다. 따라서 mode, origin 또는 bootstra
 3. **Complete:** shared query access와 explicit admin/query credential separation
 4. **Complete:** immutable provenance, minimal catalog와 admin list/detail/history
 5. **Complete:** existing mutations의 idempotency, receipt와 durable audit
-6. **In progress:** Replica convergence/drift observation
+6. **Complete:** Replica convergence/drift observation
 7. Bounded record/storage/usage/cost observation
 8. Usage/cost availability와 cardinality/retention
 9. Backup/restore, encryption-key recovery와 multi-replica end-to-end acceptance
@@ -319,10 +321,13 @@ DB-native collector와 provider connector는 rollout의 선행 조건이 아니�
 다섯 번째 단계의 atomic receipt, exact replay/conflict, migration/rolling compatibility와
 operator-first validation 증거는
 [source mutation receipt audit](verification/2026-08-23-source-mutation-receipts.md)에 기록한다.
+여섯 번째 단계의 replica identity, latest observation, failure isolation, HTTP projection과
+multi-replica convergence 증거는
+[runtime replica observation audit](verification/2026-08-25-runtime-replica-observations.md)에 기록한다.
 
 ## Release Acceptance
 
-현재 `CTRL-01`~`CTRL-05`가 충족한 acceptance:
+현재 `CTRL-01`~`CTRL-06`이 충족한 acceptance:
 
 - 운영자는 Git checkout 없이 모든 managed source의 owner, active state, history와 resource tier를
   조회한다.
@@ -334,10 +339,11 @@ operator-first validation 증거는
 - Single-token/local compatibility path가 source management 환경에서 암시적 admin을 만들지 않는다.
 - 같은 idempotency key의 재호출은 새 generation을 만들지 않고 authoritative result를 반환한다.
 - Production/development/test Control DB가 분리된다.
+- 모든 ever-registered target replica의 desired/applied 차이와 freshness를 source별 전용 admin
+  endpoint에서 확인한다.
 
-`CTRL-06`~`CTRL-09`에서 충족할 planned acceptance:
+`CTRL-07`~`CTRL-09`에서 충족할 planned acceptance:
 
-- 모든 target replica의 desired/applied 차이와 freshness를 source별로 확인한다.
 - Record/storage 값은 method/definition revision/time/freshness를 포함하고 unbounded count를
   실행하지 않는다.
 - Cost는 근거가 있을 때만 표시하며 미구성/미시도/오래됨/실패 상태를 구분한다.

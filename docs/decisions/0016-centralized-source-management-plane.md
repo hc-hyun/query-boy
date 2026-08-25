@@ -27,8 +27,9 @@ mode를 source별로 섞거나 Control DB 설정 유무로 자동 선택하지 �
 
 - `bootstrap`은 local/CI 전용이다. `config/sources/*.yaml`과 filesystem verified contract만 읽고
   Control DSN과 source encryption key를 모두 거부한다.
-- `managed`는 production authority다. Control DSN과 source encryption key를 모두 요구하고 빈
-  registry/verified map에서 Control DB lifecycle과 contract만 load한다. Source directory와
+- `managed`는 production authority다. Control DSN, source encryption key와 stable
+  `QUERY_MAN_REPLICA_ID`를 모두 요구하고 빈 registry/verified map에서 Control DB lifecycle과
+  contract만 load한다. Source directory와
   filesystem verified contract가 없거나 같은 `source_id`를 담아도 열거나 합치지 않는다.
 
 Managed source의 canonical manifest generation, active/deactivated state, metadata revision과
@@ -189,8 +190,9 @@ metadata snapshot과 verified query를 읽거나 반환하지 않는다. 이 단
 
 ## Consequences
 
-- 운영자는 Git checkout 없이 모든 managed source의 상태, 이력, resource tier, 규모와 비용
-  freshness를 한곳에서 확인한다.
+- 운영자는 Git checkout 없이 모든 managed source의 상태, 이력, resource tier와 replica
+  convergence를 한곳에서 확인한다. 규모와 비용 freshness는 후속 `CTRL-*`가 같은 surface에
+  추가한다.
 - Git은 platform schema와 fixture authority이며 production source catalog가 아니다.
 - 단일 관리 화면을 위해 business data, plaintext secret 또는 raw metric을 Control DB에
   복제하지 않는다.
@@ -198,6 +200,6 @@ metadata snapshot과 verified query를 읽거나 반환하지 않는다. 이 단
 - 관리자 한 종류와 기존 `budget_profile`만 사용하므로 초기 schema와 API가 작다.
 - Control DB availability, backup, audit integrity와 admin credential 분리는 production-critical
   boundary가 된다.
-- Replica convergence, size/cost projection과 production 복구 검증은 남은 구현 gap이다.
+- Replica convergence는 구현됐고 size/cost projection과 production 복구 검증은 남은 구현 gap이다.
 - Future per-user/org ACL, quota, tier override, multi-role approval, automated credential broker와
   chargeback은 실제 요구와 threat model이 생길 때 별도 결정으로 추가한다.

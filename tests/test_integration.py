@@ -769,6 +769,7 @@ async def test_onboards_third_source_without_runtime_restart(
         control_dsn=control_dsn,
         source_encryption_key=encryption_key,
         source_reload_interval_ms=250,
+        replica_id="onboarding-runtime",
     )
     manifest = yaml.safe_load(
         (ROOT_DIRECTORY / "config" / "onboarding" / "support-tickets.yaml").read_text(
@@ -1104,6 +1105,7 @@ async def test_onboards_commerce_edges_across_authenticated_mcp_replicas(
         control_dsn=control_dsn,
         source_encryption_key=encryption_key,
         source_reload_interval_ms=250,
+        replica_id="commerce-runtime",
     )
     l0_manifest = yaml.safe_load(
         (ROOT_DIRECTORY / "config" / "onboarding" / "commerce-edges.yaml").read_text(
@@ -1179,8 +1181,14 @@ async def test_onboards_commerce_edges_across_authenticated_mcp_replicas(
         },
     ]
 
-    replica_a = build_app(runtime, access_policy=access_policy)
-    replica_b = build_app(runtime, access_policy=access_policy)
+    replica_a = build_app(
+        replace(runtime, replica_id="commerce-runtime-a"),
+        access_policy=access_policy,
+    )
+    replica_b = build_app(
+        replace(runtime, replica_id="commerce-runtime-b"),
+        access_policy=access_policy,
+    )
     admin_connection = await AsyncConnection.connect(control_dsn)
     source_active = False
     reader_restricted = True
@@ -1498,6 +1506,45 @@ async def test_onboards_commerce_edges_across_authenticated_mcp_replicas(
                         )
                         assert final_context_body["metadata_revision"] == semantic_revision
                         assert final_context_body["quality_level"] == "L2"
+
+                        replica_projection: dict[str, object] | None = None
+                        for _ in range(150):
+                            projected = await admin_session.get(
+                                "/admin/sources/commerce-edges/replicas"
+                            )
+                            if projected.status_code == 200:
+                                candidate_projection = projected.json()
+                                projected_replicas = {
+                                    item["replica_id"]: item
+                                    for item in candidate_projection["replicas"]
+                                }
+                                if set(projected_replicas) == {
+                                    "commerce-runtime-a",
+                                    "commerce-runtime-b",
+                                } and all(
+                                    item["status"] == "available"
+                                    and item["drift"] == []
+                                    and item["applied"]
+                                    == {
+                                        "enabled": True,
+                                        "generation": l2_generation,
+                                        "state_version": expected_state_version,
+                                        "metadata_revision": semantic_revision,
+                                    }
+                                    for item in projected_replicas.values()
+                                ):
+                                    replica_projection = candidate_projection
+                                    break
+                            await asyncio.sleep(0.1)
+                        assert replica_projection is not None, (
+                            "both runtime replica observations did not converge to L2"
+                        )
+                        assert replica_projection["desired"] == {
+                            "enabled": True,
+                            "generation": l2_generation,
+                            "state_version": expected_state_version,
+                            "metadata_revision": semantic_revision,
+                        }
                         query_b_final_context = await query_b_mcp.call_tool(
                             "get_context",
                             {
@@ -1714,6 +1761,40 @@ async def test_onboards_commerce_edges_across_authenticated_mcp_replicas(
                             pytest.fail(
                                 "the open replica B MCP client retained the deactivated source"
                             )
+
+                        disabled_projection: dict[str, object] | None = None
+                        for _ in range(150):
+                            projected = await admin_session.get(
+                                "/admin/sources/commerce-edges/replicas"
+                            )
+                            if projected.status_code == 200:
+                                candidate_projection = projected.json()
+                                projected_replicas = candidate_projection["replicas"]
+                                if len(projected_replicas) == 2 and all(
+                                    item["status"] == "available"
+                                    and item["drift"] == []
+                                    and item["source_health"] is None
+                                    and item["applied"]
+                                    == {
+                                        "enabled": False,
+                                        "generation": expected_generation,
+                                        "state_version": expected_state_version,
+                                        "metadata_revision": None,
+                                    }
+                                    for item in projected_replicas
+                                ):
+                                    disabled_projection = candidate_projection
+                                    break
+                            await asyncio.sleep(0.1)
+                        assert disabled_projection is not None, (
+                            "both runtime replica observations did not converge to disabled"
+                        )
+                        assert disabled_projection["desired"] == {
+                            "enabled": False,
+                            "generation": expected_generation,
+                            "state_version": expected_state_version,
+                            "metadata_revision": None,
+                        }
                     finally:
                         if source_active:
                             cleanup = await admin_session.delete(

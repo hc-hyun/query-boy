@@ -337,13 +337,16 @@ class SourceReloader:
         except Exception:
             operations.increment("source_reload_scan_failed")
             operations.set_component_health("source_reload", "unavailable")
+            operations.set_replica_scan_failed(True)
             logger.exception("source_reload_scan_failed")
             return
+        operations.set_replica_scan_failed(False)
         self._verified_revisions.clear()
         self._verified_revisions.update(stored_verified)
         apply_failed = False
         for record in records:
             if self._applied.get(record.source_id) == record:
+                operations.clear_replica_source_apply_failure(record.source_id)
                 continue
             try:
                 await self.apply(record)
@@ -366,28 +369,70 @@ class SourceReloader:
             current = self._applied.get(record.source_id)
             if current is not None:
                 if record.state_version < current.state_version:
+                    operations.set_replica_source_failure(
+                        record.source_id,
+                        "RUNTIME_VALIDATION_REJECTED",
+                    )
                     raise SourceGenerationConflictError
                 if record.state_version == current.state_version:
                     if record != current:
+                        operations.set_replica_source_failure(
+                            record.source_id,
+                            "RUNTIME_VALIDATION_REJECTED",
+                        )
                         raise SourceGenerationConflictError
+                    operations.clear_replica_source_apply_failure(record.source_id)
                     profile = self._registry.get(record.source_id) if record.enabled else None
                     operations.reconcile_sources(self._registry.source_ids())
                     return profile
             if not record.enabled:
+                try:
+                    await self._invalidate(record.source_id)
+                    self._registry.remove(record.source_id)
+                    self._metadata.invalidate(record.source_id)
+                    self._applied[record.source_id] = record
+                    operations.set_replica_source_applied(
+                        record.source_id,
+                        record.generation,
+                        record.state_version,
+                        False,
+                    )
+                    operations.reconcile_sources(self._registry.source_ids())
+                except Exception:
+                    operations.set_replica_source_failure(
+                        record.source_id,
+                        "RUNTIME_APPLY_FAILED",
+                    )
+                    raise
+                return None
+            try:
+                profile = await self.validate(record)
+            except Exception:
+                operations.set_replica_source_failure(
+                    record.source_id,
+                    "RUNTIME_VALIDATION_REJECTED",
+                )
+                raise
+            try:
                 await self._invalidate(record.source_id)
-                self._registry.remove(record.source_id)
+                self._registry.upsert(profile)
                 self._metadata.invalidate(record.source_id)
                 self._applied[record.source_id] = record
+                operations.set_replica_source_applied(
+                    record.source_id,
+                    record.generation,
+                    record.state_version,
+                    True,
+                )
                 operations.reconcile_sources(self._registry.source_ids())
-                return None
-            profile = await self.validate(record)
-            await self._invalidate(record.source_id)
-            self._registry.upsert(profile)
-            self._metadata.invalidate(record.source_id)
-            self._applied[record.source_id] = record
-            operations.reconcile_sources(self._registry.source_ids())
-            operations.set_source_health(record.source_id, "initializing")
-            await self._probe(profile)
+                operations.set_source_health(record.source_id, "initializing")
+                await self._probe(profile)
+            except Exception:
+                operations.set_replica_source_failure(
+                    record.source_id,
+                    "RUNTIME_APPLY_FAILED",
+                )
+                raise
             return profile
 
     async def validate(self, record: StoredSource) -> SourceProfile:
@@ -445,6 +490,10 @@ class SourceReloader:
         except Exception:
             operations.increment("source_reload_metadata_probe_failed", source.source_id)
             operations.set_source_health(source.source_id, "unavailable")
+            operations.set_replica_source_failure(
+                source.source_id,
+                "METADATA_PROBE_FAILED",
+            )
             logger.exception(
                 "source_reload_metadata_probe_failed source_id=%s",
                 source.source_id,

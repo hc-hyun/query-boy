@@ -70,7 +70,9 @@ for table_name in \
   source_profile_revisions \
   active_source_profiles \
   verified_query_contracts \
-  source_mutation_receipts
+  source_mutation_receipts \
+  runtime_replicas \
+  runtime_source_observations
 do
   source_count="$(docker compose exec -T postgres psql \
     --username query_man_admin --dbname query_man --tuples-only --no-align \
@@ -164,9 +166,24 @@ schema_contract="$(docker compose exec -T postgres psql \
       AND NOT has_sequence_privilege(
         'query_man_control_writer',
         'control.source_mutation_receipts_event_id_seq', 'SELECT,UPDATE'
+      )
+      AND has_table_privilege(
+        'query_man_control_writer', 'control.runtime_replicas',
+        'SELECT,INSERT,UPDATE'
+      )
+      AND NOT has_table_privilege(
+        'query_man_control_writer', 'control.runtime_replicas', 'DELETE,TRUNCATE'
+      )
+      AND has_table_privilege(
+        'query_man_control_writer', 'control.runtime_source_observations',
+        'SELECT,INSERT,UPDATE'
+      )
+      AND NOT has_table_privilege(
+        'query_man_control_writer', 'control.runtime_source_observations',
+        'DELETE,TRUNCATE'
       );")"
 
-if [[ "$schema_contract" != "4|4|t|t" ]]; then
+if [[ "$schema_contract" != "8|4|t|t" ]]; then
   echo "Restored control schema contract mismatch: $schema_contract" >&2
   exit 1
 fi
@@ -235,4 +252,4 @@ docker compose exec -T postgres psql \
     END;
     \$\$;" >/dev/null
 
-echo "control-plane restore drill: PASS (custom archive, 7 tables, migration ledger, 4 FKs, 4 triggers, immutable history/receipts, writer ACL)"
+echo "control-plane restore drill: PASS (custom archive, 9 tables, migration ledger, 8 FKs, 4 triggers, immutable history/receipts, replica observations, writer ACL)"

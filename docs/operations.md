@@ -73,6 +73,18 @@ mutation traffic은 먼저 중단하고 schema를 적용한 뒤 `CTRL-05` applic
 Query/data plane replica는 순차 교체할 수 있다. 모든 admin replica가 새 application임을 확인하기
 전에는 mutation traffic을 다시 열지 않는다.
 
+`0003_runtime_replica_observations.sql`도 additive라 이전 application은 새 table을 사용하지 않은 채
+계속 동작한다. Schema를 먼저 적용하고, 각 managed deployment slot에 동시에 중복되지 않는 stable
+`QUERY_MAN_REPLICA_ID`를 설정한 뒤 새 application을 순차 교체한다. 이전 application은 target set에
+자동 포함되지 않으며 새 application이 처음 등록한 slot부터 관측 대상이 된다. 같은 slot 재시작은
+같은 ID를 재사용해 incarnation fencing을 갱신하고, 서로 동시에 실행되는 process가 ID를 공유하지
+않게 한다.
+
+Application rollback은 migration 3을 그대로 남긴 채 수행한다. 이전 application은 새 table을
+무시하지만 이미 등록된 slot은 report가 끊겨 stale로 계속 남는다. 이 단계에는 delete, expiry,
+retirement 또는 shutdown deregistration이 없으므로 ID를 바꿔 stale slot을 숨기거나 적용된 migration을
+수정·삭제하지 않는다. 새 version을 다시 배포할 때 원래 stable ID를 재사용한다.
+
 Schema migration과 global `query_man_control_writer`/DB ACL은 의도적으로 분리돼 있다.
 `reconcile-security.sql`은 매 실행마다 role을 harden하고 현재 DB의 최소 권한을 복구한다. 따라서
 `pg_dump --no-privileges` restore에서도 pending migration이 없어도 ACL이 복구된다. Runtime
@@ -109,10 +121,11 @@ Runtime은 process 전체의 source authority를 한 mode로 고정한다.
 | Mode | Valid source configuration | Authentication |
 |---|---|---|
 | `bootstrap` (default) | Control DSN/key 없음 | Loopback anonymous, query-only API token 또는 version 2 policy |
-| `managed` | Control DSN/key 모두 있음 | Version 2 policy file 필수; query/admin identity 분리 |
+| `managed` | Control DSN/key와 stable replica ID 모두 있음 | Version 2 policy file 필수; query/admin identity 분리 |
 
-Bootstrap에 Control 설정이 하나라도 있거나 managed에 둘 중 하나가 빠지면 configuration error로
-시작하지 않는다. Mode를 `auto`로 추론하거나 source별로 섞지 않는다. Managed startup은 source
+Bootstrap에 Control 설정이 하나라도 있거나 managed에 Control DSN/key/replica ID 중 하나가 빠지면
+configuration error로 시작하지 않는다. Bootstrap은 replica ID가 있어도 읽거나 검증하지 않는다.
+Mode를 `auto`로 추론하거나 source별로 섞지 않는다. Managed startup은 source
 directory와 filesystem verified-query file을 열지 않지만 budget profile과 configured
 authentication/access policy는 계속 deployment configuration에서 읽는다.
 
@@ -144,9 +157,13 @@ process의 이후 poll이 실패하면 마지막 verified registry를 유지하�
    invariant가 다르면 이관을 중단하고 재검토한다.
 5. 같은 semantic/budget revision에서 L2 generation을 publish하고 `/meta`, guarded query와
    intended inactive state를 확인한다.
-6. 필요한 모든 source와 L2 contract가 Control DB에 있는지 확인한 뒤 serving replica를
-   `QUERY_MAN_SOURCE_MODE=managed`로 재시작한다. Source/verified file이 없어도 같은 inventory와
-   revision이 복원되고 deactivate/rollback이 유지되는지 확인한 뒤 traffic을 전환한다.
+6. 필요한 모든 source와 L2 contract가 Control DB에 있는지 확인한다. 각 serving slot에 고유하고
+   재시작 뒤에도 유지되는 `QUERY_MAN_REPLICA_ID`를 배정한 뒤 `QUERY_MAN_SOURCE_MODE=managed`로
+   순차 재시작한다. Source/verified file이 없어도 같은 inventory와 revision이 복원되고
+   deactivate/rollback이 유지되는지 확인한다.
+7. 각 source의 `GET /admin/sources/{source_id}/replicas`에서 예상한 slot이 모두 `available`이고
+   `drift=[]`인지 확인한 뒤 traffic을 전환한다. Planned replica가 아직 시작되지 않았다면 이
+   endpoint가 아니라 deployment inventory에서 누락을 확인한다.
 
 이 절차는 startup import나 새 bulk endpoint가 아니다. Seed digest/import marker와 repository
 write-back을 만들지 않는다.
@@ -178,7 +195,7 @@ HTTP timeout이나 연결 단절 뒤에는 다음 순서를 지킨다.
 Success receipt와 source/verified-contract 변경은 한 transaction이다. Post-commit local reload가
 실패해도 success를 rollback하거나 rejection으로 바꾸지 않고 `source_reload`을 unavailable로
 표시한다. 해당 replica는 poller가 같은 desired state를 적용할 때까지 degraded일 수 있으며
-replica별 convergence의 직접 관측은 `CTRL-06`에서 추가한다.
+replica별 convergence는 전용 admin replica endpoint에서 직접 확인한다.
 
 ## Health And Metrics
 
@@ -190,6 +207,25 @@ Public endpoint는 inventory를 노출하지 않는다.
 | `GET /ready` | Public/load balancer | 아래 aggregate status만 반환; source ID 없음 |
 | `GET /admin/health` | Query Man admin | source별 `initializing`, `healthy`, `stale`, `unavailable` |
 | `GET /admin/metrics` | Query Man admin | source/component health와 bounded counter/total snapshot |
+| `GET /admin/sources/{source_id}/replicas` | Query Man admin | ever-registered replica별 desired/applied drift와 freshness |
+
+Replica endpoint는 `limit` 1~100과 exclusive `after_replica_id` cursor를 받는다. 알려진 source는
+replica가 `pending`, `stale` 또는 `unavailable`이어도 200이며 다음을 확인한다.
+
+- `available`과 빈 `drift`: freshness 안에서 desired enabled/generation/state/metadata가 일치한다.
+- `pending`: 아직 observation이 없거나 적용 state가 충분하지 않다.
+- `stale`: DB clock 기준 `observed_at + 3 × report cadence`가 지났다. Report cadence는
+  `max(QUERY_MAN_SOURCE_RELOAD_INTERVAL_MS, 5000)`ms다.
+- `unavailable`: fresh report가 scan/apply/validation/metadata probe failure를 알렸다.
+- Disabled desired는 metadata와 source health를 drift 판단에 쓰지 않는다. `source_health`와
+  `applied.metadata_revision`이 null인 정상 disabled replica도 `available`일 수 있다.
+
+`NOT_OBSERVED`, `HEARTBEAT_EXPIRED`, `CONTROL_SCAN_FAILED`, `RUNTIME_VALIDATION_REJECTED`,
+`RUNTIME_APPLY_FAILED`, `METADATA_PROBE_FAILED` 외 reason이나 raw 오류는 공개하지 않는다.
+Observation registration/report 실패는 이 endpoint의 freshness에만 나타나고 `/ready`, 기존
+source health, query data plane과 mutation receipt를 바꾸지 않는다. Process log의
+`replica_observation_registration_failed` 또는 `replica_observation_report_failed`를 조사하되 같은
+process에서 수동 재등록하거나 ID를 바꾸지 않는다.
 
 Startup은 authority mode에서 등록된 source별 published-metadata 제공 경로를 각 metadata
 statement timeout 안에서 병렬 확인한다. Managed mode는 이 probe 전에 Control lifecycle scan을
@@ -307,6 +343,7 @@ restart/OOM, FD와 RSS growth를 검사한다. 주간·수동 workflow에서 실
 | Signal | Warning | Critical / action |
 |---|---|---|
 | Metadata refresh failure | source별 5분에 3회 또는 `stale` 전이 | `unavailable` 즉시 on-call |
+| Replica convergence | expected slot의 non-empty drift 또는 `pending` 3 cadence | `stale`/`unavailable` 또는 missing expected slot이면 deployment/Control 연결 확인 |
 | Validation reject | 새 generation 1회 | 동일 source 3회 연속이면 publish 중지·마지막 정상 generation 확인 |
 | Query reject | 10분 baseline의 3배 또는 20/min | 공격/잘못된 client 배포 확인; response/audit reason별 조사 |
 | Queue pressure | 평균 queue가 timeout의 50% | 80% 또는 `query_pool_exhausted` 5회/5분이면 admission/budget 점검 |
@@ -316,10 +353,9 @@ restart/OOM, FD와 RSS growth를 검사한다. 주간·수동 workflow에서 실
 
 외부 collector를 구성하면 현재 endpoint에서 execution/reject/timeout/truncation rate,
 queue/elapsed 평균과 source/component status를 source별로, shutdown outcome을 replica별로
-계산할 수 있다. Exact
-stale age, active pool gauge, row/byte distribution과 percentile은 현재 제공하지 않으므로
-그 panel이 필요하면 먼저 계측을 추가한다. Public dashboard에는 source label을 노출하지
-않는다.
+계산할 수 있다. Replica observation의 exact stale age는 전용 source replica endpoint에만 있다.
+Admin metrics는 active pool gauge, row/byte distribution과 percentile을 제공하지 않으므로 그
+panel이 필요하면 먼저 계측을 추가한다. Public dashboard에는 source label을 노출하지 않는다.
 
 ## Security Update Policy
 

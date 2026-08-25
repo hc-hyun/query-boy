@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from query_man.runtime_config import load_runtime_config
+from query_man.runtime_config import RuntimeConfig, load_runtime_config
 from tests.helpers import ROOT_DIRECTORY
 
 _SOURCE_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
@@ -80,32 +80,35 @@ def test_defaults_to_bootstrap_source_mode() -> None:
     assert loaded.source_mode == "bootstrap"
     assert loaded.control_dsn is None
     assert loaded.source_encryption_key is None
+    assert loaded.replica_id is None
+
+
+def _managed_environment(**overrides: str) -> dict[str, str]:
+    return {
+        "QUERY_MAN_SOURCE_MODE": "managed",
+        "QUERY_MAN_CONTROL_DSN": "host=control.invalid",
+        "QUERY_MAN_SOURCE_ENCRYPTION_KEY": _SOURCE_KEY,
+        "QUERY_MAN_ACCESS_POLICY_FILE": "config/access-policies.yaml",
+        "QUERY_MAN_REPLICA_ID": "runtime-a",
+        **overrides,
+    }
 
 
 def test_loads_managed_source_mode_without_exposing_control_dsn() -> None:
     dsn = "host=control.invalid dbname=query_man user=control password=private-secret"
     loaded = load_runtime_config(
-        {
-            "QUERY_MAN_SOURCE_MODE": "managed",
-            "QUERY_MAN_CONTROL_DSN": dsn,
-            "QUERY_MAN_SOURCE_ENCRYPTION_KEY": _SOURCE_KEY,
-            "QUERY_MAN_ACCESS_POLICY_FILE": "config/access-policies.yaml",
-        },
+        _managed_environment(QUERY_MAN_CONTROL_DSN=dsn),
         ROOT_DIRECTORY,
     )
     assert loaded.source_mode == "managed"
     assert loaded.control_dsn == dsn
     assert loaded.source_encryption_key == _SOURCE_KEY
+    assert loaded.replica_id == "runtime-a"
 
     secret = "sensitive-control-password"
     with pytest.raises(ValueError) as captured:
         load_runtime_config(
-            {
-                "QUERY_MAN_SOURCE_MODE": "managed",
-                "QUERY_MAN_CONTROL_DSN": secret * 100,
-                "QUERY_MAN_SOURCE_ENCRYPTION_KEY": _SOURCE_KEY,
-                "QUERY_MAN_ACCESS_POLICY_FILE": "config/access-policies.yaml",
-            },
+            _managed_environment(QUERY_MAN_CONTROL_DSN=secret * 100),
             ROOT_DIRECTORY,
         )
     assert secret not in str(captured.value)
@@ -119,16 +122,19 @@ def test_loads_managed_source_mode_without_exposing_control_dsn() -> None:
         {
             "QUERY_MAN_SOURCE_MODE": "managed",
             "QUERY_MAN_ACCESS_POLICY_FILE": "config/access-policies.yaml",
+            "QUERY_MAN_REPLICA_ID": "runtime-a",
         },
         {
             "QUERY_MAN_SOURCE_MODE": "managed",
             "QUERY_MAN_CONTROL_DSN": "host=control.invalid",
             "QUERY_MAN_ACCESS_POLICY_FILE": "config/access-policies.yaml",
+            "QUERY_MAN_REPLICA_ID": "runtime-a",
         },
         {
             "QUERY_MAN_SOURCE_MODE": "managed",
             "QUERY_MAN_SOURCE_ENCRYPTION_KEY": _SOURCE_KEY,
             "QUERY_MAN_ACCESS_POLICY_FILE": "config/access-policies.yaml",
+            "QUERY_MAN_REPLICA_ID": "runtime-a",
         },
     ],
 )
@@ -143,38 +149,26 @@ def test_rejects_unknown_source_mode() -> None:
 
 
 def test_managed_source_mode_requires_access_policy() -> None:
+    environment = _managed_environment()
+    environment.pop("QUERY_MAN_ACCESS_POLICY_FILE")
+
     with pytest.raises(ValueError, match="requires QUERY_MAN_ACCESS_POLICY_FILE"):
-        load_runtime_config(
-            {
-                "QUERY_MAN_SOURCE_MODE": "managed",
-                "QUERY_MAN_CONTROL_DSN": "host=control.invalid",
-                "QUERY_MAN_SOURCE_ENCRYPTION_KEY": _SOURCE_KEY,
-            },
-            ROOT_DIRECTORY,
-        )
+        load_runtime_config(environment, ROOT_DIRECTORY)
 
 
 def test_managed_source_mode_rejects_legacy_api_token() -> None:
+    environment = _managed_environment(
+        QUERY_MAN_API_TOKEN="legacy-token-value-with-at-least-32-characters",
+    )
+    environment.pop("QUERY_MAN_ACCESS_POLICY_FILE")
+
     with pytest.raises(ValueError, match="does not accept QUERY_MAN_API_TOKEN"):
-        load_runtime_config(
-            {
-                "QUERY_MAN_SOURCE_MODE": "managed",
-                "QUERY_MAN_CONTROL_DSN": "host=control.invalid",
-                "QUERY_MAN_SOURCE_ENCRYPTION_KEY": _SOURCE_KEY,
-                "QUERY_MAN_API_TOKEN": "legacy-token-value-with-at-least-32-characters",
-            },
-            ROOT_DIRECTORY,
-        )
+        load_runtime_config(environment, ROOT_DIRECTORY)
 
 
 def test_managed_runtime_config_rejects_direct_api_token_construction() -> None:
     managed = load_runtime_config(
-        {
-            "QUERY_MAN_SOURCE_MODE": "managed",
-            "QUERY_MAN_CONTROL_DSN": "host=control.invalid",
-            "QUERY_MAN_SOURCE_ENCRYPTION_KEY": _SOURCE_KEY,
-            "QUERY_MAN_ACCESS_POLICY_FILE": "config/access-policies.yaml",
-        },
+        _managed_environment(),
         ROOT_DIRECTORY,
     )
 
@@ -183,3 +177,61 @@ def test_managed_runtime_config_rejects_direct_api_token_construction() -> None:
             managed,
             api_token="legacy-token-value-with-at-least-32-characters",
         )
+
+
+def test_managed_source_mode_requires_replica_id() -> None:
+    environment = _managed_environment()
+    environment.pop("QUERY_MAN_REPLICA_ID")
+
+    with pytest.raises(ValueError, match="QUERY_MAN_REPLICA_ID"):
+        load_runtime_config(environment, ROOT_DIRECTORY)
+
+
+@pytest.mark.parametrize("replica_id", ["a", "a" * 80, "runtime-a"])
+def test_managed_source_mode_accepts_replica_id_boundaries(replica_id: str) -> None:
+    loaded = load_runtime_config(
+        _managed_environment(QUERY_MAN_REPLICA_ID=replica_id),
+        ROOT_DIRECTORY,
+    )
+
+    assert loaded.replica_id == replica_id
+
+
+@pytest.mark.parametrize(
+    "replica_id",
+    ["", "Runtime-a", "runtime_a", "-runtime", "runtime-", "runtime--a", "a" * 81],
+)
+def test_managed_source_mode_rejects_invalid_replica_id(replica_id: str) -> None:
+    with pytest.raises(ValueError, match="QUERY_MAN_REPLICA_ID"):
+        load_runtime_config(
+            _managed_environment(QUERY_MAN_REPLICA_ID=replica_id),
+            ROOT_DIRECTORY,
+        )
+
+
+@pytest.mark.parametrize("replica_id", ["INVALID_replica--id", "a" * 81])
+def test_bootstrap_ignores_invalid_replica_id(replica_id: str) -> None:
+    loaded = load_runtime_config(
+        {"QUERY_MAN_REPLICA_ID": replica_id},
+        ROOT_DIRECTORY,
+    )
+
+    assert loaded.replica_id is None
+
+
+@pytest.mark.parametrize("replica_id", [None, "runtime_a", "a" * 81])
+def test_runtime_config_direct_construction_enforces_replica_id_boundary(
+    replica_id: str | None,
+) -> None:
+    managed = load_runtime_config(_managed_environment(), ROOT_DIRECTORY)
+
+    with pytest.raises(ValueError, match="QUERY_MAN_REPLICA_ID"):
+        replace(managed, replica_id=replica_id)
+
+
+def test_runtime_config_direct_bootstrap_construction_does_not_validate_replica_id() -> None:
+    bootstrap: RuntimeConfig = load_runtime_config({}, ROOT_DIRECTORY)
+
+    replaced = replace(bootstrap, replica_id="INVALID_replica--id")
+
+    assert replaced.replica_id == "INVALID_replica--id"

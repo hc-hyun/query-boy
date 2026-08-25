@@ -59,7 +59,9 @@ docker compose down
 경계는 [shared access audit](docs/verification/2026-08-23-shared-access.md), 현재 source catalog와 mutation
 receipt 증거는 각각
 [source management catalog audit](docs/verification/2026-08-23-source-management-catalog.md)과
-[source mutation receipt audit](docs/verification/2026-08-23-source-mutation-receipts.md)을 참고합니다. 각 audit는
+[source mutation receipt audit](docs/verification/2026-08-23-source-mutation-receipts.md), replica convergence
+증거는 [runtime replica observation audit](docs/verification/2026-08-25-runtime-replica-observations.md)을
+참고합니다. 각 audit는
 적힌 scope의 실행 시점 증거이며, 나중 audit을 모두 포괄하는 단일 “현재 최종” 증거로
 해석하지 않습니다.
 
@@ -126,8 +128,9 @@ Admin capability가 있는 caller는 audit log에 기록된 실행 중 `query_id
 Client는 DSN, host, database 또는 role을 전달할 수 없습니다. Runtime은
 `QUERY_MAN_SOURCE_MODE=bootstrap|managed`로 source authority를 시작할 때 한 번만 선택합니다.
 기본값 `bootstrap`은 local/CI에서 [`config/sources`](config/sources)와 filesystem verified contract를
-읽고 Control DB 설정을 거부합니다. `managed`는 `QUERY_MAN_CONTROL_DSN`과
-`QUERY_MAN_SOURCE_ENCRYPTION_KEY`를 모두 요구하며 source/verified file을 열거나 합치지 않습니다.
+읽고 Control DB 설정을 거부합니다. `managed`는 `QUERY_MAN_CONTROL_DSN`,
+`QUERY_MAN_SOURCE_ENCRYPTION_KEY`와 stable `QUERY_MAN_REPLICA_ID`를 모두 요구하며
+source/verified file을 열거나 합치지 않습니다.
 Budget profile과 access policy는 두 mode 모두 versioned deployment configuration에 남습니다.
 Mode 자동 선택, source별 혼합과 Control DB 장애 시 filesystem fallback은 없습니다.
 Production hot-added source의 authority와 관리 목표는
@@ -220,9 +223,9 @@ Production managed runtime을 준비하려면 database owner/관리자용 표준
 `scripts/apply-control-schema.sh`를 실행하고, 별도로 생성한 최소 권한 LOGIN에
 `query_man_control_writer` membership을 부여합니다. `scripts/apply-db.sh`는 네 fixture
 database·role·seed를 만드는 local/CI bootstrap이며 production migration이 아닙니다. Runtime은
-`QUERY_MAN_SOURCE_MODE=managed`, 전용 LOGIN의 TLS DSN, source encryption key와 version 2
-access-policy file을 함께 사용합니다. Bootstrap source를 이관할 때는 traffic 밖의 managed
-instance에서 기존 admin API로
+`QUERY_MAN_SOURCE_MODE=managed`, 전용 LOGIN의 TLS DSN, source encryption key, version 2
+access-policy file과 replica마다 고유한 stable `QUERY_MAN_REPLICA_ID`를 함께 사용합니다. Bootstrap
+source를 이관할 때는 traffic 밖의 managed instance에서 기존 admin API로
 L0/L1 source, Control DB verified contract, L2 source 순서로 publish한 뒤 serving replica를
 managed mode로 시작합니다. Startup import, 별도 marker와 filesystem write-back은 없습니다.
 자세한 설치·이관·복구 순서는
@@ -240,12 +243,16 @@ accuracy, unsupported/clarification recall과 context byte 상한 중 하나라�
 source는 L2이며, metadata revision과 일치하는 verified contract가 없으면 `/meta`, MCP와
 query 경로가 새 revision을 활성화하지 않습니다.
 
-`QUERY_MAN_SOURCE_MODE=managed`에서 Control DSN, encryption key와 version 2 access-policy file을
-함께 설정하면 explicit operator admin 전용 source API가 활성화됩니다. Query/admin identity가
-중 하나라도 없거나 단일 API token을 사용하거나 Control 설정이 불완전하면 startup이 실패합니다.
+`QUERY_MAN_SOURCE_MODE=managed`에서 Control DSN, encryption key, stable replica ID와 version 2
+access-policy file을 함께 설정하면 explicit operator admin 전용 source API가 활성화됩니다.
+Query/admin identity가 중 하나라도 없거나 단일 API token을 사용하거나 Control 설정이 불완전하면
+startup이 실패합니다.
 신규 manifest는 격리 staging을 통과한 뒤 encrypted
 credential, immutable metadata와 함께 원자적으로 publish되며 runtime과 다른 replica가
 재시작 없이 반영합니다. 모든 mutation은 idempotency UUID, change reference와 expected
 generation/state를 요구하고 state 변경과 immutable terminal receipt를 함께 commit합니다. Timeout은
 receipt lookup과 source-state 대조 뒤 같은 key로만 재시도합니다. 자세한 절차는
 [`docs/source-onboarding.md`](docs/source-onboarding.md)를 따릅니다.
+Operator는 `GET /admin/sources/{source_id}/replicas`에서 ever-registered replica별 desired/applied
+drift와 freshness를 확인할 수 있습니다. Observation 실패나 stale 상태는 기존 data plane,
+readiness, source health 또는 mutation receipt를 바꾸지 않습니다.

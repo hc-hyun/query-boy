@@ -54,7 +54,8 @@ generation으로 rollback하는 ABA 전이가 있어도 이전 process의 publis
 덮을 수 없다.
 
 `metadata_snapshots`의 UPDATE와 DELETE는 database trigger가 거부한다. Managed runtime은
-`QUERY_MAN_SOURCE_MODE=managed`, `QUERY_MAN_CONTROL_DSN`과 source encryption key를 함께 설정한다.
+`QUERY_MAN_SOURCE_MODE=managed`, `QUERY_MAN_CONTROL_DSN`, source encryption key와 ADR 0016의
+stable replica ID를 함께 설정한다.
 Bootstrap mode는 Control DB 설정을 거부한다. Login은
 `query_man_control_writer` group role의 최소 table 권한만 상속해야 한다. Control plane을
 설정한 runtime은 저장소 장애나 payload 검증 실패 시 local catalog만으로 우회 publish하지

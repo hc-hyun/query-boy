@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from textwrap import dedent, indent
-from typing import Literal, get_type_hints
+from typing import Literal, cast, get_type_hints
 
 import pytest
 
@@ -10,9 +11,11 @@ import query_man.app as app_module
 from query_man.access import AccessPolicy, AccessPolicyConfigurationError
 from query_man.catalog import PostgresCatalog
 from query_man.models import RuntimeCatalogProvider
+from query_man.operations import operations
 from query_man.query import PostgresQueryExecutor, RuntimeQueryExecutor
 from query_man.registry import SourceRegistry
 from query_man.runtime_config import RuntimeConfig
+from query_man.source_admin import ReplicaSourceObservation
 from query_man.verified import VerifiedQueryRegistry
 from tests.helpers import ROOT_DIRECTORY, load_test_registry
 
@@ -116,6 +119,7 @@ def _runtime(
         source_mode=source_mode,
         control_dsn="host=control.invalid dbname=query_man" if managed else None,
         source_encryption_key=_SOURCE_KEY if managed else None,
+        replica_id="runtime-test" if managed else None,
     )
 
 
@@ -304,3 +308,224 @@ def test_bootstrap_mode_does_not_construct_control_plane_stores(
 
     assert app.state.source_admin is None
     assert app.state.source_reloader is None
+
+
+@pytest.mark.parametrize(
+    ("reload_interval_ms", "heartbeat_interval_ms"),
+    [(250, 5_000), (6_000, 6_000)],
+)
+@pytest.mark.asyncio
+async def test_managed_reload_task_registers_once_and_reports_internal_snapshot(
+    reload_interval_ms: int,
+    heartbeat_interval_ms: int,
+) -> None:
+    class Reloader:
+        async def sync(self) -> None:
+            pass
+
+    class Writer:
+        def __init__(self) -> None:
+            self.registrations: list[tuple[str, int]] = []
+            self.reports: list[tuple[object, ...]] = []
+            self.reported = asyncio.Event()
+
+        async def register_replica(self, replica_id: str, interval_ms: int) -> int:
+            self.registrations.append((replica_id, interval_ms))
+            return 7
+
+        async def report_replica(
+            self,
+            replica_id: str,
+            incarnation: int,
+            *,
+            reason_code: str | None,
+            sources: tuple[object, ...],
+        ) -> None:
+            self.reports.append((replica_id, incarnation, reason_code, sources))
+            self.reported.set()
+
+    operations.reset()
+    try:
+        operations.set_replica_source_applied("source-a", 2, 3, True)
+        operations.set_replica_metadata_revision("source-a", f"sha256:{'1' * 64}")
+        operations.set_source_health("source-a", "healthy")
+        public_before = operations.snapshot()
+        writer = Writer()
+        task = asyncio.create_task(
+            app_module._reload_sources(  # type: ignore[arg-type]
+                Reloader(),
+                reload_interval_ms,
+                writer,
+                "runtime-a",
+            )
+        )
+        await asyncio.wait_for(writer.reported.wait(), timeout=1)
+
+        assert writer.registrations == [("runtime-a", heartbeat_interval_ms)]
+        assert len(writer.reports) == 1
+        replica_id, incarnation, reason_code, sources = writer.reports[0]
+        assert (replica_id, incarnation, reason_code) == ("runtime-a", 7, None)
+        assert isinstance(sources, tuple) and len(sources) == 1
+        source = cast(ReplicaSourceObservation, sources[0])
+        assert source.source_id == "source-a"
+        assert source.applied_generation == 2
+        assert source.applied_state_version == 3
+        assert source.applied_enabled is True
+        assert source.applied_metadata_revision == f"sha256:{'1' * 64}"
+        assert source.source_health == "healthy"
+        assert source.reason_code is None
+        assert operations.snapshot() == public_before
+    finally:
+        if "task" in locals():
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        operations.reset()
+
+
+@pytest.mark.asyncio
+async def test_replica_report_omits_sources_during_control_scan_failure() -> None:
+    class Writer:
+        def __init__(self) -> None:
+            self.report: tuple[object, ...] | None = None
+
+        async def report_replica(
+            self,
+            replica_id: str,
+            incarnation: int,
+            *,
+            reason_code: str | None,
+            sources: tuple[object, ...],
+        ) -> None:
+            self.report = (replica_id, incarnation, reason_code, sources)
+
+    operations.reset()
+    try:
+        operations.set_replica_source_applied("source-a", 1, 1, True)
+        operations.set_replica_scan_failed(True)
+        writer = Writer()
+
+        await app_module._report_replica_observation(  # type: ignore[arg-type]
+            writer,
+            "runtime-a",
+            4,
+        )
+
+        assert writer.report == ("runtime-a", 4, "CONTROL_SCAN_FAILED", ())
+        assert len(operations.replica_runtime_snapshot().sources) == 1
+    finally:
+        operations.reset()
+
+
+@pytest.mark.parametrize("failure", ["registration", "report"])
+@pytest.mark.asyncio
+async def test_replica_observation_failure_does_not_restart_registration_or_reload(
+    failure: str,
+) -> None:
+    class Reloader:
+        def __init__(self) -> None:
+            self.synced = asyncio.Event()
+
+        async def sync(self) -> None:
+            self.synced.set()
+
+    class Writer:
+        def __init__(self) -> None:
+            self.registrations = 0
+            self.reports = 0
+
+        async def register_replica(self, _replica_id: str, _interval_ms: int) -> int:
+            self.registrations += 1
+            if failure == "registration":
+                raise RuntimeError("registration unavailable")
+            return 3
+
+        async def report_replica(
+            self,
+            _replica_id: str,
+            _incarnation: int,
+            *,
+            reason_code: str | None,
+            sources: tuple[object, ...],
+        ) -> None:
+            del reason_code, sources
+            self.reports += 1
+            raise RuntimeError("report unavailable")
+
+    operations.reset()
+    reloader = Reloader()
+    writer = Writer()
+    task = asyncio.create_task(
+        app_module._reload_sources(  # type: ignore[arg-type]
+            reloader,
+            1,
+            writer,
+            "runtime-a",
+        )
+    )
+    try:
+        await asyncio.wait_for(reloader.synced.wait(), timeout=1)
+        assert writer.registrations == 1
+        assert writer.reports == (0 if failure == "registration" else 1)
+        assert not task.done()
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        operations.reset()
+
+
+@pytest.mark.asyncio
+async def test_replica_report_failure_retries_same_incarnation_without_reregister(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Reloader:
+        async def sync(self) -> None:
+            pass
+
+    class Writer:
+        def __init__(self) -> None:
+            self.registrations = 0
+            self.reports = 0
+            self.retried = asyncio.Event()
+
+        async def register_replica(self, _replica_id: str, _interval_ms: int) -> int:
+            self.registrations += 1
+            return 9
+
+        async def report_replica(
+            self,
+            _replica_id: str,
+            incarnation: int,
+            *,
+            reason_code: str | None,
+            sources: tuple[object, ...],
+        ) -> None:
+            del reason_code, sources
+            assert incarnation == 9
+            self.reports += 1
+            if self.reports >= 2:
+                self.retried.set()
+            raise RuntimeError("report unavailable")
+
+    monkeypatch.setattr(app_module, "REPLICA_HEARTBEAT_INTERVAL_MIN_MS", 1)
+    operations.reset()
+    writer = Writer()
+    task = asyncio.create_task(
+        app_module._reload_sources(  # type: ignore[arg-type]
+            Reloader(),
+            1,
+            writer,
+            "runtime-a",
+        )
+    )
+    try:
+        await asyncio.wait_for(writer.retried.wait(), timeout=1)
+        assert writer.registrations == 1
+        assert writer.reports >= 2
+        assert not task.done()
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        operations.reset()

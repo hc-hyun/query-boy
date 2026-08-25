@@ -257,6 +257,7 @@ class RecordingSourceAdmin:
         self.list_calls: list[tuple[object, ...]] = []
         self.detail_calls: list[str] = []
         self.history_calls: list[tuple[object, ...]] = []
+        self.replica_calls: list[tuple[object, ...]] = []
         self.receipt_calls: list[str] = []
         self.source_mutation_calls: list[tuple[object, ...]] = []
         self.mutation_calls: list[tuple[object, ...]] = []
@@ -306,6 +307,83 @@ class RecordingSourceAdmin:
             "current": {"generation": 2},
             "generations": [],
             "next_before_generation": None,
+        }
+
+    async def source_replicas(
+        self,
+        source_id: str,
+        limit: int = 50,
+        after_replica_id: str | None = None,
+    ) -> dict[str, object]:
+        self.replica_calls.append((source_id, limit, after_replica_id))
+        if source_id == "unknown-source":
+            raise SourceNotFoundError
+        if source_id == "unavailable-source":
+            raise SourceControlUnavailableError from RuntimeError(
+                "private replica observation detail"
+            )
+        replicas: list[dict[str, object]] = []
+        if source_id == "known-source":
+            replicas.append(
+                {
+                    "replica_id": "replica-alpha",
+                    "status": "available",
+                    "source_health": "healthy",
+                    "applied": {
+                        "enabled": True,
+                        "generation": 7,
+                        "state_version": 9,
+                        "metadata_revision": f"sha256:{'1' * 64}",
+                    },
+                    "drift": [],
+                    "observed_at": "2026-08-25T12:00:00+00:00",
+                    "fresh_until": "2026-08-25T12:00:15+00:00",
+                    "stale_age_ms": 0,
+                    "reason_code": None,
+                }
+            )
+        elif source_id == "replica-status-source":
+            replicas.extend(
+                [
+                    {
+                        "replica_id": "replica-stale",
+                        "status": "stale",
+                        "source_health": "healthy",
+                        "applied": {
+                            "enabled": True,
+                            "generation": 6,
+                            "state_version": 8,
+                            "metadata_revision": f"sha256:{'2' * 64}",
+                        },
+                        "drift": ["generation", "state_version", "metadata_revision"],
+                        "observed_at": "2026-08-25T11:59:00+00:00",
+                        "fresh_until": "2026-08-25T11:59:15+00:00",
+                        "stale_age_ms": 45_000,
+                        "reason_code": "HEARTBEAT_EXPIRED",
+                    },
+                    {
+                        "replica_id": "replica-unavailable",
+                        "status": "unavailable",
+                        "source_health": None,
+                        "applied": None,
+                        "drift": ["not_applied"],
+                        "observed_at": "2026-08-25T12:00:00+00:00",
+                        "fresh_until": "2026-08-25T12:00:15+00:00",
+                        "stale_age_ms": 0,
+                        "reason_code": "CONTROL_SCAN_FAILED",
+                    },
+                ]
+            )
+        return {
+            "source_id": source_id,
+            "desired": {
+                "enabled": True,
+                "generation": 7,
+                "state_version": 9,
+                "metadata_revision": f"sha256:{'1' * 64}",
+            },
+            "replicas": replicas,
+            "next_after_replica_id": None,
         }
 
     async def get_mutation(self, idempotency_key: str) -> dict[str, object]:
@@ -936,6 +1014,7 @@ async def test_query_credentials_reject_every_admin_operation_and_cancel(
         ("GET", "/admin/sources/INVALID_SOURCE", None),
         ("GET", "/admin/sources/unknown-source", None),
         ("GET", "/admin/sources/unknown-source/history", None),
+        ("GET", "/admin/sources/INVALID_SOURCE/replicas?limit=0", None),
         ("GET", "/admin/sources/unknown-source/mutations?before_event_id=0", None),
         ("GET", f"/admin/mutations/{_MUTATION_KEYS[0]}", None),
         ("GET", "/admin/mutations/not-a-canonical-uuid", None),
@@ -1078,6 +1157,211 @@ async def test_admin_mutation_and_receipt_routes_require_authentication_before_v
     assert admin.receipt_calls == []
     assert admin.source_mutation_calls == []
     assert admin.mutation_calls == []
+
+
+@pytest.mark.asyncio
+async def test_replica_admin_authenticates_and_authorizes_before_validation(
+    tmp_path: Path,
+) -> None:
+    app = build_app(
+        runtime_config(),
+        registry=load_test_registry(),
+        catalog=NeverCalledCatalog(),
+        access_policy=_shared_access_policy(tmp_path),
+    )
+    admin = RecordingSourceAdmin()
+    app.state.source_admin = admin
+    invalid_path = "/admin/sources/INVALID_SOURCE/replicas?limit=0&unexpected=value"
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://test",
+    ) as session:
+        unauthenticated = await session.get(invalid_path)
+        query_caller = await session.get(
+            invalid_path,
+            headers={"authorization": f"Bearer {_QUERY_A_TOKEN}"},
+        )
+
+    assert unauthenticated.status_code == 401
+    assert unauthenticated.json()["error"]["code"] == "UNAUTHORIZED"
+    assert query_caller.status_code == 403
+    assert query_caller.json()["error"]["code"] == "OPERATOR_REQUIRED"
+    assert admin.replica_calls == []
+
+
+@pytest.mark.asyncio
+async def test_operator_replica_admin_forwards_and_preserves_projection(
+    tmp_path: Path,
+) -> None:
+    app = build_app(
+        runtime_config(),
+        registry=load_test_registry(),
+        catalog=NeverCalledCatalog(),
+        access_policy=_shared_access_policy(tmp_path),
+    )
+    admin = RecordingSourceAdmin()
+    app.state.source_admin = admin
+    headers = {"authorization": f"Bearer {_ADMIN_TOKEN}"}
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://test",
+    ) as session:
+        default_page = await session.get(
+            "/admin/sources/known-source/replicas",
+            headers=headers,
+        )
+        explicit_page = await session.get(
+            "/admin/sources/known-source/replicas",
+            headers=headers,
+            params={"limit": "7", "after_replica_id": "replica-alpha"},
+        )
+        empty_page = await session.get(
+            "/admin/sources/empty-source/replicas",
+            headers=headers,
+        )
+        status_page = await session.get(
+            "/admin/sources/replica-status-source/replicas",
+            headers=headers,
+        )
+
+    assert all(
+        response.status_code == 200
+        for response in (default_page, explicit_page, empty_page, status_page)
+    )
+    assert admin.replica_calls == [
+        ("known-source", 50, None),
+        ("known-source", 7, "replica-alpha"),
+        ("empty-source", 50, None),
+        ("replica-status-source", 50, None),
+    ]
+    expected_available = {
+        "source_id": "known-source",
+        "desired": {
+            "enabled": True,
+            "generation": 7,
+            "state_version": 9,
+            "metadata_revision": f"sha256:{'1' * 64}",
+        },
+        "replicas": [
+            {
+                "replica_id": "replica-alpha",
+                "status": "available",
+                "source_health": "healthy",
+                "applied": {
+                    "enabled": True,
+                    "generation": 7,
+                    "state_version": 9,
+                    "metadata_revision": f"sha256:{'1' * 64}",
+                },
+                "drift": [],
+                "observed_at": "2026-08-25T12:00:00+00:00",
+                "fresh_until": "2026-08-25T12:00:15+00:00",
+                "stale_age_ms": 0,
+                "reason_code": None,
+            }
+        ],
+        "next_after_replica_id": None,
+    }
+    assert default_page.json() == explicit_page.json() == expected_available
+    assert empty_page.json() == {
+        "source_id": "empty-source",
+        "desired": expected_available["desired"],
+        "replicas": [],
+        "next_after_replica_id": None,
+    }
+    assert status_page.json() == {
+        "source_id": "replica-status-source",
+        "desired": expected_available["desired"],
+        "replicas": [
+            {
+                "replica_id": "replica-stale",
+                "status": "stale",
+                "source_health": "healthy",
+                "applied": {
+                    "enabled": True,
+                    "generation": 6,
+                    "state_version": 8,
+                    "metadata_revision": f"sha256:{'2' * 64}",
+                },
+                "drift": ["generation", "state_version", "metadata_revision"],
+                "observed_at": "2026-08-25T11:59:00+00:00",
+                "fresh_until": "2026-08-25T11:59:15+00:00",
+                "stale_age_ms": 45_000,
+                "reason_code": "HEARTBEAT_EXPIRED",
+            },
+            {
+                "replica_id": "replica-unavailable",
+                "status": "unavailable",
+                "source_health": None,
+                "applied": None,
+                "drift": ["not_applied"],
+                "observed_at": "2026-08-25T12:00:00+00:00",
+                "fresh_until": "2026-08-25T12:00:15+00:00",
+                "stale_age_ms": 0,
+                "reason_code": "CONTROL_SCAN_FAILED",
+            },
+        ],
+        "next_after_replica_id": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_operator_replica_admin_returns_bounded_errors(tmp_path: Path) -> None:
+    app = build_app(
+        runtime_config(),
+        registry=load_test_registry(),
+        catalog=NeverCalledCatalog(),
+        access_policy=_shared_access_policy(tmp_path),
+    )
+    admin = RecordingSourceAdmin()
+    app.state.source_admin = admin
+    headers = {"authorization": f"Bearer {_ADMIN_TOKEN}"}
+    invalid_paths = [
+        "/admin/sources/known-source/replicas?limit=0",
+        "/admin/sources/known-source/replicas?limit=101",
+        "/admin/sources/known-source/replicas?after_replica_id=",
+        "/admin/sources/known-source/replicas?after_replica_id=Invalid_Replica",
+        f"/admin/sources/known-source/replicas?after_replica_id={'a' * 81}",
+        "/admin/sources/known-source/replicas?after_replica_id=%20replica-alpha%20",
+        "/admin/sources/known-source/replicas?unexpected=value",
+        "/admin/sources/known-source/replicas?limit=10&limit=20",
+        (
+            "/admin/sources/known-source/replicas?"
+            "after_replica_id=replica-a&after_replica_id=replica-b"
+        ),
+        "/admin/sources/INVALID_SOURCE/replicas",
+    ]
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://test",
+    ) as session:
+        invalid = [
+            await session.get(path, headers=headers) for path in invalid_paths
+        ]
+        unknown = await session.get(
+            "/admin/sources/unknown-source/replicas",
+            headers=headers,
+        )
+        unavailable = await session.get(
+            "/admin/sources/unavailable-source/replicas",
+            headers=headers,
+        )
+
+    assert all(response.status_code == 400 for response in invalid)
+    assert all(
+        response.json()["error"]["code"] == "INVALID_REQUEST"
+        for response in invalid
+    )
+    assert all(len(response.content) < 4_096 for response in invalid)
+    assert admin.replica_calls == [
+        ("unknown-source", 50, None),
+        ("unavailable-source", 50, None),
+    ]
+    assert unknown.status_code == 404
+    assert unknown.json()["error"]["code"] == "SOURCE_NOT_FOUND"
+    assert unavailable.status_code == 503
+    assert unavailable.json()["error"]["code"] == "SOURCE_CONTROL_UNAVAILABLE"
+    assert "private replica observation detail" not in unavailable.text
 
 
 @pytest.mark.asyncio

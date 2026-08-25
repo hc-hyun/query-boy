@@ -34,7 +34,15 @@ from query_man.query import PostgresQueryExecutor, QueryService, RuntimeQueryExe
 from query_man.registry import SourceReader, SourceRegistry, load_budget_profiles
 from query_man.runtime_config import RuntimeConfig
 from query_man.secrets import SourceSecretCipher
-from query_man.source_admin import SourceAdminService, SourcePoolInvalidator, SourceReloader
+from query_man.source_admin import (
+    REPLICA_HEARTBEAT_INTERVAL_MIN_MS,
+    ControlReplicaObservationWriter,
+    ReplicaObservationWriter,
+    ReplicaSourceObservation,
+    SourceAdminService,
+    SourcePoolInvalidator,
+    SourceReloader,
+)
 from query_man.source_admin_routes import register_source_admin_routes, require_operator
 from query_man.source_store import PostgresSourceStore
 from query_man.verified import VerifiedQueryRegistry
@@ -271,12 +279,14 @@ def build_app(
     source_store: PostgresSourceStore | None = None
     source_reloader: SourceReloader | None = None
     source_admin: SourceAdminService | None = None
+    replica_observation_writer: ReplicaObservationWriter | None = None
     if runtime_config.source_mode == "managed":
         control_dsn = runtime_config.control_dsn
         encryption_key = runtime_config.source_encryption_key
         if control_dsn is None or encryption_key is None or metadata_store is None:
             raise ValueError("Managed source mode configuration is incomplete")
         source_store = PostgresSourceStore(control_dsn)
+        replica_observation_writer = ControlReplicaObservationWriter(source_store)
         cipher = SourceSecretCipher.from_base64(encryption_key)
         invalidators: tuple[SourcePoolInvalidator, ...] = (catalog, query_executor)
         budgets = load_budget_profiles(runtime_config.budget_file)
@@ -359,8 +369,16 @@ def build_app(
         operations.reconcile_sources(registry.source_ids())
         await _probe_registered_sources(registry, metadata)
         if source_reloader is not None:
+            replica_id = runtime_config.replica_id
+            if replica_id is None or replica_observation_writer is None:
+                raise ValueError("Managed replica observation configuration is incomplete")
             reload_task = asyncio.create_task(
-                _reload_sources(source_reloader, runtime_config.source_reload_interval_ms)
+                _reload_sources(
+                    source_reloader,
+                    runtime_config.source_reload_interval_ms,
+                    replica_observation_writer,
+                    replica_id,
+                )
             )
         child_entered = False
         try:
@@ -637,10 +655,85 @@ def _mcp_caller() -> CallerContext:
     return caller
 
 
-async def _reload_sources(reloader: SourceReloader, interval_ms: int) -> None:
+async def _reload_sources(
+    reloader: SourceReloader,
+    interval_ms: int,
+    observation_writer: ReplicaObservationWriter | None = None,
+    replica_id: str | None = None,
+) -> None:
+    loop = asyncio.get_running_loop()
+    reload_interval = interval_ms / 1_000
+    heartbeat_interval_ms = max(interval_ms, REPLICA_HEARTBEAT_INTERVAL_MIN_MS)
+    report_interval = heartbeat_interval_ms / 1_000
+    incarnation: int | None = None
+
+    if observation_writer is not None:
+        if replica_id is None:
+            raise ValueError("Replica ID is required for observation reporting")
+        try:
+            incarnation = await observation_writer.register_replica(
+                replica_id,
+                heartbeat_interval_ms,
+            )
+        except Exception:
+            logger.exception("replica_observation_registration_failed")
+        if incarnation is not None:
+            await _report_replica_observation(
+                observation_writer,
+                replica_id,
+                incarnation,
+            )
+
+    next_reload = loop.time() + reload_interval
+    next_report = loop.time() + report_interval
     while True:
-        await asyncio.sleep(interval_ms / 1_000)
-        await reloader.sync()
+        deadline = next_reload if incarnation is None else min(next_reload, next_report)
+        await asyncio.sleep(max(0.0, deadline - loop.time()))
+        if loop.time() >= next_reload:
+            await reloader.sync()
+            next_reload = loop.time() + reload_interval
+        if incarnation is not None and loop.time() >= next_report:
+            assert observation_writer is not None
+            assert replica_id is not None
+            await _report_replica_observation(
+                observation_writer,
+                replica_id,
+                incarnation,
+            )
+            next_report = loop.time() + report_interval
+
+
+async def _report_replica_observation(
+    writer: ReplicaObservationWriter,
+    replica_id: str,
+    incarnation: int,
+) -> None:
+    snapshot = operations.replica_runtime_snapshot()
+    sources = (
+        ()
+        if snapshot.reason_code is not None
+        else tuple(
+            ReplicaSourceObservation(
+                source_id=source.source_id,
+                applied_generation=source.applied_generation,
+                applied_state_version=source.applied_state_version,
+                applied_enabled=source.applied_enabled,
+                applied_metadata_revision=source.applied_metadata_revision,
+                source_health=source.source_health,
+                reason_code=source.reason_code,
+            )
+            for source in snapshot.sources
+        )
+    )
+    try:
+        await writer.report_replica(
+            replica_id,
+            incarnation,
+            reason_code=snapshot.reason_code,
+            sources=sources,
+        )
+    except Exception:
+        logger.exception("replica_observation_report_failed")
 
 
 async def _probe_registered_sources(

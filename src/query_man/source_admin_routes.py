@@ -83,6 +83,13 @@ class SourceHistoryQuery(BaseModel):
     before_generation: int | None = Field(None, ge=1, le=CONTROL_SEQUENCE_MAX)
 
 
+class SourceReplicaQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    limit: int = Field(50, ge=1, le=100)
+    after_replica_id: StableSlug | None = None
+
+
 class SourceDetailQuery(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -347,6 +354,21 @@ async def admin_source_history(
         source_id,
         limit=parameters.limit,
         before_generation=parameters.before_generation,
+    )
+
+
+@_router.get("/admin/sources/{source_id}/replicas")
+async def admin_source_replicas(
+    source_id: str,
+    request: Request,
+) -> dict[str, object]:
+    require_operator(request)
+    source_id = _parse_source_id(source_id)
+    parameters = _parse_query_parameters(request, SourceReplicaQuery)
+    return await _source_admin(request).source_replicas(
+        source_id,
+        limit=parameters.limit,
+        after_replica_id=parameters.after_replica_id,
     )
 
 

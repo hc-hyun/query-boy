@@ -559,9 +559,9 @@ type, 성능 상한, consumer와 rollback 범위를 후속 승인안으로 작�
 6. D5 offline CLI composition 격리 (`MOD-08`) — 완료
 7. 전체 dependency/contract audit — 완료 (2026-08-25)
 
-최종 audit에서 현재 contract 위반이나 migration 필요성은 발견되지 않았다. Active TODO의 다음
-순서는 `CTRL-06`이지만 새 Control DB schema, replica observation, freshness와 admin response 의미는
-이 승인 범위에 포함되지 않으므로 정확한 후속 계약을 다시 승인받기 전에는 구현하지 않는다.
+최종 audit에서 당시 contract 위반이나 migration 필요성은 발견되지 않았다. 이후 `CTRL-06A`의
+Control DB schema, replica observation, freshness와 admin response 계약은 2026-08-25 별도 사용자
+승인을 받아 구현됐다. Active TODO의 다음 순서는 새 계약 승인이 필요한 `CTRL-07`이다.
 
 각 단계는 provider contract, 직접 consumer, module 문서와 runnable contract test가 함께
 통과하는 독립 커밋으로 끝낸다. Shared contract file은 single-writer로 편집한다. Provider

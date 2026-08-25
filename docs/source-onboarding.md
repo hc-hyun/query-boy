@@ -50,6 +50,7 @@ ownership, state, history, size와 cost를 조회하는 목표 계약은
 | Budget hard-limit template/resource-tier catalog and current bootstrap/access policy | Deployment configuration |
 | Owner, environment and DB migration reference | Control DB immutable manifest generation |
 | Mutation audit and authoritative receipt | Control DB management plane; implemented |
+| Replica desired/applied drift and freshness | Control DB latest observation; implemented |
 | Size/growth and cost projection | Control DB management plane; implementation pending |
 | Bootstrap and acceptance input | Repository YAML seed/fixture only |
 
@@ -65,7 +66,7 @@ verified file을 열지 않으며 Control DB lifecycle이 없는 file source를 
 | Mode | Required/forbidden settings | Purpose |
 |---|---|---|
 | `bootstrap` (default) | Control DSN/key 금지; anonymous/query-only token 또는 v2 policy | Local/CI repository fixture |
-| `managed` | Control DSN/key와 v2 access policy 필수; API token/anonymous 금지 | Production Control DB authority와 hot-add |
+| `managed` | Control DSN/key, stable replica ID와 v2 access policy 필수; API token/anonymous 금지 | Production Control DB authority와 hot-add |
 
 Managed mode에는 source별 file fallback이나 verified-contract merge가 없다. Budget profile과 access
 policy는 계속 deployment configuration에서 읽는다. Source/verified directory는 없어도 되지만
@@ -74,7 +75,8 @@ budget file과 runtime secret은 있어야 한다.
 이미 bootstrap으로 사용하던 source를 production Control DB로 이관할 때는 다음 순서를 한 번만
 수행한다.
 
-1. Control schema, 전용 writer, encryption key와 version 2 query/admin access policy를 준비한다.
+1. Control schema, 전용 writer, encryption key, 각 deployment slot의 stable replica ID와 version 2
+   query/admin access policy를 준비한다. 동시에 실행되는 slot은 ID를 공유하지 않는다.
 2. Serving traffic 밖에서 managed runtime을 시작한다. 아직 active source가 없으면 `/ready` 503이
    정상이며 admin endpoint는 별도 운영 경로로 호출한다.
 3. Existing manifest의 `minimum_quality_level`을 L0/L1로 두고 기존 `PUT /admin/sources/{source_id}`로
@@ -87,8 +89,11 @@ budget file과 runtime secret은 있어야 한다.
 5. Semantic/budget 내용은 유지하고 `minimum_quality_level: L2`로 publish한다. Quality minimum은
    revision hash 재료가 아니므로 같은 revision contract를 사용할 수 있다.
 6. 필요한 source와 contract, intended active/deactivated state를 Control DB에서 확인하고 serving
-   replica를 `QUERY_MAN_SOURCE_MODE=managed`로 재시작한다. File을 제거하거나 같은 ID의 seed를
-   남겨도 inventory, rollback과 deactivate 결과가 바뀌지 않는지 확인한 뒤 traffic을 전환한다.
+   replica를 `QUERY_MAN_SOURCE_MODE=managed`와 slot별 `QUERY_MAN_REPLICA_ID`로 재시작한다. File을
+   제거하거나 같은 ID의 seed를 남겨도 inventory, rollback과 deactivate 결과가 바뀌지 않는지
+   확인한다.
+7. 각 source의 `GET /admin/sources/{source_id}/replicas`에서 시작한 모든 slot이 `available`이고
+   desired/applied `drift`가 비었는지 확인한 뒤 traffic을 전환한다.
 
 이 절차는 기존 staged admin API만 사용한다. Startup importer, bulk import endpoint, source별
 mode/origin, seed digest/marker와 repository write-back은 없다. Plaintext credential은 관리자가
@@ -165,6 +170,7 @@ capability superset이다.
 | Effective detail | `GET /admin/sources/{source_id}` | 현재 generation과 active metadata pointer를 구분한 secret-free projection |
 | Generation history | `GET /admin/sources/{source_id}/history` | 불변 generation을 내림차순으로 조회; lifecycle event audit은 별도 |
 | Mutation history | `GET /admin/sources/{source_id}/mutations` | Actor/change reference와 expected/resulting state의 secret-free chronology |
+| Replica convergence | `GET /admin/sources/{source_id}/replicas` | Ever-registered slot별 desired/applied drift와 DB-clock freshness; stale도 200 |
 | Receipt lookup | `GET /admin/mutations/{idempotency_key}` | Timeout 뒤 terminal success/rejection을 authoritative하게 조회 |
 | Stage + publish | `PUT /admin/sources/{source_id}` | Body의 `manifest`, `credential`을 분리하고 path ID 일치 검증 |
 | Credential rotation | `POST /admin/sources/{source_id}/credential` | Enabled/unpinned source에서 새 credential staging 후 generation 교체 |
@@ -287,9 +293,11 @@ file은 수정하지 않고 schema 변경마다 새 번호를 추가한다. 네 
 부여한다. LOGIN은 `INHERIT`, `NOSUPERUSER`, `NOCREATEDB`, `NOCREATEROLE`, `NOREPLICATION`,
 `NOBYPASSRLS`와 유한 connection limit를 사용한다. Metadata/source store pool이 각각 replica당
 최대 2개이므로 limit는 최소 `runtime replica 수 × 4`의 의도된 capacity와 운영 여유를
-명시적으로 산정한다. Runtime에는 `QUERY_MAN_SOURCE_MODE=managed`, 이 LOGIN의 TLS DSN과 source
-encryption key를 함께 설정한다. DSN/key 중 하나만 설정하거나 bootstrap mode와 함께 설정하면
-startup이 실패한다.
+명시적으로 산정한다. Runtime에는 `QUERY_MAN_SOURCE_MODE=managed`, 이 LOGIN의 TLS DSN, source
+encryption key와 `QUERY_MAN_REPLICA_ID`를 함께 설정한다. Replica ID는 1~80자의 lowercase stable
+slug이며 같은 deployment slot이 재시작할 때 재사용하고 동시에 실행되는 slot 사이에는 고유해야
+한다. DSN/key/ID 중 하나가 빠지거나 bootstrap mode와 Control 설정을 함께 사용하면 startup이
+실패한다. Bootstrap은 replica ID가 있어도 검증하지 않는다.
 
 정상 refresh는 immutable snapshot과 active pointer를 원자적으로 publish한다. Rollback한
 source는 pin되므로 이후 refresh가 active revision을 덮지 않으며, 검증 후 automatic publish를
@@ -302,6 +310,13 @@ Control-plane source 변경은 `QUERY_MAN_SOURCE_RELOAD_INTERVAL_MS` 주기로 �
 유지한다. Generation은 immutable profile 번호이고 rollback으로 낮아질 수 있으므로 poller는
 모든 pointer 전이에서 증가하는 `state_version`으로 순서를 판정한다. Older state와 같은
 version의 충돌 payload는 적용하지 않는다.
+
+Managed runtime은 실제 report cadence인
+`max(QUERY_MAN_SOURCE_RELOAD_INTERVAL_MS, 5000)`ms로 latest observation을 best-effort 보고한다.
+Operator는 replica endpoint에서 source별 desired/applied generation, state version, metadata
+revision과 freshness를 확인한다. 한 번 등록된 slot은 자동 삭제·retirement되지 않고 scale-down
+뒤 stale로 남으며, 아직 한 번도 시작하지 않은 planned slot은 deployment inventory에서 확인한다.
+Observation 실패는 registry, query, readiness나 mutation receipt를 바꾸지 않는다.
 
 ## L0 to L2 Promotion Runbook
 
@@ -322,7 +337,8 @@ version의 충돌 payload는 적용하지 않는다.
    반면 source profile의 execution budget과 revision-scoped policy 변경은 revision 재료이므로
    새 revision에서 verified query를 다시 실행·승인해야 한다.
 6. `/meta`와 MCP `get_context`의 `quality_level=L2`, 실제 query 결과, `/sources` visibility를
-   확인한다. 다른 replica에서도 reload interval 이후 같은 revision이 보이는지 확인한다.
+   확인한다. Replica endpoint에서 다른 replica도 report cadence 뒤 같은 generation/state/metadata
+   revision으로 `available`, `drift=[]`인지 확인한다.
 7. 문제가 있으면 마지막 정상 source generation으로 rollback한다. Rollback 대상의 encrypted
    credential, manifest, metadata와 현재 verified contract가 먼저 재검증되므로 실패한 복구가
    active pointer를 바꾸지 않는다. 원인 점검과 현재 source 재검증을 마친 뒤에만

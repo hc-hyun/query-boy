@@ -173,8 +173,9 @@ catalog와 query executor를 같은 순서의 두 `SourcePoolInvalidator`로 빠
 - Report payload는 operations의 별도 internal snapshot에서 만든다. Existing public
   `operations.snapshot()`, `/health`, `/ready`, `/admin/metrics`, source list/detail와 MCP projection에는
   field나 status를 추가하지 않는다.
-- Successful Control scan은 global `CONTROL_SCAN_FAILED`를 지우지만 source별 apply/probe failure를
-  지우지 않는다. Enabled apply는 old metadata observation을 먼저 지운 뒤 새
+- Successful Control scan만으로는 source별 apply/probe failure를 지우지 않는다. 이미 적용된 exact
+  record로 재수렴하면 obsolete validation/apply failure만 지우며 metadata probe failure는 실제
+  metadata 성공 전까지 보존한다. Enabled apply는 old metadata observation을 먼저 지운 뒤 새
   generation/state/enabled를 기록한다. Disabled apply는 applied generation/state/enabled=false만
   유지하고 metadata revision과 source health는 null로 보고한다.
 - Candidate staging처럼 `suppress_source_health_updates()`가 활성화된 흐름은 production replica의

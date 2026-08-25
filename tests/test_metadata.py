@@ -16,6 +16,7 @@ from query_man.models import (
     PreparedMetadata,
     SourceProfile,
 )
+from query_man.operations import operations
 from query_man.registry import SourceRegistry
 from query_man.relevance import RankedRelation, SelectionReason
 from query_man.revision import create_metadata_revision
@@ -506,9 +507,17 @@ async def test_scopes_wide_relation_columns_to_question_and_required_semantics()
 
 
 @pytest.mark.asyncio
-async def test_publishes_and_restores_active_metadata_across_service_restart() -> None:
+async def test_publishes_and_restores_active_metadata_across_service_restart(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     registry = load_test_registry()
     store = MemoryMetadataStore()
+    revisions: list[tuple[str, str | None]] = []
+    monkeypatch.setattr(
+        operations,
+        "set_replica_metadata_revision",
+        lambda source_id, revision: revisions.append((source_id, revision)),
+    )
     first_catalog = StaticCatalog(minimal_development_snapshot())
     first = MetadataService(registry, first_catalog, store=store)
     published = await first.get_published("development-issues")
@@ -524,6 +533,66 @@ async def test_publishes_and_restores_active_metadata_across_service_restart() -
     )
     restored = await restarted.get_published("development-issues")
     assert restored == published
+    assert revisions == [
+        ("development-issues", published.revision),
+        ("development-issues", restored.revision),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_metadata_revision_signal_clears_on_source_and_global_invalidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = load_test_registry()
+    revisions: list[tuple[str, str | None]] = []
+    monkeypatch.setattr(
+        operations,
+        "set_replica_metadata_revision",
+        lambda source_id, revision: revisions.append((source_id, revision)),
+    )
+    service = MetadataService(
+        registry,
+        StaticCatalog(minimal_development_snapshot()),
+    )
+    published = await service.get_published("development-issues")
+
+    revisions.clear()
+    service.invalidate("development-issues")
+    assert revisions == [("development-issues", None)]
+
+    restored = await service.get_published("development-issues")
+    assert restored == published
+    assert revisions[-1] == ("development-issues", published.revision)
+
+    revisions.clear()
+    service.invalidate()
+    assert set(revisions) == {
+        (source_id, None) for source_id in registry.source_ids()
+    }
+
+
+@pytest.mark.asyncio
+async def test_refresh_failure_does_not_clear_applied_metadata_revision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    revisions: list[tuple[str, str | None]] = []
+    monkeypatch.setattr(
+        operations,
+        "set_replica_metadata_revision",
+        lambda source_id, revision: revisions.append((source_id, revision)),
+    )
+    service = MetadataService(
+        load_test_registry(),
+        SequencedCatalog(minimal_development_snapshot()),
+        cache_ttl_ms=0,
+        now=lambda: 1_000,
+    )
+
+    fresh = await service.get_published("development-issues")
+    stale = await service.get_published("development-issues")
+
+    assert stale == fresh
+    assert revisions == [("development-issues", fresh.revision)]
 
 
 @pytest.mark.asyncio

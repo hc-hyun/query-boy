@@ -76,5 +76,5 @@ source generation publish도 허용하지 않는다.
   generation을 검증한 뒤 source별 catalog/query pool과 metadata cache를 교체한다.
 - 다른 endpoint로 전환하려면 별도 source ID와 새 verified contract를 사용해야 한다.
 - Owner/환경/DB migration provenance와 secret-free generation read API는 같은 immutable manifest를
-  재사용한다. Actor/reason/receipt audit, replica 상태와 규모·비용 observation은 ADR 0016의 후속
-  구현 범위다.
+  재사용한다. Actor/reason/receipt audit와 replica 상태는 ADR 0016의 `CTRL-05`/`CTRL-06`으로
+  구현됐고 규모·비용 observation은 같은 ADR의 후속 구현 범위다.

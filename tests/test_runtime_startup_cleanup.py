@@ -36,6 +36,7 @@ def _runtime(tmp_path: Path) -> RuntimeConfig:
         source_encryption_key=_SOURCE_KEY,
         source_reload_interval_ms=60_000,
         shutdown_grace_ms=30_000,
+        replica_id="startup-cleanup-runtime",
     )
 
 

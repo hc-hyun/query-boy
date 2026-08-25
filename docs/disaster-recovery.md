@@ -3,8 +3,9 @@
 ## Scope And Targets
 
 Control plane의 migration ledger, source profile generations, encrypted credentials, metadata
-snapshots, verified contracts와 immutable mutation receipts가 대상이다. Source business database
-backup은 각 source owner의 별도 정책을 따른다. Repository source/verified file은 local/CI
+snapshots, verified contracts, immutable mutation receipts와 runtime replica latest observation이
+대상이다. Replica table은 source authority가 아니라 ever-registered target과 latest operational
+projection을 복원한다. Source business database backup은 각 source owner의 별도 정책을 따른다. Repository source/verified file은 local/CI
 bootstrap fixture이며 managed production desired-state backup이나 recovery authority가 아니다.
 
 - 목표 RPO: control schema backup 주기 이하, production 권장 24시간 이내
@@ -30,6 +31,9 @@ bootstrap fixture이며 managed production desired-state backup이나 recovery a
 6. 적용된 filename/checksum과 최신 version을 change record에 남기고 두 번째 실행이 pending
    0건인지 확인한다. Migration은 immutable revision table의 update/delete trigger를 제거하지
    않는다.
+
+Migration 3의 schema-first rolling release와 application rollback 절차는
+[operations](operations.md#control-db-migration-and-environment-isolation)를 따른다.
 
 ## Backup
 
@@ -61,18 +65,21 @@ record/IaC로 복구한다.
    finite connection limit, TLS와 실제 SELECT/INSERT 권한 및 immutable table UPDATE 거부를
    확인한다.
 4. Migration ledger를 포함한 모든 control table row count, FK, immutable trigger와 실제
-   immutable UPDATE/DELETE 거부를 확인한다. Runtime writer가 receipt table에 SELECT/INSERT와
-   identity sequence USAGE만 갖고 UPDATE/DELETE/sequence mutation은 못 하는지도 실제 role로
-   검증한다.
+   immutable UPDATE/DELETE 거부를 확인한다. Runtime writer가 receipt table에는 SELECT/INSERT와
+   identity sequence USAGE만, replica observation 두 table에는 SELECT/INSERT/UPDATE만 갖고
+   DELETE/TRUNCATE는 못 하는지도 실제 role로 검증한다.
 5. `QUERY_MAN_SOURCE_MODE=managed`, 원래 `QUERY_MAN_SOURCE_ENCRYPTION_KEY`, 새 control-writer
-   DSN과 version 2 query/admin access policy를 runtime에 함께 주입한다. Bootstrap mode,
-   API-token/anonymous auth나 DSN/key 일부만으로 복구하지 않는다.
+   DSN, version 2 query/admin access policy와 deployment slot별 원래 `QUERY_MAN_REPLICA_ID`를 runtime에
+   함께 주입한다. Bootstrap mode, API-token/anonymous auth나 DSN/key/replica ID 일부만으로 복구하지
+   않는다. 같은 slot은 원래 ID를 재사용하고 동시에 실행되는 slot끼리 ID를 공유하지 않는다.
 6. Source/verified file에 의존하지 않는 상태로 runtime을 traffic 없이 시작해 admin health의
    active source/component 상태를 확인한다. Cold Control scan 실패 시 file fallback 없이
    readiness가 unavailable이어야 한다.
 7. 모든 active source의 `/meta`에서 revision/quality를 확인하고 guarded query와 verified
-   invariant를 실행한 뒤 traffic을 전환한다. Generation은 control DB/change record에서
-   별도로 대조한다.
+   invariant를 실행한다. 각 source의 replica endpoint에서 복구한 모든 expected slot이 새
+   incarnation으로 `available`, `drift=[]`인지 확인한 뒤 traffic을 전환한다. Generation은 control
+   DB/change record에서 별도로 대조한다. 복구하지 않은 과거 slot은 새 report가 없으면 기존
+   `fresh_until` 이후 stale로 남는 것이 현재 계약이다.
 8. Source credential이 별도로 rotation되었다면 restore generation을 활성화하지 말고 새
    credential을 staging/publish한다.
 
@@ -81,15 +88,15 @@ record/IaC로 복구한다.
 `./scripts/control-plane-drill.sh`는 기존 `query_man_restore_drill` DB가 있으면 덮어쓰지 않고
 중단한다. 임시 DB를 생성해 live control schema의 custom archive를 `--no-owner
 --no-privileges`로 restore하고 production과 같은 migration runner를 두 번 실행한다. Migration
-ledger를 포함한 7개 control table row count, 4개 FK, 4개 non-internal user trigger, 실제
-immutable history/receipt UPDATE·DELETE 거부와 writer group/receipt-sequence ACL을 확인한 뒤 임시
-DB를 삭제한다.
+ledger를 포함한 9개 control table row count, 8개 FK, 4개 non-internal user trigger, 실제
+immutable history/receipt UPDATE·DELETE 거부와 writer group/receipt-sequence 및 replica-table ACL을
+확인한 뒤 임시 DB를 삭제한다.
 Production data가 아닌 격리 fixture/복제본에서 분기별로 실행하고 결과를 change record에
 첨부한다.
 
 현재 자동 drill은 같은 cluster/current PostgreSQL에서의 archive restore, ledger checksum,
-current migration 2회 무오류, row count, FK/user-trigger 개수, immutable mutation 거부와 group
-ACL까지 증명한다. Trigger definition 전체, archive content hash, cross-host/version 또는 실제
+current migration 2회 무오류, row count, FK/user-trigger 개수, immutable mutation 거부와 group 및
+replica-table ACL까지 증명한다. Trigger definition 전체, archive content hash, cross-host/version 또는 실제
 N-1→N old-schema upgrade는 확인하지 않는다. Source business DB/global role, dedicated LOGIN
 생성·실제 인증, ciphertext decrypt, active generation/metadata의 의미 일치와 실제 source query는
 위 Restore 3~7단계에서 별도로 확인해야 한다. 이를 실행하지 않은 drill을 full service

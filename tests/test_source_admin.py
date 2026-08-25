@@ -988,6 +988,9 @@ async def test_failed_staging_does_not_pollute_production_health() -> None:
         )
         await admin.publish("third-source", _manifest(), "first-secret")
         assert operations.snapshot()["sources"] == {"third-source": "healthy"}
+        replica_before = operations.replica_runtime_snapshot()
+        assert replica_before.sources[0].applied_metadata_revision is not None
+        assert replica_before.sources[0].source_health == "healthy"
 
         incomplete = minimal_development_snapshot()
         incomplete = replace(incomplete, relations=incomplete.relations[:1])
@@ -997,6 +1000,7 @@ async def test_failed_staging_does_not_pollute_production_health() -> None:
 
         assert operations.snapshot()["sources"] == {"third-source": "healthy"}
         assert operations.public_status() == "ready"
+        assert operations.replica_runtime_snapshot() == replica_before
     finally:
         operations.reset()
 
@@ -1009,11 +1013,28 @@ async def test_dynamic_apply_and_deactivate_reconcile_source_inventory() -> None
 
         await admin.publish("third-source", _manifest(), "first-secret")
         assert operations.snapshot()["sources"] == {"third-source": "healthy"}
+        enabled = operations.replica_runtime_snapshot().sources[0]
+        assert (
+            enabled.applied_generation,
+            enabled.applied_state_version,
+            enabled.applied_enabled,
+            enabled.source_health,
+        ) == (1, 1, True, "healthy")
+        assert enabled.applied_metadata_revision is not None
 
         await admin.deactivate("third-source")
         operations.set_source_health("third-source", "unavailable")
         assert operations.snapshot()["sources"] == {}
         assert operations.public_status() == "unavailable"
+        disabled = operations.replica_runtime_snapshot().sources[0]
+        assert (
+            disabled.applied_generation,
+            disabled.applied_state_version,
+            disabled.applied_enabled,
+            disabled.applied_metadata_revision,
+            disabled.source_health,
+            disabled.reason_code,
+        ) == (1, 2, False, None, None, None)
 
         await admin.rollback("third-source", 1)
         assert operations.snapshot()["sources"] == {"third-source": "healthy"}
@@ -1042,6 +1063,9 @@ async def test_initial_reload_scan_failure_keeps_managed_registry_unavailable(
         assert snapshot["sources"] == {}
         assert snapshot["components"] == {"source_reload": "unavailable"}
         assert operations.public_status() == "unavailable"
+        replica = operations.replica_runtime_snapshot()
+        assert replica.reason_code == "CONTROL_SCAN_FAILED"
+        assert replica.sources == ()
     finally:
         operations.reset()
 
@@ -1071,11 +1095,15 @@ async def test_reload_scan_failure_degrades_but_keeps_usable_inventory(
             for metric in snapshot["metrics"]
         )
         assert operations.public_status() == "degraded"
+        failed_replica = operations.replica_runtime_snapshot()
+        assert failed_replica.reason_code == "CONTROL_SCAN_FAILED"
+        assert len(failed_replica.sources) == 1
 
         monkeypatch.setattr(store, "list_active", successful_scan)
         await reloader.sync()
         assert operations.snapshot()["components"] == {"source_reload": "healthy"}
         assert operations.public_status() == "ready"
+        assert operations.replica_runtime_snapshot().reason_code is None
     finally:
         operations.reset()
 
@@ -1115,11 +1143,57 @@ async def test_reload_apply_failure_keeps_component_degraded_until_clean_scan() 
             for metric in snapshot["metrics"]
         )
         assert operations.public_status() == "degraded"
+        replica = operations.replica_runtime_snapshot().sources[0]
+        assert replica.reason_code == "RUNTIME_VALIDATION_REJECTED"
+        applied_metadata_revision = replica.applied_metadata_revision
 
         store.active["third-source"] = current
         await reloader.sync()
         assert operations.snapshot()["components"] == {"source_reload": "healthy"}
         assert operations.public_status() == "ready"
+        converged = operations.replica_runtime_snapshot().sources[0]
+        assert converged.reason_code is None
+        assert converged.applied_metadata_revision == applied_metadata_revision
+    finally:
+        operations.reset()
+
+
+@pytest.mark.asyncio
+async def test_reload_apply_and_metadata_probe_failures_have_bounded_reasons(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operations.reset()
+    try:
+        admin, registry, store, invalidator, _cipher, reloader = _services()
+        await admin.publish("third-source", _manifest(), "first-secret")
+        current = store.active["third-source"]
+
+        async def fail_invalidation(_source_id: str) -> None:
+            raise RuntimeError("pool invalidation failed")
+
+        monkeypatch.setattr(invalidator, "invalidate", fail_invalidation)
+        store.active["third-source"] = replace(
+            current,
+            state_version=current.state_version + 1,
+        )
+        await reloader.sync()
+        failed_apply = operations.replica_runtime_snapshot().sources[0]
+        assert failed_apply.reason_code == "RUNTIME_APPLY_FAILED"
+        assert failed_apply.applied_state_version == current.state_version
+
+        monkeypatch.setattr(invalidator, "invalidate", RecordingInvalidator().invalidate)
+
+        async def fail_probe(_source_id: str) -> PreparedMetadata:
+            raise RuntimeError("metadata probe failed")
+
+        monkeypatch.setattr(reloader._metadata, "get_published", fail_probe)
+        await reloader.sync()
+        failed_probe = operations.replica_runtime_snapshot().sources[0]
+        assert failed_probe.applied_state_version == current.state_version + 1
+        assert failed_probe.applied_metadata_revision is None
+        assert failed_probe.source_health == "unavailable"
+        assert failed_probe.reason_code == "METADATA_PROBE_FAILED"
+        assert registry.get("third-source") is not None
     finally:
         operations.reset()
 

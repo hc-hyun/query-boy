@@ -169,8 +169,9 @@ Migration 3의 `runtime_replicas`와 `runtime_source_observations`는 replica �
 latest-only observation이다. Report는 DB clock으로 parent heartbeat와 source observation을 한
 transaction에서 갱신한다. Global reason은 `CONTROL_SCAN_FAILED`, source reason은
 `RUNTIME_VALIDATION_REJECTED|RUNTIME_APPLY_FAILED|METADATA_PROBE_FAILED`뿐이다. Global scan failure
-report는 source tuple과 함께 저장하지 않는다. Writer role은 두 table의 select/insert/update만
-가능하고 delete/truncate나 다른 authority table mutation 권한을 얻지 않는다.
+report는 source tuple과 함께 저장하지 않는다. 공용 Control writer role의 observation-table
+capability는 select/insert/update뿐이고 delete/truncate는 없다. 이 observation port를 통해 다른
+authority table을 mutation하지 않는다.
 
 Desired는 active source의 enabled/generation/state version과 active metadata revision에서 읽는다.
 Disabled desired에는 metadata revision이 없고 metadata/source-health drift를 계산하지 않는다.

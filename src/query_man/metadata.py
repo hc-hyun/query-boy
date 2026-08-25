@@ -163,6 +163,8 @@ class MetadataService:
                 self._source_epochs[current_id] = self._source_epochs.get(current_id, 0) + 1
             self._cache.clear()
             self._retrieval_indexes.clear()
+            for current_id in source_ids:
+                operations.set_replica_metadata_revision(current_id, None)
         else:
             self._source_epochs[source_id] = self._source_epochs.get(source_id, 0) + 1
             self._cache.pop(source_id, None)
@@ -171,6 +173,7 @@ class MetadataService:
                 for key, value in self._retrieval_indexes.items()
                 if key[0] != source_id
             }
+            operations.set_replica_metadata_revision(source_id, None)
 
     async def get_published(self, source_id: str) -> PreparedMetadata:
         source = self._registry.get(source_id)
@@ -344,6 +347,7 @@ class MetadataService:
             expires_at=loaded_at + self._cache_ttl_ms,
             next_refresh_at=loaded_at + self._cache_ttl_ms,
         )
+        operations.set_replica_metadata_revision(source_id, value.revision)
 
     def _require_quality(
         self,

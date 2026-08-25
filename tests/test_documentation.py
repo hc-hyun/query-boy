@@ -97,6 +97,12 @@ SOURCE_MUTATION_RECEIPT_AUDIT = (
     / "verification"
     / "2026-08-23-source-mutation-receipts.md"
 )
+RUNTIME_REPLICA_OBSERVATION_AUDIT = (
+    ROOT_DIRECTORY
+    / "docs"
+    / "verification"
+    / "2026-08-25-runtime-replica-observations.md"
+)
 EXPECTED_ID_COUNTS = {
     "BASE": 10,
     "DEC": 9,
@@ -114,7 +120,6 @@ EXPECTED_ID_COUNTS = {
     "MCPX": 8,
 }
 EXPECTED_OPEN_TODO_IDS = (
-    "CTRL-06",
     "CTRL-07",
     "CTRL-08",
     "CTRL-09",
@@ -147,6 +152,7 @@ EXPECTED_POST_BASELINE_COMPLETED_IDS = (
     "CTRL-03",
     "CTRL-04",
     "CTRL-05",
+    "CTRL-06",
     "SQLX-01",
     "QCORR-01",
     "MOD-01",
@@ -277,6 +283,9 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
     source_mutation_receipt_audit = SOURCE_MUTATION_RECEIPT_AUDIT.read_text(
         encoding="utf-8"
     )
+    runtime_replica_observation_audit = RUNTIME_REPLICA_OBSERVATION_AUDIT.read_text(
+        encoding="utf-8"
+    )
 
     assert "Status: Production ready" in roadmap
     assert "Status: Production ready" in architecture
@@ -292,6 +301,7 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
     assert "Status: Complete" in control_migration_audit
     assert "Status: Complete" in source_management_catalog_audit
     assert "Status: Complete" in source_mutation_receipt_audit
+    assert "Status: Complete" in runtime_replica_observation_audit
     assert REFACTORING_AUDIT.name in roadmap
     assert REFACTORING_AUDIT.name in architecture
     assert CONTAINER_AUDIT.name in roadmap
@@ -319,6 +329,9 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
     assert SOURCE_MANAGEMENT_CATALOG_AUDIT.name in source_management_plan
     assert SOURCE_MUTATION_RECEIPT_AUDIT.name in roadmap
     assert SOURCE_MUTATION_RECEIPT_AUDIT.name in source_management_plan
+    assert RUNTIME_REPLICA_OBSERVATION_AUDIT.name in roadmap
+    assert RUNTIME_REPLICA_OBSERVATION_AUDIT.name in architecture
+    assert RUNTIME_REPLICA_OBSERVATION_AUDIT.name in source_management_plan
     for prefix, count in EXPECTED_ID_COUNTS.items():
         audit = {
             "DEP": container_audit,
@@ -346,6 +359,9 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
     source_mutation_receipt_audit = SOURCE_MUTATION_RECEIPT_AUDIT.read_text(
         encoding="utf-8"
     )
+    runtime_replica_observation_audit = RUNTIME_REPLICA_OBSERVATION_AUDIT.read_text(
+        encoding="utf-8"
+    )
     matches = re.findall(r"^- \[([ x])\] `([A-Z]+)-(\d{2})`", todo, re.MULTILINE)
     ids = [f"{prefix}-{number}" for _checked, prefix, number in matches]
 
@@ -371,7 +387,7 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
     assert "## P0.5 — Module Contract Hardening" not in todo
     assert "offline composition `MOD-08`은 모두" in todo
     assert "Ledger의 `RTSAFE-01` 완료 및 `MOD-04`~`MOD-08`과 `CTRL-*` 완료" in todo
-    assert "`CTRL-06`~`CTRL-08`의 새 Control DB schema" in todo
+    assert "`CTRL-07`~`CTRL-08`의 새 Control DB schema" in todo
     assert "구현 전 정확한 계약 승인이 필요하다" in todo
     assert "`RTSAFE-*`, `MOD-*`" not in todo
 
@@ -386,6 +402,7 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
     assert "`CTRL-03`" in shared_access_audit
     assert "`CTRL-04`" in source_management_catalog_audit
     assert "`CTRL-05`" in source_mutation_receipt_audit
+    assert "`CTRL-06`" in runtime_replica_observation_audit
 
 
 def test_mutation_receipt_docs_preserve_terminal_and_secret_boundaries() -> None:
@@ -407,6 +424,42 @@ def test_mutation_receipt_docs_preserve_terminal_and_secret_boundaries() -> None
     assert "404를 실패" in operations
     assert "같은 transaction" in audit
     assert "question/SQL" in audit
+
+
+def test_runtime_replica_observation_docs_preserve_contract_boundaries() -> None:
+    readme = (ROOT_DIRECTORY / "README.md").read_text(encoding="utf-8")
+    environment_example = (ROOT_DIRECTORY / ".env.example").read_text(encoding="utf-8")
+    onboarding = (ROOT_DIRECTORY / "docs" / "source-onboarding.md").read_text(
+        encoding="utf-8"
+    )
+    operations = (ROOT_DIRECTORY / "docs" / "operations.md").read_text(
+        encoding="utf-8"
+    )
+    management = SOURCE_MANAGEMENT_PLAN.read_text(encoding="utf-8")
+    control_contract = (
+        ROOT_DIRECTORY / "docs" / "modules" / "control-plane" / "README.md"
+    ).read_text(encoding="utf-8")
+    delivery_contract = (
+        ROOT_DIRECTORY / "docs" / "modules" / "delivery" / "README.md"
+    ).read_text(encoding="utf-8")
+    audit = RUNTIME_REPLICA_OBSERVATION_AUDIT.read_text(encoding="utf-8")
+
+    for document in (readme, environment_example, onboarding, operations):
+        assert "QUERY_MAN_REPLICA_ID" in document
+    for document in (management, delivery_contract, audit):
+        assert "GET /admin/sources/{source_id}/replicas" in document
+    assert "observed_at + 3 * heartbeat_interval_ms" in control_contract
+    for reason in (
+        "NOT_OBSERVED",
+        "HEARTBEAT_EXPIRED",
+        "CONTROL_SCAN_FAILED",
+        "RUNTIME_VALIDATION_REJECTED",
+        "RUNTIME_APPLY_FAILED",
+        "METADATA_PROBE_FAILED",
+    ):
+        assert reason in audit
+    assert "question과 SQL" in audit
+    assert "data plane, readiness" in audit
 
 
 def test_initial_access_and_resource_tier_decision_stays_minimal() -> None:
