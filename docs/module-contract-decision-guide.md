@@ -572,7 +572,11 @@ accepted tenant isolation 위반이므로 완료 DBEDGE로 흡수하지 않고
 분리했다. Recursive strict policy identity, lock-first query admission, snapshot/revision v2와
 cutover/rollback의 implementation-ready `RLS-01-A`는 후속 5-database probe에서 확인한 exact policy
 normal/shared dependency, client-encoding name collision 및 RLS-only PostgreSQL-18/UTF8 admission까지 보완해
-[proposed ADR 0024](decisions/0024-rls-policy-drift-attestation.md)에 작성했지만 exact 사용자 승인은
+[proposed ADR 0024](decisions/0024-rls-policy-drift-attestation.md)에 작성했다. 후속 implementation-readiness
+audit의 deterministic/transient error secrecy, history/offline/live serving 분리와 모든 managed source의
+exact-profile Query-first Query/Catalog drain/cache-before-registry lifecycle도 같은 exact 범위에 포함했다.
+Non-RLS active query가 transition 때 unavailable로 정리될 수 있지만 RLS UTF8/graph/v2 조건을 non-RLS로
+넓히지는 않는다. 이 제안은 exact 사용자 승인이
 아직 없어 현재 계약이나 구현이 아니다. Reader TimeZone/canonical hash 변경은 별도 승인된
 `TIME-01`과 `TIME-02`에서
 결정·구현했고 완료 이력을 roadmap ledger로 옮겼다. 후속 database corner에서 발견한

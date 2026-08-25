@@ -161,7 +161,27 @@ deactivate/unroute한 채 non-RLS만 제공한다. V2는 RLS pool startup client
 source admission을 요구한다. Non-UTF8 RLS source는 자동 migration하지 않고 unroute/deactivate하며
 source별 DB-owner data migration/re-onboarding을 별도 승인받는다. Startup 변경에 따른 public
 value/hash/rejection은 current/rollback verified 전량에서 비교하고 설명되지 않은 차이면 route하지
-않는다. Non-RLS/all-source lossless encoding 전환은 아래 ADR 0020 v3 path에 속한다.
+않는다. Runtime은 proposed exact-profile transition에서 Guarded Query invalidator를 첫 adapter로, Catalog를
+두 번째로 조립한다. Query와 Catalog active lease를 각 최대 1초인 fixed three-phase cleanup으로 drain한 뒤 cache와
+registry를 바꾼다. Managed routed profile은 registry에서만 얻고 provider fence는 exact profile을
+요구하므로 post-fence/pre-commit partial failure/disable에서는 해당 managed source의 old/new route가 모두
+닫힌다. Non-RLS/all-source lossless
+encoding 전환은 아래 ADR 0020 v3 path에 속한다. 다만 공용 exact-profile lifecycle 자체는 모든 managed
+source transition에 적용되며 non-RLS active query도 transition 때 unavailable로 정리될 수 있다.
+Pre-fence candidate validation failure는 current route를 유지한다. Registry upsert/remove의 successful
+return이 단일 commit point이고 applied-generation/status bookkeeping은 post-commit reconciliation이다.
+Commit 뒤 bookkeeping 또는 metadata probe failure는 only-new/removed projection을 유지하고 old profile로
+되돌리지 않으며 health/apply status를 unavailable/failed로 기록한다. External probe cancellation도
+projection을 되돌리지 않지만 fabricated health/apply failure 없이 재전파한다.
+Transition이 cancel한 resource observation은 success sample 없이 current generation-fenced
+`RESOURCE_READ_FAILED`만 best-effort report하고 external observation task cancellation은 failure report 없이
+재전파한다.
+동시에 발생하면 Query/Catalog lifecycle lock에 first-recorded된 external 또는 transition cancellation reason이
+승리하며 later reason은 public result/report를 덮어쓰지 않는다.
+Ordinary active RLS observation의 PostgreSQL-version/UTF8/driver-codec invariant, completed common reader
+mismatch, fixed-setting SQLSTATE `22023`/`42501` 또는 operational setting/probe/read failure도 같은 exact
+`RESOURCE_READ_FAILED`이고 raw error를 report하지 않는다.
+Resource observation raw exception은 `exc_info`, metric 또는 audit에 넣지 않고 fixed reason만 report한다.
 
 ADR 0020 exact A도 아직 승인 대기 제안이다. Encoding/source-semantics release는 RLS v2의 field
 shape/semantics를 누적한 v3를 사용하되 RLS attestation은 current live graph에서 새로 계산하고 source별 pre-ENC v1/v2

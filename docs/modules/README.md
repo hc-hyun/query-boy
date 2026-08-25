@@ -31,14 +31,29 @@ trust boundary가 다른 module로 넘어가면 필요한 계약·코드·테스
 ## 승인 대기 중인 공통 계약
 
 [Proposed ADR 0024](../decisions/0024-rls-policy-drift-attestation.md)의 `RLS-01-A`는 Metadata가
-recursive RLS identity, exact policy normal/shared dependency와 snapshot/revision v2를 제공하고 Source
+recursive RLS identity, exact policy normal/shared dependency, deterministic validation marker,
+history-decode/current-serving gate와 snapshot/revision v2를 제공하고 Source
 Catalog가 RLS pool startup client UTF8 및 no-SQL PostgreSQL-18/server/client UTF8 connection policy를
 제공한다. Guarded Query가 두 provider를 lock-first transaction에서 소비하며 Control Plane, Delivery,
 Runtime과 Assurance가 cutover/error/acceptance를 담당하는 정확한 제안이다. 이 encoding restriction은
 client-encoding별 same Python identifier가 다른
-relation을 resolve하는 것을 막는 RLS-only identity 경계다. Non-RLS pool과 broader public result/
-source-semantics encoding은 ADR 0020에 남긴다. 아직 사용자에게 exact 범위가 승인되지 않았고 현재
+relation을 resolve하는 것을 막는 RLS-only identity 경계다. Non-RLS pool의 startup encoding/session/result
+의미와 broader public result/source-semantics encoding은 ADR 0020에 남긴다. 다만 아래 exact-profile
+lifecycle은 모든 managed source transition에 적용한다. 아직 사용자에게 exact 범위가 승인되지 않았고 현재
 module contract나 제품 구현이 아니다. 일반적인 plan/진행 승인은 이 경계를 열지 않는다.
+
+같은 RLS target은 기존 immutable `SourceProfile` exact equality를 별도 token 없이 runtime execution
+identity로 재사용한다. Control invalidator가 Query를 먼저 fence/drain하고 Catalog active
+load/observation lease까지 drain한 뒤 Metadata cache, registry 순으로 전환한다. Managed routed profile은
+registry에서만 얻고 provider exact-profile fence를 통과해야 하므로 retired profile의 pool 재생성과
+partial-failure route가 닫힌다. 각 최대 1초인 fixed three-phase cleanup도 이 lifecycle의 일부이며 ADR 0024 exact
+승인 범위이지 current invalidate 계약이 아니다. 이 공용 managed lifecycle은 non-RLS transition에도
+적용하지만 PostgreSQL-18/UTF8, graph와 snapshot v2 조건은 RLS-only다.
+Registry upsert/remove의 successful return이 단일 transition commit point다. Applied-generation/status
+bookkeeping은 post-commit reconciliation이다. Pre-fence candidate failure는 current route를 유지하고,
+Query fence 뒤 commit 전 failure만 old/new route를 닫는다. Commit 뒤 bookkeeping/probe failure는
+only-new/removed projection과 unavailable/failed status를 유지하고 external probe cancellation은 fabricated
+failure 없이 재전파한다.
 
 [Proposed ADR 0020](../decisions/0020-lossless-interval-and-json-numeric-encoding.md)의 `ENC-01-A`는 Guarded
 Query result loader/encoder와 SQL/result policy, Source Catalog reader settings, Metadata

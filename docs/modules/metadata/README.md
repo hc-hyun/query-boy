@@ -156,7 +156,8 @@ view/table/policy grammar를 검증해 relation별 `rls_attestation_v1`, snapsho
 공용 provider를 소유한다. `_RETURN` dependency와 policy별 exact table/tenant-column `pg_depend`,
 database-scoped PUBLIC-empty/exact-reader `pg_shdepend` admission도 Metadata 소유다. Metadata는 Source
 Catalog의 no-SQL RLS connection policy를 소비한다. 이 policy는 PostgreSQL 18, server/client UTF8과
-psycopg UTF-8 codec을 checkout 직후 및 live provider 직전에 요구한다. Metadata는 그 admission 뒤
+psycopg UTF-8 codec을 모든 checkout lease 직후 application `BEGIN`/SQL 전과 live attestation 직전에 요구한다. Resource
+observation은 pre-BEGIN check/startup pin만 소비하고 graph lock/attestation은 추가하지 않는다. Metadata는 그 admission 뒤
 graph text를 exact `str`만 strict
 UTF-8 sort/hash/bound/parser/JSON에 사용하고 bytes/다른 type은 candidate/refresh/live query에서
 no-stale로 닫아 공개하지 않는다. 이는 RLS source identity에 한정되며 non-RLS/result/source-semantics를
@@ -165,6 +166,48 @@ private resolved-object SQL을 import하지 않고 public `validate_sql`/`SQL_PO
 Pre-discovery/authoritative checkout은 existing metadata statement budget에서 derive한 fixed outer phase
 deadline과 bounded cancel/rollback/discard cleanup을 각각 적용한다. 현재 snapshot/revision 재료나
 lifecycle을 이미 바꾼 설명이 아니다.
+
+No-SQL connection invariant mismatch, completed common reader-session identity/policy mismatch와
+fixed-setting SQLSTATE `22023`/`42501`만 cause/context-free safe `ReaderSessionPolicyError`로 받는다. Candidate
+검증은 validation 400, active Metadata는 details 없는 `METADATA_UNAVAILABLE`, resource observation은 exact
+`RESOURCE_READ_FAILED`로 소비한다. 그 밖의 timeout/transport/driver failure는 marker로 감싸지 않고 existing
+consumer error를 따른다. Active Metadata timeout/transport/driver는 `METADATA_UNAVAILABLE`, resource
+observation timeout/transport/driver는 `RESOURCE_READ_FAILED`이며 external cancellation은 재전파한다.
+Resource observation의 pre-BEGIN invariant mismatch는 rollback 없이 close/discard하고, transaction
+setting/probe/read failure는 bounded rollback/reset 뒤 recovery 실패/broken connection만 close/discard한다.
+Marker-free raw transient는 provider/helper에서 log하지 않는다. Metadata consumer는 분류와 cleanup 뒤 raw
+exception을 버리고 except block 밖에서 direct cause/context 없는 existing `MetadataUnavailableError`만
+raise한다. Resource observation은 exception/`exc_info` 없이 fixed reason만 report하며 external cancellation은
+log/wrapping 없이 재전파한다.
+
+같은 target에서 Metadata-owned public `RlsAttestationValidationError`는 deterministic RLS
+zero-root/root-count와 graph/policy/dependency/text/type/bound/canonical violation만 표시하는
+empty-args/no-attribute marker다. Marker와 deterministic `StoredMetadataInvalidError`는 hidden original의
+`__cause__`/`__context__`를 모두 `None`으로 만들고 ordinary traceback/log에 input value를 render하지 않는다. Pre-discovery/authoritative root-list add/drop/rename mismatch, timeout, lock
+conflict, transport/driver failure와 cancellation을 감싸지 않는다. MetadataService는 active refresh를
+details 없는 no-stale `METADATA_UNAVAILABLE`로 닫고 Control staging은 이 public cause type만 소비해
+`SOURCE_VALIDATION_FAILED`를 선택한다. Control은 private catalog error나 message를 import/parse하지 않는다.
+Private history decoder는 v1/v2 original shape/revision을 보존하지만 MetadataStore의 모든 public
+`get_active|get_revision|publish|activate` input/return/activation과 MetadataService store/cache/catalog 경계는 non-RLS v1,
+RLS current-policy v2 serving compatibility를 강제한다. 별도 public history API는 만들지 않으며 cold-start
+SourceReloader도 RLS v1/old-policy v2를 노출하지 않는다.
+
+RuntimeCatalogProvider의 proposed `invalidate(source_id, *, next_source)`는 exact immutable profile을
+admission identity로 사용한다. Pool은 source ID만으로 재사용하지 않고 load와 resource observation이
+checkout 전/return 전 fence를 확인한다. Resource observation은 RLS graph attestation을 하지 않지만
+retired/transition profile fence를 우회하거나 old pool을 재생성할 수 없다. Invalidation failure는 new
+profile을 publish하지 않고 Catalog result/observation도 폐기한다. Catalog invalidator는 active
+load/resource-observation connection을 `cancel_safe(1s)`, inflight wait 1초, pending cancel/wait 1초의 fixed
+phase로 rollback/discard하고, successful return 전에 old checked-out connection을 0으로 만든다. 남은
+task/lease가 있으면 tombstone을 유지한 채 실패한다. 이 managed Catalog transition lifecycle은 non-RLS
+source에도 적용하지만 RLS graph/UTF8/snapshot v2 admission은 적용하지 않는다.
+Transition-cancelled resource observation은 Metadata error로 바꾸지 않고 Runtime의 existing
+`RESOURCE_READ_FAILED` report 경계로 넘기며 external task cancellation은 그대로 재전파한다.
+두 cancellation이 경합하면 active registration과 같은 lock에서 first-recorded된 external 또는 transition
+owner가 승리하고 later reason이 repropagation/failure-report 결과를 덮어쓰지 않는다.
+Ordinary active RLS observation의 no-SQL connection invariant, completed common reader mismatch,
+fixed-setting SQLSTATE `22023`/`42501` 또는 operational setting/probe/read failure도 success 없이 같은 exact
+reason으로 report한다.
 
 ADR 0020의 exact A 제안이 승인되면 Metadata가 bounded source-semantics catalog probe,
 canonical fingerprint, declared domain column/direct custom type pre-erasure admission, strict snapshot codec

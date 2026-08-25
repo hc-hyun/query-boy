@@ -192,14 +192,39 @@ check를 구현하지 않는다. 새 timeout knob 없이
 승인 전에는 이를 current budget 의미로 적용하지 않으며,
 production RLS source가 안전하다고 주장하지 않는다.
 
+같은 RLS-only target에서 no-SQL connection invariant mismatch, completed common reader probe mismatch와
+fixed setting SQLSTATE `22023`/`42501`만 cause/context-free safe `ReaderSessionPolicyError`다. 그 밖의
+setting/probe timeout, cancellation, connection/transport와 driver failure는 이 error로 감싸지 않아
+consumer의 transient/cancellation 분류를 보존한다. Candidate/active Metadata/query/resource observation은
+각각 validation 400/`METADATA_UNAVAILABLE`/`QUERY_UNAVAILABLE`/`RESOURCE_READ_FAILED`로 소비한다. Non-RLS
+Catalog의 current common setting/error classification은 바꾸지 않는다.
+Marker가 아닌 operational failure는 candidate `SOURCE_CONTROL_UNAVAILABLE`, active Metadata
+`METADATA_UNAVAILABLE`, query timeout `QUERY_TIMEOUT`, query transport/driver `QUERY_UNAVAILABLE`, resource
+observation `RESOURCE_READ_FAILED`이며 external cancellation은 재전파한다.
+Provider/helper는 marker-free raw operational exception을 `exc_info` 또는 값/args와 함께 기록하지 않고
+consumer가 분류할 때까지 내부로 전달한다. Public boundary의 cause/context-free safe outer mapping은 각
+consumer가 소유한다.
+
 같은 proposal에서 Source Catalog은 RLS-only public `RLS_READER_CLIENT_ENCODING="UTF8"`과 SQL을
 실행하지 않는 `require_rls_reader_connection_policy`를 소유한다. Metadata Catalog와 Guarded Query
-pool은 RLS connection startup에 이 constant를 쓰고 checkout 직후/reader probe 뒤 verifier로
-PostgreSQL 18, server/client UTF8과 psycopg UTF-8 codec을 확인한다. Non-RLS pool, manifest와 common
+pool은 RLS connection startup에 이 constant를 쓰고 checkout lease 직후 application `BEGIN`/SQL 전에 verifier로
+PostgreSQL 18, server/client UTF8과 psycopg UTF-8 codec을 확인한다. Attestation/query transaction은
+reader probe 뒤에도 재확인한다. Existing resource observation은 pre-BEGIN check만 소비하고 graph
+lock/attestation을 추가하지 않는다. Caller는 source mode를 먼저 확인해 non-RLS provider path에서 verifier를
+호출하지 않는다. Non-RLS pool, manifest와 common
 transaction setting은 바꾸지 않는다. Metadata는 exact policy `pg_depend`/`pg_shdepend`와 str-only
 graph admission을 소유한다. RLS startup pin 때문에 prior non-UTF8 client 대비 public value/hash가
 달라질 수 있으므로 current/rollback verified 전량을 재실행하지만 loader/response shape와 broader
 all-source/result semantics는 별도 ADR 0020 `ENC-01` 범위다.
+
+모든 managed source generation/state/disable transition은 별도 public token을 추가하지 않고 이 module의
+existing immutable `SourceProfile` exact equality를 Catalog/Query execution identity로 재사용한다. Profile은
+password를 포함하므로 비교/보관만 하고 repr, exception, log, audit와 metric에 넣지 않는다. 이 공용
+lifecycle이 PostgreSQL-18/UTF8, graph와 snapshot v2를 non-RLS source에 적용한다는 뜻은 아니다.
+Password canary는 fence mismatch, drain failure와 tombstone retry에서도 어떤 rendered/structured
+surface에도 나타나지 않아야 한다.
+Control-owned invalidator와 runtime fence 의미는 소비 module 계약이며 Source Catalog가 pool/drain lifecycle을
+구현하지 않는다.
 
 ## 소비 계약
 

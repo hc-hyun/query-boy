@@ -127,6 +127,27 @@ target이다. 기존 gateway trusted-tenant
 deny audit와 public SQL fingerprint audit/redaction 계약은 유지한다. Exact 승인 전에는 현재 error producer나
 HTTP/MCP rendering 계약을 바꾸지 않는다.
 
+같은 proposed RLS target에서 candidate PostgreSQL-version/UTF8/driver-codec invariant 또는 common
+reader-session identity/policy mismatch,
+deterministic zero-root/root-count/graph marker와 secret-free snapshot codec type은
+`SOURCE_VALIDATION_FAILED`이다. Fixed-setting SQLSTATE `22023`/`42501`도 이 validation이고, candidate
+`55P03`/deadline/transport/other-driver operational failure는 existing
+`SOURCE_CONTROL_UNAVAILABLE`이다. Pre-discovery/authoritative root-list add/drop/rename race도 marker 없는
+`SOURCE_CONTROL_UNAVAILABLE`이다. Staging task cancellation은 fabricated 400/503 response로 바꾸지 않고
+재전파한다. 모든 managed source transition의 active query는 non-RLS를 포함해 details 없는 existing
+`QUERY_UNAVAILABLE`로 끝날 수 있지만 새 wire/error code는 없다.
+같은 no-SQL invariant/completed mismatch/fixed-setting SQLSTATE가 active Metadata에서 발생하면
+`METADATA_UNAVAILABLE`, query에서 발생하면 `QUERY_UNAVAILABLE`, resource observation에서 발생하면 exact
+`RESOURCE_READ_FAILED`이며 Delivery는 이 consumer별 결과를 candidate 400으로 재분류하지 않는다.
+Operational timeout/transport/driver도 candidate `SOURCE_CONTROL_UNAVAILABLE`, active Metadata
+`METADATA_UNAVAILABLE`, query timeout `QUERY_TIMEOUT`, query transport/driver `QUERY_UNAVAILABLE`, resource
+observation `RESOURCE_READ_FAILED`의 existing public 결과를 보존하고 external cancellation을 응답으로 만들지 않는다.
+RLS marker-free transient의 HTTP/MCP outer error는 direct cause/context 없는 existing safe AppError여야 한다.
+AppError/MCP ordinary logging에는 generic outer error만 남고 raw PostgreSQL/driver `str/repr/args/traceback`과
+hidden source canary가 없어야 한다. Resource observation reason에는 exception을 붙이지 않고 external
+cancellation은 log/response로 만들지 않는다.
+Non-RLS candidate reader-setting error mapping은 현재 의미를 유지한다.
+
 [Proposed ADR 0020](../../decisions/0020-lossless-interval-and-json-numeric-encoding.md)의 `ENC-01-A`가
 승인되면 Delivery는 Guarded Query가 만든 lossless interval/time/JSON canonical row와 strict result-OID
 거부 결과를 그대로 HTTP/MCP에 전달하고 byte/truncation 계산 및 Assurance/Control verified result hash가

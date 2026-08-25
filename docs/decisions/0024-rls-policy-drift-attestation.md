@@ -268,15 +268,21 @@ def require_rls_reader_connection_policy(
 ) -> None: ...
 ```
 
-함수는 RLS source 전용이며 SQL을 실행하거나 setting/lifecycle을 바꾸지 않는다. Source가 RLS가 아니거나
-libpq ParameterStatus/connection info의 `180000 <= server_version < 190000`,
+함수는 RLS source 전용이며 SQL을 실행하거나 setting/lifecycle을 바꾸지 않는다. Caller는 source mode를
+먼저 확인하고 non-RLS source에는 이 verifier를 호출하지 않는다. Non-RLS provider path의 invocation count는
+0이어야 하며 기존 common setting/error mapping을 보존한다. RLS source의 libpq ParameterStatus/connection
+info에서 `180000 <= server_version < 190000`,
 `server_encoding=UTF8`, `client_encoding=UTF8`과 psycopg active codec `utf-8` 중 하나라도 다르면 existing
-`ReaderSessionPolicyError`를 낸다. Connection을 연 직후 pre-discovery가 relation을 읽기 전과
-authoritative/query checkout이 `BEGIN`에 들어가기 전에 caller가 실행한다. Root lock과 existing
-settings/common reader probe 뒤 `attest_rls_roots`가 live graph를 읽기 직전에도 같은 connection에서
-다시 실행한다. Metadata는 이 connection policy를 복제하지 않고 strict graph text/fingerprint만
-소유한다. Pre-`BEGIN` mismatch는 rollback 없이 connection을 close/discard하고 pool에 반환하지 않는다.
-Transaction 안의 recheck mismatch는 bounded rollback 뒤 connection을 close/discard한다.
+`ReaderSessionPolicyError`를 낸다. Metadata pre-discovery/authoritative/resource-observation과 Guarded Query를
+포함한 모든 RLS Catalog/Query pool checkout에서 caller가 lease를 받은 직후 application `BEGIN`과 any
+application SQL보다 먼저 실행한다.
+Root lock과 existing settings/common reader probe 뒤 `attest_rls_roots`가 live graph를 읽기 직전에도 같은
+connection에서 다시 실행한다. Resource observation은 graph text나 tenant row를 읽어 snapshot/revision을
+만들지 않는 existing numeric capability이므로 pre-`BEGIN` check와 startup pin만 적용하고 relation lock,
+attestation과 post-settings recheck를 추가하지 않는다. Metadata는 이 connection policy를 복제하지 않고
+strict graph text/fingerprint만 소유한다. Pre-`BEGIN` mismatch는 rollback 없이 connection을
+close/discard하고 pool에 반환하지 않는다. Transaction 안의 recheck mismatch는 bounded rollback 뒤
+connection을 close/discard한다.
 Connection-startup parameter는 transaction 안의 settings statement가 아니므로 `BEGIN` 뒤 lock-first와
 `TimeZone=UTC` first-settings 순서를 바꾸지 않는다.
 
@@ -410,9 +416,13 @@ attestation version, root identity, `view_sql_policy_revision`과 최종 attesta
 
 ### 4. Python and persisted snapshot v2 contract
 
-Metadata가 다음 immutable Python value를 제공한다.
+Metadata가 다음 immutable Python value를 제공한다. Runtime transition은 existing immutable
+`SourceProfile`의 exact equality를 재사용하며 별도 token type을 만들지 않는다.
 
 ```python
+class RlsAttestationValidationError(ValueError):
+    pass
+
 @dataclass(frozen=True)
 class RlsPolicyAttestation:
     version: Literal[1]
@@ -436,6 +446,24 @@ class CatalogSnapshot:
     relations: tuple[CatalogRelation, ...] = ()
     snapshot_contract_version: Literal[1, 2] = 1
 ```
+
+`RlsAttestationValidationError`는 Metadata-owned public marker이며 항상 `args == ()`,
+`__cause__ is None`, `__context__ is None`이고 추가 attribute가 없다. Ordinary traceback/log는 hidden
+input value를 render하지 않는다.
+Metadata RLS admission provider의 deterministic zero-root/root-count와
+graph/policy/dependency/text/type/bound/canonical violation만 이 type으로 낸다. Pre-discovery와 authoritative
+root list의 mismatch/rename/drop, `55P03`, timeout, transport/driver failure와 task cancellation은 이
+marker로 감싸지 않는다. MetadataService는 active
+refresh에서 이 marker를 details 없는 `MetadataUnavailableError`의 cause로 보존하고 no-stale로 닫는다.
+Control staging만 cause type을 검사해 existing `SOURCE_VALIDATION_FAILED`를 고르며 private
+`_CatalogValidationError`, exception message 또는 hidden graph value를 import/parse하지 않는다. Strict
+snapshot codec/offline serving-compatibility가 deterministic document/Pydantic validation failure를
+`StoredMetadataInvalidError`로 변환할 때는 outer error의 `__cause__`와 `__context__`를 모두 `None`으로
+만들고 input repr을 제거해 generic secret-free message만 남긴다. 단순 `raise ... from None`의 rendered
+suppression만으로는 충분하지 않다. PostgreSQL I/O, connection/transport/driver operational failure와
+task cancellation은 이 error로 변환하지 않고 각각 transient 503/cancellation 경로를 보존한다. Ordinary
+logger는 이 두 deterministic error의 hidden cause/context chain, fingerprint와 raw payload를 render하지
+않는다.
 
 `RlsQueryAttestation.roots`는 unique `(root_schema, root_relation)` UTF-8 C-order tuple이고 각 descriptor의
 version, SQL policy revision과 hash shape가 valid해야 한다. Empty tuple은 relationless RLS query에만
@@ -485,8 +513,8 @@ V2의 모든 relation은 exact root identity와 일치하는 attestation이 필�
 version, invalid hash, relation-attestation identity mismatch와 mixed attested/unattested relation은
 invalid다. Codec/history validation은 persisted `view_sql_policy_revision`이 well-formed이고 fingerprint
 material에 들어간 version-specific byte invariant만 확인한다. Historical v2를 current
-`SQL_POLICY_REVISION`과 같다고 다시 쓰거나 그 불일치만으로 decode 실패시키지 않는다. Fresh builder와
-serving validation은 attestation의 `view_sql_policy_revision`, live fingerprint material과 current
+`SQL_POLICY_REVISION`과 같다고 다시 쓰거나 그 불일치만으로 history decode를 실패시키지 않는다. Fresh builder와
+live serving attestation은 attestation의 `view_sql_policy_revision`, live fingerprint material과 current
 `SQL_POLICY_REVISION`이 모두 일치해야 하고 policy revision이 바뀌면 live graph에서 새 v2
 snapshot/revision을 재발행한다. Decoder는 v1/v2 history를 읽되 다음 serving policy를 분리한다.
 
@@ -495,6 +523,16 @@ snapshot/revision을 재발행한다. Decoder는 v1/v2 history를 읽되 다음 
   `METADATA_UNAVAILABLE`다.
 - V1 row를 update/delete하거나 v2로 자동 변환하지 않는다. Fresh live graph를 검증해 새 immutable v2
   row와 revision을 append한다.
+
+MetadataStore의 private history decoder는 strict v1/v2 shape와 해당 version의 original revision bytes만
+검증하고 source mode나 current `SQL_POLICY_REVISION`을 덮어쓰지 않는다. 별도 public history method는
+추가하지 않는다. 반대로 runtime serving path인 `get_active`, `get_revision`, `publish`, `activate`의 모든
+input/return/activation과 MetadataService의 store/cache/catalog 경계는 하나의 Metadata-internal offline
+serving-compatibility check를 통과해야 한다. 이 offline check는 non-RLS v1 또는 RLS v2, current
+policy/descriptor identity와 revision bytes를 검증하지만 database의 현재 live fingerprint가 같다고
+주장하지 않는다. Live equality는 fresh Metadata attestation과 every RLS query transaction만 증명한다. 따라서
+SourceReloader cold start가 existing `get_revision`을 호출해도 RLS v1이나 old-policy v2를 active profile로
+노출하지 않는다. Raw immutable history와 decoder golden은 보존한다.
 
 `create_metadata_revision()`은 snapshot version으로 dispatch한다. V1 builder/canonicalizer와 golden은
 동결한다. V2는 source/budget/semantic/relation material에 `snapshot_contract_version=2`와 relation별
@@ -533,8 +571,8 @@ transaction을 분리한다. 두 조회는 exact same publishable-root predicate
 view, schema `USAGE`, table-level `SELECT`, 그리고 `attnum>0`, non-dropped, column `SELECT`인 visible
 column이 하나 이상인지를 사용한다. 이 predicate와 ordering은 한 Metadata-owned SQL/capability를
 재사용하고 복제하지 않는다. Root count는 source budget과 fixed attestation bound를 모두 적용한
-`bound+1`로 읽어 초과 시 lock SQL을 만들기 전에 거부한다. Zero root도 `LOCK TABLE` empty statement를
-만들지 않고 existing `No selectable relations` validation failure로 거부한다.
+`bound+1`로 읽어 초과 시 lock SQL을 만들기 전에 empty-args `RlsAttestationValidationError`로 거부한다.
+Zero root도 `LOCK TABLE` empty statement를 만들지 않고 같은 deterministic marker로 거부한다.
 
 두 Metadata phase는 각각 별도 pool checkout/transaction이고 다음 derived outer deadline을 사용한다.
 새 manifest/budget field는 추가하지 않는다.
@@ -552,6 +590,14 @@ Deadline expiry는 in-flight operation을 cancel하고 connection을 rollback/re
 1,000ms 안에 끝나지 않으면 connection을 close/discard해 pool에 반환하지 않는다. External task
 cancellation은 같은 cleanup 뒤 그대로 전파하고 Metadata failure로 삼키지 않는다. Active RLS refresh의
 phase timeout은 아래 no-stale `METADATA_UNAVAILABLE`이고 partial root/snapshot을 publish하지 않는다.
+
+이 세분화는 RLS Catalog/Query path에만 적용한다. 위 no-SQL connection-info invariant mismatch, common
+reader-session probe가 정상 row를 반환했지만 identity/policy boolean이 false인 경우, fixed setting이
+PostgreSQL SQLSTATE `22023`(invalid parameter value)/`42501`(insufficient privilege)로 거부된 경우만 safe
+`ReaderSessionPolicyError` deterministic mismatch다. 이 public error도 original cause/context를 보존하지
+않는다. 그 밖의 setting/probe timeout, cancellation, connection/transport와 driver failure는
+`ReaderSessionPolicyError`로 감싸지 않고 caller의 transient/cancellation 분류를 보존한다. Non-RLS
+Catalog의 current common setting/error classification은 이 결정에서 바꾸지 않는다.
 
 ```text
 RLS pool connection startup: client_encoding=UTF8
@@ -575,9 +621,13 @@ authoritative checkout
   -> commit
 ```
 
-Missing/added/renamed root, lock conflict와 any validation failure는 partial snapshot 없이 rollback한다.
-Identifier는 structured schema/name에서 `psycopg.sql.Identifier`로만 조립한다. Metadata가 hidden graph
-SQL과 canonical provider를 소유하고 Source Catalog 또는 Guarded Query에 복제하지 않는다.
+Pre-discovery와 authoritative list의 missing/added/renamed mismatch, lock 전 drop/rename으로 인한 undefined
+root와 lock conflict는 concurrent DDL/privilege race일 수 있으므로 deterministic marker나 public
+`contract_violations`로 바꾸지 않는다. Control candidate에서는 existing `SOURCE_CONTROL_UNAVAILABLE`,
+active refresh에서는 no-stale `METADATA_UNAVAILABLE`이며 partial snapshot 없이 rollback한다. 동일한
+root set에서 발견한 deterministic graph/policy violation만 empty-args marker를 사용한다. Identifier는
+structured schema/name에서 `psycopg.sql.Identifier`로만 조립한다. Metadata가 hidden graph SQL과 canonical
+provider를 소유하고 Source Catalog 또는 Guarded Query에 복제하지 않는다.
 
 QueryService는 source, metadata와 SQL validation 뒤 실제 `ValidatedSql.relations`에 대응하는 root
 attestation만 schema/name C order로 묶는다. 모든 referenced relation이 v2 relation에 존재해야 한다.
@@ -627,9 +677,113 @@ QueryService는 metadata read 뒤 `SourceReader.get(source_id)`를 다시 읽고
 같은지 확인한다. 불일치면 executor에 들어가지 않고 fail-closed한다. Executor는 bundle과 source mode가
 서로 모순되거나 RLS bundle인데 tenant가 없으면 DB user SQL 전에 다시 거부한다.
 
-Source generation, state 또는 `tenant_isolation` 변경 apply는 Metadata Catalog와 Guarded Query pool을
-모두 invalidate한 뒤 새 profile을 노출한다. RLS profile은 startup UTF8 option 없이 만들어진 old pool을
-재사용하지 않는다. Invalidation/apply 실패는 old/new pool을 섞지 않고 source를 unavailable로 둔다.
+Source generation, state 또는 `tenant_isolation` 변경은 QueryService second-read만으로 직렬화되지 않는다.
+Second-read 직후 apply가 source-id-only pool을 pop/close하면 detached old task가 old profile로 pool을 다시
+만들거나 new pool을 소비할 수 있고, psycopg pool close도 checked-out connection을 즉시 닫지 않는다.
+따라서 Control-owned invalidator port의 required contract를 다음처럼 강화하고 existing immutable
+`SourceProfile` exact equality를 execution identity로 재사용한다. Password를 포함한 profile repr/equality
+failure는 log, error, metric 또는 audit에 넣지 않는다.
+
+이 port와 pool lifecycle은 managed Runtime의 공용 경계이므로 exact-profile fence/drain은 RLS 여부와
+무관하게 모든 managed source generation/state/disable transition에 적용한다. 따라서 non-RLS active query도
+source transition이면 details 없는 `QUERY_UNAVAILABLE`로 정리될 수 있다. RLS-only PostgreSQL-18/UTF8,
+graph attestation과 snapshot v2 조건을 non-RLS source로 넓히는 것은 아니다. Static bootstrap source는
+runtime transition이 없고 아래 lazy-admit 예외를 유지한다.
+
+```python
+async def invalidate(
+    source_id: str,
+    *,
+    next_source: SourceProfile | None,
+) -> None: ...
+```
+
+Managed enabled apply의 exact process-local 순서는 다음과 같다.
+
+```text
+stored profile + offline snapshot serving-compatibility validation
+  -> Guarded Query invalidate(source_id, next_source=new_profile)
+  -> Metadata Catalog invalidate(source_id, next_source=new_profile)
+  -> Metadata cache/epoch invalidate(source_id)
+  -> registry upsert(new_profile)                                  # transition commit
+  -> post-commit applied-generation bookkeeping
+  -> post-commit health=initializing + bounded metadata probe
+```
+
+Disable은 현재 admitted/registry profile이 있으면 retire 대상으로 잡고, cold-start disabled record처럼
+현재 profile이 없어도 Query와 Catalog에 `next_source=None`을 같은 순서로 전달해 source-ID tombstone을
+먼저 설치한다. Cache/epoch invalidate 뒤 registry remove는 마지막에 수행한다. Query invalidator는 첫
+in-memory action으로 source admission을 닫고, old profile의 semaphore/pool wait와 checkout 사이를 포함한
+모든 경로가 fence를 다시 확인하게 한다. Old active query는 source별로 cancel하고 rollback/discard를
+bounded drain한 뒤에만 invalidation이 성공한다. Transition cancellation은 partial result 없이 details 없는
+existing `QUERY_UNAVAILABLE`이고 operator/shutdown/client cancellation 의미를 바꾸지 않는다. Fence check와
+connection lease의 active registration은 같은 lock/order로 직렬화해 어느 쪽이 먼저 와도 old query가
+fence 뒤 새로 `BEGIN`을 넘지 못하게 한다. Fence 전에 이미 active였던 remainder는 cancel 대상이며
+successful invalidation 뒤에는 0이어야 한다. Query active registration은 terminal result handoff까지
+유지하고 result handoff gate와 transition fence를 같은 lock/order에서 선형화한다. Result gate가 먼저면
+그 old query는 transition 전에 완료/publish된 것이고, transition fence가 먼저면 buffered row를 버리고
+`QUERY_UNAVAILABLE`로 끝낸다. Drain timeout 뒤 남은 task도 나중에 fence를 통과하지 못하므로 old result를
+publish/return하지 못한 채 invalidation이 실패한다. 각 invalidator가 cleanup 중일 때는 old/next profile을 모두 거부하고, 성공
+return 직전에만 exact `next_source`를 pending identity로 설치한다. Managed production의 query, metadata와
+observation route는 profile을 `SourceReader`에서만 얻고 provider는 registry를 직접 읽지 않는다. 따라서
+registry swap 전에는 routed caller가 new profile을 얻을 수 없고, provider exact-profile fence는 이미
+profile을 가진 old task를 거부한다. 이후 단계가 실패해 old registry profile이 남아도 old profile은
+fence와 다르고 new profile은 route에서 얻을 수 없어 둘 다 닫힌다. 해당 invalidator 자체가 실패하면
+tombstone, 성공한 뒤 downstream이 실패하면 pending-next인 fail-closed fence를 유지한다.
+
+Catalog와 Query pool entry 및 Query semaphore는 source ID만이 아니라 exact profile identity에 결합한다.
+Queued old task는 semaphore acquire 뒤와 pool checkout/`BEGIN` 전 및 terminal result handoff 직전에,
+Catalog load/resource observation은 checkout 전과 return/publish 전에 fence를 다시 확인한다. Query의 terminal
+gate/active deregistration과 Catalog의 return/publish gate도 각 transition fence와 같은 lock/order를 쓴다.
+Catalog invalidator도 첫 internal action으로
+Catalog admission을 닫고 source별 active load/resource-observation lease를 database-cancel,
+rollback/discard하고 bounded drain한다. Successful return에는 old-profile Catalog lease와 checked-out
+connection이 0이어야 한다. Resource observation은 graph attestation 예외지만 profile transition fence의
+예외는 아니다. Static bootstrap/isolated staging adapter만 첫 immutable profile을 lazy-admit할 수 있고
+managed runtime은 reloader의 required `next_source` transition을 우회하지 않는다.
+
+Query와 Catalog transition drain은 새 knob를 추가하지 않고 current executor cleanup의 fixed phase를
+재사용한다. Source별 queued task는 즉시 cancel하고, registered active connection에는 concurrent
+`cancel_safe(timeout=1)`을 요청한 뒤 source inflight를 최대 1초 기다린다. 남은 task를 cancel하고 다시
+최대 1초 기다리며 rollback/reset할 수 없는 connection은 close/discard한다. 그 뒤에도 task, lease 또는
+checked-out connection이 남으면 invalidator는 실패하고 tombstone을 유지하며 registry swap을 금지한다.
+Query transition은 details 없는 `QUERY_UNAVAILABLE`, Catalog load는 details 없는
+`METADATA_UNAVAILABLE`로 끝난다. Transition이 cancel한 resource observation은 success sample을 버리고
+Runtime이 current generation fencing을 거쳐 existing exact reason `RESOURCE_READ_FAILED`만 best-effort
+report한다. External observation task/operator/client/shutdown cancellation은 그대로 재전파하고 fabricated
+failure report를 만들지 않으며 기존 의미를 바꾸지 않는다.
+
+Query와 Catalog active registration은 cancellation owner를 `external` 또는 `transition`으로 같은 lifecycle
+lock 안에서 최초 한 번만 기록한다. External task/operator/client/shutdown cancellation handler가 먼저
+기록하면 이후 invalidator가 덮어쓰지 않고 기존 query cancellation 의미 또는 observation 재전파/failure
+report 0을 보존한다. Invalidation이 `transition`을 먼저 기록하면 이후 external cancellation이 그 원인을
+덮어쓰지 않고 query는 `QUERY_UNAVAILABLE`, observation은 success 0/exact `RESOURCE_READ_FAILED`로 끝낸다.
+동시 race는 이 first-recorded-reason linearization으로 결정하며 어느 경우든 같은 bounded cleanup을 수행한다.
+
+Query invalidator는 Runtime composition에서 반드시 첫 adapter다. 첫 action으로 fence를 닫은 뒤 cleanup이
+실패해도 fence를 old profile에 다시 열지 않는다. 이후 Catalog invalidation, cache invalidation, registry
+swap/remove의 successful return 전 disable cleanup 중 하나라도 실패하면 new profile을 노출하지 않고
+`RUNTIME_APPLY_FAILED`로 기록하며 old/new query를 모두 route하지 않는다. Retry가 같은/newer validated
+profile을 다시 fence에 설치할 때만 진행한다. Existing process-local `SourceRegistry.upsert/remove`의 successful
+return이 단일 transition commit point다. 이 method는 await/callback 없는 in-memory exact-profile
+swap/remove이고 applied-generation/replica-status bookkeeping은 합성 commit의 일부가 아닌 post-commit
+idempotent reconciliation이다. Bookkeeping이 실패해도 exact new/removed projection과 provider fence를
+되돌리거나 tombstone하지 않고 health/apply status를 unavailable/failed로 기록한다. Retry는 registry가 같은
+desired projection인지 확인한 뒤 transition drain을 반복하지 않고 bookkeeping/status만 복구한다. Commit 뒤
+metadata probe failure도 transition rollback이 아니라 source health를 `unavailable`로 기록하는 post-commit
+observation이고, exact new profile projection/fence를 다시 tombstone하거나 old profile을 복구하지 않는다. RLS metadata가 live
+attestation에 실패하면 route는 존재해도 no-stale `METADATA_UNAVAILABLE`로 user SQL 전에 닫힌다.
+Post-commit external probe cancellation도 committed projection을 되돌리거나 fabricated health/apply failure를
+쓰지 않고 그대로 재전파한다.
+RLS profile은 startup UTF8 option 없이 만들어진 old pool을 재사용하지 않는다. Route-off cutover와
+disable은 old profile을 availability fallback으로 route하지 않는다.
+
+Stored/offline candidate validation은 Query fence보다 먼저다. 이 pre-fence validation/operational failure는
+candidate만 거부하고 already-admitted current profile, pool과 route를 바꾸지 않는다. Old/new route를 모두
+닫는 rule은 Query invalidator가 fence를 설치한 뒤 transition commit 전에 실패한 경우에만 적용한다.
+실패한 adapter는 tombstone을 유지하지만 이미 성공한 earlier adapter는 pending-next identity일 수 있다.
+Registry는 old profile이므로 이 혼합 state도 routed profile과 일치하지 않아 old/new route가 모두 닫히며,
+별도 compensating abort port는 추가하지 않는다.
 
 기존 tenant-error precedence는 보존한다. 첫 stable `SourceProfile`이 RLS인데 trusted tenant가 없으면
 metadata read 전에 HTTP 400 `QUERY_REJECTED`와 bounded
@@ -648,18 +802,36 @@ consistency를 확인해 contradiction이면 tenant 유무와 무관하게 detai
 
 | Condition | Public result | Side effect/stale rule |
 |---|---|---|
-| Control candidate의 PostgreSQL-version/UTF8/driver-type invariant mismatch | existing `SOURCE_VALIDATION_FAILED` | Candidate generation/snapshot/pointer를 쓰지 않는다. Pre-BEGIN이면 즉시, live recheck이면 rollback 뒤 connection을 close/discard한다. |
-| Control candidate의 structural/policy/snapshot-codec violation | existing `SOURCE_VALIDATION_FAILED` | Candidate generation/snapshot/pointer를 쓰지 않고 transaction을 rollback/reset한다. Reset이 실패할 때만 connection을 discard한다. |
-| Active RLS metadata의 PostgreSQL-version/UTF8/driver-type invariant mismatch | details 없는 existing `METADATA_UNAVAILABLE` | Older v2 stale fallback을 금지한다. Pre-BEGIN이면 즉시, live recheck이면 rollback 뒤 connection을 close/discard한다. |
+| Control candidate Catalog/resource-observation의 PostgreSQL-version/UTF8/driver-codec invariant, completed common reader-session identity/policy mismatch 또는 fixed-setting SQLSTATE `22023`/`42501` | existing `SOURCE_VALIDATION_FAILED` | Safe cause/context-free `ReaderSessionPolicyError`로 분류한다. Candidate generation/snapshot/pointer를 쓰지 않고 pre-fence current route를 바꾸지 않는다. Pre-BEGIN이면 즉시, transaction probe이면 rollback/reset하고 connection identity mismatch는 close/discard한다. |
+| Control candidate의 deterministic zero-root/root-count/graph/policy/text/bound violation | existing `SOURCE_VALIDATION_FAILED` | Exact empty-args/no-hidden-chain `RlsAttestationValidationError` cause로 분류한다. Candidate generation/snapshot/pointer를 쓰지 않고 pre-fence current route를 바꾸지 않으며 transaction을 rollback/reset한다. Reset이 실패할 때만 connection을 discard한다. |
+| Control candidate의 deterministic snapshot codec/serving violation | existing `SOURCE_VALIDATION_FAILED` | Existing secret-free typed `StoredMetadataInvalidError`로 분류하고 candidate pointer/pre-fence current route를 바꾸지 않는다. Deterministic codec/Pydantic failure만 변환하며 PostgreSQL I/O/transport/driver failure나 cancellation을 감싸지 않는다. Private decoder error message를 parse하거나 공개하지 않는다. |
+| Control candidate의 pre-discovery/authoritative root-list mismatch·rename/drop, `55P03`, phase deadline, setting/probe timeout, connection/transport/other-driver failure | existing `SOURCE_CONTROL_UNAVAILABLE` (503) | Root race와 operational setting/probe error를 deterministic marker/`ReaderSessionPolicyError`로 바꾸지 않는다. Candidate generation/snapshot/pointer와 terminal validation receipt를 쓰지 않고 pre-fence current route를 바꾸지 않는다. Bounded rollback/reset하고 recovery가 실패한 connection만 discard한다. |
+| Control staging task cancellation | cancellation 그대로 재전파 | Candidate write/receipt 없이 bounded cancel/rollback/discard cleanup만 수행하며 400/503으로 삼키지 않는다. |
+| Active RLS metadata의 PostgreSQL-version/UTF8/driver-codec invariant, completed common reader-session identity/policy mismatch 또는 fixed-setting SQLSTATE `22023`/`42501` | details 없는 existing `METADATA_UNAVAILABLE` | Safe `ReaderSessionPolicyError` 여부와 무관하게 older v2 stale fallback을 금지한다. Pre-BEGIN이면 즉시, transaction probe이면 rollback/reset하고 connection identity mismatch는 close/discard한다. |
 | Trusted tenant가 있는 active RLS v1, invalid v2, deterministic graph violation 또는 refresh drift | details 없는 existing `METADATA_UNAVAILABLE` | Cached/persisted v1 또는 older v2 stale fallback을 금지하고 transaction을 rollback/reset한다. Reset이 실패할 때만 connection을 discard한다. |
-| Active RLS metadata pre-discovery/lock/live attestation의 `55P03`, timeout, connection/transport/driver failure | details 없는 existing `METADATA_UNAVAILABLE` | Transient 여부와 무관하게 그 refresh에서 older v2 stale fallback을 금지하고 partial publish하지 않는다. Cancellation은 삼키지 않는다. |
+| Active RLS metadata pre-discovery/authoritative root-list mismatch·rename/drop 또는 lock/live attestation의 `55P03`, timeout, connection/transport/driver failure | details 없는 existing `METADATA_UNAVAILABLE` | Transient 여부와 무관하게 그 refresh에서 older v2 stale fallback을 금지하고 partial publish하지 않는다. Cancellation은 삼키지 않는다. |
+| Retired/transition `SourceProfile`의 catalog load | details 없는 existing `METADATA_UNAVAILABLE` | Old pool을 재생성하지 않고 snapshot/cache를 publish하지 않는다. Active Catalog lease를 cancel/rollback/discard하고 successful invalidation 전에 old checked-out connection을 0으로 drain한다. |
+| Transition이 cancel한 resource observation | success sample 없이 existing exact `RESOURCE_READ_FAILED` best-effort report | Old pool을 재생성하거나 observation을 publish하지 않고 current generation fence를 보존한다. External cancellation과 경합하면 same-lock first-recorded reason이 transition이면 이 결과, external이면 cancellation 재전파/failure-report 0이고 later reason은 덮어쓰지 않는다. |
+| Active RLS resource-observation checkout의 PostgreSQL-version/UTF8/driver-codec invariant, completed common reader-session identity/policy mismatch, fixed-setting SQLSTATE `22023`/`42501` 또는 setting/probe/read operational failure | success sample 없이 existing exact `RESOURCE_READ_FAILED` best-effort report | Pre-BEGIN invariant mismatch는 rollback 없이 close/discard한다. Transaction setting/probe/read failure는 bounded rollback/reset하고 recovery가 실패하거나 connection이 broken일 때만 close/discard한다. Raw error를 report하지 않는다. External observation task cancellation은 같은 cleanup 뒤 재전파하고 failure report를 만들지 않는다. |
 | Source generation/state/mode second-read mismatch | details 없는 existing `METADATA_UNAVAILABLE` | Executor와 source SQL에 들어가지 않는다. |
 | Stable source mode 또는 consistency를 통과한 v2 bundle이 RLS인데 trusted tenant 없음 | existing HTTP 400 `QUERY_REJECTED`, detail `reason_code=TENANT_CONTEXT_REQUIRED` | Existing source-mode check는 metadata 전, bundle defense는 lock/plan/user SQL 전에 거부한다. |
 | Executor까지 도달한 source-mode/bundle contradiction, tenant 동시 누락 포함 | details 없는 existing `QUERY_UNAVAILABLE` | Contradiction을 tenant check보다 먼저, lock/plan/user SQL 전에 거부한다. |
-| Query checkout/live PostgreSQL-version/UTF8 mismatch | details 없는 existing `QUERY_UNAVAILABLE` (503) | Checkout mismatch는 `BEGIN` 없이, live mismatch는 rollback 뒤 connection을 close/discard한다. Resolved-object/plan/user SQL은 실행하지 않는다. |
-| Query lock `NOWAIT` conflict, live fingerprint mismatch, graph/probe non-timeout internal/driver failure | details 없는 existing `QUERY_UNAVAILABLE` (503) | Resolved-object/plan/user SQL 전 rollback/reset한다. Driver state가 복구되지 않으면 connection을 discard한다. |
+| Query checkout/live PostgreSQL-version/UTF8/driver-codec mismatch | details 없는 existing `QUERY_UNAVAILABLE` (503) | Checkout mismatch는 `BEGIN` 없이, live mismatch는 rollback 뒤 connection을 close/discard한다. Resolved-object/plan/user SQL은 실행하지 않는다. |
+| Retired/transition `SourceProfile` query, source-transition cancel 포함 | details 없는 existing `QUERY_UNAVAILABLE` (503) | Queue/pool wait, checkout 뒤와 terminal result handoff에서 fence를 확인한다. Fence-first면 old buffered result를 버리고, result-first면 transition 전 완료로 선형화한다. External cancellation과 경합하면 same-lock first-recorded reason을 보존한다. Old active transaction은 cancel/rollback/discard하고 new profile registry swap 전에는 old/new user SQL을 실행하지 않는다. |
+| Query completed common reader-session identity/policy mismatch 또는 fixed-setting SQLSTATE `22023`/`42501`, lock `NOWAIT` conflict, live fingerprint mismatch, graph/probe non-timeout internal/driver failure | details 없는 existing `QUERY_UNAVAILABLE` (503) | Safe `ReaderSessionPolicyError` 여부와 무관하게 resolved-object/plan/user SQL 전 rollback/reset한다. Driver state가 복구되지 않으면 connection을 discard한다. |
 | Query transaction의 live attestation이 existing transaction/statement deadline을 초과하거나 DB statement가 timeout/cancel됨 | existing `QUERY_TIMEOUT`과 current operator/shutdown cancellation mapping | Partial attestation/result 없이 rollback하고 pool reset/recovery를 보존한다. |
 | Client의 old metadata/SQL-policy token | existing `METADATA_REVISION_MISMATCH` | Executor 전에 거부하고 context refetch가 필요하다. |
+
+Marker-free transient는 raw exception을 public/log chain에 보존한다는 뜻이 아니다. Candidate, active Metadata와
+query consumer는 SQLSTATE/type/deadline을 catch 지점에서 위 표대로 분류하고 bounded cleanup을 끝낸 뒤 raw
+exception의 `str/repr/args/traceback`을 log, metric, audit 또는 public error에 전달하지 않는다. Provider/helper도
+이 raw exception을 `exc_info`로 기록하지 않는다. Deterministic marker로 오분류하지 않은 채 existing safe
+`SourceControlUnavailableError`, `MetadataUnavailableError`, `QueryUnavailableError` 또는 `QueryTimeoutError`를
+except block 밖에서 새로 raise해 그 outer error의 direct `__cause__`와 `__context__`를 모두 `None`으로 만든다.
+Resource observation은 exception 없이 fixed `RESOURCE_READ_FAILED` reason만 report한다. External cancellation은
+safe error/failure report로 바꾸거나 log하지 않고 그대로 재전파한다. 따라서 HTTP AppError/MCP handler가
+ordinary traceback을 기록해도 generic safe outer error만 보이며 hidden source material은 chain에 없다. 이는
+새 transient marker/error code가 아니라 기존 public outcome을 만드는 disclosure boundary다.
 
 RLS graph timeout은 위 existing query/catalog deadline과 cancellation 분류를 따른다. SQL, hidden relation,
 policy/role/expression, OID/raw node와 RLS attestation fingerprint는 response, safe detail, metric label
@@ -676,30 +848,35 @@ fresh-cache read 자체는 current cache contract대로 허용하지만 query-ti
 ### 7. Provider, consumer and ownership impact
 
 - **Metadata provider:** recursive discovery/admission/canonical helper, immutable types, relation
-  attestation, RLS-specific stored-binding rule, v1/v2 codec/revision과 no-stale classification을
+  attestation, `RlsAttestationValidationError`, RLS-specific stored-binding/serving rule, v1/v2
+  history codec/revision과 no-stale classification을
   소유한다. Source Catalog의 RLS connection policy와 Guarded Query의 public
   `validate_sql`/`SQL_POLICY_REVISION`만 소비한다.
 - **Guarded Query consumer:** QueryExecutor required keyword, source-generation second read, tenant
-  authority, RLS pool startup client UTF8, lock-first comparison 호출과 query error/rollback 순서를
-  소유한다. Encoder policy/shape는 그대로지만 prior non-UTF8 client와 비교한 public value/hash는 바뀌거나
-  새 admission에서 거부될 수 있다.
+  authority, exact-profile admission fence와 source-specific transition drain, RLS pool startup client
+  UTF8, lock-first comparison 호출과 query error/rollback 순서를 소유한다. Encoder policy/shape는 그대로지만
+  prior non-UTF8 client와 비교한 public value/hash는 바뀌거나 새 admission에서 거부될 수 있다.
 - **Source Catalog provider:** `RLS_READER_CLIENT_ENCODING`과 no-SQL
   `require_rls_reader_connection_policy`를 소유한다. Metadata/Guarded Query pool이 startup client UTF8과
   checkout/live invariant에 이를 소비하고 common reader settings와 current `SourceProfile`/manifest v2는
   보존한다. `TimeZone=UTC`는 lock 뒤 첫 settings statement다. 새 manifest fingerprint/timeout field를
-  만들지 않고 existing metadata statement budget에서 fixed phase deadline을 derive한다. Non-RLS pool은
-  이 결정에서 바꾸지 않는다.
+  만들지 않고 existing metadata statement budget에서 fixed phase deadline을 derive한다. Non-RLS pool의
+  startup encoding/session/result semantics는 바꾸지 않지만 공용 exact-profile binding/drain lifecycle은
+  모든 managed source pool에 적용한다.
 - **Control Plane consumer:** existing JSONB append/pointer transaction으로 v2를 저장하고 isolated
-  candidate failure, current/rollback reissue와 verified publish를 조율한다. Control SQL schema migration은
-  없다.
+  candidate failure, required `invalidate(source_id, *, next_source)` transition과 current/rollback reissue,
+  verified publish를 조율한다. Query fence를 첫 invalidator로 호출하고 registry swap은 마지막에 한다.
+  Control SQL schema migration은 없다.
 - **Delivery consumer:** 기존 tenant derivation과 public error mapping/redaction을 그대로 사용하며
   request/response/tool field를 추가하지 않는다.
 - **Runtime consumer:** old process/connection drain, route-off new fleet, replica convergence와 safe
-  binary rollback을 조립한다. Fingerprint 업무 규칙을 구현하지 않는다.
+  binary rollback 및 Query-before-Catalog transition adapter order를 조립한다. Fingerprint 업무 규칙을
+  구현하지 않는다.
 - **Assurance verifier:** strict xfail을 fail-closed passing regression으로 바꾸고 provider/consumer,
   race, cache, migration과 cleanup을 검증한다. Offline CLI는 계속 tenant를 공급하지 않는다.
 
-Shared `reader_policy.py`, `catalog.py`, `query.py`, `models.py`, `metadata_store.py`, integration fixture와
+Shared `reader_policy.py`, `catalog.py`, `query.py`, `models.py`, `metadata_store.py`, `source_admin.py`, 새
+Metadata-owned `rls_attestation.py`, integration fixture와
 contract 문서는 coordinating workstream이 single-writer로 직렬화한다. Source Catalog reader-connection
 provider baseline을 먼저 동결하고 Metadata graph/snapshot/provider를 그다음 확정한다. 두 baseline 뒤에
 Guarded Query와 Control/Runtime/Assurance consumer를 갱신한다. 고정된 서로 다른 consumer 구현만
@@ -784,8 +961,8 @@ snapshot과 non-UTF8 source/rollback counterpart를 activate/serve하지 않는�
 deactivate/unroute하고 connection을 drain한 뒤 non-RLS source만 old release에서 제공한다. RLS availability를
 포기하는 것이 tenant isolation을 깨는 binary rollback보다 안전하다.
 
-현재 TODO의 권장 production path처럼 ADR 0020 encoding v3와 같은 protected change record에서
-수행하면 v1→v3 direct reissue를 사용한다. Route하지 않을 production v2 current/rollback row를
+ADR 0020 encoding v3와 결합한 production path를 선택해 같은 protected change record에서 수행하면
+v1→v3 direct reissue를 사용한다. Route하지 않을 production v2 current/rollback row를
 중간 산출물로 만들지 않는다. V2 codec/revision golden과 disposable standalone v2 acceptance는 RLS-02
 repository baseline에 남기되 protected current/rollback verified contract는 fresh v3 counterpart로만
 전량 재발행한다. Functional rollback도 미리 재발행·검증한 v3 rollback generation으로 한다. 별도로
@@ -839,15 +1016,64 @@ tenant registry comparison을 추가하려면 별도 data contract가 필요하�
   DDL이 commit까지 진행하지 못하는 deterministic event-order test.
 - Snapshot-before-lock에서는 old catalog/new execution이 갈라지는 PostgreSQL negative
   characterization과 lock-first에서 latest catalog가 보이는 positive control.
-- Pre-discovery/root-list race, graph depth/relation/policy/dependency/text/material byte bound와 duplicate/
-  unresolved row no-stale rejection.
+- Stable zero-root/root-count excess의 empty-args deterministic marker와 candidate 400, pre-discovery/
+  authoritative root-list add/drop/rename race의 marker 없는 candidate 503/no-terminal-receipt 및 active
+  no-stale rejection, graph depth/relation/policy/dependency/text/material byte bound와 duplicate/unresolved row.
 - Cold/warm/stale cache, pinned RLS v1, corrupt/mixed v2, pinned RLS v2와 same live fingerprint의 serving,
   pinned RLS v2와 different live fingerprint의 no-stale `METADATA_UNAVAILABLE`, source
   generation/state/mode reload race와 relationless RLS query tenant requirement.
+- Private history decoder의 old-policy v2 success와 모든 public store/service serving path의 RLS v1/
+  old-policy v2 rejection, cold-start SourceReloader no-exposure, deterministic marker 대 transient error
+  분류를 검증한다. Pool과 Metadata cache가 registry projection보다 먼저 invalidate되고 Query fence 뒤
+  registry commit 전 partial failure가 old/new generation 어느 쪽도 노출하지 않는 event order도 검증한다.
+- Hidden fingerprint/relation canary에서 wrapping 전 `RlsAttestationValidationError`와
+  `StoredMetadataInvalidError`의 `__cause__ is None`, `__context__ is None`이고 rendered traceback 및 ordinary
+  `logger.exception` output에도 값이 없어야 한다. Outer public error가 marker를 cause로 보존할 때도 그
+  cause는 위 safe marker뿐이어야 한다. Candidate transient failure는
+  `SOURCE_CONTROL_UNAVAILABLE`, cancellation은 재전파되며 candidate write가 0인지 검증한다.
+- Root-list race/`55P03`/timeout/transport/other-driver의 hidden canary를 candidate, active Metadata와 query
+  path에 넣어 raw exception을 분류한 뒤 existing safe outer error의 direct `__cause__`/`__context__`가 모두
+  `None`인지, provider/helper 및 HTTP/MCP ordinary log/metric/audit에 raw `str/repr/args/traceback`이 없는지
+  검증한다. Resource observation은 exception/`exc_info` 없이 fixed reason만 report하고 external cancellation은
+  log/failure-report 없이 재전파되어야 한다.
+- `ReaderSessionPolicyError`는 no-SQL connection invariant mismatch, completed probe mismatch와 exact
+  SQLSTATE `22023`/`42501`에서만 cause/context-free로 만들고 hidden setting/driver canary를 render하지 않아야
+  한다. Candidate/active metadata/query/resource-observation에서 각각 400/`METADATA_UNAVAILABLE`/
+  `QUERY_UNAVAILABLE`/`RESOURCE_READ_FAILED`인지 검증한다. Timeout, cancellation, transport/other-driver
+  corpus는 marker로 감싸지 않고 각 consumer의 transient/cancellation 분류를 보존한다.
+- QueryService second-read 직후 barrier에서 apply를 완료한 뒤 old task를 재개하는 race, detached old
+  semaphore/pool waiter, checked-out active query의 transition cancel/rollback/drain, stale Catalog refresh와
+  resource observation의 active lease cancel/rollback/drain, invalidator 중간 실패와 disable cleanup failure를
+  검증한다. Fixed `cancel_safe(1s) -> inflight wait(1s) -> pending cancel/wait(1s)` phase와 drain-timeout failure도
+  포함한다. Successful invalidation 뒤 old Query/Catalog checked-out connection은 0이어야 한다. 어느 경우에도
+  transition fence가 먼저 선형화된 old task의 terminal result 0, old profile pool 재생성/새 pool 재사용/
+  registry swap/user `BEGIN`이 없어야 하고 new exact profile만 fresh
+  startup UTF8 pool을 만들 수 있다. Transition-cancelled observation은 success 0/exact
+  `RESOURCE_READ_FAILED`, external observation cancellation은 repropagation/failure-report 0이어야 한다.
+  Ordinary active RLS observation의 PostgreSQL-version/UTF8/driver-codec invariant, completed common reader
+  mismatch, fixed-setting SQLSTATE `22023`/`42501` 또는 operational setting/probe/read failure도 success
+  0/exact `RESOURCE_READ_FAILED`여야 한다.
+- Query/observation의 external cancellation과 transition cancellation을 같은 event barrier에서 반대 순서로
+  경합시켜 first-recorded reason이 전자는 current cancellation/repropagation과 failure-report 0, 후자는
+  `QUERY_UNAVAILABLE`/exact `RESOURCE_READ_FAILED`를 결정하고 later reason이 덮어쓰지 않는지 검증한다.
+- Pre-fence candidate validation/operational failure는 current old route/pool/fence 불변을 검증한다. Query
+  fence 뒤 registry commit 직전 invalidator/cache failure는 old/new route 0, failed-adapter tombstone과
+  earlier-adapter pending-next의 non-routable mixed state를, successful commit 직후
+  applied-generation/replica-status bookkeeping 또는 metadata probe failure는 only-new exact profile 유지,
+  old route 0과 health unavailable을 검증한다. Post-commit bookkeeping retry는 transition drain 없이 status만
+  복구해야 한다. 같은
+  live failure가 query refresh/attestation에서도 지속되면 user SQL은 0이고, 이후 fresh metadata/live
+  attestation이 성공하면 new profile은 serve할 수 있다. Probe failure만으로 tombstone/rollback하지 않으며
+  post-commit external probe cancellation도 fabricated health/apply failure 0으로 그대로 재전파하고
+  committed projection을 되돌리지 않아야 한다.
+- Password canary가 exact-profile equality mismatch, queued/active drain failure, tombstone retry,
+  invalidator exception과 ordinary log/metric/audit 어느 곳에도 나타나지 않고 `SourceProfile` repr 자체를
+  render하지 않는지 검증한다.
 - Tenant parallel execution, pool reset, timeout/cancel/disconnect, partial-row 폐기와 raw detail 비노출.
 - RLS pool create/reset/reconnect마다 startup client UTF8가 적용되고 source mode/generation 전환이 old
   non-RLS/RLS pool을 invalidate하며, pre-BEGIN mismatch는 transaction 없이 discard하고 post-lock
-  mismatch는 rollback 뒤 discard하는 event corpus.
+  mismatch는 rollback 뒤 discard하는 event corpus. Ordinary non-RLS provider path는 RLS verifier를 호출하지
+  않고 current common setting/error mapping을 유지해야 한다.
 - PostgreSQL 18 UTF8 libc/ICU/builtin locale별 admission, exact-C tenant result와 같은 DB 반복 호출
   fingerprint stability, 별도 fixed canonical fixture golden을 검증한다. Cross-DB fingerprint equality는
   모든 canonical leaf/raw-node bytes가 실제 같음을 먼저 증명한 통제 fixture에만 요구한다. Strict `str`,
@@ -884,32 +1110,87 @@ policy별 exact table-auto/tenant-column `pg_depend`와 PUBLIC-empty 또는 name
 current SQL_POLICY_REVISION으로 검증한 nested view와 custom/volatile/security-definer/non-allowlisted
 function/operator/type/collation·subquery·partition/foreign/materialized/
 inheritance 거부, exact `_RETURN`/`pg_depend`와 PostgreSQL-18 initdb builtin admission,
-RLS Catalog/Query connection-startup `client_encoding=UTF8`, no-SQL PostgreSQL-18/server/client UTF8
-admission과 strict str-only graph text/bytes fail-closed, rls_attestation_v1 canonical
-shape·정렬·per-root/source 고정 bound, relation별 snapshot/revision v2,
+RLS Catalog/Query connection-startup `client_encoding=UTF8`, resource observation을 포함한 every RLS
+pool checkout의 pre-BEGIN no-SQL PostgreSQL-18/server/client UTF8와 psycopg UTF-8 codec admission,
+Catalog/Query의 lock/common probe 뒤 live attestation 직전 같은 connection-info recheck, resource observation에는
+startup/pre-BEGIN verifier만 적용하고 graph lock/attestation/post-settings recheck를 제외하는 경계와 strict str-only graph
+text/bytes fail-closed, ordinary non-RLS provider path의 verifier invocation 0/current setting-error mapping 보존,
+candidate connection-invariant mismatch의 `SOURCE_VALIDATION_FAILED`, hidden
+`__cause__`/`__context__`를 모두 `None`으로 하고 ordinary traceback/log에 hidden input을 남기지 않는 empty-args public
+`RlsAttestationValidationError`의 deterministic
+zero-root/root-count/graph 분류, root-list add/drop/rename
+race의 marker 없는 transient 503과 deterministic codec/Pydantic만 cause/context 없이 변환하는 existing
+secret-free typed `StoredMetadataInvalidError` 분류, PostgreSQL I/O/transport/driver failure를 변환하지 않는
+candidate transient `SOURCE_CONTROL_UNAVAILABLE`/cancellation 재전파, RLS-only cause/context-free
+`ReaderSessionPolicyError`는 no-SQL connection invariant mismatch, completed mismatch와 SQLSTATE
+`22023`/`42501`에서만 만들고 candidate는 validation 400, active metadata는 `METADATA_UNAVAILABLE`, query는
+`QUERY_UNAVAILABLE`, resource observation은 `RESOURCE_READ_FAILED`로 각각 소비하며 다른 setting/probe
+failure는 marker로 감싸지 않고 candidate `SOURCE_CONTROL_UNAVAILABLE`, active metadata
+`METADATA_UNAVAILABLE`, query timeout `QUERY_TIMEOUT`, query transport/driver `QUERY_UNAVAILABLE`, resource
+observation `RESOURCE_READ_FAILED`로 각각 소비하며 external cancellation을 재전파하고 non-RLS current error
+mapping은 보존하는 분류, marker-free transient도 provider/helper에서 raw exception을 log하지 않고 consumer가
+분류·cleanup 뒤 except block 밖에서 direct cause/context 없는 existing safe
+`SourceControlUnavailableError`/`MetadataUnavailableError`/`QueryUnavailableError`/`QueryTimeoutError`만 raise하며
+resource observation은 exception 없이 fixed reason만 report하고 external cancellation은 log/wrapping 없이
+재전파하는 disclosure 경계, rls_attestation_v1 canonical
+shape·정렬·per-root/source 고정 bound, relation별 snapshot/revision v2, private historical decode와 모든
+public store/service path의 offline current-policy serving-compatibility 및 refresh/query live attestation 분리,
 attestation에 고정한 view SQL policy revision, required RlsQueryAttestation/QueryExecutor 계약,
 BEGIN 직후 ACCESS SHARE NOWAIT lock-first 순서,
 existing metadata statement budget에서 derive한 pre-discovery/authoritative outer deadline과 bounded
-cleanup, source generation/state 재확인, HTTP 400 QUERY_REJECTED/TENANT_CONTEXT_REQUIRED reason을 포함한 exact
+cleanup은 각 phase가 독립적으로 `min(30_000, 8 * metadata_statement_timeout_ms)`이고 checkout 직전부터
+commit과 return/reset 완료까지 재며 cancel/rollback 1,000ms 초과 시 discard하는 계약, query live
+attestation은 existing statement/transaction deadline을 소비하고 초과 시 existing `QUERY_TIMEOUT`인 의미,
+exact immutable `SourceProfile` admission identity와 required
+`invalidate(source_id, *, next_source)` fence, registry-only routed profile acquisition과 exact-profile
+provider gate, Query-first Query/Catalog
+source-specific `cancel_safe(1s)`/inflight-wait(1s)/pending-cancel-wait(1s) rollback/discard drain,
+successful invalidation의 old Query/Catalog checked-out connection 0, transition fence-first terminal old-result
+0과 result-first completion-before-transition을 같은 lock에서 선형화하는 Query result gate, drain failure
+tombstone, Query/observation external 대 transition cancellation의 same-lock first-recorded-reason 및 later
+reason non-overwrite, password
+canary를 포함한 secret-bearing profile의 error/log/metric/audit/repr 비공개, profile-bound pool/semaphore 및 pool과 Metadata cache를 registry profile보다 먼저
+invalidate하는 모든 managed source generation/state/disable 적용과 non-RLS transition query의
+`QUERY_UNAVAILABLE`, pre-fence candidate failure의 current route 불변, transition-cancelled observation의 exact `RESOURCE_READ_FAILED`와 external observation
+cancellation의 failure-report 없는 재전파, ordinary active RLS observation connection/read failure의 exact
+`RESOURCE_READ_FAILED`, observation pre-BEGIN invariant mismatch의 no-rollback close/discard와 transaction
+setting/probe/read failure의 rollback/reset·recovery-failure-only discard, process-local registry upsert/remove의
+successful return만 transition commit point로 삼고 applied-generation/replica-status bookkeeping을 post-commit
+idempotent reconciliation으로 두어
+Query fence 뒤 pre-commit failure는 failed adapter tombstone과 earlier adapter pending-next를 모두 non-routable로
+유지하고 compensating abort 없이 old/new route를 닫으며 post-commit bookkeeping/probe failure는 only-new/
+removed projection과 unavailable/failed health/apply status를 유지하고 same desired retry는 transition drain 없이
+bookkeeping만 복구하는 의미, post-commit external probe cancellation은 fabricated health/apply failure 없이
+그대로 재전파하고 committed projection을 되돌리지 않는 의미,
+HTTP 400 QUERY_REJECTED/TENANT_CONTEXT_REQUIRED reason을 포함한 exact
 no-stale/public error와 기존 gateway tenant/SQL-fingerprint audit 보존·RLS fingerprint 비공개,
 manifest와 Control SQL schema 무변경, existing operator caller를 쓰는 protected external
 verified-tenant mapping v1을 승인한다. Standalone RLS 배포는 current/rollback v2를 전량 재발행하고,
-ENC와 통합한 권장 배포는 production v2 row 없이 current/rollback v3로 direct 재발행하며 verified v3
-functional rollback만 허용한다. Mixed fleet 금지와 v1 history-only·old-binary RLS deactivate rollback도
+ENC와 통합한 권장 배포는 production v2 row 없이 current/rollback v3로 direct 재발행하며 functional
+rollback은 verified v3를 사용한다. 다만 별도로 실제 배포·검증해 captured한 v2 release/generation이 이미
+있는 경우에만 v3→v2 functional rollback을 허용한다. Mixed fleet 금지와 v1 history-only·old-binary RLS deactivate rollback도
 승인한다. 이 RLS 승인만으로 v3 provider/codec/test 구현을 시작하지 않고 ADR 0020 `ENC-01` exact
 승인과 `ENC-02` baseline을 별도로 기다린다.
+위 standalone/combined deployment, policy/data migration, reissue와 rollback 문장은 repository 계약,
+disposable fixture와 operator artifact를 구현·검증하는 의미만 승인한다. Protected environment의 read-only
+inventory, mutation freeze, policy/data DDL, unroute/deactivate, credential/pointer/reissue, fleet/route cutover와
+rollback 실행은 이 승인의 권한이 아니다. Standalone v2 protected 실행은 `RLS-02` 완료 뒤 별도 `RLS-03`
+environment 승인/access/change record로 진행하며 `ENC-02`/`TIME-03`을 기다리지 않는다. Combined direct-v3
+protected 실행만 `ENC-02` 완료 뒤 coordinated `RLS-03`/`TIME-03` environment 승인/access/change record를
+요구한다.
 Repository/managed source의 comparison을 exact C-collated policy로 migration하고 SELECT에 영향을 주는
 admin/group/ALL policy를 제거하되, admin write dependency가 발견되면 별도 승인 전 중단하는 영향도
 승인한다. Fresh init 외에 repository forward/rollback SQL artifact와 managed DB-owner migration
 reference/checksum이 필요하고 source DDL은 application이 자동 실행하지 않는 범위도 승인한다.
 Non-UTF8 RLS database는 자동 변환하지 않고 즉시 unroute/deactivate하며, source별 DB-owner data
 migration/re-onboarding과 rollback을 별도 승인하고 fresh v2를 발행하기 전에는 publish/route하지 않는
-영향도 승인한다. 이 승인은 그 protected data migration 실행 자체의 승인이 아니다.
+영향도 승인한다. 이 승인은 그 protected policy/data migration이나 다른 protected cutover 실행 자체의
+승인이 아니다.
 각 protected row의 exact `tenant_id` 값은 DB owner가 보장하는 authoritative source-data contract다.
 Source superuser/role-admin/PostgreSQL image는 mutation-free trusted serving boundary이고 이를
 adversarial하게 직렬화하려면 별도 broker 계약이 필요하다는 residual limitation도 수용한다.
-이 UTF8 admission은 RLS v2 pool/source identity에만 적용하고 non-RLS pool과 result encoder policy/
-response shape는 바꾸지 않는다. 다만 prior non-UTF8 client의 RLS public value/hash/rejection은 달라질
+이 UTF8 admission은 RLS v2 pool/source identity에만 적용하고 non-RLS pool의 startup encoding/session/
+result semantics와 response shape는 exact-profile lifecycle 외에는 바꾸지 않는다. 다만 prior non-UTF8 client의 RLS public value/hash/rejection은 달라질
 수 있어 current/rollback verified 전량 재실행과 설명되지 않은 차이의 별도 승인이 필요하다.
 Interval/JSON/result OID와 cumulative source-semantics를 포함한 broader encoding 계약은 별도 ADR
 0020/ENC-01 범위라는 경계도 수용한다.

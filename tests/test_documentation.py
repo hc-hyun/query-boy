@@ -979,6 +979,9 @@ def test_source_database_corner_docs_record_canonical_time_resolution() -> None:
     metadata = (
         ROOT_DIRECTORY / "docs" / "modules" / "metadata" / "README.md"
     ).read_text(encoding="utf-8")
+    control_plane = (
+        ROOT_DIRECTORY / "docs" / "modules" / "control-plane" / "README.md"
+    ).read_text(encoding="utf-8")
     development_todo = DEVELOPMENT_TODO.read_text(encoding="utf-8")
 
     assert "`DBEDGE-01`" in audit
@@ -1009,6 +1012,38 @@ def test_source_database_corner_docs_record_canonical_time_resolution() -> None:
     assert "LIMIT N+1" in rls_adr
     assert 'RLS_READER_CLIENT_ENCODING: Final = "UTF8"' in rls_adr
     assert "require_rls_reader_connection_policy" in rls_adr
+    assert "class RlsAttestationValidationError(ValueError)" in rls_adr
+    assert "deterministic zero-root/root-count" in rls_adr
+    assert "root-list add/drop/rename" in rls_adr
+    assert "common reader-session identity/policy mismatch" in rls_adr
+    assert "SQLSTATE `22023`/`42501`" in rls_adr
+    assert "no-SQL connection invariant mismatch" in rls_adr
+    assert "Candidate/active metadata/query/resource-observation" in rls_adr
+    assert "query timeout `QUERY_TIMEOUT`" in rls_adr
+    assert "Marker-free transient" in rls_adr
+    assert "except block 밖에서" in rls_adr
+    assert "raw exception을 public/log chain에 보존" in rls_adr
+    assert "Active RLS resource-observation checkout" in rls_adr
+    assert "StoredMetadataInvalidError" in rls_adr
+    assert "`__cause__ is None`, `__context__ is None`" in rls_adr
+    assert "Password canary" in rls_adr
+    assert "private history decoder" in rls_adr
+    assert "offline\nserving-compatibility check" in rls_adr
+    assert "Metadata cache/epoch invalidate(source_id)" in rls_adr
+    assert "resource-observation" in rls_adr
+    assert "next_source: SourceProfile | None" in rls_adr
+    assert "Query invalidator는 Runtime composition에서 반드시 첫 adapter" in rls_adr
+    assert "cancel_safe(timeout=1)" in rls_adr
+    assert "old-profile Catalog lease와 checked-out\nconnection이 0" in rls_adr
+    assert "first-recorded-reason" in rls_adr
+    assert "transition fence-first terminal old-result" in rls_adr
+    assert "result-first completion-before-transition" in rls_adr
+    assert "successful return만 transition commit point" in rls_adr
+    assert "provider는 registry를 직접 읽지 않는다" in rls_adr
+    assert "모든 managed source generation/state/disable transition" in rls_adr
+    assert "exact `RESOURCE_READ_FAILED`" in rls_adr
+    assert "External observation task" in rls_adr
+    assert "SOURCE_CONTROL_UNAVAILABLE" in rls_adr
     assert "server_encoding=UTF8" in rls_adr
     assert "same-Python-name/different-relation" in rls_adr
     assert "oid < 16384" in rls_adr
@@ -1017,14 +1052,26 @@ def test_source_database_corner_docs_record_canonical_time_resolution() -> None:
     assert "production v2 current/rollback row" in rls_adr
     assert "operator_subject" in rls_adr
     assert "metadata_phase_timeout_ms = min(30_000, 8 *" in rls_adr
+    assert "Protected environment의 read-only\ninventory" in rls_adr
+    assert "Standalone v2 protected 실행" in rls_adr
+    assert "Combined direct-v3\nprotected 실행만" in rls_adr
     canonical_start = rls_adr.index("각 root의 internal canonical material")
     canonical_end = rls_adr.index("`roles` array length", canonical_start)
     assert rls_adr[canonical_start:canonical_end].count('"definition_sha256"') == 1
     assert RLS_POLICY_ATTESTATION_ADR.name in development_todo
     assert "RLS_READER_CLIENT_ENCODING" in source_catalog
     assert "require_rls_reader_connection_policy" in source_catalog
+    assert "checkout lease 직후 application `BEGIN`/SQL 전에" in source_catalog
     assert "Metadata는 Source\nCatalog의 no-SQL RLS connection policy를 소비" in metadata
+    assert "RlsAttestationValidationError" in metadata
+    assert "Private history decoder" in metadata
+    assert "retired/transition profile fence" in metadata
+    assert "successful return 전에 old checked-out connection을 0" in metadata
+    assert "마지막에 registry projection을 교체" in control_plane
+    assert "invalidate(source_id, *, next_source: SourceProfile | None)" in control_plane
+    assert "old/new user route를 unavailable" in control_plane
     assert "Source Catalog의 RLS-only startup constant" in development_todo
+    assert "history-decode/offline-serving/live-attestation" in development_todo
     for module_name in MODULE_NAMES:
         module_contract = (
             ROOT_DIRECTORY / "docs" / "modules" / module_name / "README.md"
@@ -1042,6 +1089,12 @@ def test_source_database_corner_docs_record_canonical_time_resolution() -> None:
     assert "SQL_ASCII, libc `C`" in rls_audit
     assert "pg_shdepend" in rls_audit
     assert "같은 Python identifier" in rls_audit
+    assert "Read-Only Implementation-Readiness Audit" in rls_audit
+    assert "canary_in_traceback=True" in rls_audit
+    assert "83 passed, 657 deselected, 2 xfailed" in rls_audit
+    assert "public offline current-policy serving-compatibility" in rls_audit
+    assert "모든 managed source transition" in rls_audit
+    assert "non-RLS active query도 transition" in rls_audit
     assert "connection startup" in rls_audit
     assert "database `0`, role `0`" in audit
     assert "### Resolved follow-up: canonical `timestamptz`" in audit

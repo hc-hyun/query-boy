@@ -223,6 +223,31 @@ policy normal/shared dependency 및 str-only graph admission을 사용한다. En
 hidden value를 공개하지 않고 checkout이면 transaction 없이 connection을 discard하고, live
 transaction이면 `QUERY_UNAVAILABLE`로 plan 전 rollback한다. Scalar loader/response shape는 그대로지만
 prior non-UTF8 RLS client 대비 value/hash/rejection은 달라질 수 있어 verified 전량 재실행 대상이다.
+Completed common reader-session identity/policy mismatch와 fixed-setting SQLSTATE `22023`/`42501`의 safe
+`ReaderSessionPolicyError`도 query에서는 details 없는 `QUERY_UNAVAILABLE`로 소비한다. Timeout/transport/
+other-driver failure는 marker로 감싸지 않는다. Existing query/DB deadline은 `QUERY_TIMEOUT`, transport/
+other-driver는 `QUERY_UNAVAILABLE`, operator/shutdown/client task cancellation은 current mapping을 보존한다.
+Marker-free raw transient는 executor/provider가 log하지 않고 query boundary가 분류·cleanup 뒤 버린다. Safe
+outer `QueryTimeoutError`/`QueryUnavailableError`는 except block 밖에서 raise해 direct cause/context를 모두
+`None`으로 만들며 external cancellation은 log/wrapping 없이 existing mapping으로 재전파한다.
+Source generation/state/mode apply에서는 existing exact immutable `SourceProfile`을 execution identity로
+사용하고 proposed `invalidate(source_id, *, next_source)`가 첫 action으로 admission을 fence한다. Old
+semaphore/pool waiter는 acquire/checkout 뒤 다시 확인하고 active old query는 source-transition
+`QUERY_UNAVAILABLE`로 cancel/rollback/discard한다. Queued cancel, concurrent `cancel_safe(timeout=1)`,
+inflight wait 1초, pending cancel/wait 1초의 fixed phase 뒤에도 task/connection이 남으면 invalidation은
+실패하고 tombstone을 유지한다. Fence와 active registration은 같은 lock/order를 사용하며
+pool/semaphore를 source ID만으로 재사용하지 않는다. Active registration은 terminal result handoff까지
+유지한다. Result gate가 transition fence와 같은 lock에서 먼저 선형화되면 transition 전 완료이고, fence가
+먼저면 buffered row를 버리고 `QUERY_UNAVAILABLE`로 끝내므로 drain-timeout remainder도 old result를 반환할
+수 없다. External 대 transition cancellation owner도 같은 lock에서 first-recorded reason으로 고정해 later
+reason이 기존 operator/shutdown/client 의미 또는 transition `QUERY_UNAVAILABLE`을 덮어쓰지 않는다.
+Managed routed source는 `SourceReader`에서만 얻으므로
+invalidator/pre-commit partial failure나 disable은 old/new route를 다시 열지 않는다. Post-commit
+applied-generation/status bookkeeping failure, metadata probe failure와 external probe cancellation은 Runtime이
+only-new/removed projection을 유지한다.
+이 exact-profile lifecycle은 모든 managed
+source transition에 적용되어 non-RLS active query도 transition `QUERY_UNAVAILABLE`로 정리될 수 있지만,
+RLS attestation/UTF8 조건을 non-RLS query로 넓히지 않는다.
 Exact 승인 전에는 위 현재 1~9단계나 `QueryExecutor`/error 계약을 교체하지 않는다.
 
 ### Executor lifecycle contract

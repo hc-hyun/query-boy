@@ -82,6 +82,51 @@ ADR 0020 exact A의 encoding snapshot은 RLS semantics/shape를 fresh live v3 at
 combined production cutover에서는 route하지 않을 v2 row를 만들지 않고 current/rollback v3만
 재발행한다.
 
+RLS target의 deterministic zero-root/root-count/graph/policy/text/bound 위반은 Metadata-owned public empty-args
+`RlsAttestationValidationError` cause로만 candidate validation failure와 구분한다. Private Metadata
+exception/message/hidden value를 import하거나 parse하지 않는다. Pre-discovery/authoritative root-list
+add/drop/rename race는 marker 없는 `SOURCE_CONTROL_UNAVAILABLE`이고 terminal rejection receipt를 쓰지
+않는다. RLS candidate의 no-SQL connection invariant mismatch, completed reader-session mismatch와
+fixed-setting SQLSTATE `22023`/`42501`의 safe `ReaderSessionPolicyError`만 validation이고 timeout/transport/
+other-driver failure는 control unavailable이다.
+Non-RLS candidate의 current reader-setting error mapping은 보존한다.
+Candidate transient는 raw exception을 log/public chain에 붙이지 않는다. `_stage`가 type/SQLSTATE/deadline으로
+분류하고 cleanup한 뒤 except block 밖에서 direct cause/context 없는 existing
+`SourceControlUnavailableError`만 raise하며 external cancellation은 log/wrapping 없이 재전파한다.
+Deterministic snapshot codec/Pydantic
+serving violation만 existing secret-free typed `StoredMetadataInvalidError`로 구분하되 message를 parse하거나
+공개하지 않는다. PostgreSQL I/O/transport/driver failure와 cancellation은 이 error로 바꾸지 않는다. MetadataStore의 public serving path가
+RLS v1/old-policy v2를 거부하므로 `SourceReloader.validate()`의 existing `get_revision()`도 cold start에서
+이를 우회하지 않는다. Generation/state/mode apply는 별도 token 대신 existing immutable `SourceProfile`
+exact equality를 execution identity로 쓴다. Proposed required port는
+`invalidate(source_id, *, next_source: SourceProfile | None)`이다. Query invalidator가 첫 in-memory action으로
+old/new admission을 fence하고 old active query를 cancel/rollback/bounded drain한다. Catalog invalidator도
+active load/resource observation을 cancel/rollback/discard해 old checked-out connection을 0으로 drain한 뒤
+Metadata cache/epoch, registry 순으로 전환해 마지막에 registry projection을 교체한다. 각 drain은 existing
+fixed `cancel_safe(1s)`, inflight wait 1초, pending cancel/wait 1초 phase를 재사용하며 남은 task/lease가
+있으면 실패하고 tombstone을 유지한다. Managed routed caller는 profile을 registry에서만 얻고 provider는
+registry를 직접 읽지 않는다. Pending next identity의 exact-profile fence 때문에 registry swap 전에는 new
+profile route가 열리지 않는다. Profile은 password를 포함하므로 repr/log/error/metric에 넣지 않는다.
+Query 또는 이후 invalidator/disable cleanup이 registry commit 전에 실패하면 fence를 다시 열거나
+registry를 교체하지 않고 old/new user route를 unavailable로 둔다. Retry가 validated replacement을 다시
+설치할 때만 진행한다. Existing process-local registry upsert/remove의 successful return이 단일 transition
+commit point다. Applied-generation/replica-status bookkeeping은 post-commit idempotent reconciliation이고,
+실패해도 new/removed projection과 fence를 되돌리지 않는다. 같은 desired projection의 retry는 transition
+drain 없이 bookkeeping/status만 복구한다. 그 뒤 bookkeeping 또는 metadata probe failure는 health/apply
+status만 unavailable/failed로 두며 old profile을 복구하지 않는다. Post-commit external probe cancellation도
+fabricated health/apply failure 없이 그대로 재전파하고 committed projection을 되돌리지 않는다. 이 공용 managed transition lifecycle은 non-RLS source에도 적용하며 그 active
+query도 transition 시 `QUERY_UNAVAILABLE`로 정리될 수 있다. PostgreSQL-18/UTF8, graph/snapshot v2는
+RLS-only다. 이 순서는 아직 승인된 현재 contract가 아니라 ADR 0024의 target이다.
+Transition이 cancel한 resource observation은 existing generation-fenced reason
+`RESOURCE_READ_FAILED`만 best-effort report하며 success sample을 쓰지 않는다. External observation task
+cancellation은 failure report 없이 재전파한다.
+Query/Catalog active registration의 external 대 transition cancellation owner는 같은 lifecycle lock에서
+first-recorded reason으로 고정하고 later reason이 덮어쓰지 않는다.
+Stored/offline validation은 Query fence 전이므로 그 candidate failure는 current route/pool/fence를
+바꾸지 않는다.
+Post-fence/pre-commit failure에서 failed adapter는 tombstone, earlier successful adapter는 pending-next일 수
+있지만 old registry profile과 둘 다 불일치하므로 route는 닫힌다. 별도 compensating abort port는 없다.
+
 `SourceAdminService._stage`는 candidate를 active runtime과 격리해 검증하려고 일시적인
 `SourceRegistry + MetadataService + RuntimeCatalogProvider`를 조립하고 registry application reference는
 `SourceReader`로 좁힌다. 이는 Control Plane에 한정된 staging composition root이며 production
@@ -356,6 +401,8 @@ new fleet에서 source별 L1→all verified→L2를 완료하고, replica conver
 Pool/cache adapter에는 Control Plane 소유의 작은 `SourcePoolInvalidator.invalidate(source_id)` port만
 요구한다. Runtime이 provider-owned composite lifecycle을 검증하고 catalog, query executor 순서로 두
 invalidator를 주입하며 Control Plane은 그 composite Protocol을 소유하거나 optional하게 탐색하지 않는다.
+이는 현재 accepted baseline이다. ADR 0024 `RLS-01-A`가 exact 승인되면 위 proposed required
+`invalidate(source_id, *, next_source)`와 Query-first fence/drain order가 이를 교체한다.
 
 Replica 적용 순서는 다음과 같다.
 

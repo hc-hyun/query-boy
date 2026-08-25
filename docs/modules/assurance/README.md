@@ -156,6 +156,42 @@ owner-rights/security-definer leak, role inheritance, FORCE RLS, custom function
 grammar/bound, exact policy `pg_depend`/database-scoped `pg_shdepend`, UTF8 libc/ICU/builtin positive,
 SQL_ASCII/non-UTF8 server/client와 same-Python-name/different-relation negative, startup/checkout/live
 connection policy, str-only graph, cache/reload 및 v1/v2 cutover/rollback을 cross-module로 검증한다.
+Stable zero-root/root-count deterministic public marker 대 root-list add/drop/rename 및 다른 transient error,
+private history decode 대 public current-serving gate,
+RLS v1/old-policy v2 cold-start rejection과 pool/cache-before-registry apply order/partial failure도 검증한다.
+Pre-fence candidate failure의 current route 불변, post-fence/pre-commit failure의 old/new route 0과
+post-commit bookkeeping/probe failure의 only-new/removed projection과 health/apply-status unavailable/failed,
+external probe cancellation의 same projection/fabricated failure-status 0/재전파를 서로 다른 event-order case로 고정한다.
+Post-fence failure는 failed-adapter tombstone과 earlier pending-next가 섞여도 route 0인지 확인한다.
+Hidden canary가 marker/codec cause-context와 ordinary log에 없는지, candidate transient 503/cancellation
+재전파, second-read 직후 old query·detached semaphore waiter·checked-out query·Catalog refresh/resource
+observation의 active checked-out connection race 및 disable failure가 exact-profile fence를 우회하지
+않는지도 event barrier로 검증한다. 각 최대 1초인 fixed transition cleanup phase의 timeout과 successful invalidation 뒤
+old Query/Catalog checked-out connection 0도 확인한다.
+Query terminal result gate와 transition fence의 양쪽 event order를 검증해 fence-first old result 0과
+result-first completion-before-transition을 구분한다. Query/observation external 대 transition cancellation도 같은
+lifecycle lock의 first-recorded reason이 승리하고 later reason이 error/report를 덮어쓰지 않는지 검증한다.
+Marker/codec error는 rendered suppression뿐 아니라 direct `__cause__`/`__context__`가 모두 `None`인지
+검사한다. Password canary도 fence mismatch, drain failure, tombstone retry의 error/log/metric/audit에 없어야 한다.
+Candidate/active/query 각각의 no-SQL connection invariant mismatch, common reader-session identity/policy
+mismatch와 fixed-setting SQLSTATE `22023`/`42501`이 400 validation, `METADATA_UNAVAILABLE`,
+`QUERY_UNAVAILABLE`로 갈리는지 확인하고 resource observation에서는 exact `RESOURCE_READ_FAILED`인지
+별도로 검증한다. `ReaderSessionPolicyError`는 direct cause/context None이어야 한다. Marker로 감싸지 않는
+timeout/transport/other-driver는 candidate `SOURCE_CONTROL_UNAVAILABLE`, active Metadata
+`METADATA_UNAVAILABLE`, query timeout `QUERY_TIMEOUT`, query transport/other-driver
+`QUERY_UNAVAILABLE`, resource observation `RESOURCE_READ_FAILED`로 각각 갈리고 external cancellation은
+재전파되는 corpus를 검증한다. Non-RLS current mapping 회귀도 고정한다. Ordinary active RLS observation
+connection/read failure도 success 0/exact `RESOURCE_READ_FAILED`여야 한다.
+각 marker-free transient corpus에 hidden relation/policy/driver-message canary를 넣어 provider/helper log 0,
+candidate/active Metadata/query safe outer의 direct cause/context None, HTTP/MCP ordinary log/metric/audit canary
+0을 확인한다. Resource observation은 exception/`exc_info` 0/fixed reason만, external cancellation은
+log/wrapping/failure-report 0으로 재전파되어야 한다.
+Resource observation cleanup은 pre-BEGIN invariant mismatch에서 rollback 0/close-discard, transaction
+setting/probe/read failure에서 rollback-reset 및 recovery 실패/broken connection만 close-discard인지 확인한다.
+같은 transition corpus는 non-RLS managed source에서도 active query가 details 없는 unavailable로 끝나고
+RLS-only connection verifier의 invocation 0이며 UTF8/graph/v2 admission이 실행되지 않는지 함께 검증한다.
+Transition-cancelled resource observation의 success 0/exact `RESOURCE_READ_FAILED`와 external observation
+cancellation의 repropagation/failure-report 0도 구분한다.
 Startup UTF8에 따른 value/hash/rejection도 current/rollback verified 전량과 비교한다. `RLS-02` 구현 전에는
 strict xfail을 passing regression으로 바꾸거나 현재 계약을 완료로 기록하지 않는다.
 Acceptance에는 dynamic leak fixture뿐 아니라 disposable managed RLS source의 existing-schema

@@ -143,11 +143,48 @@ resolve했다. Fetch 뒤 raw bytes를 복원해 fingerprint만 다르게 해도 
 psycopg UTF-8 codec을 relation access 전 no-SQL connection info로 admission한다. Lock과 common reader
 probe 뒤 live provider 직전에도 같은 info를 재확인하고 graph text는 exact `str`만 허용한다. Non-UTF8
 RLS source는 UTF8 migration/re-onboarding과 fresh v2 발행 전 publish/route하지 않는다. 이 범위는
-RLS identity를 위한 source/session restriction이며 non-RLS pool은 바꾸지 않는다. Interval/JSON/result
-OID와 broader source-semantics는 proposed ADR 0020에 그대로 남는다.
+RLS identity를 위한 source/session restriction이며 non-RLS pool의 startup encoding/session/result 의미는
+바꾸지 않는다. 다만 아래 exact-profile transition lifecycle은 모든 managed source에 공통 적용한다.
+Interval/JSON/result OID와 broader source-semantics는 proposed ADR 0020에 그대로 남는다.
 
 탐색, 5-database 재실행, exact policy dependency와 encoding-collision 재실행이 만든 prefix를 독립
 조회한 최종 residue는 database `0`, role `0`, cleanup error `0`이었다.
+
+## Read-Only Implementation-Readiness Audit
+
+위 PostgreSQL probe 뒤에는 제품 동작, schema와 source configuration을 바꾸지 않고 현재 runtime의
+transition/error 경계를 읽기 전용으로 추적했다. 이 검토는 proposed ADR 0024를 구현했다고 주장하는
+acceptance가 아니라, exact 승인 뒤 구현자가 같은 race와 disclosure를 다시 만들지 않게 하는 근거다.
+
+- 현재 `PostgresQueryExecutor`의 pool/semaphore와 `PostgresCatalog` pool은 `source_id`만 key로 사용하고
+  두 `invalidate(source_id)`는 map에서 pool을 pop한 뒤 close할 뿐이다. `SourceReloader`에 주입되는 현재
+  adapter 순서도 Catalog 다음 Query이고, enabled apply는 registry upsert 뒤 Metadata cache를 invalidate한다.
+- 따라서 old query가 source를 읽은 직후 멈추고 reloader가 pool을 close/swap한 다음 재개되면 old
+  profile로 pool을 다시 만들거나 같은 source ID의 new-profile pool을 소비할 수 있다. Catalog load와
+  resource observation에도 같은 lease/publish race가 있다. QueryService second-read만 추가해도 그 확인
+  직후 같은 race가 남으므로 exact-profile fence, active registration과 transition drain이 함께 필요하다.
+- 이 repository의 locked `psycopg_pool 3.3.1` source에서 `AsyncConnectionPool.close()`는 waiting client와
+  idle connection을 제거하지만 checked-out connection은 pool에 반환될 때까지 닫지 않는다고 명시한다.
+  따라서 pool close만으로 registry swap 시점의 old Query/Catalog connection `0`을 증명할 수 없다.
+- 현재 snapshot `_decode()`는 deterministic Pydantic failure를
+  `StoredMetadataInvalidError(... ) from error`로 보존하고 `SourceReloader.sync()`/apply failure는
+  `logger.exception`으로 chain을 render할 수 있다. In-memory canary probe는 outer cause가
+  `ValidationError`이고 hidden relation canary가 formatted traceback에 포함되는 결과
+  `canary_in_traceback=True`를 확인했다. 제안 계약은 deterministic codec cause/context/input repr을
+  제거하되 PostgreSQL I/O/transport/driver failure와 cancellation은 해당 error로 바꾸지 않는다.
+- Immutable history decode와 current runtime serving은 같은 판정이 아니다. Old-policy v2를 historical
+  golden으로 읽을 수 있어도 public store/service/cold-start path가 current RLS snapshot으로 제공해서는
+  안 되며, offline serving-compatibility도 live DB fingerprint equality를 주장할 수 없다. Fresh refresh와
+  every RLS query transaction만 live equality를 증명한다.
+- Current staging의 Metadata refresh error branch는 `ReaderSessionPolicyError` 또는 public
+  `contract_violations` detail만 deterministic validation으로 구분한다. 새 graph provider의 private
+  exception/message를 parse하지 않으면서
+  deterministic graph failure는 400, `55P03`/deadline/transport/driver failure는 503, task cancellation은
+  재전파하려면 Metadata-owned empty-args public marker가 필요하다.
+
+이 audit 뒤 repository integration gate는 `83 passed, 657 deselected, 2 xfailed`였다. 두 XFAIL은 위
+cross-tenant policy-drift sentinel이며 unexpected setup/query/cleanup failure는 없었다. Integration 종료 뒤
+disposable database와 role residue를 다시 조회한 결과도 각각 `0`, `0`이었다.
 
 따라서 단순 fingerprint 추가가 아니라 strict graph/policy admission, lock-first order와 custom/role
 잔여 경계를 하나의 계약으로 결정해야 한다. ADR 0024는 제안 상태이고 정확한 사용자 승인 전에는
@@ -164,14 +201,61 @@ OID와 broader source-semantics는 proposed ADR 0020에 그대로 남는다.
    admission할지
 3. Custom function/operator와 nested owner-rights view를 거부할지 또는 transitive하게 attest할지
 4. Metadata publish/revision과 같은 read-only transaction의 query-time drift check를 어떻게 연결하고
-   concurrent DDL race를 어떤 lock/order로 닫을지
+   concurrent DDL race를 어떤 lock/order로 닫을지. 두 Metadata phase는 각각
+   `min(30_000, 8 * metadata_statement_timeout_ms)`를 checkout 전부터 return/reset까지 독립 소비하고
+   1,000ms cleanup을 넘으면 discard하며, query live attestation은 existing query deadline을 소비한다.
 5. Policy `pg_depend`/database-scoped `pg_shdepend`의 exact bound와 RLS source/pool의
    PostgreSQL-18/UTF8 identity를 어떻게 admission할지
-6. Drift의 public error, cache/stale 금지, managed snapshot migration, current/rollback reissue와 rollback
+6. Stable zero-root/root-count/graph와 codec/Pydantic failure를 hidden cause/context 없는 public
+   marker/type으로 구분하고, pre-discovery/authoritative root-list add/drop/rename race 및
+   `55P03`/deadline/transport/driver failure와 cancellation을 각각 marker 없는 503/재전파로 보존할지
+   Candidate/active/query의 no-SQL connection invariant mismatch, completed common reader-session
+   identity/policy mismatch와 fixed-setting SQLSTATE `22023`/`42501`은 각각 existing validation 400,
+   `METADATA_UNAVAILABLE`, `QUERY_UNAVAILABLE`로 분류하고 resource observation에서는 exact
+   `RESOURCE_READ_FAILED`로 소비한다.
+   Deterministic marker/codec error의 direct `__cause__`와 `__context__`도 모두 `None`이어야 하며 rendered
+   suppression만으로 충족한 것으로 보지 않는다.
+   RLS `ReaderSessionPolicyError`는 위 no-SQL invariant, completed mismatch와 SQLSTATE `22023`/`42501`에서만
+   direct cause/context None으로 만들되 각 consumer의 public 결과를 보존한다. Marker로 감싸지 않는 timeout/
+   transport/other-driver는 candidate `SOURCE_CONTROL_UNAVAILABLE`, active Metadata
+   `METADATA_UNAVAILABLE`, query timeout `QUERY_TIMEOUT`, query transport/other-driver
+   `QUERY_UNAVAILABLE`, resource observation `RESOURCE_READ_FAILED`로 각각 소비하고 external cancellation은
+   재전파한다. Non-RLS current reader-setting error mapping은 바꾸지 않는다.
+   Marker-free transient raw exception은 provider/helper가 log하지 않고 consumer가 분류·cleanup한 뒤 버린다.
+   Candidate/active Metadata/query는 except block 밖에서 direct cause/context 없는 existing safe outer error만
+   raise하고, resource observation은 exception 없이 fixed reason만 report하며, external cancellation은
+   log/wrapping 없이 재전파한다.
+7. Private v1/v2 history decode, public offline current-policy serving-compatibility와 fresh refresh/query
+   live attestation을 어떻게 분리해 cold start와 stale cache에서 old-policy snapshot을 막을지
+8. 모든 managed source transition에서 exact `SourceProfile` fence와
+   `invalidate(source_id, *, next_source)`를 사용하고 Query-first Query/Catalog active lease를 fixed
+   three-phase(각 최대 1초) cleanup으로 drain한 뒤 Metadata cache, registry 순서로 적용할지. Resource observation과
+   partial/disable failure도 fence를 우회하지 않으며 non-RLS active query도 transition
+   `QUERY_UNAVAILABLE`로 끝날 수 있는 영향을 포함한다. Transition-cancelled observation은 exact
+   `RESOURCE_READ_FAILED`, external observation cancellation은 failure-report 없는 재전파로 구분한다.
+   Query terminal result handoff와 transition fence는 같은 lock에서 선형화해 fence-first old result를
+   폐기한다. Query/observation의 external 대 transition cancellation은 같은 lock의 first-recorded reason이
+   public result/report를 결정하고 later reason이 덮어쓰지 않는다.
+   Ordinary active RLS observation의 connection-policy/operational read failure도 exact
+   `RESOURCE_READ_FAILED`이며 raw error를 저장하지 않는다. Pre-BEGIN invariant mismatch는 rollback 없이
+   close/discard하고 transaction setting/probe/read failure는 rollback/reset recovery 실패/broken connection만
+   close/discard한다.
+   Secret-bearing exact profile은 password canary가 fence/drain/tombstone retry의 error/log/metric/audit에
+   남지 않아야 한다.
+   Registry upsert/remove의 successful return만 transition commit point다. Applied-generation/status
+   bookkeeping은 post-commit reconciliation이며 bookkeeping/probe failure 또는 external probe cancellation은
+   committed projection을 되돌리지 않는다. Failure는 unavailable/failed status를 기록하지만 external
+   cancellation은 fabricated status 없이 재전파한다. Same desired projection retry는 drain 없이 bookkeeping만 복구한다.
+9. Drift의 cache/stale 금지, managed snapshot migration, current/rollback reissue와 rollback
 
-이 범위는 Metadata snapshot/revision, Guarded Query admission/error와 Control Plane publish/cutover에
-영향을 주는 module contract 변경이다. 사용자가 정확한 proposal을 승인하기 전 제품 코드, schema,
-snapshot codec 또는 production route를 변경하지 않는다.
+이 범위는 Source Catalog connection admission, Metadata snapshot/revision, Guarded Query admission/error,
+Control Plane apply, Runtime transition과 Assurance acceptance에 영향을 주는 module contract 변경이다.
+사용자가 정확한 proposal을 승인하기 전 제품 코드, schema, snapshot codec 또는 production route를
+변경하지 않는다.
+
+이 repository contract 승인은 protected inventory/freeze, policy/data DDL, unroute/deactivate,
+credential/pointer/reissue, fleet/route cutover와 rollback 실행 권한이 아니다. 해당 환경 작업은 access와
+change record를 갖춘 별도 `RLS-03`/`TIME-03` 승인을 요구한다.
 
 Protected environment의 RLS source inventory, mutation freeze와 unverified route drain은 안전상 우선
 조치지만 이 repository 세션에는 production DSN, source 목록, 권한, route/drain 또는 change record가
