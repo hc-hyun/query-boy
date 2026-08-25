@@ -164,6 +164,18 @@ WORKFLOW_TRACE_ADR = (
     / "decisions"
     / "0022-w3c-workflow-trace-context.md"
 )
+DATABASE_NATIVE_ALERT_ADR = (
+    ROOT_DIRECTORY
+    / "docs"
+    / "decisions"
+    / "0023-database-native-usage-spike-alert.md"
+)
+LOWER_TRACK_CONTRACT_PREWORK = (
+    ROOT_DIRECTORY
+    / "docs"
+    / "verification"
+    / "2026-08-26-lower-track-contract-prework.md"
+)
 EXPECTED_ID_COUNTS = {
     "BASE": 10,
     "DEC": 9,
@@ -461,6 +473,8 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
         encoding="utf-8"
     )
     cost_adr = DATABASE_NATIVE_COST_ADR.read_text(encoding="utf-8")
+    alert_adr = DATABASE_NATIVE_ALERT_ADR.read_text(encoding="utf-8")
+    lower_track_prework = LOWER_TRACK_CONTRACT_PREWORK.read_text(encoding="utf-8")
     query_cost = QUERY_COST_CONTROL.read_text(encoding="utf-8")
     trace_adr = WORKFLOW_TRACE_ADR.read_text(encoding="utf-8")
     assurance_contract = (
@@ -533,18 +547,65 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
     assert "`CTRL-08` usage/cost state" in todo
     assert "현재 선택지 초안은 lower-track read-only prework" in todo
     assert "`COST-01-A|B|C`" in todo
-    assert "`COST-04` 급증 threshold/alert" in todo
-    assert "alert event/state 보존 기간은" in todo
+    assert "`COST-04`는 별도 [proposed ADR 0023]" in todo
+    assert "alert 90일은 아직 승인된 현재 계약이 아니다" in todo
     assert "`TRACE-01-A|B|C`" in todo
     assert (
         "Status: Proposed read-only prework — priority gate and user approval required"
         in cost_adr
     )
     assert "`COST-01-A` — dedicated sanitized monitor (recommended)" in cost_adr
-    assert "`COST-04` Contract Gap — separate exact addendum required" in cost_adr
-    assert "아래 A 문구는 위 `COST-04` threshold/alert addendum를 승인하지 않는다" in cost_adr
+    assert "`COST-04` Boundary — separate ADR 0023 approval required" in cost_adr
+    assert "아래 A 문구는 proposed ADR 0023의 `COST-04`" in cost_adr
+    assert "Status: Proposed read-only prework" in alert_adr
+    assert "`COST-04-A` — durable polling-only execution-time spike alert" in alert_adr
+    assert "accepted_samples >= 10" in alert_adr
+    assert "sample-count-qualified" in alert_adr
+    assert "whole-hour/continuous coverage" in alert_adr
+    assert "CREATE TABLE control.source_db_alert_policy_revisions" in alert_adr
+    assert "CREATE TABLE control.source_db_alert_policy_state" in alert_adr
+    assert "CREATE TABLE control.source_db_alert_states" in alert_adr
+    assert "CREATE TABLE control.source_db_alert_events" in alert_adr
+    assert "migration **7**" in alert_adr
+    assert "base 18+alert 4=22 tables" in alert_adr
+    assert "source_db_alert_events_one_terminal_idx" in alert_adr
+    assert "alert_policy_state_version bigint NOT NULL" in alert_adr
+    assert "observation_started_bucket timestamptz NOT NULL" in alert_adr
+    assert "firing_event_type text NOT NULL" in alert_adr
+    assert "compatibility release" in alert_adr
+    assert "모든 fenced committed monitoring attempt" in alert_adr
+    assert "| not_configured/version 0 | configure |" in alert_adr
+    assert "event_retention_days=90" in alert_adr
+    assert "field도 생략하지 않고 JSON `null`" in alert_adr
+    assert "reason_code IS DISTINCT FROM 'COOLDOWN_ACTIVE'" in alert_adr
+    assert "evaluated_at < cooldown_until" in alert_adr
+    assert "Webhook/email/push" in alert_adr
+    assert "COST-04-A를" in alert_adr
+    assert "disposable contract prework" in roadmap
+    assert "Repository production code" in lower_track_prework
+    assert "22 tables" in lower_track_prework
+    assert "exact_target_only=true" in lower_track_prework
+    assert "query-man-acl-probe-final-0021" in lower_track_prework
+    assert "잔여 count는 모두 0" in lower_track_prework
+    assert "exact contract 승인이나 production implementation evidence가 아니다" in (
+        lower_track_prework
+    )
     assert "pg_monitor" in cost_adr
     assert "query text" in cost_adr
+    assert "effective capability matrix" in cost_adr
+    assert "Query Man application은 shared PUBLIC ACL을 자동 revoke하지 않고" in cost_adr
+    assert "raw non-reset statement/info function" in cost_adr
+    assert "roleid=owner_oid" in cost_adr
+    assert "roleid=monitor_oid" in cost_adr
+    assert "target database의 PUBLIC `TEMPORARY`" in cost_adr
+    assert "모든 `pg_database.datallowconn=true` database의 PUBLIC `CONNECT`" in cost_adr
+    assert "true\n      count는 0" in cost_adr
+    assert "CREATE DATABASE ... ALLOW_CONNECTIONS false" in cost_adr
+    assert "ALLOW_CONNECTIONS false→ACL hardening→true" in cost_adr
+    assert "Target CONNECT가 direct ACL item이면 grant option은 false" in cost_adr
+    assert "identity/baseline/attempt/success만 전부 null" in cost_adr
+    assert "shared_blks_hit, shared_blks_read, shared_blks_dirtied" in cost_adr
+    assert "other-database PUBLIC CONNECT 및 PUBLIC/object ACL hardening" in cost_adr
     assert "row별 `stats_since`" in cost_adr
     assert "target reader role의 `pg_stat_statements` aggregate" in cost_adr
     assert "Query Man business query별 측정이나" in cost_adr
@@ -565,7 +626,7 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
     assert definition_bytes.isascii()
     definition_revision = "sha256:" + hashlib.sha256(definition_bytes).hexdigest()
     assert definition_revision == (
-        "sha256:b4bf6e4400041f51d57cf828ed580100c07b59cdb543268b363989ef64484b77"
+        "sha256:f621a1815ad806d23d23f00fe0f0faa030c4083fbf49d184a4b8dd3d7e379160"
     )
     assert f"`{definition_revision}`" in cost_adr
     assert definition_material["attribution"] == {
@@ -588,13 +649,18 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
         "baseline_new_observation_identity"
     )
     assert definition_material["binding"] == {
+        "database_binding": "one_source_per_system_identifier_and_database_oid",
         "database_oid": "current_database_catalog_oid",
         "info_must_match_bound_source": True,
-        "reader_oid": "to_regrole(active_source_reader_username_parameter)",
+        "reader_oid": "exact_pg_roles_rolname(active_source_reader_username_parameter)",
         "statement_rows_must_match_info": True,
     }
     assert definition_material["failure_precedence"] == [
         ["bound_database_or_reader_or_mid_scan_target", "failed_TARGET_MISMATCH"],
+        [
+            "monitor_or_function_owner_privilege_or_projection_security_drift",
+            "failed_MONITOR_PRIVILEGE_MISMATCH",
+        ],
         [
             "extension_preload_version_or_projection_missing",
             "failed_EXTENSION_UNAVAILABLE",
@@ -605,8 +671,8 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
         ],
         ["statement_rows_over_5000", "discarded_ROW_LIMIT_EXCEEDED"],
         [
-            "mid_scan_reset_or_dealloc_shape_type_null_info_cardinality_decode_"
-            "nonfinite_nonintegral_statement_binding_or_incomplete",
+            "mid_scan_reset_or_dealloc_duplicate_identity_shape_type_null_info_"
+            "cardinality_decode_nonfinite_nonintegral_statement_binding_or_incomplete",
             "discarded_OBSERVATION_INCOMPLETE",
         ],
         [
@@ -619,11 +685,46 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
         ],
     ]
     assert definition_material["projection"] == {
+        "acl_profile": (
+            "pgss_v1_21_2_owner_raw_nonreset_readstats_inbound0_monitor_wrappers_"
+            "nomembership_targetdb_only_notemp_public_hardened"
+        ),
+        "body_template_encoding": "utf8_exact_lf_terminal_newline",
+        "extension_namespace": "public",
+        "function_language": "sql",
+        "function_security": (
+            "security_definer_stable_parallel_restricted_locked_search_path"
+        ),
+        "info_body_template_revision": (
+            "sha256:093d8c24cf77b9a93e2e790fa01f2d190965be3a3864beb3dbdbbf5b7a19fa20"
+        ),
         "info_function": "query_man_monitor.monitor_info_v1()",
         "overloads": False,
+        "reader_literal_placeholder": "{{reader_sql_literal}}",
         "schema": "query_man_monitor",
+        "statement_body_template_revision": (
+            "sha256:728bbb12bec272b7a6bc31320fcd11ce55513281a06e076458ce1928097707f4"
+        ),
         "statement_function": "query_man_monitor.monitor_statements_v1()",
     }
+    source_sql_templates = re.findall(
+        r"^   ```sql\n(.*?)\n   ```$", cost_adr, re.DOTALL | re.MULTILINE
+    )
+    assert len(source_sql_templates) >= 2
+    template_revisions = []
+    for template in source_sql_templates[:2]:
+        material = (
+            "\n".join(
+                line[3:] if line.startswith("   ") else line
+                for line in template.splitlines()
+            )
+            + "\n"
+        ).encode("utf-8")
+        template_revisions.append("sha256:" + hashlib.sha256(material).hexdigest())
+    assert template_revisions == [
+        definition_material["projection"]["info_body_template_revision"],
+        definition_material["projection"]["statement_body_template_revision"],
+    ]
     assert definition_material["session"] == {
         "date_style": "ISO, YMD",
         "time_zone": "UTC",
@@ -672,6 +773,12 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
         "transaction_ms": 75000,
     }
     assert definition_material["target_instance"]["template"].count("\n") == 6
+    assert definition_material["target_instance"]["database_binding_template"] == (
+        "pg18-db\n{system_identifier}\n{dbid}"
+    )
+    assert definition_material["bounds"]["collector_concurrency_per_replica"] == 4
+    assert definition_material["bounds"]["accepted_samples_per_hour"] == 12
+    assert definition_material["delta"]["explicit_zero"] == "persist_rollup_row"
     assert "`bucket_start=date_trunc('hour', accepted_at, 'UTC')`" in cost_adr
     assert "`lease_until=now+120 seconds`" in cost_adr
     assert "Source I/O 중 Control connection이나" in cost_adr
@@ -684,7 +791,7 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
     assert "same-key/different-secret을 구분하는 in-memory" in cost_adr
     assert "Source I/O 동안 Control connection/lock은 0개" in cost_adr
     assert "canonical `failure_precedence`의 first matching outcome/reason" in cost_adr
-    assert "pg_catalog.to_regrole($1::text)::oid" in cost_adr
+    assert "role_row.rolname = $1::pg_catalog.name" in cost_adr
     assert "모든 statement row의 `dbid/userid`는 두 info와 같아야" in cost_adr
     assert "existing `SOURCE_VALIDATION_FAILED` 400" in cost_adr
     assert "| disabled | rotate | next revision" in cost_adr
@@ -703,6 +810,32 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
     assert "COUNTER_OVERFLOW" in cost_adr
     assert "read_at <= fresh_until" in cost_adr
     assert "source_db_usage_rollups" in cost_adr
+    for table_name in (
+        "source_db_monitoring_revisions",
+        "source_db_monitoring_state",
+        "source_db_usage_state",
+        "source_db_statement_baselines",
+        "source_db_usage_rollups",
+    ):
+        assert f"CREATE TABLE control.{table_name}" in cost_adr
+    assert "additive migration **6**" in cost_adr
+    assert "db_monitoring_state_database_unique UNIQUE (database_binding_id)" in cost_adr
+    assert "accepted_samples BETWEEN 1 AND 12" in cost_adr
+    assert "lease_epoch bigint NOT NULL DEFAULT 0" in cost_adr
+    assert "source_db_usage_state_due_idx" in cost_adr
+    assert "source_profile_revision_generation_metadata_unique" not in cost_adr
+    assert "db_usage_state_metadata_exists" in cost_adr
+    assert ") IS TRUE" in cost_adr
+    assert "Compatibility-reader-first" in cost_adr
+    assert "18-table/25-FK/5-trigger" in cost_adr
+    assert "source_db_monitoring_revisions_are_immutable" in cost_adr
+    assert "configure_database_native_monitoring" in cost_adr
+    assert "기존 13개에\n    이 5개를 더한 18개 table" in cost_adr
+    assert "MONITOR_PRIVILEGE_MISMATCH" in cost_adr
+    assert "process당 source scan은 최대 4개" in cost_adr
+    assert "같은 database의 binding을 **다른 source가**" in cost_adr
+    assert "The requested monitoring revision was not found." in cost_adr
+    assert "The source monitoring state changed; retry with current state." in cost_adr
     assert "database_native" in cost_adr
     assert "`database_native` section 자체를 추가하지 않는다" in cost_adr
     assert "이는 contract 선택이며 열린 ENC/TIME보다 구현을 먼저" in cost_adr
@@ -718,24 +851,45 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
         "Status: Proposed read-only prework — priority gate and user approval required"
         in trace_adr
     )
-    assert "`TRACE-01-A` — authenticated fail-soft `traceparent` (recommended)" in trace_adr
+    assert "`TRACE-01-A` — policy-admitted fail-soft `traceparent` (recommended)" in trace_adr
     assert "B/C를 선택하면 route, audit/counter" in trace_adr
-    assert "`POST /mcp`, `POST /query`와 operator" in trace_adr
-    assert "`DELETE /queries/{query_id}`뿐이다" in trace_adr
-    assert "DELETE /queries/{query_id}에서만 W3C traceparent" in trace_adr
-    assert "admin source route, MCP GET, authenticated 404/405" in trace_adr
+    assert "configured authentication policy가 `CallerContext`" in trace_adr
+    assert "`/queries/{query_id}` 한 segment인 `DELETE`" in trace_adr
+    assert "decoded exact DELETE /queries/{query_id}에서만 ASGI raw" in trace_adr
+    assert "admin source route, MCP GET" in trace_adr
+    assert "policy-admitted 404/405" in trace_adr
     assert "accepted | generated_absent | restarted_invalid | restarted_duplicate" in trace_adr
     assert "Mixed-case duplicate도 duplicate" in trace_adr
+    assert "visible US-ASCII `0x21..0x7e`" in trace_adr
+    assert "ASGI-observable" in trace_adr
+    assert "wire OWS" in trace_adr
+    assert "`local-development`도 성공한 caller context" in trace_adr
+    assert "Lone trailing `-`도 future-version opaque suffix" in trace_adr
+    assert "`secrets.token_hex(16)`" in trace_adr
     assert "`current_trace_context() -> TraceContext | None`" in trace_adr
+    assert "frozen+slots `TraceContext" in trace_adr
     assert "ASGI `scope[\"state\"]`" in trace_adr
-    assert "reset된 ContextVar가 아니라" in trace_adr
+    assert "ContextVar가 아니라 같은 ASGI state" in trace_adr
+    assert "private MCP-call scope" in trace_adr
+    assert "existing `mcp_call_id`를 query start/success/failure/interruption" in trace_adr
     assert "Runtime provider → Delivery parser/set-reset" in trace_adr
-    assert "cancel request의 trace" in trace_adr
+    assert "cancel request trace" in trace_adr
     assert "의미 있는 식별자를 32-hex에 encode해서는" in trace_adr
     assert "안 된다(MUST NOT)" in trace_adr
     assert "replica-local, process-restart-reset aggregate counter" in trace_adr
+    assert "CallerContext-bearing request 하나마다 source-less counter" in trace_adr
+    assert "잘못된 type/value면 stringify/redact해 내보내지 않고" in trace_adr
+    assert "all-zero가 아닌 string" in trace_adr
     assert "P4의 TRACE-01 결정과 승인된" in trace_adr
     assert "tracestate/baggage/response/outbound propagation" in trace_adr
+    assert "failed parallel MCP query" in delivery_contract
+    assert "current process-local trace만" in guarded_query_contract
+    assert "Delivery-private MCP call ID는 Guarded Query로 넘기지 않고" in guarded_query_contract
+    assert "target query의 original trace" in guarded_query_contract
+    assert "failed parallel MCP call→query mapping" in assurance_contract
+    assert "real Uvicorn/h11 wire OWS normalization parity" in assurance_contract
+    assert "unknown-source trace absence" in assurance_contract
+    assert "two-process/replica soak correlation" in assurance_contract
     assert "`RTSAFE-*`, `MOD-*`" not in todo
 
     for item_id in EXPECTED_POST_BASELINE_COMPLETED_IDS:
@@ -964,8 +1118,8 @@ def test_source_database_corner_docs_record_canonical_time_resolution() -> None:
     assert "`47 passed`, 20 deselected" in audit
     assert "`18 passed`, 1 deselected" in audit
     assert "`24 passed`, 1 deselected" in audit
-    assert "`645 passed`, 91 deselected" in audit
-    assert "`79 passed`, 657 deselected" in audit
+    assert "`645 passed`, 92 deselected" in audit
+    assert "`80 passed`, 657 deselected" in audit
 
 
 def test_mutation_receipt_docs_preserve_terminal_and_secret_boundaries() -> None:

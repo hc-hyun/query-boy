@@ -326,8 +326,11 @@ prework인 [proposed ADR 0021](../../decisions/0021-database-native-cost-attribu
 monitoring identity, reset/deallocation-aware target-reader-role aggregate와 sibling `database_native`
 section의 선택지만 기록한다. ENC final baseline 확정, `TIME-03` 완료 또는 명시적 defer와 정확한
 `COST-01-A|B|C` 승인 전에는 source monitoring role/function, Control schema/store나 `/usage` 의미를
-변경하지 않는다. A의 base collector/rollup 제안에도 `COST-04` 급증 threshold/alert 계산·상태·전달
-계약은 없으므로 별도 exact addendum 승인 전 alert state/table을 만들지 않는다.
+변경하지 않는다. A의 base collector/rollup 제안은 `COST-04`를 포함하지 않는다. 별도
+[proposed ADR 0023](../../decisions/0023-database-native-usage-spike-alert.md)의 base evidence gate와 exact
+approval 전에는 alert policy/state/event table, evaluator나 operator projection을 만들지 않는다. 승인될
+경우 Control Plane이 closed-bucket sample-count heuristic, policy/base epoch와 migration 7의 four-table
+authority 및 polling projection을 provider-first로 소유한다. 이 count는 continuous-hour coverage가 아니다.
 
 Delivery는 이 application result만 소비하고 table/private DTO를 읽지 않는다. Unknown source는
 `SourceNotFoundError`, DB/decode/cardinality 오류는 `SourceControlUnavailableError`이며 stale 또는

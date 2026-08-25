@@ -2,7 +2,7 @@
 
 Status: Complete
 
-Last updated: 2026-08-26 (`DBEDGE-04`)
+Last updated: 2026-08-26 (`DBEDGE-04` function-body follow-up)
 
 ## Scope
 
@@ -60,7 +60,7 @@ SELECT
 | Catalog hard limits | Cold cache에서 relation 3개/상한 2, column 3개/상한 2, structure 3개/상한 2와 warm cache에서 relation 1개/상한 1 뒤 두 번째 relation grant | 실제 catalog가 partial snapshot을 publish하지 않았고, warm cache도 이전 snapshot을 stale 성공으로 가장하지 않은 채 `METADATA_UNAVAILABLE`로 fail-closed했다. 초과 object를 제거한 뒤 같은 max-one pool은 정상 snapshot을 다시 publish했다. |
 | Unsupported driver values | PostgreSQL infinity date, `int4range`, nonempty `int4multirange`와 nonempty `int4range[]` | 내부 driver/object detail 없이 `QUERY_UNAVAILABLE`로 rollback했고 같은 max-one pool의 다음 supported query가 정상 복구됐다. |
 | Multibyte byte boundary | 한글과 emoji를 포함한 두 row, 첫 row compact UTF-8 exact boundary | 첫 complete row만 반환하고 두 번째 row를 부분 직렬화하지 않은 채 `truncated=true`, exact byte count를 유지했다. |
-| Open scalar/collection/result-type contract characterization | Month interval/30 days, 큰 JSONB fractional numeric, duplicate-key JSON, SQL_ASCII text/bytea, time 24시, direct·hidden-view·domain-type `C`/`pg_c_utf8` collation, anonymous/named record, `oid/name`·array와 string/integer/list-valued unknown OID, empty multirange/range-array/integer-array, 0/1 lower-bound array, reader semantic GUC와 `bytea_output` | Silent hash collision, unsupported SQL type accidental success, same-revision SQL 의미/value/hash drift와 driver availability failure를 exact golden으로 재현했다. Boolean view의 hidden base collation도 public snapshot/definition hash를 바꾸지 않았다. Custom domain collation은 같은 view definition 아래 direct `pg_type` dependency와 `typcollation`으로만 바뀌었다. `jsonb` duplicate normalization과 `bytea_output=hex|escape`는 DB/driver가 안정적으로 정규화하는 negative control이었다. 의미 수정은 `ENC-01` 승인 전 중단했다. |
+| Open scalar/collection/result-type contract characterization | Month interval/30 days, 큰 JSONB fractional numeric, duplicate-key JSON, SQL_ASCII text/bytea, time 24시, direct·hidden-view·domain-type `C`/`pg_c_utf8` collation, same-OID custom function body, anonymous/named record, `oid/name`·array와 string/integer/list-valued unknown OID, empty multirange/range-array/integer-array, 0/1 lower-bound array, reader semantic GUC와 `bytea_output` | Silent hash collision, unsupported SQL type accidental success, same-revision SQL 의미/value/hash drift와 driver availability failure를 exact golden으로 재현했다. Boolean view의 hidden base collation과 custom function body도 public snapshot/definition hash를 바꾸지 않았다. Custom domain collation은 같은 view definition 아래 direct `pg_type` dependency와 `typcollation`으로만 바뀌었다. `jsonb` duplicate normalization과 `bytea_output=hex|escape`는 DB/driver가 안정적으로 정규화하는 negative control이었다. 의미 수정은 `ENC-01` 승인 전 중단했다. |
 
 ## Findings And Changes
 
@@ -138,6 +138,7 @@ PostgreSQL 18/psycopg default loader를 실제 read-only query로 확인한 결�
 | `text` column collation `C`→`pg_c_utf8` | `lower('Ä')`가 `Ä`→`ä` | Fresh catalog snapshot/revision도 같아 live semantic DDL을 탐지하지 못한다. |
 | Boolean view의 hidden base column collation `C`→`pg_c_utf8` | 같은 view SQL/output에서 `false`→`true` | View를 같은 definition으로 재생성해도 snapshot/revision이 같아 visible output column만으로는 dependency drift를 탐지하지 못한다. |
 | Custom domain collation `C`→`pg_c_utf8` | View definition은 같지만 direct `pg_type` edge의 `typcollation`이 바뀌 | Column/direct-`pg_collation` edge만 추적하면 constant domain cast의 active collation을 놓친다. |
+| Same-OID custom function body `false`→`true` | View definition·snapshot·revision은 같지만 boolean result/hash가 바뀌 | Call-site/view text만으로 user function implementation drift를 자동 attest할 수 없다. |
 | `'[0:1]={10,20}'::integer[]` 대 `'{10,20}'::integer[]` | 둘 다 public `[10,20]` | PostgreSQL array lower bound가 사라져 다른 배열이 같은 value/hash가 된다. |
 | `'{}'::int4range[]` 대 `'{}'::integer[]` | 둘 다 public `[]` | Empty range array는 accidental success하고 nonempty range array는 비공개 실패한다. |
 | `ROW()` 대 `ROW(NULL::integer)` | 둘 다 public `[]` | Anonymous record의 field count와 NULL이 사라져 같은 hash가 된다. |
@@ -206,6 +207,13 @@ OID erasure 전 거부한다. Pinned built-in type edge는 PostgreSQL 18 `pg_dep
 Noncollatable `positive_integer` domain column을 포함한 whole-row view는 base table에
 `refobjsubid=0` `pg_class` dependency만 남기고 direct `pg_type` edge는 남기지 않았다. 따라서
 domain admission은 collation용 zero-subid expansion과 분리해 모든 non-dropped column을 검사해야 한다.
+View call-site를 그대로 둔 `CREATE OR REPLACE FUNCTION` same-OID body 변경은 fresh
+snapshot/revision을 바꾸지 않았지만 public `enabled` value를 `false`에서 `true`로,
+hash를
+`sha256:2c3bdb6d969f6176565315abeacf08d1aac846b2bb003fbc887a55519d10376c`에서
+`sha256:630788e0d75c2d80b58158c7b0bb7ba7bb9af9ab8acfa21ae90433896ce1c42b`로 바꿨다.
+이는 ADR 0020 A가 custom function implementation을 automatic fingerprint 밖의 protected
+artifact freeze·cutover-stop residual로 정직하게 남겨야 하는 runnable 증거다.
 `time '24:00:00'` direct result는 비공개 unavailable로 rollback했고 text cast는 PostgreSQL이 midnight와
 구분해 `24:00:00`/`00:00:00`을 반환했다.
 `bytea_output=hex|escape`는 둘 다
@@ -272,9 +280,12 @@ ADR 0020 승인 범위에 남겼다.
 | `uv run ruff check tests/test_documentation.py tests/test_source_database_corners.py` (`DBEDGE-04`) | PASS |
 | `uv run pytest -m integration tests/test_source_database_corners.py -q` (`DBEDGE-04`) | PASS — SQL_ASCII, duplicate JSON, time 24시, timezone abbreviation, direct/hidden-view/domain-type collation과 known-loader OID/named-composite 포함 `24 passed`, 1 deselected |
 | `uv run pytest tests/test_documentation.py -q` (`DBEDGE-04`) | PASS — `16 passed` |
+| `uv run ruff check tests/test_documentation.py tests/test_source_database_corners.py` (`DBEDGE-04` function-body follow-up) | PASS |
+| `uv run pytest -m integration tests/test_source_database_corners.py -q` (`DBEDGE-04` function-body follow-up) | PASS — same-OID custom function body drift와 기존 disposable corner/cleanup 포함 `25 passed`, 1 deselected |
+| `uv run pytest tests/test_documentation.py -q` (`DBEDGE-04` function-body follow-up) | PASS — `16 passed` |
 | `uv run ruff check .` / `uv run mypy src` | PASS — 29 source files, mypy issue 0 |
-| `uv run pytest` | PASS — `645 passed`, 91 deselected |
-| `uv run pytest -m integration` | PASS — `79 passed`, 657 deselected |
+| `uv run pytest` | PASS — `645 passed`, 92 deselected |
+| `uv run pytest -m integration` | PASS — `80 passed`, 657 deselected |
 | Prefix residue query | PASS — database `0`, role `0` |
 
 현재 `DBEDGE-04` root static/unit/integration 결과는 위 표에 기록했다. 실제 managed source의 전체

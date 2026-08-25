@@ -2067,6 +2067,178 @@ async def test_enc_01_characterizes_domain_type_dependencies() -> None:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_enc_01_characterizes_custom_function_body_revision_gap() -> None:
+    async with _disposable_source_database() as database:
+        admin = await AsyncConnection.connect(database.admin_dsn, autocommit=True)
+        try:
+            await admin.execute("CREATE SCHEMA private")
+            await admin.execute("CREATE SCHEMA analytics")
+            await admin.execute(
+                """
+                CREATE FUNCTION private.semantic_flag(text)
+                RETURNS boolean
+                LANGUAGE sql
+                IMMUTABLE
+                STRICT
+                AS 'SELECT false'
+                """
+            )
+            await admin.execute(
+                "CREATE VIEW analytics.function_semantics AS "
+                "SELECT private.semantic_flag('fixture') AS enabled"
+            )
+            function_identity_cursor = await admin.execute(
+                """
+                SELECT procedure.oid,
+                       procedure.proname,
+                       pg_catalog.pg_get_function_identity_arguments(procedure.oid)
+                FROM pg_catalog.pg_proc AS procedure
+                JOIN pg_catalog.pg_namespace AS namespace
+                  ON namespace.oid = procedure.pronamespace
+                WHERE namespace.nspname = 'private'
+                  AND procedure.proname = 'semantic_flag'
+                """
+            )
+            function_identity = await function_identity_cursor.fetchone()
+            assert function_identity is not None
+            await admin.execute(
+                sql.SQL("GRANT USAGE ON SCHEMA private, analytics TO {}").format(
+                    sql.Identifier(database.view_owner_name)
+                )
+            )
+            await admin.execute(
+                sql.SQL(
+                    "GRANT EXECUTE ON FUNCTION private.semantic_flag(text) TO {}, {}"
+                ).format(
+                    sql.Identifier(database.view_owner_name),
+                    sql.Identifier(database.reader_name),
+                )
+            )
+            await admin.execute(
+                sql.SQL("ALTER VIEW analytics.function_semantics OWNER TO {}").format(
+                    sql.Identifier(database.view_owner_name)
+                )
+            )
+            await admin.execute(
+                sql.SQL("GRANT USAGE ON SCHEMA analytics TO {}").format(
+                    sql.Identifier(database.reader_name)
+                )
+            )
+            await admin.execute(
+                sql.SQL("GRANT SELECT ON analytics.function_semantics TO {}").format(
+                    sql.Identifier(database.reader_name)
+                )
+            )
+
+            source = _source_profile(database, "function-drift", ("view",))
+            catalog, executor, metadata, query = _open_services(
+                source,
+                cache_ttl_ms=0,
+            )
+            try:
+                disabled = await metadata.get_published(source.source_id)
+                assert [
+                    relation.qualified_name for relation in disabled.snapshot.relations
+                ] == ["analytics.function_semantics"]
+                disabled_result = await query.query(
+                    source.source_id,
+                    "SELECT enabled FROM analytics.function_semantics",
+                    disabled.revision,
+                    SQL_POLICY_REVISION,
+                )
+                _assert_canonical_result(
+                    disabled_result,
+                    disabled.revision,
+                    ["enabled"],
+                    [{"enabled": False}],
+                )
+                assert create_result_hash(
+                    ("enabled",), disabled_result["rows"]
+                ) == (
+                    "sha256:2c3bdb6d969f6176565315abeacf08d1aac846b2bb003fbc887a55519d10376c"
+                )
+
+                await admin.execute(
+                    """
+                    CREATE OR REPLACE FUNCTION private.semantic_flag(text)
+                    RETURNS boolean
+                    LANGUAGE sql
+                    IMMUTABLE
+                    STRICT
+                    AS 'SELECT true'
+                    """
+                )
+                replaced_identity_cursor = await admin.execute(
+                    """
+                    SELECT procedure.oid,
+                           procedure.proname,
+                           pg_catalog.pg_get_function_identity_arguments(procedure.oid)
+                    FROM pg_catalog.pg_proc AS procedure
+                    JOIN pg_catalog.pg_namespace AS namespace
+                      ON namespace.oid = procedure.pronamespace
+                    WHERE namespace.nspname = 'private'
+                      AND procedure.proname = 'semantic_flag'
+                    """
+                )
+                assert await replaced_identity_cursor.fetchone() == function_identity
+                metadata.invalidate(source.source_id)
+                enabled = await metadata.get_published(source.source_id)
+                assert enabled.revision == disabled.revision
+                assert enabled.snapshot == disabled.snapshot
+                enabled_result = await query.query(
+                    source.source_id,
+                    "SELECT enabled FROM analytics.function_semantics",
+                    enabled.revision,
+                    SQL_POLICY_REVISION,
+                )
+                # ponytail: defect characterization; a same-OID function body
+                # change is outside the current metadata/view definition hash.
+                _assert_canonical_result(
+                    enabled_result,
+                    enabled.revision,
+                    ["enabled"],
+                    [{"enabled": True}],
+                )
+                assert create_result_hash(
+                    ("enabled",), enabled_result["rows"]
+                ) == (
+                    "sha256:630788e0d75c2d80b58158c7b0bb7ba7bb9af9ab8acfa21ae90433896ce1c42b"
+                )
+            finally:
+                active_error = sys.exception()
+                cleanup_errors = await _attempt_cleanup_steps(
+                    (
+                        ("close function-drift query executor", executor.close),
+                        ("close function-drift catalog", catalog.close),
+                    )
+                )
+                if cleanup_errors:
+                    if active_error is not None:
+                        raise BaseExceptionGroup(
+                            "Function-drift query and cleanup failed",
+                            [active_error, *cleanup_errors],
+                        )
+                    raise BaseExceptionGroup(
+                        "Function-drift query cleanup failed", cleanup_errors
+                    )
+        finally:
+            active_error = sys.exception()
+            cleanup_errors = await _attempt_cleanup_steps(
+                (("close function-drift setup admin", admin.close),)
+            )
+            if cleanup_errors:
+                if active_error is not None:
+                    raise BaseExceptionGroup(
+                        "Function-drift setup and cleanup failed",
+                        [active_error, *cleanup_errors],
+                    )
+                raise BaseExceptionGroup(
+                    "Function-drift setup cleanup failed", cleanup_errors
+                )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_enc_01_characterizes_sql_semantic_gucs_and_array_identity_loss() -> None:
     async with _disposable_source_database() as database:
         connection = await AsyncConnection.connect(

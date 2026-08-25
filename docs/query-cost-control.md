@@ -54,7 +54,9 @@ Missing/failed 값과 빈 hour는 0으로 표시하지 않는다. 이 public pro
 DB-native/provider monetary collector는 여전히 범위 밖이라 monetary cost는
 `not_configured/PROVIDER_NOT_CONFIGURED`만 표시한다. DB-native reader-role aggregate 선택지는
 [proposed ADR 0021](decisions/0021-database-native-cost-attribution.md)의 read-only prework일 뿐 현재
-`/usage` 계약이나 수집 동작을 바꾸지 않는다.
+`/usage` 계약이나 수집 동작을 바꾸지 않는다. Usage spike/alert도 별도
+[proposed ADR 0023](decisions/0023-database-native-usage-spike-alert.md)의 read-only addendum이며 base
+evidence와 exact approval 전에는 threshold, event, polling route나 notification 동작이 없다.
 
 ## What Is Measured
 

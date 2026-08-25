@@ -131,7 +131,8 @@ gap이며 일반 무손실 evidence로 취급하지 않는다.
 `C`→`pg_c_utf8`로 바꾸어도 current snapshot/revision이 같고 result/hash만 바뀌는 것을
 disposable PostgreSQL 18 DB로 고정한다. Same-definition custom domain의 direct `pg_type`
 dependency와 `typcollation` drift, base OID로 domain identity가 지워지는 것도 raw catalog/driver
-sentinel로 고정한다. ADR 0020 exact A가 승인되면 Assurance는 visible binding뿐 아니라
+sentinel로 고정한다. Same-OID custom function body가 view definition/snapshot/revision 없이 public
+value/hash를 바꾸는 residual도 public companion case로 고정한다. ADR 0020 exact A가 승인되면 Assurance는 visible binding뿐 아니라
 recursive view dependency fingerprint, declared/custom domain pre-erasure rejection, result OID/cursor loader, v1/v2 codec,
 current/rollback full verified reissue와 rollback을 cross-module acceptance로 검증한다. 승인 전에는
 이 characterization을 새 production contract의 완료 evidence로 해석하지 않는다.
@@ -189,6 +190,21 @@ acceptance가 승인·시작되면 Assurance는 sanitized source projection, res
 bounded operator projection과 recovery의 cross-module acceptance만 소유한다. Collector status 계산,
 Control DTO/table과 monitoring credential lifecycle implementation은 Assurance 소유가 아니며 현재
 `TIME-03`/COST start gate 전에는 test fixture나 accepted contract를 추가하지 않는다.
+
+별도 [proposed ADR 0023](../../decisions/0023-database-native-usage-spike-alert.md)의 COST-04 acceptance도
+base explicit-zero/accepted-sample/identity evidence와 exact approval 전에는 현재 계약이 아니다. 시작되면
+Assurance는 seven closed-bucket sample-count qualification과 whole-hour coverage를 주장하지 않는 한계,
+median/hysteresis/recovery/cooldown, multi-replica event dedup,
+migration 7/22-table recovery, 90일 pagination, operator-only polling과 no-notification/no-admission redaction을
+검증하되 alert evaluator/store/DTO를 복제하지 않는다.
+
+Lower-priority [proposed ADR 0022](../../decisions/0022-w3c-workflow-trace-context.md)의 TRACE
+acceptance도 exact approval과 provider baseline 전에는 현재 계약이 아니다. 시작되면 Assurance는 ASGI raw
+header occurrence/direct-ASGI whitespace corpus와 real Uvicorn/h11 wire OWS normalization parity,
+local anonymous/managed auth route, unknown-source trace absence, all-zero formatter omission,
+nested·parallel context isolation, multi-POST/revision retry, failed parallel MCP call→query mapping,
+cancel/disconnect와 실제 two-process/replica soak correlation을 cross-module로 검증한다. Production trace provider/parser/audit helper를 Assurance에 복제하지
+않고 shared test/fixture와 module 문서는 coordinating single-writer가 관리한다.
 
 ### Control recovery acceptance contract (`CTRL-09`)
 

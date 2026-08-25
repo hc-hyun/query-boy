@@ -574,7 +574,8 @@ lossless scalar/JSON/time, source encoding/collation, semantic GUC, result OID�
 구현을 동결했다. Repository fixture와 local cutover까지는 검증했지만 final encoding baseline의 실제
 managed production inventory·재발행·rollback change record인 `TIME-03`은 열려 있다. 이를 완료하거나
 사용자가 명시적으로 defer한 뒤에만 `COST-01`을 시작한다. COST/TRACE의
-[ADR 0021](decisions/0021-database-native-cost-attribution.md)과
+[ADR 0021](decisions/0021-database-native-cost-attribution.md), 별도 COST-04
+[ADR 0023](decisions/0023-database-native-usage-spike-alert.md)과
 [ADR 0022](decisions/0022-w3c-workflow-trace-context.md)는 lower-track read-only 선택지 초안일 뿐
 start/contract 승인이 아니다.
 

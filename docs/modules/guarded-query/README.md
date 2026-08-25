@@ -161,6 +161,14 @@ record하지 않는다. Recorder failure는 query 결과나 오류를 바꾸지 
 tenant, fingerprint, query ID와 raw database error를 payload에 넣지 않는다. 기존 public query
 result/error와 audit event 의미는 유지한다.
 
+Lower-priority [proposed ADR 0022](../../decisions/0022-w3c-workflow-trace-context.md)의 exact A는 아직
+Guarded Query 계약이 아니다. 승인되고 Runtime/Delivery provider baseline이 먼저 확정된 뒤에만
+Guarded Query는 current process-local trace만 execution failure, interruption과 plan rejection audit의
+추가 correlation field로 소비한다. Delivery-private MCP call ID는 Guarded Query로 넘기지 않고 Delivery의
+Gateway query lifecycle audit에서만 연결한다. Trace를 authorization, admission, cache, cancel key,
+PostgreSQL `application_name`, result/hash 또는 usage signal에 넣지 않고 target query의 original trace를
+cancel request trace로 덮어쓰지 않는다.
+
 ### Error contract
 
 Public query error category는 `SOURCE_NOT_FOUND`, `METADATA_REVISION_MISMATCH`, `QUERY_REJECTED`,

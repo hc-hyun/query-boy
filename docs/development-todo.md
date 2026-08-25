@@ -95,7 +95,7 @@ source/resource-tier 단위에서 관측한다. 이는 auxiliary statement와 �
 | Direct consumers | Delivery admin projection과 operator workflow |
 | Affected providers/verifiers | Runtime collector/composition, Source Catalog budget 의미, Metadata revision, 완료된 `CTRL-07` observation baseline과 `CTRL-08` projection, Assurance acceptance. Guarded Query의 reader-role workload는 관측 대상일 뿐 새 signal API provider가 아니다. |
 | Contract baseline | [ADR 0016](decisions/0016-centralized-source-management-plane.md), [ADR 0017](decisions/0017-shared-source-access-and-resource-tier.md)와 [source management plane](source-management-plane.md), 완료된 `CTRL-07A` observation method/freshness/logical retention과 `CTRL-08` usage/cost state |
-| Approval gate | Monitoring identity, collector/rollup schema, retention, status와 admin projection은 새 persisted/public 계약이다. Read-only prework인 [proposed ADR 0021](decisions/0021-database-native-cost-attribution.md)의 `COST-01-A|B|C` 중 A는 base collector/rollup/projection implementation-ready 제안, C는 exact defer, B는 direction-only다. A 구현 또는 C defer는 exact 범위를 사용자가 승인해야 하며 B는 lifecycle/wire/persistence/rollback을 다시 명시한 별도 승인이 먼저다. A에도 `COST-04` 급증 threshold/alert의 key/window/baseline/hysteresis/lifecycle/delivery가 없어 이를 구현·완료하려면 별도 exact addendum 승인이 필요하다. ID 선택이나 포괄적 승인은 계약 승인이 아니다. |
+| Approval gate | Monitoring identity, collector/rollup schema, retention, status와 admin projection은 새 persisted/public 계약이다. Read-only prework인 [proposed ADR 0021](decisions/0021-database-native-cost-attribution.md)의 `COST-01-A|B|C` 중 A는 base collector/rollup/projection implementation-ready 제안, C는 exact defer, B는 direction-only다. A 구현 또는 C defer는 exact 범위를 사용자가 승인해야 하며 B는 lifecycle/wire/persistence/rollback을 다시 명시한 별도 승인이 먼저다. `COST-04`는 별도 [proposed ADR 0023](decisions/0023-database-native-usage-spike-alert.md)의 `COST-04-A|B|C`와 base evidence gate를 따르며 base A 승인은 alert 계약을 포함하지 않는다. ID 선택이나 포괄적 승인은 계약 승인이 아니다. |
 | Single writer | Control Plane owner가 observation 계약을 먼저 확정하고 signal producer와 Delivery consumer는 이후 병렬화한다. |
 | Start gate | 완료된 `CTRL-07` baseline과 `CTRL-08` projection 뒤에도 열린 `TIME-03`이 우선이다. 이를 완료하거나 사용자가 명시적으로 defer한 뒤 proposed ADR 0021의 정확한 monitoring 계약과 영향 범위를 별도 승인받는다. 현재 선택지 초안은 lower-track read-only prework일 뿐 `COST-01` 시작/완료가 아니다. 아래의 “다음”은 track-local 순서다. |
 | Verification | 최소 권한 DB integration, reset/server-deallocation/entry/replica/cardinality 경계, redaction과 root gate |
@@ -113,10 +113,11 @@ source/resource-tier 단위에서 관측한다. 이는 auxiliary statement와 �
 - [ ] `COST-04` Source/profile별 DB-native usage 급증 threshold, alert-event retention과 admin 조회 계약을
   정의하고 query-facing/non-admin public endpoint·metric label에 source를 노출하지 않는다. Operator-only
   `/admin/sources/{source_id}/...` path의 source ID는 이 금지에 포함되지 않는다. Proposed ADR 0021의
-  base A 승인만으로 시작하지 않고 key/window/baseline/missing·stale/hysteresis/cooldown, alert
-  lifecycle/delivery/alert-event retention/redaction addendum를 사용자에게 exact 승인받는다. Base rollup의
-  inclusive 31일 logical visibility/input window는 `COST-01-A` 범위이고 alert event/state 보존 기간은
-  아직 정하지 않았다.
+  base A 승인만으로 시작하지 않고 base explicit-zero/accepted-sample/identity evidence 뒤 proposed
+  ADR 0023의 key/window/baseline/missing·stale/hysteresis/cooldown, lifecycle/polling delivery/90일
+  logical event retention/redaction addendum를 사용자에게 exact 승인받는다. `accepted_samples>=10`은
+  whole-hour coverage가 아닌 count-based heuristic이라는 한계도 승인 범위다. Base rollup의 inclusive
+  31일 logical visibility/input window는 `COST-01-A` 범위이며 alert 90일은 아직 승인된 현재 계약이 아니다.
 - [ ] `COST-05` 실제 fixture에서 낮은 사용량·execution-time-heavy·block read/write·temp/WAL
   statement aggregate를 구분하는 acceptance와
   provider 자료가 없거나 user/organization chargeback이 불가능할 때의 운영 판단 절차를

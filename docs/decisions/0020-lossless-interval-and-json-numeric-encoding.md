@@ -4,7 +4,7 @@ Status: Proposed — user approval required before implementation
 
 Date: 2026-08-25
 
-Last expanded: 2026-08-26 (`DBEDGE-04` encoding, JSON, time, collation and OID characterization)
+Last expanded: 2026-08-26 (`DBEDGE-04` encoding, JSON, time, collation, dependency and OID characterization)
 
 ## Context
 
@@ -28,6 +28,8 @@ QueryService case에서 silent data-loss, SQL semantic setting과 collection ide
 | 같은 `CST` timestamptz literal, `timezone_abbreviations=Default|Australia` | UTC `18:00` 또는 `02:30` | `TimeZone=UTC`를 고정해도 abbreviation input instant와 hash가 같은 metadata/SQL-policy revision 아래 달라진다. |
 | 같은 `text` column, collation `C` 대 `pg_c_utf8` | `lower('Ä')`가 `Ä` 또는 `ä` | 현재 catalog/revision이 `attcollation`을 담지 않아 live DDL 뒤 snapshot/revision은 같은데 SQL 결과/hash가 달라진다. |
 | Boolean만 공개하는 view의 hidden base `text` column collation `C` 대 `pg_c_utf8` | `lower(label)='ä'`가 `false` 또는 `true` | View SQL text와 public output column은 같아 visible-column fingerprint만으로도 탐지할 수 없다. Recursive rewrite dependency binding이 필요하다. |
+| 같은 이름/view text의 custom domain collation `C` 대 `pg_c_utf8` | Direct `_RETURN` `pg_type` dependency의 `typcollation`만 바뀌 | Domain의 base/constraint 변경은 typcollation이 같을 수 있고 RowDescription은 base OID로 identity를 지워, declared/direct custom type을 소실 전 거부해야 한다. |
+| 같은 OID/name/signature의 custom function body `false` 대 `true` | View definition/snapshot/revision은 같지만 public boolean/hash가 바뀌 | Call-site hash는 same-OID user implementation을 attest하지 못하므로 protected artifact freeze와 cutover stop을 residual로 명시해야 한다. |
 | `'[0:1]={10,20}'::integer[]` 대 `'{10,20}'::integer[]` | 둘 다 Python/public `[10, 20]` | 배열 lower bound `0`과 `1`이 사라져 다른 PostgreSQL 배열이 같은 value/hash로 합쳐진다. |
 | `'{}'::int4range[]` 대 `'{}'::integer[]` | 둘 다 Python/public `[]` | Empty range array는 element object가 없어 accidental success하고, 같은 type의 nonempty array는 실패한다. |
 | `ROW()` 대 `ROW(NULL::integer)` | 둘 다 Python tuple/public `[]` | Record field count와 NULL이 사라져 같은 value/hash가 된다. |

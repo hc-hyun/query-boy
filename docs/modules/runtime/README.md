@@ -174,15 +174,21 @@ fleet는 섞지 않고 rollback은 보존된 v1 pointer/L2와 old release를 다
 prework인 [proposed ADR 0022](../../decisions/0022-w3c-workflow-trace-context.md)의 우선순위와
 `TRACE-01-A|B|C`가 정확히 승인되기 전에는 ContextVar, structured-log field나 counter를 추가하지 않는다.
 승인될 경우에도 Runtime이 최소 process-local provider를 먼저 소유하고 Delivery가 인증 뒤 set/reset하며
-MCP/Guarded Query가 소비한다.
+MCP/Guarded Query가 소비한다. Proposed exact A의 provider 경계는 frozen+slots validated context,
+nested/finally-safe scope, exact trace field allowlist와 네 source-less replica-local disposition counter뿐이며,
+header route parsing, MCP-call scope와 Delivery route/MCP/Gateway audit event 선택은 Delivery가 소유한다.
+Guarded Query execution event 선택은 계속 Guarded Query owner 경계다.
 
 현재 Runtime background task에는 source DB-native statement collector도 없다. Lower-priority
 [proposed ADR 0021](../../decisions/0021-database-native-cost-attribution.md)은 Runtime collector/composition
 선택지를 기록할 뿐, ENC/TIME start gate와 정확한 `COST-01-A|B|C` 승인 전에는 task, source credential,
 Control writer나 operations field를 추가하지 않는다.
-Base A에도 `COST-04` threshold/alert scheduler·state·delivery는 정의되지 않아 별도 exact addendum 전
-background evaluator나 notification task를 만들지 않는다. 기존 base rollup 31일 window는 alert
-event/state retention을 정한 것이 아니다.
+Base A는 `COST-04`를 포함하지 않는다. 별도
+[proposed ADR 0023](../../decisions/0023-database-native-usage-spike-alert.md)의 exact approval과 base
+explicit-zero/accepted-sample/identity evidence 전에는 background evaluator나 notification task를 만들지
+않는다. A가 승인돼도 Runtime은 모든 fenced committed monitoring attempt 뒤 usage transaction과 분리된
+bounded evaluator 호출 순서만 소유하며
+push worker는 만들지 않는다. 기존 base rollup 31일 window는 proposed alert event 90일 visibility와 다르다.
 
 ### Managed replica reporting contract (`CTRL-06`)
 

@@ -103,7 +103,13 @@ discovery/serialization은 의도적으로 다를 수 있다.
 연결한다. 여러 POST workflow용 client trace header/audit field는 아직 계약이 아니다. Lower-priority
 read-only prework인 [proposed ADR 0022](../../decisions/0022-w3c-workflow-trace-context.md)의
 `TRACE-01-A|B|C`와 우선순위를 사용자가 정확히 승인하기 전에는 header parsing, structured field,
-metric이나 propagation을 추가하지 않는다.
+metric이나 propagation을 추가하지 않는다. Exact A가 승인되면 Delivery는 auth-after exact-route
+`traceparent` parser, immutable ASGI request-state bridge와 private nested MCP-call scope를 소유한다.
+Runtime provider를 사용해 scope를 finally-safe하게 복원하고 failed parallel MCP query도 existing
+request/call/query ID로 구분해 Gateway audit에 전달한다. Response header/tool field, persistence와
+outbound propagation은 여전히 만들지 않는다. Configured policy가 만든 bootstrap local anonymous caller도
+in-scope이며 parser는 ASGI-observable header만 보므로 Uvicorn/h11이 wire OWS를 제거한 뒤의 값과 direct-ASGI
+whitespace corpus를 구분해 검증한다.
 
 ### Public error contract
 
@@ -201,9 +207,11 @@ operator-first auth/validation, exact monitoring GET/PUT/credential POST/DELETE/
 `/usage.database_native` serialization/error mapping을 소유하고 Control Plane의 공개 use case/projection만
 소비한다. Monitoring credential, source function, Control table/lease/baseline을 읽거나 구현하지 않는다.
 Direction-only B는 ID 선택만으로 이 owner 범위를 열지 않으며 별도 exact 계약이 필요하다.
-`COST-04` threshold/alert의 operator wire와 delivery backend도 A base 승인에 포함되지 않으며 별도
-exact addendum 전 route, notification 또는 metric label을 추가하지 않는다. 기존 base rollup의 31일
-window와 별개인 alert event/state retention도 이 addendum에서 정한다.
+`COST-04` threshold/alert의 operator wire와 delivery backend도 A base 승인에 포함되지 않는다. 별도
+[proposed ADR 0023](../../decisions/0023-database-native-usage-spike-alert.md)의 exact approval 전 route,
+notification 또는 metric label을 추가하지 않는다. 승인될 경우에도 Delivery는 operator polling GET과
+policy configure/disable/rollback validation/serialization만 소유하고 webhook/email/push를 만들지 않는다.
+기존 base rollup 31일과 proposed alert event 90일 logical visibility는 서로 다른 계약이다.
 
 ### MCP contract
 
