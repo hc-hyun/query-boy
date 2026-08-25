@@ -1,6 +1,6 @@
 # Query Man Architecture
 
-Status: Production ready
+Status: Baseline complete; RLS-enabled production serving blocked pending `RLS-*`
 
 ## Goal
 
@@ -9,11 +9,15 @@ Status: Production ready
 신호를 관리한다. 신규 데이터베이스 추가 과정에서 애플리케이션 코드 변경과 배포가 발생하지
 않는 것을 최종 성공 기준으로 삼는다.
 
-이 문서의 `Production ready` 상태는 완료된 query/data-plane baseline을 뜻한다. 중앙
+완료된 query/data-plane과 중앙 management plane baseline 이력은 보존한다. 다만
+[RLS policy drift security finding](verification/2026-08-26-rls-policy-drift.md)에서 accepted tenant
+isolation을 위반하는 hidden base-policy drift가 재현됐으므로, `RLS-01`~`RLS-03`을 해결하고 protected
+inventory를 확인하기 전 RLS-enabled source의 production serving을 ready로 주장하지 않는다. 중앙
 management plane baseline은 source inventory/history, mutation receipt, replica convergence,
 내부 규모·gateway usage observation, public availability projection과 격리된 Control recovery
 fixture acceptance까지
-`CTRL-01`~`CTRL-09`로 구현됐다. DB-native/provider cost는
+`CTRL-01`~`CTRL-09`로 구현됐다. Non-RLS baseline 완료와 RLS production readiness를 같은 상태로
+해석하지 않는다. DB-native/provider cost는
 [active development TODO](development-todo.md)의 후속 목표다.
 
 완전한 무설정 자동화를 목표로 하지 않는다. 자동으로 알 수 없는 비즈니스 의미는

@@ -1,6 +1,6 @@
 # Query Man Implementation Roadmap
 
-Status: Production ready
+Status: Baseline complete; RLS-enabled production serving blocked pending `RLS-*`
 
 이 문서는 Query Man의 최종 목적을 구현한 production baseline과 완료 이력을 보존한다.
 세부 설계 원칙은 [architecture.md](architecture.md), 현재 검증용 데이터와 계약은
@@ -354,6 +354,7 @@ client와 실제 PostgreSQL fixture를 사용해야 한다. 실행 결과와 남
 | `DBEDGE-02` | 추가 disposable DB에서 live view-definition revision 전환, cold/warm relation·column·structure catalog 상한, multibyte row truncation과 unsupported infinity/range/nonempty-multirange의 비공개 실패·rollback·pool 복구를 고정했다. Month interval, fractional JSONB numeric, empty multirange의 hash collision과 reader-format default drift를 재현하고 계약 변경 전 구현을 중단했다. | [source database corner acceptance](verification/2026-08-25-source-database-corners.md), [proposed ADR 0020](decisions/0020-lossless-interval-and-json-numeric-encoding.md), [`test_source_database_corners.py`](../tests/test_source_database_corners.py) |
 | `DBEDGE-03` | 별도 disposable DB들에서 SQL semantic GUC drift, array lower-bound 소실, empty unsupported array 우회, anonymous record field/type 소실과 string-valued unknown OID의 accidental success를 재현했다. `bytea_output`은 current loader가 안정적으로 정규화함을 확인하고, 의미 수정은 확장한 proposed ADR 0020의 정확한 승인 전 중단했다. | [source database corner acceptance](verification/2026-08-25-source-database-corners.md), [proposed ADR 0020](decisions/0020-lossless-interval-and-json-numeric-encoding.md), [`test_source_database_corners.py`](../tests/test_source_database_corners.py) |
 | `DBEDGE-04` | 추가 disposable UTF8/SQL_ASCII DB들에서 duplicate-key JSON collision, text/bytea type confusion, time 24시 decode failure, timezone-abbreviation same-revision drift, direct/hidden-view/domain-type collation·same-OID custom-function drift와 `oid/name`·array/named-composite accidental success를 재현했다. Boolean-only view의 hidden base collation/function body가 같은 snapshot/revision에서 result/hash를 바꾸고 domain은 RowDescription에서 base OID로 identity가 사라져 recursive dependency fingerprint·pre-erasure rejection·managed artifact residual 필요를 고정했다. 현재 동작은 바꾸지 않고 proposed ADR 0020 A의 encoding/source-semantics 경계를 보완했다. | [source database corner acceptance](verification/2026-08-25-source-database-corners.md), [proposed ADR 0020](decisions/0020-lossless-interval-and-json-numeric-encoding.md), [`test_source_database_corners.py`](../tests/test_source_database_corners.py) |
+| `DBEDGE-05` | 추가 disposable PostgreSQL 18 DB들에서 custom operator의 transitive function rebinding, interval infinity/zero collision, temporal·JSON digit driver boundary, varbit positive shape, `bytea::text`/implicit text-search role-default drift와 planner-order-sensitive float/JSONB aggregate를 public QueryService exact hash로 고정했다. 현재 제품 의미는 바꾸지 않았다. 별도로 발견한 RLS base-policy 누출은 완료 결과로 세지 않고 open strict xfail과 security finding으로 분리했다. | [source database corner acceptance](verification/2026-08-25-source-database-corners.md), [RLS policy drift finding](verification/2026-08-26-rls-policy-drift.md), [proposed ADR 0020](decisions/0020-lossless-interval-and-json-numeric-encoding.md), [`test_source_database_corners.py`](../tests/test_source_database_corners.py) |
 | `TIME-01` | Reader session UTC, aware datetime UTC `+00:00`, business calendar `Asia/Seoul`, SQL-policy/metadata revision 재료, full verified reissue, coordinated cutover와 immutable rollback 보존을 하나의 정확한 계약으로 확정하고 사용자 승인을 받았다. R1에서 업무 날짜 SQL을 명시하고 dev/market 9개 계약의 기존 결과를 보존했다. | [ADR 0019](decisions/0019-canonical-time-stability.md), [canonical time verification](verification/2026-08-25-canonical-time-stability.md) |
 | `TIME-02` | Catalog와 Query가 transaction 시작 직후 UTC를 local 설정·검사하고 aware datetime만 UTC `+00:00`으로 정규화한다. Canonical-time material을 metadata와 SQL-policy revision에 넣어 이전 token을 실행 전에 거부하면서 naive datetime/date/time/timetz 의미는 보존했다. | [ADR 0019](decisions/0019-canonical-time-stability.md), [canonical time verification](verification/2026-08-25-canonical-time-stability.md), [`test_catalog.py`](../tests/test_catalog.py), [`test_query.py`](../tests/test_query.py), [`test_result_encoding.py`](../tests/test_result_encoding.py) |
 
@@ -379,13 +380,15 @@ evidence가 해당 완료 작업의 상세 경계와 실행 증거를 보존한�
 | M11 Multi-Replica Soak | `SOAK-*` | 두 Docker replica의 exact result, 독립 포화·복구와 1,000-session resource gate를 통과한다. |
 | M12 Centralized Source Management | `CTRL-*` | Admin 한곳에서 source authority, 공통 resource tier, 상태·규모·비용 freshness를 관리한다. |
 | M13 Onboarding Planning Skill | `SKILL-*` | Credential·mutation 없이 반복 가능한 source plan과 admin handoff를 만든다. |
+| M13.5 RLS Policy Drift Attestation | `RLS-*` | Published invoker view의 hidden base RLS policy drift가 cross-tenant row를 성공시키기 전에 fail-closed한다. |
 | M14 Canonical Time Stability | `TIME-*` | 같은 PostgreSQL instant의 public value와 verified hash를 reader timezone과 무관하게 고정한다. |
 | M14.5 Lossless Scalar, Reader And Result Types | `ENC-*` | Calendar interval, exact 24시 time, nested/duplicate JSON, UTF8 source/client, timezone abbreviation·collation semantics, array lower bound와 record/composite/known-loader OID identity 손실을 닫고 SQL 의미·decode를 PostgreSQL 18의 role/source default와 무관하게 고정한다. |
 | M15 Cost Attribution | `COST-*` | DB-native 사용량을 source/resource-tier time bucket으로 bounded 집계하고 운영 threshold를 고정한다. |
 | M16 Workflow Trace | `TRACE-*` | 여러 tool call과 retry를 bounded trace ID로 안전하게 연결한다. |
 
-M1부터 M13, `TIME-01`~`TIME-02`와 별도 assurance `DBEDGE-01`~`DBEDGE-04`는 완료됐다.
-M14.5의 `ENC-*` 결정·구현과 M14 production 전환 `TIME-03`은 active이며 M15와 M16은 각각
+M1부터 M13, `TIME-01`~`TIME-02`와 별도 assurance `DBEDGE-01`~`DBEDGE-05`는 완료됐다.
+재현된 authorization gap인 M13.5 `RLS-*`가 최우선 active다. M14.5의 `ENC-*` 결정·구현과 M14
+production 전환 `TIME-03`도 active이며 M15와 M16은 각각
 정확한 계약을 다시 승인받아야 한다. M15/M16의
 [proposed ADR 0021](decisions/0021-database-native-cost-attribution.md), 별도 COST-04
 [proposed ADR 0023](decisions/0023-database-native-usage-spike-alert.md)과

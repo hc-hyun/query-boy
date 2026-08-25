@@ -165,7 +165,9 @@ snapshot/revision material로 admission하지 않는다. 실제
 PostgreSQL 18 characterization에서 이 default가 ambiguous date, backslash string, NULL 비교와 NULL
 array literal의 SQL 의미, interval availability, finite-float hash, timezone abbreviation instant와
 SQL text/binary identity를 흔들고 collation-only DDL은 same-revision result를 바꾸는 것이 확인됐다.
-`bytea_output=hex|escape`는 현재 loader/Base64 결과가 같았다.
+Direct `bytea` loader/Base64는 `bytea_output=hex|escape`에서 같지만 허용된 `bytea::text` cast는
+setting별 text/hash가 달랐고, `default_text_search_config`도 hidden curated view의 같은 SQL 의미를
+바꿨다.
 [Proposed ADR 0020](../../decisions/0020-lossless-interval-and-json-numeric-encoding.md)의
 `ENC-01-A|B|C`가 정확히 승인되기 전에는 shared `reader_policy.py`나 metadata revision material을
 변경하지 않는다.
@@ -175,6 +177,12 @@ Exact A 제안에서 Source Catalog의 추가 역할은 Catalog/Query pool start
 한정된다. Catalog semantics SQL, fingerprint material/hash와 snapshot codec/revision은 Metadata
 소유이며 Source Catalog에 복제하지 않는다. 이 경계도 exact A 승인 전에는 현재
 contract가 아니다.
+
+별도 [RLS policy drift security finding](../../verification/2026-08-26-rls-policy-drift.md)은 공통
+session probe가 정상이어도 hidden base table policy를 `USING (true)`로 바꾸거나 RLS를 disable하면
+같은 snapshot/revision 아래 cross-tenant row가 성공함을 재현했다. 이는 accepted contract가 아니라
+열린 보안 결함이다. `RLS-01` exact dependency/policy admission 계약 승인 전 임의의 manifest field나
+reader check를 추가하지 않으며, production RLS source가 안전하다고 주장하지 않는다.
 
 ## 소비 계약
 

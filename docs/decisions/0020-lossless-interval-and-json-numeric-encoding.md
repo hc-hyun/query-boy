@@ -4,16 +4,17 @@ Status: Proposed — user approval required before implementation
 
 Date: 2026-08-25
 
-Last expanded: 2026-08-26 (`DBEDGE-04` encoding, JSON, time, collation, dependency and OID characterization)
+Last expanded: 2026-08-26 (`DBEDGE-05` extreme scalar, reader setting, operator and aggregate characterization)
 
 ## Context
 
-`DBEDGE-02`~`DBEDGE-04`의 PostgreSQL 18/psycopg raw-driver read-only probe와 public
+`DBEDGE-02`~`DBEDGE-05`의 PostgreSQL 18/psycopg raw-driver read-only probe와 public
 QueryService case에서 silent data-loss, SQL semantic setting과 collection identity 경계를 재현했다.
 
 | PostgreSQL value/default | 현재 Python value/동작 | 손실 또는 불안정성 |
 |---|---|---|
 | `interval '1 month 2 days 03:04:05.6'` | `timedelta(days=32, seconds=11045, microseconds=600000)` | Calendar month가 고정 30일로 평탄화되어 원래 interval과 `32 days`를 구분할 수 없다. |
+| `interval '0'`, `'infinity'`, `'-infinity'` | 셋 모두 `timedelta(0)`/public `0:00:00` | PostgreSQL의 두 infinity가 zero와 같은 value/hash로 조용히 합쳐진다. |
 | `'{"amount":12345678901234567890.1234567890}'::jsonb` | `{"amount": 1.2345678901234567e+19}` | JSONB가 보존한 decimal precision과 scale이 binary float 변환에서 사라진다. |
 | 중첩 duplicate key가 있는 `json` 대 last-key만 있는 `json` | 둘 다 `{"outer": {"amount": 2}}` | PostgreSQL `json` text에는 두 key가 남아 있지만 default object loader와 public hash는 last key만 남겨 서로 다른 값을 합친다. `jsonb`의 동일 결과는 PostgreSQL 자체 normalization인 negative control이다. |
 | `SQL_ASCII` database/client의 `text 'hello'` 대 같은 bytes의 `bytea` | 둘 다 Python `bytes`/`base64:aGVsbG8=` | Result OID를 보기 전 encoder가 text를 bytea로 오인해 같은 public value/hash가 된다. 같은 DB에서 client를 UTF8로 바꾸면 text만 `str`이 되어 결과가 달라진다. |
@@ -30,12 +31,16 @@ QueryService case에서 silent data-loss, SQL semantic setting과 collection ide
 | Boolean만 공개하는 view의 hidden base `text` column collation `C` 대 `pg_c_utf8` | `lower(label)='ä'`가 `false` 또는 `true` | View SQL text와 public output column은 같아 visible-column fingerprint만으로도 탐지할 수 없다. Recursive rewrite dependency binding이 필요하다. |
 | 같은 이름/view text의 custom domain collation `C` 대 `pg_c_utf8` | Direct `_RETURN` `pg_type` dependency의 `typcollation`만 바뀌 | Domain의 base/constraint 변경은 typcollation이 같을 수 있고 RowDescription은 base OID로 identity를 지워, declared/direct custom type을 소실 전 거부해야 한다. |
 | 같은 OID/name/signature의 custom function body `false` 대 `true` | View definition/snapshot/revision은 같지만 public boolean/hash가 바뀌 | Call-site hash는 same-OID user implementation을 attest하지 못하므로 protected artifact freeze와 cutover stop을 residual로 명시해야 한다. |
+| 같은 name/signature custom operator의 function rebind | View는 direct `pg_operator`, operator는 second-hop `pg_proc` dependency | View definition/snapshot/revision은 같지만 public boolean/hash가 바뀌어 transitive implementation은 v1 fingerprint 밖이다. |
 | `'[0:1]={10,20}'::integer[]` 대 `'{10,20}'::integer[]` | 둘 다 Python/public `[10, 20]` | 배열 lower bound `0`과 `1`이 사라져 다른 PostgreSQL 배열이 같은 value/hash로 합쳐진다. |
 | `'{}'::int4range[]` 대 `'{}'::integer[]` | 둘 다 Python/public `[]` | Empty range array는 element object가 없어 accidental success하고, 같은 type의 nonempty array는 실패한다. |
 | `ROW()` 대 `ROW(NULL::integer)` | 둘 다 Python tuple/public `[]` | Record field count와 NULL이 사라져 같은 value/hash가 된다. |
 | `ROW(1::integer)` 대 `ROW('1'::text)` | 둘 다 public `["1"]` | Anonymous record loader가 field type을 잃어 다른 typed field가 같은 value/hash로 합쳐진다. |
 | `money`, `point`, `xml` 등 unregistered result OID | psycopg가 Python `str`로 반환 | Encoder가 SQL type을 보지 못하고 PostgreSQL `text`로 오인해 unsupported type이 accidental success한다. |
 | `oid/name`과 그 array, named composite | Python `int`/`str`/`list` 또는 composite text | 같은 값을 가진 allowed integer/text/array와 public row/hash가 같아 known loader도 OID gate를 우회한다. |
+| Direct `bytea` 대 허용된 `bytea::text`, role별 `bytea_output` | Direct 값은 같은 Base64지만 cast text는 `\\x00ff` 또는 `\\000\\377` | Loader negative control만으로 setting이 public SQL에 무관하다고 결론낼 수 없다. |
+| Hidden view의 implicit full-text search, role별 `default_text_search_config` | `english`는 `rats`/`rat` match, `simple`은 mismatch | Direct function은 SQL policy가 거부해도 curated view 안의 runtime default가 same-revision boolean/hash를 바꾼다. |
+| 같은 rows/SQL의 seq/index aggregate order | `sum(float8)`은 `0.0|1.0`, duplicate-key `jsonb_object_agg`는 `{x:2}|{x:3}` | PostgreSQL이 loader 전에 만든 order-sensitive value라 canonical encoder만으로 결정성을 만들 수 없다. |
 
 현재 Guarded Query encoder는 top-level PostgreSQL `numeric`을 decimal string으로 무손실 전달하지만,
 psycopg가 이미 평탄화한 `timedelta`와 JSONB 내부 float에서는 원래 값을 복원할 수 없다. 실제로
@@ -48,8 +53,9 @@ float8의 binary value까지 바꾸지는 않지만 같은 값의 public represe
 설정이 아니다. `standard_conforming_strings`, `transform_null_equals`와 `array_nulls`도 parse 단계에서
 같은 SQL text의 의미를 바꾼다. `timezone_abbreviations`와 column/database collation은 이 설정들을
 고정해도 timestamp parsing과 text operator/function 의미를 바꿀 수 있다. `client_encoding=SQL_ASCII`는
-SQL type identity까지 Python runtime value에서 지운다. 반면 `bytea_output=hex|escape`는 psycopg bytes loader와 현재 Base64
-encoder가 같은 value/hash로 정규화하므로 새 pin이 필요하다는 근거는 발견되지 않았다.
+SQL type identity까지 Python runtime value에서 지운다. Direct bytea는 `bytea_output=hex|escape`에서
+같은 Base64지만 허용된 server-side text cast는 setting을 그대로 노출하므로 canonical setting이 필요하다.
+Implicit full-text-search config와 planner input order도 loader 밖에서 같은 revision의 SQL 의미를 바꾼다.
 
 반면 PostgreSQL infinity date와 range object는 현재 지원 대상이 아니다. 실제 query는 내부 값을
 공개하지 않는 `QUERY_UNAVAILABLE`로 실패하고 rollback/pool 재사용 뒤 정상 query가 복구된다. 이
@@ -58,11 +64,12 @@ encoder가 같은 value/hash로 정규화하므로 새 pin이 필요하다는 �
 ## Current Contract
 
 - Query connection은 psycopg default interval/time/JSON loader를 사용한다. PostgreSQL `json`의 duplicate
-  object key는 Python mapping 변환에서 last key만 남고 `time|timetz`의 valid `24:00`은 decode에 실패한다.
+  object key는 Python mapping 변환에서 last key만 남고 `time|timetz`의 valid `24:00`은 decode에
+  실패하며 interval positive/negative infinity는 zero `timedelta`로 합쳐진다.
 - Common reader session은 `TimeZone=UTC`를 고정하지만 `DateStyle`, `IntervalStyle`,
   `extra_float_digits`, `standard_conforming_strings`, `transform_null_equals`, `array_nulls`,
-  `client_encoding`과 `timezone_abbreviations`는 설정·검사하지 않는다. Source database의
-  `server_encoding`도 UTF8인지 admission하지 않는다.
+  `client_encoding`, `timezone_abbreviations`, `bytea_output`과 `default_text_search_config`는
+  설정·검사하지 않는다. Source database의 `server_encoding`도 UTF8인지 admission하지 않는다.
 - Python aware datetime만 UTC로 정규화한다.
 - `timedelta`는 `str(value)`, top-level `Decimal`은 decimal string, mapping/sequence는 재귀적으로
   encoding한다.
@@ -80,6 +87,8 @@ encoder가 같은 value/hash로 정규화하므로 새 pin이 필요하다는 �
 - Catalog snapshot/revision은 effective database/column collation identity, provider, determinism과
   stored/actual version을 담지 않는다. Explicit `COLLATE` SQL은 이미 거부하지만 curated column의 live
   collation DDL은 같은 revision 아래 function/operator 의미를 바꿀 수 있다.
+- SQL/metadata revision은 aggregate input ordering을 보증하지 않는다. Unordered float aggregate와
+  duplicate-key JSON object aggregate는 같은 data/SQL에서도 plan order에 따라 value/hash가 달라질 수 있다.
 - SQL policy version 2와 canonical-time material version 1이 현재 revision baseline이다.
 - Public row shape, result hash와 immutable verified identity는 현재 encoding 결과에 묶여 있다.
 
@@ -97,7 +106,8 @@ encoder가 같은 value/hash로 정규화하므로 새 pin이 필요하다는 �
    required Python contract로 받아 같은 query transaction에서 user planning 전에 재검사한다.
 3. Current/rollback-preserved verified SQL과 managed view dependency를 inventory한다. Ambiguous date/time,
    timezone abbreviation, backslash string, `expression = NULL`, textual NULL array, non-1 lower bound,
-   collation-dependent expression, custom procedure/operator dependency, IANA/POSIX named timezone과
+   collation-dependent expression, implicit default text-search config, bytea text cast, custom
+   procedure/operator dependency, IANA/POSIX named timezone, order-sensitive float/JSON object aggregate와
    unsupported result OID가 발견되면 결과를 별도 승인하기 전 cutover를 중단한다.
 4. 사용자 SQL의 text-format named result cursor에만 interval/time/JSON/array loader를 SQL 실행 전에
    등록한다. User SQL을 `DECLARE`한 뒤 duplicate column과 RowDescription OID 전체를 검사하고, 승인된
@@ -127,7 +137,8 @@ BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY
 1. TimeZone=UTC
 2. DateStyle=ISO, YMD; IntervalStyle=iso_8601; extra_float_digits=1;
    standard_conforming_strings=on; transform_null_equals=off; array_nulls=on;
-   timezone_abbreviations=Default
+   timezone_abbreviations=Default; bytea_output=hex;
+   default_text_search_config=pg_catalog.english
 3. 기존 timeout/search_path/row-security/tenant/budget setting
 4. common reader policy 검증
 5. Metadata-owned source-semantics probe
@@ -137,7 +148,10 @@ BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY
 `client_encoding`만 connection lifetime이고 나머지는 transaction-local이다. Verifier는
 `180000 <= server_version_num < 190000`, `server_encoding=UTF8`, `client_encoding=UTF8`과 위 setting
 exact 값을 모두 요구한다. PostgreSQL 18 밖이거나 설정·encoding이 다르면 catalog/user value를 읽기 전에
-거부한다. `bytea_output`은 current loader가 stable Base64로 정규화하므로 pin하지 않는다.
+거부한다. Direct bytea Base64뿐 아니라 허용된 server-side text cast와 hidden text-search view도 이
+setting 아래에서 결정적으로 실행한다. `pg_catalog.english` config/dictionary implementation은 v1
+fingerprint가 자동 attest하지 않으므로 PostgreSQL image/build/static catalog freeze와 managed inventory
+residual을 따른다. Custom/explicit regconfig dependency를 자동 안전하다고 주장하지 않는다.
 
 #### Exact `source_semantics_fingerprint` v1
 
@@ -166,7 +180,9 @@ Canonical material은 모든 key를 생략 없이 포함하는 다음 exact shap
     "transform_null_equals": "off",
     "array_nulls": "on",
     "client_encoding": "UTF8",
-    "timezone_abbreviations": "Default"
+    "timezone_abbreviations": "Default",
+    "bytea_output": "hex",
+    "default_text_search_config": "pg_catalog.english"
   },
   "database_collation": {
     "provider": "builtin|libc|icu",
@@ -441,7 +457,9 @@ Historical `CANONICAL_TIME_POLICY_MATERIAL` v1은 old revision 검증용으로 �
     "standard_conforming_strings": "on",
     "transform_null_equals": "off",
     "array_nulls": "on",
-    "timezone_abbreviations": "Default"
+    "timezone_abbreviations": "Default",
+    "bytea_output": "hex",
+    "default_text_search_config": "pg_catalog.english"
   },
   "source_semantics": {
     "fingerprint_version": 1,
@@ -493,11 +511,11 @@ Historical `CANONICAL_TIME_POLICY_MATERIAL` v1은 old revision 검증용으로 �
 }
 ```
 
-Compact sorted UTF8 material은 1,849 bytes이고 golden은
-`sha256:cf38dcf490fcd06886b7f0c8d308accc464d8ec9bb9fffcf9bc7c52b76ca37e7`다. SQL policy는
+Compact sorted UTF8 material은 1,920 bytes이고 golden은
+`sha256:60a62b61c6b1bb429987186730c9d24a6b0868c0cb0406ccad97a5698a900446`다. SQL policy는
 current function/operator/type/node set을 유지하고 version을 3, key를 exact
 `"result_encoding_policy": RESULT_ENCODING_POLICY_MATERIAL`로 바꾼다. Expected golden은
-`sha256:138b8c7fb1e017172acc6542236cb2f3890d5c0af98592766d566fe049639353`다.
+`sha256:42b7b1da79339b115a950bc77c12b4178891be321b34701e072b5473e7b9b754`다.
 
 #### Snapshot v1/v2, Metadata revision and Python Protocol
 
@@ -637,11 +655,28 @@ cutover stop이다. 같은 fingerprint/revision을 유지한 ordinary full reiss
 fingerprint 확장 계약을 다시 승인받는다. A가 이 drift를 자동 fail-closed한다고 주장하지
 않는다.
 
+#### Text-search and order-sensitive aggregate residual limitation
+
+`default_text_search_config=pg_catalog.english` pin은 implicit overload가 role/database default에 따라
+달라지는 것을 막지만 해당 built-in config/dictionary의 catalog definition과 dictionary data를 v1
+fingerprint가 자동 attest하지 않는다. Protected PostgreSQL image/build/static-catalog inventory에
+freeze하고 custom/explicit regconfig dependency는 cutover stop으로 둔다. Automatic text-search artifact
+attestation이나 implicit overload rejection이 필요하면 fingerprint/SQL policy 계약을 다시 승인받는다.
+
+Canonical loader는 PostgreSQL이 이미 계산한 aggregate input order를 복원할 수 없다. 따라서 A는
+unordered `sum(float4|float8)`와 duplicate-key `json[b]_object_agg`가 모든 plan에서 같은 값을 만든다고
+주장하지 않는다. Current/rollback verified inventory는 float aggregate의 stable unique aggregate
+`ORDER BY`와 JSON object key uniqueness/aggregate ordering을 증명하지 못하면 cutover를 중단한다.
+General public SQL에서 이 construct를 새로 거부하거나 schema-aware uniqueness/order를 강제하려면
+별도 SQL-policy 계약 승인이 필요하다. A의 무손실 보장은 admitted result value의 decode/encoding
+경계이지 order-sensitive SQL 자체를 결정적으로 다시 쓰는 보장이 아니다.
+
 ### `ENC-01-B` — loss-prone types fail closed
 
 UTF8-only source/client, source-semantics fingerprint와 collation drift, `DateStyle=ISO, YMD`,
 `extra_float_digits=1`, `standard_conforming_strings=on`, `transform_null_equals=off`,
-`array_nulls=on`, `timezone_abbreviations=Default`는 A와 같이 고정·inventory하고
+`array_nulls=on`, `timezone_abbreviations=Default`, `bytea_output=hex`,
+`default_text_search_config=pg_catalog.english`는 A와 같이 고정·inventory하고
 `IntervalStyle=postgres`를 설정·검사하되, user-result cursor scope의 custom text loader가 interval
 전체, `time|timetz` 24시, fractional 또는 duplicate-key JSON/JSONB를 손실 전에 감지하면
 `QUERY_UNAVAILABLE`로 거부한다. A와 같이
@@ -678,7 +713,8 @@ cutover로 적용하고 current/rollback-preserved contract를 한 번만 재실
    마지막에는 intended current v2 counterpart만 active로 둔다.
 6. Server/client encoding, timezone-abbreviation fingerprint, database/column collation version과 ambiguous
    date/time, timezone abbreviation, ordinary backslash string, `expression = NULL`, textual NULL array
-   literal, non-1 lower-bound array, hidden view dependency, IANA/POSIX named zone 및 unsupported/custom result
+   literal, non-1 lower-bound array, bytea text cast, implicit/custom text-search dependency, hidden view
+   dependency, IANA/POSIX named zone, order-sensitive float/JSON object aggregate 및 unsupported/custom result
    OID를 전량 inventory한다. Interval/time/JSON changed value/hash와 domain rejection,
    bit/varbit 보존을
    exact 승인한다. 설명되지 않은 column/row/hash/rejection 또는 inventory 누락에는 중단한다.
@@ -712,7 +748,9 @@ Mixed old/new serving fleet는 같은 SQL의 row/hash가 달라 허용하지 않
   date/time literal, backslash string literal, `expression = NULL`, NULL array literal은 기존 default와
   달리 실패하거나 다른 의미를 가질 수 있어 managed verified inventory stop condition이다.
   User SQL과 visited curated/nested view의 explicit `COLLATE`는 거부하고 active non-C/POSIX
-  versionless collation도 거부한다.
+  versionless collation도 거부한다. `bytea_output=hex`와
+  `default_text_search_config=pg_catalog.english` pin은 기존 role default와 다른 cast/text-search result를
+  만들 수 있다.
 - Result behavior: duplicate-key JSON, non-1 array와 unsupported/custom OID는 새로 거부될 수 있다.
   모든 finite interval과 fractional/exponent JSON의 public string/hash는 바뀔 수 있고 end-of-day time은
   새 canonical string으로 성공한다. Declared/custom domain은 OID identity erasure 전 새로 거부하고
@@ -724,7 +762,9 @@ Mixed old/new serving fleet는 같은 SQL의 row/hash가 달라 허용하지 않
   distro/libc/ICU/locale-data drift는 자동 fingerprint하지 않으며 image/build/package identity
   change 때 managed inventory와 full verified reissue로 통제한다. Same-name user
   procedure/operator implementation·transitive dependency drift도 자동 감지 밖이며 protected artifact
-  freeze·cutover stop 후 별도 fingerprint/admission 계약 승인이 필요하다.
+  freeze·cutover stop 후 별도 fingerprint/admission 계약 승인이 필요하다. Built-in text-search
+  config/dictionary artifact와 unordered float/duplicate-key JSON aggregate의 planner-order 의미도 자동
+  fingerprint/SQL rewrite 대상이 아니며 managed inventory stop과 위 residual을 따른다.
 - Data loss: A는 silent loss를 제거한다. B는 값을 거부한다. C는 runtime protection이 없다.
 
 ## Verification Required For `ENC-01-A`
@@ -774,17 +814,23 @@ Mixed old/new serving fleet는 같은 SQL의 row/hash가 달라 허용하지 않
   검증한다.
 - `extra_float_digits=1|3|0|-1|-3`, ISO/SQL/Postgres/German `DateStyle`, supported/unsupported
   `IntervalStyle`, `standard_conforming_strings=on|off`, `transform_null_equals=on|off`,
-  `array_nulls=on|off`, `client_encoding=UTF8|SQL_ASCII`와 `timezone_abbreviations=Default|Australia` role
+  `array_nulls=on|off`, `client_encoding=UTF8|SQL_ASCII`, `timezone_abbreviations=Default|Australia`,
+  `bytea_output=hex|escape`와 `default_text_search_config=pg_catalog.english|simple` role
   default에서 exact 결과. PostgreSQL 18의 `extra_float_digits>=1`은 같은
-  shortest-precise 출력을 내며 계약값 1이 더 정밀하다는 주장은 하지 않는다. `bytea_output=hex|escape`는
-  같은 Base64/hash라는 negative control을 유지한다.
+  shortest-precise 출력을 내며 계약값 1이 더 정밀하다는 주장은 하지 않는다. Direct bytea는
+  같은 Base64/hash인 negative control이고 `bytea::text`와 hidden implicit text-search view는 서로 다른
+  current hash 뒤 canonical setting에서 같은 결과가 되는 acceptance를 둔다.
+- Forced seq/index plan에서 unordered float sum과 duplicate-key JSONB object aggregate의 exact drift를
+  negative corpus로 유지한다. Managed verified inventory는 stable unique aggregate ordering/key
+  evidence가 없는 contract를 cutover stop으로 분류한다.
 - Current/rollback-preserved verified SQL의 ambiguous date/timestamp/timezone abbreviation, ordinary
-  backslash string, `expression = NULL`, NULL array literal, non-1 lower-bound array, collation dependency와
-  result OID inventory 및 발견 시 stop.
+  backslash string, `expression = NULL`, NULL array literal, non-1 lower-bound array, bytea text cast,
+  implicit/custom text-search, order-sensitive aggregate, collation dependency와 result OID inventory 및
+  발견 시 stop.
 - UTC/서울/뉴욕 role default, commit/rollback/timeout/cancel 뒤 reader-format과 timezone pool reset.
 - Old metadata/SQL policy token의 executor-before rejection.
 - V1/v2 strict codec, v1 JSONB value/shape·revision byte golden, v2 required fingerprint/invariant, active v1 serving rejection,
-  result-policy 1,849-byte/hash 및 SQL-policy v3 hash, shared material identity와 recursive immutability.
+  result-policy 1,920-byte/hash 및 SQL-policy v3 hash, shared material identity와 recursive immutability.
 - Lock된 psycopg 3.3.x 뿐 아니라 `pyproject.toml`의 oldest supported 3.2.x로 cursor-local
   loader, named cursor/OID-before-fetch acceptance를 별도 실행한다. 3.2에서 보존할 수 없으면
   지원 하한을 조용히 올리지 않고 dependency contract 변경을 다시 승인받는다.
@@ -809,10 +855,11 @@ restatement해야 하고 C는 open defer다. 일반적인 “진행/구현/승�
 ```text
 ENC-01-A를 ADR 0020의 Exact reader order/admission, source_semantics_fingerprint v1 shape·정렬·bound·
 hidden/private nested view dependency·visited definition·direct pg_type edge·declared/custom
-domain pre-erasure rejection, result
-cursor/scalar/collection/OID 규칙, 1,849-byte result policy v2
-`sha256:cf38dcf490fcd06886b7f0c8d308accc464d8ec9bb9fffcf9bc7c52b76ca37e7`, SQL policy v3
-`sha256:138b8c7fb1e017172acc6542236cb2f3890d5c0af98592766d566fe049639353`, snapshot/revision v1/v2와
+domain pre-erasure rejection, `bytea_output=hex`,
+`default_text_search_config=pg_catalog.english`, result
+cursor/scalar/collection/OID 규칙, 1,920-byte result policy v2
+`sha256:60a62b61c6b1bb429987186730c9d24a6b0868c0cb0406ccad97a5698a900446`, SQL policy v3
+`sha256:42b7b1da79339b115a950bc77c12b4178891be321b34701e072b5473e7b9b754`, snapshot/revision v1/v2와
 QueryExecutor keyword-only fingerprint, exact public error mapping, PostgreSQL-18/UTF8-only admission,
 current/rollback full verified reissue, mixed-fleet 금지와 immutable coordinated cutover/rollback 전 범위로
 승인한다. Curated/nested view explicit COLLATE와 active non-C/POSIX versionless collation을
@@ -821,4 +868,8 @@ distro/libc/ICU/locale-data drift는 자동 fingerprint하지 않고 PostgreSQL/
 identity change마다 managed inventory와 full verified reissue로 통제한다. Same-name user
 procedure/operator body·transitive dependency drift는 automatic fingerprint 밖이므로 protected artifact
 freeze·cutover stop 후 별도 fingerprint/admission 계약 승인을 요구하는 residual limitation도 수용한다.
+Built-in text-search config/dictionary artifact와 unordered float/duplicate-key JSON object aggregate의
+planner-order 의미도 automatic attestation/rewrite 밖이며 managed verified inventory에서 stable unique
+aggregate order/key를 증명하지 못하면 cutover stop한다. General public SQL rejection은 이 승인에
+포함하지 않는 residual limitation도 수용한다.
 ```

@@ -49,7 +49,7 @@ Managed runtime은 source scope가 없는 version 2 access policy와 explicit qu
 |---|---|
 | Production 품질을 L1/L2로 관리 | 모든 공개 relation의 description/grain/time 역할, approved join·business term과 현재 revision의 reviewed verified query를 등록한다. |
 | Join 또는 여러 grain 사용 | Cardinality/fanout guidance를 선언하고 각 grain 선집계 후 결합하는 query와 zero-child 데이터를 검증한다. |
-| RLS source | `FORCE ROW LEVEL SECURITY`, `security_invoker` view, trusted tenant context와 pool 재사용 격리를 검증한다. |
+| RLS source | `FORCE ROW LEVEL SECURITY`, `security_invoker` view, trusted tenant context와 pool 재사용 격리를 검증한다. 이 검사만으로 hidden base-policy drift가 닫히지 않으므로 [RLS policy drift finding](verification/2026-08-26-rls-policy-drift.md)의 `RLS-01`~`RLS-03` 완료 전 production publish와 route activation은 보류한다. |
 | 기존 profile로 자원 상한을 만족하지 못함 | 별도 platform review 후 `budget_profile`을 변경한다. Source별 임의 숫자나 `cost_tier`를 추가하지 않는다. Budget 파일은 startup 설정이므로 현재는 restart가 필요하고, 새 metadata revision에서 L2 verified query를 다시 승인한다. |
 | Wide relation 또는 큰 결과 | 질문별 column disclosure, context/result byte, row limit과 truncation UX를 측정한다. |
 | Quoted PostgreSQL identifier | Manifest에는 `Identifier`/`schema.relation` 규칙을 만족하는 canonical 이름을 쓰고 metadata의 `sql_name`을 SQL에 그대로 사용한다. 공백·Unicode identifier는 curated view에서 안전한 이름으로 바꾼다. |

@@ -2507,7 +2507,9 @@ async def test_live_query_concurrency_cancel_and_source_isolation() -> None:
 
         async def pooled_reader_timezone() -> str:
             pool = await executor._get_pool(limited_development)
-            async with pool.connection() as connection:
+            async with pool.connection(
+                timeout=development.budget.query_queue_timeout_ms / 1000
+            ) as connection:
                 cursor = await connection.execute(
                     "SELECT pg_catalog.current_setting('TimeZone') AS timezone"
                 )

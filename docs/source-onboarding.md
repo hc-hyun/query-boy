@@ -390,3 +390,7 @@ relation/column의 `sql_name`을 사용해야 한다.
 - `tenant_isolation: rls` source는 `view`만 허용하고 모든 공개 view가
   `security_invoker=true`여야 한다. Reader는 `NOBYPASSRLS`여야 하며 policy는 transaction-local
   `query_man.tenant_id`를 사용한다.
+- 위 검사는 hidden base relation의 RLS flag/policy drift까지 증명하지 못한다. 현재
+  [RLS policy drift finding](verification/2026-08-26-rls-policy-drift.md)의 `RLS-01`~`RLS-03`이 열려
+  있으므로 RLS source의 production publish와 route activation은 보류한다. Non-RLS source onboarding은
+  이 보류 대상이 아니다.

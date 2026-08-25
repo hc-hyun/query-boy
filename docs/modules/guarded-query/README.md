@@ -209,6 +209,13 @@ resolved-object 검증과 commit에서 같은 SQLSTATE가 발생해도 사용자
 
 앞 단계를 뒤 단계로 미루거나 검증 실패 뒤 SQL을 실행하지 않는다.
 
+현재 6단계는 transaction-local `row_security=on`, trusted tenant, restricted reader와 published
+security-invoker view를 확인하지만 hidden base relation의 RLS flag/policy 의미를 attest하지 않는다.
+[RLS policy drift finding](../../verification/2026-08-26-rls-policy-drift.md)은 이 gap에서 다른 tenant
+행이 성공함을 재현했으며 strict xfail sentinel로 남아 있다. 이는 안전 contract의 예외 승인이
+아니다. Same-transaction lock/check order, provider fingerprint와 public error는 `RLS-01` exact 승인
+전 임의로 구현하지 않는다.
+
 ### Executor lifecycle contract
 
 ```text

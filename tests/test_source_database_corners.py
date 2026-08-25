@@ -50,6 +50,11 @@ _READER_NAME = re.compile(rf"^{_READER_PREFIX}[0-9a-f]{{32}}$")
 _VIEW_OWNER_NAME = re.compile(rf"^{_VIEW_OWNER_PREFIX}[0-9a-f]{{32}}$")
 _READER_TIMEZONES = ("UTC", "Asia/Seoul", "America/New_York")
 
+
+class _RlsIsolationViolationError(AssertionError):
+    pass
+
+
 _BUDGET = BudgetProfile(
     name="corner-integration",
     version=1,
@@ -2239,6 +2244,750 @@ async def test_enc_01_characterizes_custom_function_body_revision_gap() -> None:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_enc_01_characterizes_custom_operator_binding_revision_gap() -> None:
+    async with _disposable_source_database() as database:
+        admin = await AsyncConnection.connect(database.admin_dsn, autocommit=True)
+        try:
+            await admin.execute("CREATE SCHEMA private")
+            await admin.execute("CREATE SCHEMA analytics")
+            await admin.execute(
+                """
+                CREATE FUNCTION private.operator_false(text, text)
+                RETURNS boolean
+                LANGUAGE sql
+                IMMUTABLE
+                STRICT
+                AS 'SELECT false'
+                """
+            )
+            await admin.execute(
+                """
+                CREATE FUNCTION private.operator_true(text, text)
+                RETURNS boolean
+                LANGUAGE sql
+                IMMUTABLE
+                STRICT
+                AS 'SELECT true'
+                """
+            )
+            function_cursor = await admin.execute(
+                """
+                SELECT procedure.proname, procedure.oid
+                FROM pg_catalog.pg_proc AS procedure
+                JOIN pg_catalog.pg_namespace AS namespace
+                  ON namespace.oid = procedure.pronamespace
+                WHERE namespace.nspname = 'private'
+                  AND procedure.proname IN ('operator_false', 'operator_true')
+                ORDER BY procedure.proname
+                """
+            )
+            function_oids = dict(await function_cursor.fetchall())
+            assert set(function_oids) == {"operator_false", "operator_true"}
+
+            await admin.execute(
+                """
+                CREATE OPERATOR private.=== (
+                    FUNCTION = private.operator_false,
+                    LEFTARG = text,
+                    RIGHTARG = text
+                )
+                """
+            )
+            view_sql = (
+                "CREATE VIEW analytics.operator_semantics AS "
+                "SELECT 'left'::text OPERATOR(private.===) 'right'::text AS enabled"
+            )
+            await admin.execute(view_sql)
+            await admin.execute(
+                sql.SQL("GRANT USAGE ON SCHEMA private, analytics TO {}").format(
+                    sql.Identifier(database.view_owner_name)
+                )
+            )
+            await admin.execute(
+                sql.SQL(
+                    "GRANT EXECUTE ON FUNCTION private.operator_false(text, text), "
+                    "private.operator_true(text, text) TO {}, {}"
+                ).format(
+                    sql.Identifier(database.view_owner_name),
+                    sql.Identifier(database.reader_name),
+                )
+            )
+            await admin.execute(
+                sql.SQL("ALTER VIEW analytics.operator_semantics OWNER TO {}").format(
+                    sql.Identifier(database.view_owner_name)
+                )
+            )
+            await admin.execute(
+                sql.SQL("GRANT USAGE ON SCHEMA analytics TO {}").format(
+                    sql.Identifier(database.reader_name)
+                )
+            )
+            await admin.execute(
+                sql.SQL("GRANT SELECT ON analytics.operator_semantics TO {}").format(
+                    sql.Identifier(database.reader_name)
+                )
+            )
+
+            initial_operator_cursor = await admin.execute(
+                """
+                SELECT operator.oid, operator.oprcode::oid
+                FROM pg_catalog.pg_operator AS operator
+                JOIN pg_catalog.pg_namespace AS namespace
+                  ON namespace.oid = operator.oprnamespace
+                WHERE namespace.nspname = 'private'
+                  AND operator.oprname = '==='
+                  AND operator.oprleft = 'pg_catalog.text'::regtype
+                  AND operator.oprright = 'pg_catalog.text'::regtype
+                """
+            )
+            initial_operator = await initial_operator_cursor.fetchone()
+            assert initial_operator is not None
+            assert initial_operator[1] == function_oids["operator_false"]
+            initial_view_cursor = await admin.execute(
+                "SELECT pg_catalog.pg_get_viewdef("
+                "'analytics.operator_semantics'::regclass, true)"
+            )
+            initial_view_definition = await initial_view_cursor.fetchone()
+            assert initial_view_definition is not None
+
+            direct_operator_cursor = await admin.execute(
+                """
+                SELECT pg_catalog.count(*)
+                FROM pg_catalog.pg_rewrite AS rewrite
+                JOIN pg_catalog.pg_class AS view_relation
+                  ON view_relation.oid = rewrite.ev_class
+                JOIN pg_catalog.pg_namespace AS view_namespace
+                  ON view_namespace.oid = view_relation.relnamespace
+                JOIN pg_catalog.pg_depend AS dependency
+                  ON dependency.classid = 'pg_catalog.pg_rewrite'::regclass
+                 AND dependency.objid = rewrite.oid
+                 AND dependency.objsubid = 0
+                 AND dependency.deptype = 'n'
+                WHERE view_namespace.nspname = 'analytics'
+                  AND view_relation.relname = 'operator_semantics'
+                  AND rewrite.rulename = '_RETURN'
+                  AND dependency.refclassid = 'pg_catalog.pg_operator'::regclass
+                  AND dependency.refobjid = %s
+                """,
+                (initial_operator[0],),
+            )
+            assert await direct_operator_cursor.fetchone() == (1,)
+            direct_function_cursor = await admin.execute(
+                """
+                SELECT pg_catalog.count(*)
+                FROM pg_catalog.pg_rewrite AS rewrite
+                JOIN pg_catalog.pg_class AS view_relation
+                  ON view_relation.oid = rewrite.ev_class
+                JOIN pg_catalog.pg_namespace AS view_namespace
+                  ON view_namespace.oid = view_relation.relnamespace
+                JOIN pg_catalog.pg_depend AS dependency
+                  ON dependency.classid = 'pg_catalog.pg_rewrite'::regclass
+                 AND dependency.objid = rewrite.oid
+                 AND dependency.objsubid = 0
+                 AND dependency.deptype = 'n'
+                WHERE view_namespace.nspname = 'analytics'
+                  AND view_relation.relname = 'operator_semantics'
+                  AND rewrite.rulename = '_RETURN'
+                  AND dependency.refclassid = 'pg_catalog.pg_proc'::regclass
+                  AND dependency.refobjid = %s
+                """,
+                (function_oids["operator_false"],),
+            )
+            assert await direct_function_cursor.fetchone() == (0,)
+            transitive_function_cursor = await admin.execute(
+                """
+                SELECT pg_catalog.count(*)
+                FROM pg_catalog.pg_depend AS dependency
+                WHERE dependency.classid = 'pg_catalog.pg_operator'::regclass
+                  AND dependency.objid = %s
+                  AND dependency.objsubid = 0
+                  AND dependency.refclassid = 'pg_catalog.pg_proc'::regclass
+                  AND dependency.refobjid = %s
+                  AND dependency.deptype = 'n'
+                """,
+                (initial_operator[0], function_oids["operator_false"]),
+            )
+            assert await transitive_function_cursor.fetchone() == (1,)
+
+            source = _source_profile(database, "operator-drift", ("view",))
+            catalog, executor, metadata, query = _open_services(
+                source,
+                cache_ttl_ms=0,
+            )
+            try:
+                disabled = await metadata.get_published(source.source_id)
+                assert [
+                    relation.qualified_name for relation in disabled.snapshot.relations
+                ] == ["analytics.operator_semantics"]
+                assert disabled.snapshot.relations[0].definition_hash == (
+                    "fa4f4892aa25aa2ac7cee9c54ab523ce"
+                )
+                disabled_result = await query.query(
+                    source.source_id,
+                    "SELECT enabled FROM analytics.operator_semantics",
+                    disabled.revision,
+                    SQL_POLICY_REVISION,
+                )
+                _assert_canonical_result(
+                    disabled_result,
+                    disabled.revision,
+                    ["enabled"],
+                    [{"enabled": False}],
+                )
+                assert create_result_hash(
+                    ("enabled",), disabled_result["rows"]
+                ) == (
+                    "sha256:2c3bdb6d969f6176565315abeacf08d1aac846b2bb003fbc887a55519d10376c"
+                )
+
+                await admin.execute("DROP VIEW analytics.operator_semantics")
+                await admin.execute("DROP OPERATOR private.===(text, text)")
+                await admin.execute(
+                    """
+                    CREATE OPERATOR private.=== (
+                        FUNCTION = private.operator_true,
+                        LEFTARG = text,
+                        RIGHTARG = text
+                    )
+                    """
+                )
+                await admin.execute(view_sql)
+                await admin.execute(
+                    sql.SQL(
+                        "ALTER VIEW analytics.operator_semantics OWNER TO {}"
+                    ).format(sql.Identifier(database.view_owner_name))
+                )
+                await admin.execute(
+                    sql.SQL(
+                        "GRANT SELECT ON analytics.operator_semantics TO {}"
+                    ).format(sql.Identifier(database.reader_name))
+                )
+
+                rebound_operator_cursor = await admin.execute(
+                    """
+                    SELECT operator.oid, operator.oprcode::oid
+                    FROM pg_catalog.pg_operator AS operator
+                    JOIN pg_catalog.pg_namespace AS namespace
+                      ON namespace.oid = operator.oprnamespace
+                    WHERE namespace.nspname = 'private'
+                      AND operator.oprname = '==='
+                      AND operator.oprleft = 'pg_catalog.text'::regtype
+                      AND operator.oprright = 'pg_catalog.text'::regtype
+                    """
+                )
+                rebound_operator = await rebound_operator_cursor.fetchone()
+                assert rebound_operator is not None
+                assert rebound_operator[0] != initial_operator[0]
+                assert rebound_operator[1] == function_oids["operator_true"]
+                rebound_view_cursor = await admin.execute(
+                    "SELECT pg_catalog.pg_get_viewdef("
+                    "'analytics.operator_semantics'::regclass, true)"
+                )
+                assert await rebound_view_cursor.fetchone() == initial_view_definition
+
+                rebound_direct_cursor = await admin.execute(
+                    """
+                    SELECT pg_catalog.count(*)
+                    FROM pg_catalog.pg_rewrite AS rewrite
+                    JOIN pg_catalog.pg_class AS view_relation
+                      ON view_relation.oid = rewrite.ev_class
+                    JOIN pg_catalog.pg_namespace AS view_namespace
+                      ON view_namespace.oid = view_relation.relnamespace
+                    JOIN pg_catalog.pg_depend AS dependency
+                      ON dependency.classid = 'pg_catalog.pg_rewrite'::regclass
+                     AND dependency.objid = rewrite.oid
+                     AND dependency.objsubid = 0
+                     AND dependency.deptype = 'n'
+                    WHERE view_namespace.nspname = 'analytics'
+                      AND view_relation.relname = 'operator_semantics'
+                      AND rewrite.rulename = '_RETURN'
+                      AND dependency.refclassid = 'pg_catalog.pg_operator'::regclass
+                      AND dependency.refobjid = %s
+                    """,
+                    (rebound_operator[0],),
+                )
+                assert await rebound_direct_cursor.fetchone() == (1,)
+                rebound_transitive_cursor = await admin.execute(
+                    """
+                    SELECT pg_catalog.count(*)
+                    FROM pg_catalog.pg_depend AS dependency
+                    WHERE dependency.classid = 'pg_catalog.pg_operator'::regclass
+                      AND dependency.objid = %s
+                      AND dependency.objsubid = 0
+                      AND dependency.refclassid = 'pg_catalog.pg_proc'::regclass
+                      AND dependency.refobjid = %s
+                      AND dependency.deptype = 'n'
+                    """,
+                    (rebound_operator[0], function_oids["operator_true"]),
+                )
+                assert await rebound_transitive_cursor.fetchone() == (1,)
+
+                metadata.invalidate(source.source_id)
+                enabled = await metadata.get_published(source.source_id)
+                # ponytail: defect characterization; the view's direct dependency
+                # stops at pg_operator, so rebinding its pg_proc target is outside
+                # the current definition hash and metadata revision.
+                assert enabled.revision == disabled.revision
+                assert enabled.snapshot == disabled.snapshot
+                enabled_result = await query.query(
+                    source.source_id,
+                    "SELECT enabled FROM analytics.operator_semantics",
+                    enabled.revision,
+                    SQL_POLICY_REVISION,
+                )
+                _assert_canonical_result(
+                    enabled_result,
+                    enabled.revision,
+                    ["enabled"],
+                    [{"enabled": True}],
+                )
+                assert create_result_hash(
+                    ("enabled",), enabled_result["rows"]
+                ) == (
+                    "sha256:630788e0d75c2d80b58158c7b0bb7ba7bb9af9ab8acfa21ae90433896ce1c42b"
+                )
+            finally:
+                active_error = sys.exception()
+                cleanup_errors = await _attempt_cleanup_steps(
+                    (
+                        ("close operator-drift query executor", executor.close),
+                        ("close operator-drift catalog", catalog.close),
+                    )
+                )
+                if cleanup_errors:
+                    if active_error is not None:
+                        raise BaseExceptionGroup(
+                            "Operator-drift query and cleanup failed",
+                            [active_error, *cleanup_errors],
+                        )
+                    raise BaseExceptionGroup(
+                        "Operator-drift query cleanup failed", cleanup_errors
+                    )
+        finally:
+            active_error = sys.exception()
+            cleanup_errors = await _attempt_cleanup_steps(
+                (("close operator-drift setup admin", admin.close),)
+            )
+            if cleanup_errors:
+                if active_error is not None:
+                    raise BaseExceptionGroup(
+                        "Operator-drift setup and cleanup failed",
+                        [active_error, *cleanup_errors],
+                    )
+                raise BaseExceptionGroup(
+                    "Operator-drift setup cleanup failed", cleanup_errors
+                )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("drift_sql", "expected_rls_enabled"),
+    (
+        pytest.param(
+            "ALTER POLICY tenant_filter ON private.tenant_records USING (true)",
+            True,
+            id="permissive-policy",
+        ),
+        pytest.param(
+            "ALTER TABLE private.tenant_records DISABLE ROW LEVEL SECURITY",
+            False,
+            id="disabled-rls",
+        ),
+    ),
+)
+@pytest.mark.xfail(
+    strict=True,
+    raises=_RlsIsolationViolationError,
+    reason="RLS base-policy attestation requires an approved fail-closed contract",
+)
+async def test_rls_source_requires_base_policy_drift_to_preserve_isolation(
+    drift_sql: str,
+    expected_rls_enabled: bool,
+) -> None:
+    async with _disposable_source_database() as database:
+        admin = await AsyncConnection.connect(database.admin_dsn, autocommit=True)
+        try:
+            await admin.execute("CREATE SCHEMA private")
+            await admin.execute("CREATE SCHEMA analytics")
+            await admin.execute(
+                "CREATE TABLE private.tenant_records "
+                "(record_id bigint PRIMARY KEY, tenant_id text NOT NULL, label text NOT NULL)"
+            )
+            await admin.execute(
+                "INSERT INTO private.tenant_records VALUES "
+                "(1, 'acme', 'acme-only'), (2, 'other', 'other-only')"
+            )
+            await admin.execute(
+                "ALTER TABLE private.tenant_records ENABLE ROW LEVEL SECURITY"
+            )
+            await admin.execute(
+                "CREATE POLICY tenant_filter ON private.tenant_records "
+                "USING (tenant_id = "
+                "pg_catalog.current_setting('query_man.tenant_id', true))"
+            )
+            await admin.execute(
+                "CREATE VIEW analytics.tenant_records "
+                "WITH (security_invoker = true) AS "
+                "SELECT record_id, label FROM private.tenant_records"
+            )
+            await admin.execute(
+                sql.SQL("ALTER VIEW analytics.tenant_records OWNER TO {}").format(
+                    sql.Identifier(database.view_owner_name)
+                )
+            )
+            await admin.execute(
+                sql.SQL("GRANT USAGE ON SCHEMA private, analytics TO {}").format(
+                    sql.Identifier(database.reader_name)
+                )
+            )
+            await admin.execute(
+                sql.SQL("GRANT SELECT ON private.tenant_records TO {}").format(
+                    sql.Identifier(database.reader_name)
+                )
+            )
+            await admin.execute(
+                sql.SQL("GRANT SELECT ON analytics.tenant_records TO {}").format(
+                    sql.Identifier(database.reader_name)
+                )
+            )
+
+            source = replace(
+                _source_profile(database, "rls-policy-drift", ("view",)),
+                tenant_isolation="rls",
+            )
+            catalog, executor, metadata, query = _open_services(
+                source,
+                cache_ttl_ms=0,
+            )
+            try:
+                baseline = await metadata.get_published(source.source_id)
+                assert [
+                    (
+                        relation.qualified_name,
+                        relation.security_invoker,
+                    )
+                    for relation in baseline.snapshot.relations
+                ] == [("analytics.tenant_records", True)]
+                acme_only = await query.query(
+                    source.source_id,
+                    "SELECT record_id FROM analytics.tenant_records "
+                    "ORDER BY record_id",
+                    baseline.revision,
+                    SQL_POLICY_REVISION,
+                    tenant_id="acme",
+                )
+                _assert_canonical_result(
+                    acme_only,
+                    baseline.revision,
+                    ["record_id"],
+                    [{"record_id": 1}],
+                )
+                assert create_result_hash(
+                    ("record_id",), acme_only["rows"]
+                ) == (
+                    "sha256:e31870f73f15d65fbe67fa0b6e57f9b36d130e8dba5340c0fd2e3cad1b455270"
+                )
+
+                await admin.execute(drift_sql)
+                rls_state_cursor = await admin.execute(
+                    """
+                    SELECT relation.relrowsecurity
+                    FROM pg_catalog.pg_class AS relation
+                    JOIN pg_catalog.pg_namespace AS namespace
+                      ON namespace.oid = relation.relnamespace
+                    WHERE namespace.nspname = 'private'
+                      AND relation.relname = 'tenant_records'
+                    """
+                )
+                assert await rls_state_cursor.fetchone() == (expected_rls_enabled,)
+                metadata.invalidate(source.source_id)
+                drifted_policy = await metadata.get_published(source.source_id)
+                # ponytail: unresolved security regression; the exact fail-closed
+                # provider/error contract requires approval, but cross-tenant rows
+                # may never become a successful result.
+                assert drifted_policy.revision == baseline.revision
+                assert drifted_policy.snapshot == baseline.snapshot
+                drifted_result = await query.query(
+                    source.source_id,
+                    "SELECT record_id FROM analytics.tenant_records "
+                    "ORDER BY record_id",
+                    drifted_policy.revision,
+                    SQL_POLICY_REVISION,
+                    tenant_id="acme",
+                )
+                if drifted_result["rows"] != [{"record_id": 1}]:
+                    assert drifted_result["columns"] == ["record_id"]
+                    assert drifted_result["rows"] == [
+                        {"record_id": 1},
+                        {"record_id": 2},
+                    ]
+                    assert create_result_hash(
+                        ("record_id",), drifted_result["rows"]
+                    ) == (
+                        "sha256:6432f5ac9d37fc70b8d0b5caa12a95340df62491a9e5b994cb36d16014b17f70"
+                    )
+                    raise _RlsIsolationViolationError(
+                        "authenticated tenant query returned a cross-tenant row"
+                    )
+                _assert_canonical_result(
+                    drifted_result,
+                    drifted_policy.revision,
+                    ["record_id"],
+                    [{"record_id": 1}],
+                )
+                assert create_result_hash(
+                    ("record_id",), drifted_result["rows"]
+                ) == (
+                    "sha256:e31870f73f15d65fbe67fa0b6e57f9b36d130e8dba5340c0fd2e3cad1b455270"
+                )
+                await _assert_pool_restored_reader_timezone(executor, source, "UTC")
+            finally:
+                active_error = sys.exception()
+                cleanup_errors = await _attempt_cleanup_steps(
+                    (
+                        ("close RLS-policy query executor", executor.close),
+                        ("close RLS-policy catalog", catalog.close),
+                    )
+                )
+                if cleanup_errors:
+                    if active_error is not None:
+                        raise BaseExceptionGroup(
+                            "RLS-policy query and cleanup failed",
+                            [active_error, *cleanup_errors],
+                        )
+                    raise BaseExceptionGroup(
+                        "RLS-policy query cleanup failed", cleanup_errors
+                    )
+        finally:
+            active_error = sys.exception()
+            cleanup_errors = await _attempt_cleanup_steps(
+                (("close RLS-policy setup admin", admin.close),)
+            )
+            if cleanup_errors:
+                if active_error is not None:
+                    raise BaseExceptionGroup(
+                        "RLS-policy setup and cleanup failed",
+                        [active_error, *cleanup_errors],
+                    )
+                raise BaseExceptionGroup(
+                    "RLS-policy setup cleanup failed", cleanup_errors
+                )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_enc_01_characterizes_extreme_scalar_driver_boundaries() -> None:
+    async with _disposable_source_database() as database:
+        admin = await AsyncConnection.connect(database.admin_dsn, autocommit=True)
+        try:
+            await admin.execute("CREATE SCHEMA analytics")
+            await admin.execute(
+                """
+                CREATE TABLE analytics.driver_extremes (
+                    record_id bigint PRIMARY KEY,
+                    zero_interval interval NOT NULL,
+                    positive_infinity_interval interval NOT NULL,
+                    negative_infinity_interval interval NOT NULL,
+                    bc_date date NOT NULL,
+                    far_date date NOT NULL,
+                    bc_timestamp timestamp without time zone NOT NULL,
+                    far_timestamp timestamp without time zone NOT NULL,
+                    json_4300 json NOT NULL,
+                    json_4301 json NOT NULL,
+                    empty_bits varbit NOT NULL,
+                    sample_bits varbit NOT NULL
+                )
+                """
+            )
+            await admin.execute(
+                """
+                INSERT INTO analytics.driver_extremes VALUES (
+                    1,
+                    interval '0',
+                    interval 'infinity',
+                    interval '-infinity',
+                    date '0001-01-01 BC',
+                    date '10000-01-01',
+                    timestamp '0001-01-01 BC',
+                    timestamp '10000-01-01',
+                    ('{"n":' || pg_catalog.repeat('9', 4300) || '}')::json,
+                    ('{"n":' || pg_catalog.repeat('9', 4301) || '}')::json,
+                    B''::varbit,
+                    B'101'::varbit
+                )
+                """
+            )
+            await admin.execute(
+                sql.SQL("GRANT USAGE ON SCHEMA analytics TO {}").format(
+                    sql.Identifier(database.reader_name)
+                )
+            )
+            await admin.execute(
+                sql.SQL("GRANT SELECT ON analytics.driver_extremes TO {}").format(
+                    sql.Identifier(database.reader_name)
+                )
+            )
+        finally:
+            active_error = sys.exception()
+            cleanup_errors = await _attempt_cleanup_steps(
+                (("close extreme-scalar setup admin", admin.close),)
+            )
+            if cleanup_errors:
+                if active_error is not None:
+                    raise BaseExceptionGroup(
+                        "Extreme-scalar setup and cleanup failed",
+                        [active_error, *cleanup_errors],
+                    )
+                raise BaseExceptionGroup(
+                    "Extreme-scalar setup cleanup failed", cleanup_errors
+                )
+
+        source = _source_profile(database, "extreme-scalars", ("table",))
+        catalog, executor, metadata, query = _open_services(source)
+        try:
+            published = await metadata.get_published(source.source_id)
+            relation = published.snapshot.relations[0]
+            assert [column.name for column in relation.columns] == [
+                "record_id",
+                "zero_interval",
+                "positive_infinity_interval",
+                "negative_infinity_interval",
+                "bc_date",
+                "far_date",
+                "bc_timestamp",
+                "far_timestamp",
+                "json_4300",
+                "json_4301",
+                "empty_bits",
+                "sample_bits",
+            ]
+
+            interval_results = []
+            for column in (
+                "zero_interval",
+                "positive_infinity_interval",
+                "negative_infinity_interval",
+            ):
+                interval_results.append(
+                    await query.query(
+                        source.source_id,
+                        f"SELECT {column} AS value FROM analytics.driver_extremes",
+                        published.revision,
+                        SQL_POLICY_REVISION,
+                    )
+                )
+            # ponytail: defect characterization; psycopg's default interval
+            # loader collapses both infinities to the same timedelta as zero.
+            for result in interval_results:
+                _assert_canonical_result(
+                    result,
+                    published.revision,
+                    ["value"],
+                    [{"value": "0:00:00"}],
+                )
+            assert {
+                create_result_hash(("value",), result["rows"])
+                for result in interval_results
+            } == {
+                "sha256:265de8ffe863aa833be5993c281f86ae00468a34e51345ab53e537622c071b48"
+            }
+
+            for column in (
+                "bc_date",
+                "far_date",
+                "bc_timestamp",
+                "far_timestamp",
+            ):
+                with pytest.raises(QueryUnavailableError) as unavailable:
+                    await query.query(
+                        source.source_id,
+                        f"SELECT {column} AS value FROM analytics.driver_extremes",
+                        published.revision,
+                        SQL_POLICY_REVISION,
+                    )
+                assert unavailable.value.details is None
+                assert isinstance(unavailable.value.__cause__, errors.DataError)
+
+                recovered = await query.query(
+                    source.source_id,
+                    "SELECT record_id FROM analytics.driver_extremes",
+                    published.revision,
+                    SQL_POLICY_REVISION,
+                )
+                _assert_canonical_result(
+                    recovered,
+                    published.revision,
+                    ["record_id"],
+                    [{"record_id": 1}],
+                )
+
+            exact_integer = int("9" * 4300)
+            json_boundary = await query.query(
+                source.source_id,
+                "SELECT json_4300 AS value FROM analytics.driver_extremes",
+                published.revision,
+                SQL_POLICY_REVISION,
+            )
+            _assert_canonical_result(
+                json_boundary,
+                published.revision,
+                ["value"],
+                [{"value": {"n": exact_integer}}],
+            )
+            assert create_result_hash(("value",), json_boundary["rows"]) == (
+                "sha256:f5990467cfa9498375afc2cab1363623590acfe5305370bf35dfc437c42704c8"
+            )
+
+            with pytest.raises(QueryUnavailableError) as json_overflow:
+                await query.query(
+                    source.source_id,
+                    "SELECT json_4301 AS value FROM analytics.driver_extremes",
+                    published.revision,
+                    SQL_POLICY_REVISION,
+                )
+            assert json_overflow.value.details is None
+            assert isinstance(json_overflow.value.__cause__, ValueError)
+
+            bits = await query.query(
+                source.source_id,
+                "SELECT empty_bits, sample_bits FROM analytics.driver_extremes",
+                published.revision,
+                SQL_POLICY_REVISION,
+            )
+            _assert_canonical_result(
+                bits,
+                published.revision,
+                ["empty_bits", "sample_bits"],
+                [{"empty_bits": "", "sample_bits": "101"}],
+            )
+            assert create_result_hash(
+                ("empty_bits", "sample_bits"), bits["rows"]
+            ) == (
+                "sha256:675a9688aa730d64927d9a124cec8825eb6f87abf0da494410bb26576f9fc5a1"
+            )
+            await _assert_pool_restored_reader_timezone(executor, source, "UTC")
+        finally:
+            active_error = sys.exception()
+            cleanup_errors = await _attempt_cleanup_steps(
+                (
+                    ("close extreme-scalar query executor", executor.close),
+                    ("close extreme-scalar catalog", catalog.close),
+                )
+            )
+            if cleanup_errors:
+                if active_error is not None:
+                    raise BaseExceptionGroup(
+                        "Extreme-scalar query and cleanup failed",
+                        [active_error, *cleanup_errors],
+                    )
+                raise BaseExceptionGroup(
+                    "Extreme-scalar query cleanup failed", cleanup_errors
+                )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_enc_01_characterizes_sql_semantic_gucs_and_array_identity_loss() -> None:
     async with _disposable_source_database() as database:
         connection = await AsyncConnection.connect(
@@ -2482,9 +3231,19 @@ async def test_enc_01_characterizes_public_query_semantic_guc_drift() -> None:
         try:
             await admin.execute("CREATE SCHEMA analytics")
             await admin.execute(
-                "CREATE TABLE analytics.semantic_edges (record_id bigint PRIMARY KEY)"
+                "CREATE TABLE analytics.semantic_edges "
+                "(record_id bigint PRIMARY KEY, payload bytea NOT NULL, body text NOT NULL)"
             )
-            await admin.execute("INSERT INTO analytics.semantic_edges VALUES (1)")
+            await admin.execute(
+                "INSERT INTO analytics.semantic_edges VALUES "
+                "(1, pg_catalog.decode('00ff', 'hex'), 'rats')"
+            )
+            await admin.execute(
+                "CREATE VIEW analytics.search_semantics AS "
+                "SELECT pg_catalog.to_tsvector(body) "
+                "@@ pg_catalog.to_tsquery('rat') AS matches "
+                "FROM analytics.semantic_edges"
+            )
             await admin.execute(
                 sql.SQL("GRANT USAGE ON SCHEMA analytics TO {}").format(
                     sql.Identifier(database.reader_name)
@@ -2492,6 +3251,11 @@ async def test_enc_01_characterizes_public_query_semantic_guc_drift() -> None:
             )
             await admin.execute(
                 sql.SQL("GRANT SELECT ON analytics.semantic_edges TO {}").format(
+                    sql.Identifier(database.reader_name)
+                )
+            )
+            await admin.execute(
+                sql.SQL("GRANT SELECT ON analytics.search_semantics TO {}").format(
                     sql.Identifier(database.reader_name)
                 )
             )
@@ -2516,6 +3280,8 @@ async def test_enc_01_characterizes_public_query_semantic_guc_drift() -> None:
             transform_null_equals: str,
             array_nulls: str,
             timezone_abbreviations: str,
+            bytea_output: str,
+            default_text_search_config: str,
         ) -> None:
             connection = await AsyncConnection.connect(
                 database.admin_dsn, autocommit=True
@@ -2526,6 +3292,8 @@ async def test_enc_01_characterizes_public_query_semantic_guc_drift() -> None:
                     ("transform_null_equals", transform_null_equals),
                     ("array_nulls", array_nulls),
                     ("timezone_abbreviations", timezone_abbreviations),
+                    ("bytea_output", bytea_output),
+                    ("default_text_search_config", default_text_search_config),
                 ):
                     await connection.execute(
                         sql.SQL("ALTER ROLE {} SET {} TO {}").format(
@@ -2550,7 +3318,11 @@ async def test_enc_01_characterizes_public_query_semantic_guc_drift() -> None:
                     )
 
         async def read_public_results() -> tuple[str, dict[str, tuple[object, str]]]:
-            source = _source_profile(database, "semantic-guc-edges", ("table",))
+            source = _source_profile(
+                database,
+                "semantic-guc-edges",
+                ("table", "view"),
+            )
             catalog, executor, metadata, query = _open_services(source)
             try:
                 published = await metadata.get_published(source.source_id)
@@ -2575,6 +3347,15 @@ async def test_enc_01_characterizes_public_query_semantic_guc_drift() -> None:
                         "SELECT '2024-01-01 12:00 CST'::pg_catalog.timestamptz "
                         "AS value "
                         "FROM analytics.semantic_edges",
+                    ),
+                    (
+                        "bytea_text_cast",
+                        "SELECT payload::pg_catalog.text AS value "
+                        "FROM analytics.semantic_edges",
+                    ),
+                    (
+                        "default_text_search",
+                        "SELECT matches AS value FROM analytics.search_semantics",
                     ),
                 ):
                     result = await query.query(
@@ -2618,6 +3399,8 @@ async def test_enc_01_characterizes_public_query_semantic_guc_drift() -> None:
             transform_null_equals="on",
             array_nulls="off",
             timezone_abbreviations="Australia",
+            bytea_output="escape",
+            default_text_search_config="pg_catalog.simple",
         )
         drift_revision, drift_results = await read_public_results()
         assert drift_results == {
@@ -2637,6 +3420,14 @@ async def test_enc_01_characterizes_public_query_semantic_guc_drift() -> None:
                 "2024-01-01T02:30:00+00:00",
                 "sha256:95bbd395245ad95402487aea0c6d8038bdd9a46d3ce5cef298ddbaf9eaa342f7",
             ),
+            "bytea_text_cast": (
+                "\\000\\377",
+                "sha256:be10c695747100145649abc3d972028963c4cb6dd3fbf2ca34bee276516e7c61",
+            ),
+            "default_text_search": (
+                False,
+                "sha256:650abf959c971b3fd503ca4db961b5e37d917207abde3500214ad23d64833b56",
+            ),
         }
 
         await set_reader_defaults(
@@ -2644,6 +3435,8 @@ async def test_enc_01_characterizes_public_query_semantic_guc_drift() -> None:
             transform_null_equals="off",
             array_nulls="on",
             timezone_abbreviations="Default",
+            bytea_output="hex",
+            default_text_search_config="pg_catalog.english",
         )
         baseline_revision, baseline_results = await read_public_results()
         # ponytail: defect characterization; semantic role defaults are not revision material.
@@ -2665,7 +3458,183 @@ async def test_enc_01_characterizes_public_query_semantic_guc_drift() -> None:
                 "2024-01-01T18:00:00+00:00",
                 "sha256:4e9285bbe4bbd477dfa08dfd6b9d0583b528f942c7ac6fccaeaf52e40abc8591",
             ),
+            "bytea_text_cast": (
+                "\\x00ff",
+                "sha256:07714fda947fb9e09a2b6217b0fe0c4e53eb3d7032cce257e157acf1eb64b553",
+            ),
+            "default_text_search": (
+                True,
+                "sha256:f3b63060353a6de843bdab60cff00570124850083597cbb3ebc09406ddf3af16",
+            ),
         }
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_enc_01_characterizes_planner_order_sensitive_aggregates() -> None:
+    async with _disposable_source_database() as database:
+        admin = await AsyncConnection.connect(database.admin_dsn, autocommit=True)
+        try:
+            await admin.execute("CREATE SCHEMA analytics")
+            await admin.execute(
+                """
+                CREATE TABLE analytics.aggregate_edges (
+                    record_id integer PRIMARY KEY,
+                    object_key text NOT NULL,
+                    object_value integer NOT NULL,
+                    float_value double precision NOT NULL
+                )
+                """
+            )
+            # Heap order is 1, 3, 2 while the primary-key index order is 1, 2, 3.
+            await admin.execute(
+                "INSERT INTO analytics.aggregate_edges VALUES "
+                "(1, 'x', 1, 1e16), "
+                "(3, 'x', 3, 1.0), "
+                "(2, 'x', 2, -1e16)"
+            )
+            await admin.execute("ANALYZE analytics.aggregate_edges")
+            await admin.execute(
+                sql.SQL("GRANT USAGE ON SCHEMA analytics TO {}").format(
+                    sql.Identifier(database.reader_name)
+                )
+            )
+            await admin.execute(
+                sql.SQL("GRANT SELECT ON analytics.aggregate_edges TO {}").format(
+                    sql.Identifier(database.reader_name)
+                )
+            )
+
+            async def set_planner_defaults(
+                *,
+                enable_seqscan: str,
+                enable_indexscan: str,
+            ) -> None:
+                for name, value in (
+                    ("enable_seqscan", enable_seqscan),
+                    ("enable_indexscan", enable_indexscan),
+                    ("enable_bitmapscan", "off"),
+                ):
+                    await admin.execute(
+                        sql.SQL("ALTER ROLE {} IN DATABASE {} SET {} TO {}").format(
+                            sql.Identifier(database.reader_name),
+                            sql.Identifier(database.name),
+                            sql.Identifier(name),
+                            sql.Literal(value),
+                        )
+                    )
+
+            async def read_public_results() -> tuple[
+                str,
+                dict[str, tuple[object, str]],
+            ]:
+                source = _source_profile(
+                    database,
+                    "planner-order-edges",
+                    ("table",),
+                )
+                catalog, executor, metadata, query = _open_services(source)
+                try:
+                    published = await metadata.get_published(source.source_id)
+                    results: dict[str, tuple[object, str]] = {}
+                    for label, statement in (
+                        (
+                            "float_sum",
+                            "SELECT pg_catalog.sum(float_value) AS value "
+                            "FROM analytics.aggregate_edges WHERE record_id > 0",
+                        ),
+                        (
+                            "jsonb_object",
+                            "SELECT pg_catalog.jsonb_object_agg("
+                            "object_key, object_value) AS value "
+                            "FROM analytics.aggregate_edges WHERE record_id > 0",
+                        ),
+                    ):
+                        result = await query.query(
+                            source.source_id,
+                            statement,
+                            published.revision,
+                            SQL_POLICY_REVISION,
+                        )
+                        value = result["rows"][0]["value"]
+                        _assert_canonical_result(
+                            result,
+                            published.revision,
+                            ["value"],
+                            [{"value": value}],
+                        )
+                        results[label] = (
+                            value,
+                            create_result_hash(("value",), result["rows"]),
+                        )
+                    return published.revision, results
+                finally:
+                    active_error = sys.exception()
+                    cleanup_errors = await _attempt_cleanup_steps(
+                        (
+                            ("close planner-order query executor", executor.close),
+                            ("close planner-order catalog", catalog.close),
+                        )
+                    )
+                    if cleanup_errors:
+                        if active_error is not None:
+                            raise BaseExceptionGroup(
+                                "Planner-order query and cleanup failed",
+                                [active_error, *cleanup_errors],
+                            )
+                        raise BaseExceptionGroup(
+                            "Planner-order query cleanup failed", cleanup_errors
+                        )
+
+            await set_planner_defaults(
+                enable_seqscan="on",
+                enable_indexscan="off",
+            )
+            sequence_revision, sequence_results = await read_public_results()
+            assert sequence_results == {
+                "float_sum": (
+                    0.0,
+                    "sha256:0e281397bb078de6414ccdef1ed9350c948a57b45765001261da4b51de253c88",
+                ),
+                "jsonb_object": (
+                    {"x": 2},
+                    "sha256:dbf3df0bd59c886d21f44a6b339b2fdada8aff45599fc34394518469afef7d08",
+                ),
+            }
+
+            await set_planner_defaults(
+                enable_seqscan="off",
+                enable_indexscan="on",
+            )
+            index_revision, index_results = await read_public_results()
+            # ponytail: defect characterization; aggregate input order is not
+            # revision material, so planner defaults can change exact public
+            # values and verified hashes with identical data and SQL.
+            assert index_revision == sequence_revision
+            assert index_results == {
+                "float_sum": (
+                    1.0,
+                    "sha256:bc865c9c470c0a06cf4e957928f26fc1c3dc7d6ae1cfaebe271f53ace90b793a",
+                ),
+                "jsonb_object": (
+                    {"x": 3},
+                    "sha256:50d6676ae9c55a3167bd4b59b6f3c31f3798157f8937cb8968219a7ca754f375",
+                ),
+            }
+        finally:
+            active_error = sys.exception()
+            cleanup_errors = await _attempt_cleanup_steps(
+                (("close planner-order setup admin", admin.close),)
+            )
+            if cleanup_errors:
+                if active_error is not None:
+                    raise BaseExceptionGroup(
+                        "Planner-order setup and cleanup failed",
+                        [active_error, *cleanup_errors],
+                    )
+                raise BaseExceptionGroup(
+                    "Planner-order setup cleanup failed", cleanup_errors
+                )
 
 
 @pytest.mark.integration

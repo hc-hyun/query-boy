@@ -566,7 +566,10 @@ Control DB schema, replica observation, freshness와 admin response 계약은 20
 별도 승인을 받아 구현됐고, 기존 계약을 재현한 `CTRL-09` isolated cross-service Control recovery
 fixture acceptance까지 완료됐다. 이후 plan-only Source Onboarding Skill `SKILL-01`~`SKILL-06`도
 독립 forward evaluation과 mutation 0 증거로 완료됐다. Disposable source DB assurance
-`DBEDGE-01`~`DBEDGE-04`도 완료했다. Reader TimeZone/canonical hash 변경은 별도 승인된
+`DBEDGE-01`~`DBEDGE-05`도 완료했다. 이 과정에서 별도로 발견한 hidden base RLS policy drift는
+accepted tenant isolation 위반이므로 완료 DBEDGE로 흡수하지 않고
+[open security finding](verification/2026-08-26-rls-policy-drift.md)과 최우선 `RLS-01`~`RLS-03`으로
+분리했다. Reader TimeZone/canonical hash 변경은 별도 승인된
 `TIME-01`과 `TIME-02`에서
 결정·구현했고 완료 이력을 roadmap ledger로 옮겼다. 후속 database corner에서 발견한
 lossless scalar/JSON/time, source encoding/collation, semantic GUC, result OID와 array identity gap은

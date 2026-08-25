@@ -136,6 +136,12 @@ SOURCE_DATABASE_CORNERS_AUDIT = (
     / "verification"
     / "2026-08-25-source-database-corners.md"
 )
+RLS_POLICY_DRIFT_AUDIT = (
+    ROOT_DIRECTORY
+    / "docs"
+    / "verification"
+    / "2026-08-26-rls-policy-drift.md"
+)
 CANONICAL_TIME_AUDIT = (
     ROOT_DIRECTORY
     / "docs"
@@ -193,6 +199,9 @@ EXPECTED_ID_COUNTS = {
     "MCPX": 8,
 }
 EXPECTED_OPEN_TODO_IDS = (
+    "RLS-01",
+    "RLS-02",
+    "RLS-03",
     "ENC-01",
     "ENC-02",
     "TIME-03",
@@ -244,6 +253,7 @@ EXPECTED_POST_BASELINE_COMPLETED_IDS = (
     "DBEDGE-02",
     "DBEDGE-03",
     "DBEDGE-04",
+    "DBEDGE-05",
     "TIME-01",
     "TIME-02",
 )
@@ -376,8 +386,12 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
     usage_projection_audit = USAGE_PROJECTION_AUDIT.read_text(encoding="utf-8")
     control_recovery_audit = CONTROL_RECOVERY_AUDIT.read_text(encoding="utf-8")
 
-    assert "Status: Production ready" in roadmap
-    assert "Status: Production ready" in architecture
+    current_status = (
+        "Status: Baseline complete; RLS-enabled production serving blocked "
+        "pending `RLS-*`"
+    )
+    assert current_status in roadmap
+    assert current_status in architecture
     assert "Status: Complete" in baseline_audit
     assert "Status: Complete" in refactoring_audit
     assert "Status: Complete" in container_audit
@@ -515,7 +529,7 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
         "Start gate",
         "Verification",
     ):
-        assert todo.count(f"| {field} |") == 4
+        assert todo.count(f"| {field} |") == 5
 
     assert "Lower-track의 `read-only prework`" in todo
     assert "**plan 승인은 contract 선택" in todo
@@ -539,10 +553,9 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
     assert "명시적으로 defer하기 전에는 `COST-01` 구현을 시작하지" in todo
     assert "proposed ADR 0021의 정확한 monitoring 계약과 영향 범위를 별도 승인" in todo
     assert "| `TIME-03` |" not in roadmap
-    assert (
-        "M14.5의 `ENC-*` 결정·구현과 M14 production 전환 `TIME-03`은 active"
-        in roadmap
-    )
+    assert "재현된 authorization gap인 M13.5 `RLS-*`가 최우선 active" in roadmap
+    assert "M14.5의 `ENC-*` 결정·구현과 M14" in roadmap
+    assert "production 전환 `TIME-03`도 active" in roadmap
     assert "`CTRL-07A` observation method/freshness/logical retention" in todo
     assert "`CTRL-08` usage/cost state" in todo
     assert "현재 선택지 초안은 lower-track read-only prework" in todo
@@ -939,6 +952,13 @@ def test_source_onboarding_skill_docs_record_plan_only_adoption_and_evidence() -
 
 def test_source_database_corner_docs_record_canonical_time_resolution() -> None:
     audit = SOURCE_DATABASE_CORNERS_AUDIT.read_text(encoding="utf-8")
+    rls_audit = RLS_POLICY_DRIFT_AUDIT.read_text(encoding="utf-8")
+    onboarding = (ROOT_DIRECTORY / "docs" / "source-onboarding.md").read_text(
+        encoding="utf-8"
+    )
+    extension_checklist = (
+        ROOT_DIRECTORY / "docs" / "source-extension-checklist.md"
+    ).read_text(encoding="utf-8")
     canonical_audit = CANONICAL_TIME_AUDIT.read_text(encoding="utf-8")
     canonical_adr = CANONICAL_TIME_ADR.read_text(encoding="utf-8")
     lossless_adr = LOSSLESS_SCALAR_ADR.read_text(encoding="utf-8")
@@ -951,10 +971,20 @@ def test_source_database_corner_docs_record_canonical_time_resolution() -> None:
     assert "`DBEDGE-02`" in audit
     assert "`DBEDGE-03`" in audit
     assert "`DBEDGE-04`" in audit
+    assert "`DBEDGE-05`" in audit
     assert "test_source_database_corners.py" in module_index
-    assert "domain `pg_depend`는 raw driver/catalog probe" in module_index
+    assert "domain/operator `pg_depend`는 raw driver/catalog probe" in module_index
     assert "raw-only driver/catalog probe" in audit
     assert SOURCE_DATABASE_CORNERS_AUDIT.name in assurance
+    assert RLS_POLICY_DRIFT_AUDIT.name in assurance
+    assert "Status: Open — contract decision and fail-closed implementation required" in rls_audit
+    assert "strict=True" in rls_audit
+    for operator_document in (onboarding, extension_checklist):
+        assert RLS_POLICY_DRIFT_AUDIT.name in operator_document
+        assert "`RLS-01`~`RLS-03`" in operator_document
+        assert "production publish" in operator_document
+    assert "`RLS-01`" in rls_audit
+    assert "cross-tenant" in rls_audit
     assert "database `0`, role `0`" in audit
     assert "### Resolved follow-up: canonical `timestamptz`" in audit
     assert "role default `UTC`, `Asia/Seoul`, `America/New_York`" in audit
@@ -984,6 +1014,8 @@ def test_source_database_corner_docs_record_canonical_time_resolution() -> None:
     assert "`client_encoding=UTF8`" in lossless_adr
     assert "`server_encoding=UTF8`" in lossless_adr
     assert "`timezone_abbreviations=Default`" in lossless_adr
+    assert "`bytea_output=hex`" in lossless_adr
+    assert "`default_text_search_config=pg_catalog.english`" in lossless_adr
     assert "`source_semantics_fingerprint`" in lossless_adr
     assert "Decoded key가 같은 duplicate" in lossless_adr
     assert 'exact `"24:00:00"`' in lossless_adr
@@ -1000,15 +1032,16 @@ def test_source_database_corner_docs_record_canonical_time_resolution() -> None:
     )
     assert "CollateClause" in lossless_adr
     assert "Function and operator dependency residual limitation" in lossless_adr
+    assert "Text-search and order-sensitive aggregate residual limitation" in lossless_adr
     assert "IANA/POSIX named timezone rule drift" in lossless_adr
     assert "`pg_catalog.default` provider `database_default`" in lossless_adr
-    assert "1,849 bytes" in lossless_adr
+    assert "1,920 bytes" in lossless_adr
     assert (
-        "sha256:cf38dcf490fcd06886b7f0c8d308accc464d8ec9bb9fffcf9bc7c52b76ca37e7"
+        "sha256:60a62b61c6b1bb429987186730c9d24a6b0868c0cb0406ccad97a5698a900446"
         in lossless_adr
     )
     assert (
-        "sha256:138b8c7fb1e017172acc6542236cb2f3890d5c0af98592766d566fe049639353"
+        "sha256:42b7b1da79339b115a950bc77c12b4178891be321b34701e072b5473e7b9b754"
         in lossless_adr
     )
     result_policy_match = re.search(
@@ -1025,9 +1058,9 @@ def test_source_database_corner_docs_record_canonical_time_resolution() -> None:
         sort_keys=True,
         allow_nan=False,
     ).encode("utf-8")
-    assert len(result_policy_bytes) == 1_849
+    assert len(result_policy_bytes) == 1_920
     assert hashlib.sha256(result_policy_bytes).hexdigest() == (
-        "cf38dcf490fcd06886b7f0c8d308accc464d8ec9bb9fffcf9bc7c52b76ca37e7"
+        "60a62b61c6b1bb429987186730c9d24a6b0868c0cb0406ccad97a5698a900446"
     )
     sql_policy = {
         "version": 3,
@@ -1055,7 +1088,7 @@ def test_source_database_corner_docs_record_canonical_time_resolution() -> None:
         sort_keys=True,
     ).encode("utf-8")
     assert hashlib.sha256(sql_policy_bytes).hexdigest() == (
-        "138b8c7fb1e017172acc6542236cb2f3890d5c0af98592766d566fe049639353"
+        "42b7b1da79339b115a950bc77c12b4178891be321b34701e072b5473e7b9b754"
     )
     assert tuple(result_policy["result_oid"]["allowed_pg_catalog_scalar"]) == (
         "bit",
@@ -1086,6 +1119,10 @@ def test_source_database_corner_docs_record_canonical_time_resolution() -> None:
     assert result_policy["result_oid"]["domain"] == (
         "reject_declared_domain_before_oid_erasure"
     )
+    assert result_policy["reader_session"]["bytea_output"] == "hex"
+    assert result_policy["reader_session"]["default_text_search_config"] == (
+        "pg_catalog.english"
+    )
     assert "user-result cursor scope" in lossless_adr
     assert "`EXPLAIN (FORMAT JSON)`" in lossless_adr
     assert "`IntervalStyle=postgres`를 설정·검사" in lossless_adr
@@ -1113,13 +1150,24 @@ def test_source_database_corner_docs_record_canonical_time_resolution() -> None:
     assert "sha256:c4692859cde38b3e26c3bc09be96cc3ae2db09442fb7e8e826deace60da05a64" in audit
     assert "sha256:24a658e9869ee578b8189b9e41242fe1521c1843bf2e4bae7ff64cca6c9c396f" in audit
     assert "sha256:a6e1781ce2c45d140ae02f09454591e2ce6dcbd16eb2d3ca699f1f86a10b678a" in audit
+    assert "sha256:265de8ffe863aa833be5993c281f86ae00468a34e51345ab53e537622c071b48" in audit
+    assert "sha256:f5990467cfa9498375afc2cab1363623590acfe5305370bf35dfc437c42704c8" in audit
+    assert "sha256:675a9688aa730d64927d9a124cec8825eb6f87abf0da494410bb26576f9fc5a1" in audit
+    assert "sha256:07714fda947fb9e09a2b6217b0fe0c4e53eb3d7032cce257e157acf1eb64b553" in audit
+    assert "sha256:be10c695747100145649abc3d972028963c4cb6dd3fbf2ca34bee276516e7c61" in audit
+    assert "sha256:650abf959c971b3fd503ca4db961b5e37d917207abde3500214ad23d64833b56" in audit
+    assert "sha256:bc865c9c470c0a06cf4e957928f26fc1c3dc7d6ae1cfaebe271f53ace90b793a" in audit
+    assert "sha256:50d6676ae9c55a3167bd4b59b6f3c31f3798157f8937cb8968219a7ca754f375" in audit
     assert "`47 passed`, 16 deselected" in audit
     assert "`14 passed`, 1 deselected" in audit
     assert "`47 passed`, 20 deselected" in audit
     assert "`18 passed`, 1 deselected" in audit
     assert "`24 passed`, 1 deselected" in audit
+    assert "`28 passed`, 1 deselected, 2 xfailed" in audit
     assert "`645 passed`, 92 deselected" in audit
     assert "`80 passed`, 657 deselected" in audit
+    assert "`645 passed`, 97 deselected" in audit
+    assert "`83 passed`, 657 deselected, 2 xfailed" in audit
 
 
 def test_mutation_receipt_docs_preserve_terminal_and_secret_boundaries() -> None:

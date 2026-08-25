@@ -11,6 +11,10 @@ Status: Active
 
 - 전역 순서는 위에서 아래다. 더 높은 priority의 항목이 열려 있으면 낮은 track은 설계와
   조사만 할 수 있고 구현을 먼저 시작하지 않는다.
+- 단, higher track의 protected-environment 완료 항목이 lower track의 확정된 repository baseline을
+  선행 조건으로 명시한 경우 그 운영 항목은 prerequisite repository 구현을 막지 않고 최종 production
+  acceptance를 막는다. 이 예외와 선후 관계는 양쪽 Start gate에 모두 적어야 한다. 현재는 `RLS-03`과
+  `ENC-01`~`TIME-03` 관계에만 적용한다.
 - Lower-track의 `read-only prework`는 현재 code/test/운영 근거 조사, 선택지 비교와
   초안 작성까지만 뜻한다. Start gate 전에는 해당 item을 공식적으로 시작하거나
   완료했다고 기록하지 않고, accepted baseline을 바꾸거나 code/schema/config/
@@ -34,6 +38,30 @@ Status: Active
 - MCP는 현재 지원 버전 `2026-07-28`만 받는다. 이전 handshake와 protocol version을 위한
   compatibility branch는 만들지 않으며 version 변경은 명시적인 upgrade 작업으로 처리한다.
 
+## P2.3 — RLS Base-Policy Drift Attestation
+
+목표: `tenant_isolation=rls` source의 authenticated tenant query가 private base relation의 RLS flag나
+policy 변경 뒤에도 다른 tenant 행을 성공 응답으로 반환하지 않게 한다. 이 항목은 재현된 authorization
+경계이므로 아래 encoding 작업보다 먼저 결정한다.
+
+| 작업 경계 | 내용 |
+|---|---|
+| Primary module | Metadata |
+| Direct consumers | Guarded Query tenant query admission, Delivery HTTP/MCP tenant-isolated result, Control Plane source publish |
+| Affected providers/verifiers | Source Catalog reader/session-policy impact, Runtime managed baseline/cutover, Assurance cross-database security acceptance. Recursive dependency/catalog introspection은 Primary owner인 Metadata가 담당한다. |
+| Contract baseline | Accepted ADR 0014는 restricted reader, transaction-local trusted tenant, `row_security=on`과 public `security_invoker=true` view를 강제한다. 현재 snapshot/revision은 private dependency의 `relrowsecurity`와 `pg_policy`를 담지 않아 policy를 `USING (true)`로 바꾸거나 RLS를 disable해도 같은 revision 아래 cross-tenant row가 성공한다. [RLS policy drift finding](verification/2026-08-26-rls-policy-drift.md)이 PostgreSQL 18 disposable DB에서 독립 재현했다. |
+| Approval gate | Recursive dependency 범위, RLS flag/owner/policy identity와 expression 허용 규칙, custom function/operator와 nested view 처리, concurrent DDL lock/check order, snapshot/revision/codec, public error, migration/cutover/rollback은 module contract 변경이다. 정확한 proposal과 영향을 사용자에게 제시하고 명시적 승인을 받은 뒤 구현한다. 일반적인 진행/승인은 선택 승인이 아니다. |
+| Single writer | Coordinating agent가 Metadata policy identity provider와 snapshot/revision baseline을 먼저 직렬화하고, Guarded Query same-transaction verifier와 Control/Runtime/Assurance consumer는 그 baseline 뒤에 작업한다. Shared catalog/query/test/doc은 coordinating agent만 편집한다. |
+| Start gate | Read-only reproduction과 strict xfail sentinel은 완료됐다. `RLS-01` exact decision이 다음 단계다. 승인 전에는 누출을 current contract로 고정하거나 임의의 fingerprint/error를 구현하지 않는다. Protected inventory 권한이 제공되면 읽기 전용으로 먼저 확인하고 검증되지 않은 RLS source의 route 상태를 사용자와 결정한다. `RLS-03`의 inventory·mutation freeze는 앞서 준비할 수 있지만, current/rollback 재발행·route drain 완료는 승인된 `RLS-02`와 `ENC-02`의 최종 repository baseline을 기다려 `TIME-03` protected change record에서 함께 증명한다. |
+| Verification | Policy-expression 및 RLS enable/force/owner/role drift, nested dependency와 custom function/operator, same-name drop/recreate, concurrent DDL race, cold/warm cache와 stale 금지, tenant 병렬/pool reset, bounded non-disclosure error, managed current/rollback reissue와 production inventory/cutover/rollback |
+
+- [ ] `RLS-01` Recursive dependency와 exact RLS policy identity, query-time lock/check, revision/error,
+  migration/cutover/rollback 계약을 decision record로 확정하고 사용자 승인을 받는다.
+- [ ] `RLS-02` 승인된 policy attestation을 Metadata와 Guarded Query에 구현하고 strict xfail을
+  fail-closed passing regression으로 전환해 provider/consumer 전체를 검증한다.
+- [ ] `RLS-03` Protected environment의 모든 RLS source를 read-only inventory하고 mutation freeze,
+  current/rollback reissue, unverified route drain과 rollback change record를 남긴다.
+
 ## P2.4 — Lossless Scalar Encoding, Reader Formatting And Result Types
 
 목표: PostgreSQL interval calendar-month, time 24시, JSON/JSONB fractional/duplicate-key, SQL
@@ -48,10 +76,10 @@ record/composite와 unknown/non-allowlisted result OID도 supported SQL type으�
 | Primary module | Guarded Query |
 | Direct consumers | Delivery public result, Assurance verified result hash와 Control Plane verified publish |
 | Affected providers/verifiers | Source Catalog deterministic reader settings, Metadata revision material, Runtime coordinated cutover와 cross-database Assurance acceptance |
-| Contract baseline | psycopg default loader가 month-bearing interval과 fractional JSON numeric을 평탄화하고 duplicate-key JSON의 앞 key를 버리며 time 24시를 decode하지 못한다. SQL_ASCII text는 bytea와 같은 bytes/Base64가 되고 collation·timezone abbreviation은 같은 revision SQL 의미를 바꾼다. Empty unsupported collection/array lower bound와 record/composite 및 `oid/name`·array/unknown OID identity도 Python 기본형에서 사라진다. [`DBEDGE-02`~`DBEDGE-04`](verification/2026-08-25-source-database-corners.md)이 이를 실제 PostgreSQL 18 disposable DB에서 재현했다. Infinity date, range와 nonempty multirange/range-array는 비공개 `QUERY_UNAVAILABLE` 후 rollback/recovery한다. |
+| Contract baseline | psycopg default loader가 month-bearing interval과 fractional JSON numeric을 평탄화하고 duplicate-key JSON의 앞 key를 버리며 time 24시를 decode하지 못한다. Interval infinity는 zero와 같은 `timedelta`/public hash로 합쳐지고 Python 범위 밖 date/timestamp와 4,301자리 JSON integer는 decode에 실패한다. SQL_ASCII text는 bytea와 같은 bytes/Base64가 되고 collation·timezone abbreviation·custom operator binding은 같은 revision SQL 의미를 바꾼다. Empty unsupported collection/array lower bound와 record/composite 및 `oid/name`·array/unknown OID identity도 Python 기본형에서 사라진다. [`DBEDGE-02`~`DBEDGE-05`](verification/2026-08-25-source-database-corners.md)가 이를 실제 PostgreSQL 18 disposable DB에서 재현했다. Infinity date, range와 nonempty multirange/range-array는 비공개 `QUERY_UNAVAILABLE` 후 rollback/recovery한다. |
 | Approval gate | Loader, UTF8 source/client, reader semantic settings/fingerprint, collation snapshot/revision material, result OID allowlist, array type/lower-bound policy, canonical row, SQL policy/metadata revision과 verified migration은 persisted/public/policy 계약 변경이다. [ADR 0020](decisions/0020-lossless-interval-and-json-numeric-encoding.md)의 A는 fingerprint byte schema/bounds, private nested-view definition, direct type edge·declared/custom domain pre-erasure rejection, explicit COLLATE/active versionless rejection, provider/Protocol, snapshot codec v1/v2, exact result/error/policy golden, migration/rollback과 named-timezone·provider-artifact·custom procedure/operator residual limitation까지 묶은 implementation-ready 제안이다. 아직 사용자가 이 exact 범위를 명시적으로 승인하지 않았다. B는 별도 exact restatement가 필요하고 C는 production completion을 block하는 defer라 완료 선택이 아니다. 일반적인 진행/승인이나 ID만으로 구현하지 않는다. |
 | Single writer | Coordinating agent가 symbol phase별로 Guarded Query immutable result/SQL-policy descriptor provider → Source Catalog shared `reader_policy.py` → Metadata fingerprint/snapshot codec/revision provider → Guarded Query result-cursor loader/encoder·fingerprint consumer 순으로 baseline을 직렬화한다. 각 provider baseline이 확정된 뒤 서로 다른 Delivery/Control Plane/Runtime/Assurance consumer 구현·검증만 병렬화하고 shared transition test/doc은 coordinating agent가 계속 single-writer로 다룬다. Guarded Query module을 두 agent가 동시에 쓰는 뜻이 아니며, descriptor provider commit 후 executor consumer phase를 같은 owner가 이어서 수행한다. |
-| Start gate | `DBEDGE-02`~`DBEDGE-04` reproduction과 선택지 작성은 완료됐다. `ENC-01`의 정확한 사용자 선택이 다음 순서이며 승인 전 loader/setting/encoder/source-semantics snapshot/revision/hash를 바꾸지 않는다. |
+| Start gate | `DBEDGE-02`~`DBEDGE-05` reproduction과 선택지 작성은 완료됐다. 최우선 `RLS-01`~`RLS-02` security boundary를 먼저 확정·해결한 뒤 `ENC-01`의 정확한 사용자 선택으로 간다. Protected RLS inventory/cutover인 `RLS-03`은 repository encoding 구현을 막지는 않지만 production acceptance 전에 완료해야 한다. 승인 전 loader/setting/encoder/source-semantics snapshot/revision/hash를 바꾸지 않는다. |
 | Verification | Month/sign/day/subsecond interval, time/timetz 24시, large/scale/exponent/nested/duplicate JSON, UTF8/SQL_ASCII, timezone abbreviation/collation fingerprint, direct/whole-relation domain pre-erasure rejection, allowed/unknown result OID와 named composite, empty/nonempty unsupported collection, 1/non-1 lower-bound array, noncanonical defaults, managed inventory, cursor-only loader와 EXPLAIN 비회귀, pool reset, byte/hash, stale-token rejection, full verified reissue와 rollback |
 
 - [ ] `ENC-01` ADR 0020의 exact lossless A, 별도 restatement가 필요한 손실 전 거부 B 또는 production
@@ -75,7 +103,7 @@ inventory와 실제 배포·rollback 증거는 환경별 change record로 남겨
 | Contract baseline | 승인된 [`TIME-01` 결정](decisions/0019-canonical-time-stability.md)과 완료된 `TIME-02`가 UTC-first reader policy, aware datetime UTC `+00:00`, policy v2와 새 metadata revision을 고정한다. Repository fixture 11개, UTC/서울/뉴욕·DST, old/new Control row 공존과 local coordinated cutover는 통과했다. |
 | Approval gate | 사용자가 2026-08-25 `TIME-01`의 정확한 정책·영향·cutover·rollback을 승인했다. 그 범위의 production 전환은 승인됐지만 환경 권한과 stop condition 증거 없이 실행하지 않으며, 승인 범위를 넘는 의미 변경은 다시 승인받는다. |
 | Single writer | Production operator가 coordinating agent와 함께 protected inventory, DB migration ref, fleet drain, 재발행과 rollback change record를 하나의 직렬 전환으로 관리한다. |
-| Start gate | `TIME-01`과 `TIME-02`는 완료됐다. `ENC-01` 결정과 그에 따른 `ENC-02`가 완료된 최종 encoding baseline에서만 `TIME-03`을 수행한다. Production inventory·권한·backup·route가 제공되어야 하며, 완료하거나 사용자가 명시적으로 defer하기 전에는 `COST-01` 구현을 시작하지 않는다. |
+| Start gate | `TIME-01`과 `TIME-02`는 완료됐다. `RLS-01`~`RLS-02`, `ENC-01` 결정 및 그에 따른 `ENC-02`가 완료된 최종 security/encoding baseline에서만 `TIME-03`을 수행한다. 같은 protected change record에서 `RLS-03` inventory·mutation freeze·current/rollback reissue·route drain을 먼저 완료하거나 함께 원자적으로 증명해야 한다. Production inventory·권한·backup·route가 제공되어야 하며, 완료하거나 사용자가 명시적으로 defer하기 전에는 `COST-01` 구현을 시작하지 않는다. |
 | Verification | Managed current/rollback-preserved contract 전량 재실행·재발행, 실제 R1 migration ref, old connection 0, replica convergence, R2→R1 rollback과 environment change record |
 
 - [ ] `TIME-03` Repository에서 이미 검증한 전환 절차를 실제 managed environment에 적용해

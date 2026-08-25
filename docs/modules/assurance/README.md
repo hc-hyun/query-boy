@@ -122,8 +122,9 @@ Rows는 Guarded Query의 canonical result encoding을 거친 값이어야 한다
 date/time, mapping 또는 non-finite value encoding이 바뀌면 같은 SQL의 verified hash도 바뀐다.
 Aware datetime은 UTC `+00:00`이고 naive datetime/date/time/timetz는 기존 ISO 표현이다. Canonical-time
 policy나 metadata revision이 바뀌면 값이 같은 contract도 새 exact revision에서 다시 실행한다.
-Month-bearing interval, time 24시, fractional/duplicate-key JSON, SQL_ASCII, collation, empty unsupported
-collection, array lower-bound, record/unknown result OID collision과 reader semantic/format default drift는
+Month-bearing/infinity interval, time 24시, temporal year overflow, fractional/duplicate-key/숫자 길이 경계
+JSON, SQL_ASCII, collation, empty unsupported collection, array lower-bound, record/unknown result OID
+collision과 reader semantic/format default drift는
 [DB corner audit](../../verification/2026-08-25-source-database-corners.md)의 open lossless/stability
 gap이며 일반 무손실 evidence로 취급하지 않는다.
 
@@ -136,6 +137,20 @@ value/hash를 바꾸는 residual도 public companion case로 고정한다. ADR 0
 recursive view dependency fingerprint, declared/custom domain pre-erasure rejection, result OID/cursor loader, v1/v2 codec,
 current/rollback full verified reissue와 rollback을 cross-module acceptance로 검증한다. 승인 전에는
 이 characterization을 새 production contract의 완료 evidence로 해석하지 않는다.
+
+`DBEDGE-05`는 view rule의 direct dependency가 custom operator에서 끝나고 실제 function은 두 번째
+`pg_depend` edge에 있는 것을 고정한다. 같은 operator spelling/signature를 다른 immutable function에
+다시 연결하면 view definition, definition hash, snapshot과 revision은 같은데 boolean result/hash가
+뒤집힌다. 별도 public corpus는 interval infinity의 zero collision, Python 범위 밖 date/timestamp와
+JSON integer digit-limit 실패·pool 복구, 4,300자리 JSON 및 varbit positive shape, `bytea::text`와
+implicit text-search config drift, planner order에 민감한 float/JSONB aggregate를 고정한다. 이는 ADR
+0020의 residual·verification requirement를 실행 가능하게 만든 것이며 새 encoding/fingerprint/SQL
+계약을 구현한 것은 아니다.
+
+[RLS policy drift finding](../../verification/2026-08-26-rls-policy-drift.md)은 다른 tenant 행을
+통과 golden으로 보존하지 않는다. `test_rls_source_requires_base_policy_drift_to_preserve_isolation`은
+approved ADR 0014의 no-cross-tenant invariant를 strict xfail로 나타내며 `RLS-01` exact 계약과
+`RLS-02` 구현 뒤 fail-closed passing regression으로 바꿔야 한다.
 
 ### Metadata quality evaluation contract
 

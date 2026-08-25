@@ -143,6 +143,13 @@ snapshot/revision도 같지만 `lower()` 결과/hash가 달라지는 gap을 재�
 `source_semantics_fingerprint` persisted snapshot/revision 변경은 `ENC-01-A|B|C` exact 승인 전
 구현하지 않는다.
 
+현재 revision은 published `security_invoker` flag를 포함하지만 그 view가 읽는 private/nested base
+relation의 `relrowsecurity`, owner와 `pg_policy` identity는 포함하지 않는다. 실제 PostgreSQL 18
+probe에서 policy `USING (true)`와 RLS disable 뒤에도 fresh snapshot/revision이 같고 cross-tenant row가
+성공했다. 이는 revision compatibility로 보존할 동작이 아니라
+[열린 RLS security finding](../../verification/2026-08-26-rls-policy-drift.md)이다. Recursive policy
+identity, query-time race-free check, codec/revision/error는 `RLS-01` exact 승인 전 구현하지 않는다.
+
 ADR 0020의 exact A 제안이 승인되면 Metadata가 bounded source-semantics catalog probe,
 canonical fingerprint, declared domain column/direct custom type pre-erasure admission, strict snapshot codec
 v1/v2와 metadata revision v1/v2를 소유한다. Source
@@ -263,6 +270,8 @@ policy descriptor다. 이 dependency를 바꾸는 refactoring은 외부 context 
 - Reader가 실제로 조회할 수 없는 schema/relation을 metadata에 발행하지 않는다.
 - DB comment와 semantic text를 명령으로 실행하거나 join 규칙으로 해석하지 않는다.
 - Allowed schema/kind, tenant policy, budget, overlay와 revision material drift를 fail-closed한다.
+- RLS base-policy drift의 현재 미검출은 위 불변조건을 충족한 것으로 해석하지 않고 열린 security
+  finding으로 관리한다.
 - Persisted snapshot payload와 revision이 다르면 저장값을 사용하지 않는다.
 - Published source/metadata graph에 mutable collection 또는 decoder/builder input alias를 남기지 않는다.
 - Process restart가 persisted activation freshness를 초기화하지 않는다.
