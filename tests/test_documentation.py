@@ -1053,8 +1053,15 @@ def test_source_database_corner_docs_record_canonical_time_resolution() -> None:
     assert "operator_subject" in rls_adr
     assert "metadata_phase_timeout_ms = min(30_000, 8 *" in rls_adr
     assert "Protected environment의 read-only\ninventory" in rls_adr
-    assert "Standalone v2 protected 실행" in rls_adr
-    assert "Combined direct-v3\nprotected 실행만" in rls_adr
+    assert (
+        "Standalone v2 protected 실행은 `RLS-02` 완료 뒤 별도 `RLS-03`\n"
+        "environment 승인/access/change record로 진행하며 `ENC-02`/`TIME-03`을 "
+        "기다리지 않는다."
+    ) in rls_adr
+    assert (
+        "Combined direct-v3\nprotected 실행만 `ENC-02` 완료 뒤 coordinated "
+        "`RLS-03`/`TIME-03` environment 승인/access/change record를\n요구한다."
+    ) in rls_adr
     canonical_start = rls_adr.index("각 root의 internal canonical material")
     canonical_end = rls_adr.index("`roles` array length", canonical_start)
     assert rls_adr[canonical_start:canonical_end].count('"definition_sha256"') == 1
@@ -1072,6 +1079,14 @@ def test_source_database_corner_docs_record_canonical_time_resolution() -> None:
     assert "old/new user route를 unavailable" in control_plane
     assert "Source Catalog의 RLS-only startup constant" in development_todo
     assert "history-decode/offline-serving/live-attestation" in development_todo
+    assert (
+        "Standalone v2 환경 작업은 별도 `RLS-03` 승인과 access/change record가 "
+        "필요하며\n`ENC-02`/`TIME-03`을 기다리지 않는다."
+    ) in development_todo
+    assert (
+        "Combined direct-v3 환경 작업만 coordinated\n`RLS-03`/`TIME-03` "
+        "승인과\naccess/change record가 필요하다."
+    ) in development_todo
     for module_name in MODULE_NAMES:
         module_contract = (
             ROOT_DIRECTORY / "docs" / "modules" / module_name / "README.md"
@@ -1096,6 +1111,14 @@ def test_source_database_corner_docs_record_canonical_time_resolution() -> None:
     assert "모든 managed source transition" in rls_audit
     assert "non-RLS active query도 transition" in rls_audit
     assert "connection startup" in rls_audit
+    assert (
+        "Standalone v2 환경 작업은\naccess와 change record를 갖춘 별도 `RLS-03` "
+        "승인을 요구하며 `ENC-02`/`TIME-03`을 기다리지 않는다."
+    ) in rls_audit
+    assert (
+        "Combined direct-v3 환경 작업만 coordinated `RLS-03`/`TIME-03` 승인과 "
+        "access/change record를 요구한다."
+    ) in rls_audit
     assert "database `0`, role `0`" in audit
     assert "### Resolved follow-up: canonical `timestamptz`" in audit
     assert "role default `UTC`, `Asia/Seoul`, `America/New_York`" in audit

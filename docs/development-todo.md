@@ -56,8 +56,11 @@ policy 변경 뒤에도 다른 tenant 행을 성공 응답으로 반환하지 �
 | Verification | Policy-expression 및 RLS enable/force/owner/role drift, nested dependency와 custom function/operator, exact policy normal/shared dependency, stable zero/root-bound marker와 transient root-list race, UTF8 libc/ICU/builtin positive와 SQL_ASCII/non-UTF8 server/client negative, same-name encoding collision과 drop/recreate, snapshot-before-lock old-catalog/new-policy race와 lock-first concurrent DDL, cold/warm cache와 stale 금지, deterministic/transient direct cause/context None 및 hidden/password/raw-driver log canary 비공개, exact-profile transition/queued-active Query와 active Catalog lease fixed drain, terminal result fence와 cancellation-owner race, pre-fence 대 post-fence/pre-commit 대 registry-commit/post-commit bookkeeping·probe failure, observation `RESOURCE_READ_FAILED` 대 external cancellation, tenant 병렬/pool reset, bounded non-disclosure error, managed current/rollback reissue와 production inventory/cutover/rollback |
 
 위 `RLS-01` approval gate는 repository contract/code/disposable fixture/operator artifact 구현용이다.
-Protected inventory/freeze/DDL/reissue/fleet·route cutover/rollback 실행은 별도 `RLS-03`/`TIME-03` 환경
-승인과 access/change record가 필요하다.
+Protected inventory/freeze/DDL/reissue/fleet·route cutover/rollback 실행은 repository 계약 승인에 포함되지
+않는다. Standalone v2 환경 작업은 별도 `RLS-03` 승인과 access/change record가 필요하며
+`ENC-02`/`TIME-03`을 기다리지 않는다. Combined direct-v3 환경 작업만 coordinated
+`RLS-03`/`TIME-03` 승인과
+access/change record가 필요하다.
 
 - [ ] `RLS-01` Proposed ADR 0024의 `RLS-01-A` exact recursive policy/dependency/UTF8 admission,
   deterministic-vs-root-race error secrecy, history/offline/live split, lock/snapshot, all-managed

@@ -254,8 +254,9 @@ Control Plane apply, Runtime transition과 Assurance acceptance에 영향을 주
 변경하지 않는다.
 
 이 repository contract 승인은 protected inventory/freeze, policy/data DDL, unroute/deactivate,
-credential/pointer/reissue, fleet/route cutover와 rollback 실행 권한이 아니다. 해당 환경 작업은 access와
-change record를 갖춘 별도 `RLS-03`/`TIME-03` 승인을 요구한다.
+credential/pointer/reissue, fleet/route cutover와 rollback 실행 권한이 아니다. Standalone v2 환경 작업은
+access와 change record를 갖춘 별도 `RLS-03` 승인을 요구하며 `ENC-02`/`TIME-03`을 기다리지 않는다.
+Combined direct-v3 환경 작업만 coordinated `RLS-03`/`TIME-03` 승인과 access/change record를 요구한다.
 
 Protected environment의 RLS source inventory, mutation freeze와 unverified route drain은 안전상 우선
 조치지만 이 repository 세션에는 production DSN, source 목록, 권한, route/drain 또는 change record가
