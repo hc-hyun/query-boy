@@ -7,6 +7,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
+from query_man.catalog import _CatalogValidationError
 from query_man.errors import MetadataUnavailableError, SourceNotFoundError
 from query_man.metadata_store import MetadataStore, StoredMetadataSupersededError
 from query_man.models import (
@@ -275,7 +276,7 @@ class MetadataService:
                 return cached.value, True
             operations.set_source_health(source.source_id, "unavailable")
             raise MetadataUnavailableError from error
-        except ReaderSessionPolicyError as error:
+        except (ReaderSessionPolicyError, _CatalogValidationError) as error:
             operations.increment("metadata_refresh_failed", source.source_id)
             operations.set_source_health(source.source_id, "unavailable")
             raise MetadataUnavailableError from error

@@ -7,6 +7,7 @@ from dataclasses import replace
 
 import pytest
 
+from query_man.catalog import _CatalogValidationError
 from query_man.errors import MetadataUnavailableError
 from query_man.metadata import MetadataService, _to_relation_response
 from query_man.models import (
@@ -41,14 +42,20 @@ class StaticCatalog:
 
 
 class SequencedCatalog(StaticCatalog):
-    def __init__(self, snapshot: CatalogSnapshot) -> None:
+    def __init__(
+        self,
+        snapshot: CatalogSnapshot,
+        *,
+        failure: Exception | None = None,
+    ) -> None:
         super().__init__(snapshot)
         self.load_count = 0
+        self.failure = failure or RuntimeError("temporary catalog failure")
 
     async def load(self, _source: SourceProfile) -> CatalogSnapshot:
         self.load_count += 1
         if self.load_count > 1:
-            raise RuntimeError("temporary catalog failure")
+            raise self.failure
         return self.snapshot
 
 
@@ -160,9 +167,15 @@ async def test_rejects_semantic_overlay_drift() -> None:
         await service.get_context("development-issues", "최근 문제")
 
 
+@pytest.mark.parametrize("failure_type", [RuntimeError, ValueError])
 @pytest.mark.asyncio
-async def test_returns_stale_revision_after_refresh_failure() -> None:
-    catalog = SequencedCatalog(minimal_development_snapshot())
+async def test_returns_stale_revision_after_refresh_failure(
+    failure_type: type[Exception],
+) -> None:
+    catalog = SequencedCatalog(
+        minimal_development_snapshot(),
+        failure=failure_type("temporary catalog failure"),
+    )
     service = MetadataService(load_test_registry(), catalog, cache_ttl_ms=0, now=lambda: 1000)
     fresh = await service.get_context("development-issues", "최근 문제")
     stale = await service.get_context("development-issues", "최근 문제")
@@ -173,6 +186,21 @@ async def test_returns_stale_revision_after_refresh_failure() -> None:
     assert stale_during_backoff["snapshot_status"] == "stale"
     assert catalog.load_count == 2
     assert "STALE_METADATA_SNAPSHOT" in [item["code"] for item in stale["ambiguities"]]
+
+
+@pytest.mark.asyncio
+async def test_catalog_policy_rejection_never_returns_a_stale_revision() -> None:
+    catalog = SequencedCatalog(
+        minimal_development_snapshot(),
+        failure=_CatalogValidationError("Catalog relation limit exceeded"),
+    )
+    service = MetadataService(load_test_registry(), catalog, cache_ttl_ms=0, now=lambda: 1000)
+    await service.get_context("development-issues", "최근 문제")
+
+    with pytest.raises(MetadataUnavailableError):
+        await service.get_context("development-issues", "최근 문제")
+
+    assert catalog.load_count == 2
 
 
 @pytest.mark.asyncio

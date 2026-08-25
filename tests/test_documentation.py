@@ -142,6 +142,12 @@ CANONICAL_TIME_AUDIT = (
 CANONICAL_TIME_ADR = (
     ROOT_DIRECTORY / "docs" / "decisions" / "0019-canonical-time-stability.md"
 )
+LOSSLESS_SCALAR_ADR = (
+    ROOT_DIRECTORY
+    / "docs"
+    / "decisions"
+    / "0020-lossless-interval-and-json-numeric-encoding.md"
+)
 EXPECTED_ID_COUNTS = {
     "BASE": 10,
     "DEC": 9,
@@ -159,6 +165,8 @@ EXPECTED_ID_COUNTS = {
     "MCPX": 8,
 }
 EXPECTED_OPEN_TODO_IDS = (
+    "ENC-01",
+    "ENC-02",
     "TIME-03",
     "COST-01",
     "COST-02",
@@ -205,6 +213,7 @@ EXPECTED_POST_BASELINE_COMPLETED_IDS = (
     "SKILL-05",
     "SKILL-06",
     "DBEDGE-01",
+    "DBEDGE-02",
     "TIME-01",
     "TIME-02",
 )
@@ -450,7 +459,7 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
         "Start gate",
         "Verification",
     ):
-        assert todo.count(f"| {field} |") == 3
+        assert todo.count(f"| {field} |") == 4
 
     assert "Lower-track의 `read-only prework`" in todo
     assert "**plan 승인은 contract 선택" in todo
@@ -458,11 +467,16 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
     assert "## P0.5 — Module Contract Hardening" not in todo
     assert "offline composition `MOD-08`은 모두" in todo
     assert "## P2 — Source Onboarding Skill" not in todo
-    assert "`TIME-03`은 production inventory" in todo
+    assert "`ENC-01-A`, `ENC-01-B` 또는 위험 수용 `ENC-01-C`" in todo
+    assert "승인 전 loader/setting/encoder/revision/hash를 바꾸지" in todo
+    assert "Production inventory·권한·backup·route가 제공되어야" in todo
     assert "명시적으로 defer하기 전에는 `COST-01` 구현을 시작하지" in todo
     assert "정확한 monitoring 계약과 영향 범위를 제시하고 별도 승인" in todo
     assert "| `TIME-03` |" not in roadmap
-    assert "M14의 production\n전환 `TIME-03`은 active" in roadmap
+    assert (
+        "M14.5의 `ENC-*` 결정·구현과 M14 production 전환 `TIME-03`은 active"
+        in roadmap
+    )
     assert "`CTRL-07A` observation method/freshness/logical retention" in todo
     assert "`CTRL-08` usage/cost state" in todo
     assert "각 단계 구현 전 사용자 승인이 필요하다" in todo
@@ -517,12 +531,14 @@ def test_source_database_corner_docs_record_canonical_time_resolution() -> None:
     audit = SOURCE_DATABASE_CORNERS_AUDIT.read_text(encoding="utf-8")
     canonical_audit = CANONICAL_TIME_AUDIT.read_text(encoding="utf-8")
     canonical_adr = CANONICAL_TIME_ADR.read_text(encoding="utf-8")
+    lossless_adr = LOSSLESS_SCALAR_ADR.read_text(encoding="utf-8")
     module_index = MODULE_INDEX.read_text(encoding="utf-8")
     assurance = (
         ROOT_DIRECTORY / "docs" / "modules" / "assurance" / "README.md"
     ).read_text(encoding="utf-8")
 
     assert "`DBEDGE-01`" in audit
+    assert "`DBEDGE-02`" in audit
     assert "test_source_database_corners.py" in module_index
     assert SOURCE_DATABASE_CORNERS_AUDIT.name in assurance
     assert "database `0`, role `0`" in audit
@@ -539,6 +555,27 @@ def test_source_database_corner_docs_record_canonical_time_resolution() -> None:
     ) in canonical_audit
     assert "production external state를 완료로 주장하지 않는다" in canonical_audit
     assert "열린 `TIME-03`" in audit
+    assert (
+        "Approval-required follow-up: lossless interval, JSONB numeric, and reader formatting"
+        in audit
+    )
+    assert "Status: Proposed — user approval required before implementation" in lossless_adr
+    assert "`ENC-01-A` — lossless canonical values (recommended)" in lossless_adr
+    assert (
+        "`DateStyle=ISO, YMD`, `IntervalStyle=iso_8601`, `extra_float_digits=1`"
+        in lossless_adr
+    )
+    assert "user-result cursor scope" in lossless_adr
+    assert "`EXPLAIN (FORMAT JSON)`" in lossless_adr
+    assert "`IntervalStyle=postgres`를 설정·검사" in lossless_adr
+    assert "data type exclusion이나 setting을 검증하지 못" in lossless_adr
+    assert "Range/Multirange를 generic Sequence보다 먼저" in lossless_adr
+    assert "SQL policy version은 3" in lossless_adr
+    assert "sha256:a1d1217174eb9b0ebce121652ec50bec72411619310ca4f1fee427d55f412014" in audit
+    assert "sha256:3b05810025aca001615bd4e78fdbb40763f9d3ea1ba257043625796ba3783ced" in audit
+    assert "sha256:77f588e368495248abbd8eb87354efadbd31afa38d0ca675154506624470f06a" in audit
+    assert "`47 passed`, 16 deselected" in audit
+    assert "`14 passed`, 1 deselected" in audit
 
 
 def test_mutation_receipt_docs_preserve_terminal_and_secret_boundaries() -> None:

@@ -28,6 +28,11 @@ from query_man.reader_policy import (
     require_reader_session_policy,
 )
 
+
+class _CatalogValidationError(ValueError):
+    pass
+
+
 _CATALOG_SESSION_SETTINGS = (
     "SELECT pg_catalog.set_config('statement_timeout', %s, true), "
     "pg_catalog.set_config('lock_timeout', %s, true), "
@@ -341,7 +346,7 @@ class PostgresCatalog:
                 )
                 rows = await cursor.fetchall()
                 if len(rows) > source.budget.max_metadata_columns:
-                    raise RuntimeError("Catalog column limit exceeded")
+                    raise _CatalogValidationError("Catalog column limit exceeded")
                 structure_cursor = await connection.execute(
                     STRUCTURE_QUERY,
                     (
@@ -352,17 +357,20 @@ class PostgresCatalog:
                 )
                 structures = await structure_cursor.fetchall()
                 if len(structures) > source.budget.max_metadata_columns:
-                    raise RuntimeError("Catalog structure limit exceeded")
+                    raise _CatalogValidationError("Catalog structure limit exceeded")
                 await connection.execute("COMMIT")
-            except Exception:
-                await connection.rollback()
+            except Exception as error:
+                try:
+                    await connection.rollback()
+                except Exception as rollback_error:
+                    raise error from rollback_error
                 raise
 
         relations = _rows_to_relations(rows)
         if len(relations) > source.budget.max_metadata_relations:
-            raise RuntimeError("Catalog relation limit exceeded")
+            raise _CatalogValidationError("Catalog relation limit exceeded")
         if any(len(relation.columns) > source.budget.max_columns_per_relation for relation in relations):
-            raise RuntimeError("Catalog per-relation column limit exceeded")
+            raise _CatalogValidationError("Catalog per-relation column limit exceeded")
         frozen_relations = tuple(relation.freeze() for relation in relations)
         return CatalogSnapshot(
             relations=_apply_structures(frozen_relations, structures)
@@ -562,12 +570,12 @@ def _apply_structures(
     for row in rows:
         qualified_name = f"{row['schema_name']}.{row['relation_name']}"
         if qualified_name not in by_name:
-            raise RuntimeError("Catalog structure references an unavailable relation")
+            raise _CatalogValidationError("Catalog structure references an unavailable relation")
         columns = tuple(str(column) for column in row["column_names"])
         kind = row["structure_kind"]
         if kind == "primary_key":
             if qualified_name in primary_keys:
-                raise RuntimeError("Catalog relation has multiple primary keys")
+                raise _CatalogValidationError("Catalog relation has multiple primary keys")
             primary_keys[qualified_name] = columns
         elif kind == "foreign_key":
             foreign_keys[qualified_name].append(
@@ -588,7 +596,7 @@ def _apply_structures(
                 )
             )
         else:
-            raise RuntimeError("Catalog returned an unknown structure kind")
+            raise _CatalogValidationError("Catalog returned an unknown structure kind")
     return tuple(
         replace(
             relation,

@@ -12,7 +12,8 @@ from psycopg import AsyncConnection
 from psycopg.conninfo import make_conninfo
 
 import query_man.catalog as catalog_module
-from query_man.catalog import PostgresCatalog, _apply_structures
+from query_man.catalog import PostgresCatalog, _apply_structures, _CatalogValidationError
+from query_man.errors import MetadataUnavailableError
 from query_man.metadata import MetadataService
 from query_man.models import (
     CatalogForeignKey,
@@ -31,6 +32,7 @@ from query_man.reader_policy import (
     ReaderSessionPolicyError,
     require_reader_session_policy,
 )
+from query_man.registry import SourceRegistry
 from tests.helpers import (
     ROOT_DIRECTORY,
     column,
@@ -266,6 +268,101 @@ async def test_resource_observation_uses_exact_bounded_catalog_query_without_new
     assert "count(" not in normalized_query
     assert "explain" not in normalized_query
     assert "development.issues" not in normalized_query
+
+
+@pytest.mark.asyncio
+async def test_catalog_limit_with_failed_rollback_never_serves_warm_stale(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+    source = replace(
+        source,
+        budget=replace(source.budget, max_metadata_columns=1),
+    )
+    catalog = PostgresCatalog()
+    rollback_error = RuntimeError("private rollback failure")
+
+    class Cursor:
+        async def fetchall(self) -> list[dict[str, object]]:
+            return [{}, {}]
+
+    class Connection:
+        rollback_attempted = False
+
+        async def execute(
+            self,
+            statement: str,
+            parameters: object | None = None,
+        ) -> Cursor:
+            assert statement == catalog_module.CATALOG_QUERY
+            assert parameters is not None
+            return Cursor()
+
+        async def rollback(self) -> None:
+            self.rollback_attempted = True
+            raise rollback_error
+
+    connection = Connection()
+
+    class ConnectionContext:
+        async def __aenter__(self) -> Connection:
+            return connection
+
+        async def __aexit__(self, *_args: object) -> None:
+            pass
+
+    class Pool:
+        def connection(self) -> ConnectionContext:
+            return ConnectionContext()
+
+    async def get_pool(requested_source: SourceProfile) -> Pool:
+        assert requested_source is source
+        return Pool()
+
+    async def begin_catalog_transaction(
+        requested_connection: object,
+        requested_source: SourceProfile,
+    ) -> None:
+        assert requested_connection is connection
+        assert requested_source is source
+
+    monkeypatch.setattr(catalog, "_get_pool", get_pool)
+    monkeypatch.setattr(
+        catalog_module,
+        "_begin_catalog_transaction",
+        begin_catalog_transaction,
+    )
+
+    class WarmThenPostgresCatalog:
+        load_count = 0
+
+        async def load(self, requested_source: SourceProfile) -> CatalogSnapshot:
+            self.load_count += 1
+            if self.load_count == 1:
+                return minimal_development_snapshot()
+            return await catalog.load(requested_source)
+
+        async def close(self) -> None:
+            pass
+
+    provider = WarmThenPostgresCatalog()
+    service = MetadataService(
+        SourceRegistry([source]),
+        provider,
+        cache_ttl_ms=0,
+        now=lambda: 1_000,
+    )
+    await service.get_context(source.source_id, "최근 문제")
+
+    with pytest.raises(MetadataUnavailableError) as unavailable:
+        await service.get_context(source.source_id, "최근 문제")
+
+    assert unavailable.value.__cause__ is not None
+    assert isinstance(unavailable.value.__cause__, _CatalogValidationError)
+    assert unavailable.value.__cause__.__cause__ is rollback_error
+    assert provider.load_count == 2
+    assert connection.rollback_attempted
 
 
 @pytest.mark.asyncio

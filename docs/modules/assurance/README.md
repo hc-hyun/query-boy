@@ -25,8 +25,9 @@ membership과 offline 품질 증거를 제공하고 동일 기준을 회귀 검�
 - CTRL-09 isolated cross-service Control archive, key/LOGIN, logical retention, zero-bootstrap와
   multi-replica recovery fixture acceptance
 - Source onboarding Skill의 독립 trigger/adversarial evaluation과 repository/DB/admin 무변경 증거
-- UUID별 disposable source DB의 wide/untrusted metadata, temporal/scalar, partition/materialized/empty
-  result integration acceptance와 leak-free cleanup 증거
+- UUID별 disposable source DB의 wide/untrusted metadata, temporal/scalar, live drift, catalog hard
+  limit, unsupported driver recovery, multibyte, partition/materialized/empty result integration
+  acceptance와 leak-free cleanup 증거
 
 ## 소유하지 않는 책임
 
@@ -120,6 +121,10 @@ Rows는 Guarded Query의 canonical result encoding을 거친 값이어야 한다
 date/time, mapping 또는 non-finite value encoding이 바뀌면 같은 SQL의 verified hash도 바뀐다.
 Aware datetime은 UTC `+00:00`이고 naive datetime/date/time/timetz는 기존 ISO 표현이다. Canonical-time
 policy나 metadata revision이 바뀌면 값이 같은 contract도 새 exact revision에서 다시 실행한다.
+Month-bearing interval, JSONB fractional numeric, empty multirange/array collision과 reader-format
+default drift는
+[DB corner audit](../../verification/2026-08-25-source-database-corners.md)의 open lossless/stability
+gap이며 일반 무손실 evidence로 취급하지 않는다.
 
 ### Metadata quality evaluation contract
 

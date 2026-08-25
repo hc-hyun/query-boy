@@ -145,7 +145,8 @@ Canonicalizer는 list와 tuple, dict와 immutable mapping을 같은 canonical ar
 - Rollback pin, resume와 stale activation provenance를 보존한다.
 - Source generation 교체 시 epoch와 current profile을 함께 확인하여 지연 refresh를 거부한다.
 - Transient catalog failure는 bounded stale window 안에서만 마지막 정상 revision을 제공한다.
-- Reader-session policy drift와 schema/overlay validation failure는 stale fallback 없이 fail-closed한다.
+- Reader-session policy drift, catalog structure/budget rejection과 schema/overlay validation failure는
+  stale fallback 없이 fail-closed한다.
 - Rollback으로 다른 revision이 pin되어 candidate publish가 거부된 경우에만 bounded cached revision을
   별도 stale path로 제공할 수 있다.
 - Fresh cache hit는 PostgreSQL reader policy를 다시 조회하지 않으며 drift는 다음 refresh에서

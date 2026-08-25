@@ -34,6 +34,29 @@ Status: Active
 - MCP는 현재 지원 버전 `2026-07-28`만 받는다. 이전 handshake와 protocol version을 위한
   compatibility branch는 만들지 않으며 version 변경은 명시적인 upgrade 작업으로 처리한다.
 
+## P2.4 — Lossless Scalar Encoding And Reader Formatting
+
+목표: PostgreSQL interval의 calendar-month 의미와 JSON/JSONB fractional numeric precision을 public
+row와 verified hash까지 조용한 손실 없이 전달하거나 손실 전에 명시적으로 fail-closed한다. Empty
+multirange의 array 오인도 닫고, finite-float 표현과 date/interval SQL 의미·decode가 role formatting
+default와 무관하게 결정적이어야 한다.
+
+| 작업 경계 | 내용 |
+|---|---|
+| Primary module | Guarded Query |
+| Direct consumers | Delivery public result, Assurance verified result hash와 Control Plane verified publish |
+| Affected providers/verifiers | Source Catalog deterministic reader settings, Metadata revision material, Runtime coordinated cutover와 cross-database Assurance acceptance |
+| Contract baseline | psycopg default loader가 month-bearing interval을 30-day `timedelta`로 평탄화하고 JSONB fractional number를 binary float로 읽는다. Empty multirange만 generic Sequence에서 empty array와 같은 value/hash로 성공한다. [`DBEDGE-02`](verification/2026-08-25-source-database-corners.md)가 이 collision, `extra_float_digits`별 finite-float drift, ambiguous `DateStyle`의 같은 SQL error/DMY/MDY 의미·hash와 non-postgres `IntervalStyle` availability 차이를 실제 PostgreSQL 18에서 재현했다. Infinity date, range와 nonempty multirange는 비공개 `QUERY_UNAVAILABLE` 후 rollback/recovery한다. |
+| Approval gate | Loader, `DateStyle`/`IntervalStyle`/`extra_float_digits`, canonical row, SQL policy/metadata revision과 verified migration은 public/policy 계약 변경이다. 사용자가 [ADR 0020](decisions/0020-lossless-interval-and-json-numeric-encoding.md)의 `ENC-01-A`, `ENC-01-B` 또는 위험 수용 `ENC-01-C`를 정확히 선택해야 한다. |
+| Single writer | Coordinating agent가 exact policy material을 동결한 뒤 Source Catalog의 shared `reader_policy.py`, Guarded Query result-cursor loader/encoder, Metadata/Assurance consumer 순으로 직렬화한다. 확정된 서로 다른 consumer 검증만 병렬화한다. |
+| Start gate | `DBEDGE-02` reproduction과 선택지 작성은 완료됐다. `ENC-01`의 정확한 사용자 선택이 다음 순서이며 승인 전 loader/setting/encoder/revision/hash를 바꾸지 않는다. |
+| Verification | Month/sign/day/subsecond interval, large/scale/exponent/nested JSON numeric, empty/nonempty range·multirange, noncanonical reader defaults, ambiguous literal inventory, user-result cursor-only loader와 EXPLAIN/plan_summary 비회귀, pool reset, byte/hash, stale-token rejection, full verified reissue와 rollback |
+
+- [ ] `ENC-01` ADR 0020의 lossless 지원 A, 손실 전 거부 B 또는 현재 위험 수용 C 중 exact
+  canonical contract와 provider/consumer·migration 영향을 사용자 결정으로 확정한다.
+- [ ] `ENC-02` 승인된 A/B를 구현하고 policy/revision/verified migration과 rollback을 검증한다.
+  C를 선택하면 runtime guard가 없다는 production exclusion과 위험 수용을 운영 기록에 고정한다.
+
 ## P2.5 — Canonical Timestamptz Stability
 
 목표: 같은 PostgreSQL instant가 reader session `TimeZone`과 무관하게 같은 public canonical value와
@@ -48,7 +71,7 @@ inventory와 실제 배포·rollback 증거는 환경별 change record로 남겨
 | Contract baseline | 승인된 [`TIME-01` 결정](decisions/0019-canonical-time-stability.md)과 완료된 `TIME-02`가 UTC-first reader policy, aware datetime UTC `+00:00`, policy v2와 새 metadata revision을 고정한다. Repository fixture 11개, UTC/서울/뉴욕·DST, old/new Control row 공존과 local coordinated cutover는 통과했다. |
 | Approval gate | 사용자가 2026-08-25 `TIME-01`의 정확한 정책·영향·cutover·rollback을 승인했다. 그 범위의 production 전환은 승인됐지만 환경 권한과 stop condition 증거 없이 실행하지 않으며, 승인 범위를 넘는 의미 변경은 다시 승인받는다. |
 | Single writer | Production operator가 coordinating agent와 함께 protected inventory, DB migration ref, fleet drain, 재발행과 rollback change record를 하나의 직렬 전환으로 관리한다. |
-| Start gate | `TIME-01`과 `TIME-02`는 완료됐다. `TIME-03`은 production inventory·권한·backup·route가 제공된 환경에서만 진행한다. 완료하거나 사용자가 명시적으로 defer하기 전에는 `COST-01` 구현을 시작하지 않는다. |
+| Start gate | `TIME-01`과 `TIME-02`는 완료됐다. `ENC-01` 결정과 그에 따른 `ENC-02`가 완료된 최종 encoding baseline에서만 `TIME-03`을 수행한다. Production inventory·권한·backup·route가 제공되어야 하며, 완료하거나 사용자가 명시적으로 defer하기 전에는 `COST-01` 구현을 시작하지 않는다. |
 | Verification | Managed current/rollback-preserved contract 전량 재실행·재발행, 실제 R1 migration ref, old connection 0, replica convergence, R2→R1 rollback과 environment change record |
 
 - [ ] `TIME-03` Repository에서 이미 검증한 전환 절차를 실제 managed environment에 적용해

@@ -108,6 +108,17 @@ Aware Python datetime은 UTC `+00:00` ISO 문자열로 정규화하고 `Z`를 �
 date, time과 timetz는 기존 `isoformat()` 표현을 보존한다. Microseconds는 Python의 automatic
 timespec을 그대로 따른다.
 
+현재 default driver 경계에는 known gap이 있다. Month-bearing PostgreSQL interval은 Python
+`timedelta`에서 calendar-month 의미를 잃고, JSON/JSONB fractional number는 float precision을 잃을
+수 있다. 또한 common reader policy가 `extra_float_digits`, `DateStyle`, `IntervalStyle`을 아직
+고정하지 않아 role default에 따라 finite float 결과/hash, ambiguous date SQL 의미가 달라지거나 일부
+driver decode가 실패할 수 있다. Empty psycopg Multirange는 generic Sequence로 오인되어 empty SQL
+array와 같은 `[]`/hash로 성공하지만 nonempty multirange는 실패한다. Day-time interval과 ordinary
+mapping/sequence evidence를 이 범위의 무손실·결정성 보장으로 확대하지 않는다.
+[Proposed ADR 0020](../../decisions/0020-lossless-interval-and-json-numeric-encoding.md)의
+`ENC-01-A|B|C`가 승인되기 전 loader, canonical value, revision과 hash를 변경하지 않는다. Infinity
+date, range와 nonempty multirange 같은 unsupported driver value는 `QUERY_UNAVAILABLE`로 rollback한다.
+
 `result_bytes`는 compact UTF-8 JSON rows array의 `[]`와 comma까지 포함한다. 다음 행이 byte 또는
 row 상한을 넘으면 그 행을 넣지 않고 `truncated=true`로 반환한다. Duplicate result column은
 dictionary row value 손실을 막기 위해 fetch 전에 거부한다.

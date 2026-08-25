@@ -15,9 +15,17 @@ import pytest
 from dotenv import load_dotenv
 from psycopg import AsyncConnection, errors, sql
 from psycopg.conninfo import make_conninfo
+from psycopg.pq import TransactionStatus
 
 from query_man.catalog import PostgresCatalog
-from query_man.errors import QueryInvalidError, QueryRejectedError, QueryTimeoutError
+from query_man.errors import (
+    MetadataRevisionMismatchError,
+    MetadataUnavailableError,
+    QueryInvalidError,
+    QueryRejectedError,
+    QueryTimeoutError,
+    QueryUnavailableError,
+)
 from query_man.metadata import MetadataService
 from query_man.models import (
     AllowedRelationKind,
@@ -29,6 +37,7 @@ from query_man.models import (
 )
 from query_man.query import PostgresQueryExecutor, QueryService
 from query_man.registry import SourceRegistry
+from query_man.result_encoding import encode_result_value
 from query_man.sql_validation import SQL_POLICY_REVISION, validate_sql
 from query_man.verified import create_result_hash
 from tests.helpers import ROOT_DIRECTORY
@@ -399,11 +408,13 @@ async def test_cleanup_steps_attempt_every_target_and_preserve_all_errors() -> N
 
 def _open_services(
     source: SourceProfile,
+    *,
+    cache_ttl_ms: int = 30_000,
 ) -> tuple[PostgresCatalog, PostgresQueryExecutor, MetadataService, QueryService]:
     registry = SourceRegistry([source])
     catalog = PostgresCatalog()
     executor = PostgresQueryExecutor()
-    metadata = MetadataService(registry, catalog, cache_ttl_ms=30_000)
+    metadata = MetadataService(registry, catalog, cache_ttl_ms=cache_ttl_ms)
     return catalog, executor, metadata, QueryService(registry, metadata, executor)
 
 
@@ -884,6 +895,594 @@ async def test_temporal_results_are_canonical_across_reader_timezones(
                 source,
                 reader_timezone,
             )
+        finally:
+            await executor.close()
+            await catalog.close()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_live_view_definition_drift_reissues_revision_before_query() -> None:
+    async with _disposable_source_database() as database:
+        admin = await AsyncConnection.connect(database.admin_dsn, autocommit=True)
+        try:
+            await admin.execute("CREATE SCHEMA private")
+            await admin.execute("CREATE SCHEMA analytics")
+            await admin.execute(
+                "CREATE TABLE private.live_records (record_id bigint PRIMARY KEY, label text NOT NULL)"
+            )
+            await admin.execute(
+                "INSERT INTO private.live_records VALUES (1, 'alpha'), (2, 'beta')"
+            )
+            await admin.execute(
+                "CREATE VIEW analytics.live_records AS "
+                "SELECT record_id, label FROM private.live_records"
+            )
+            await admin.execute(
+                sql.SQL("GRANT USAGE ON SCHEMA private, analytics TO {}").format(
+                    sql.Identifier(database.view_owner_name)
+                )
+            )
+            await admin.execute(
+                sql.SQL("GRANT SELECT ON private.live_records TO {}").format(
+                    sql.Identifier(database.view_owner_name)
+                )
+            )
+            await admin.execute(
+                sql.SQL("ALTER VIEW analytics.live_records OWNER TO {}").format(
+                    sql.Identifier(database.view_owner_name)
+                )
+            )
+            await admin.execute(
+                sql.SQL("GRANT USAGE ON SCHEMA analytics TO {}").format(
+                    sql.Identifier(database.reader_name)
+                )
+            )
+            await admin.execute(
+                sql.SQL("GRANT SELECT ON analytics.live_records TO {}").format(
+                    sql.Identifier(database.reader_name)
+                )
+            )
+        finally:
+            await admin.close()
+
+        source = _source_profile(database, "live-drift", ("view",))
+        catalog, executor, metadata, query = _open_services(
+            source,
+            cache_ttl_ms=0,
+        )
+        try:
+            original = await metadata.get_published(source.source_id)
+            original_hash = original.snapshot.relations[0].definition_hash
+
+            admin = await AsyncConnection.connect(database.admin_dsn, autocommit=True)
+            try:
+                await admin.execute(
+                    "CREATE OR REPLACE VIEW analytics.live_records AS "
+                    "SELECT record_id, label || '-v2' AS label FROM private.live_records"
+                )
+            finally:
+                await admin.close()
+
+            with pytest.raises(MetadataRevisionMismatchError):
+                await query.query(
+                    source.source_id,
+                    "SELECT record_id, label FROM analytics.live_records ORDER BY record_id",
+                    original.revision,
+                    SQL_POLICY_REVISION,
+                )
+
+            current = await metadata.get_published(source.source_id)
+            assert current.revision != original.revision
+            assert current.snapshot.relations[0].definition_hash != original_hash
+            result = await query.query(
+                source.source_id,
+                "SELECT record_id, label FROM analytics.live_records ORDER BY record_id",
+                current.revision,
+                SQL_POLICY_REVISION,
+            )
+            _assert_canonical_result(
+                result,
+                current.revision,
+                ["record_id", "label"],
+                [
+                    {"record_id": 1, "label": "alpha-v2"},
+                    {"record_id": 2, "label": "beta-v2"},
+                ],
+            )
+        finally:
+            await executor.close()
+            await catalog.close()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit_kind", ("relations", "columns", "structures"))
+async def test_live_catalog_limits_fail_closed_and_pool_recovers(limit_kind: str) -> None:
+    async with _disposable_source_database() as database:
+        admin = await AsyncConnection.connect(database.admin_dsn, autocommit=True)
+        try:
+            await admin.execute("CREATE SCHEMA analytics")
+            if limit_kind == "relations":
+                for number in range(3):
+                    relation_name = f"bounded_{number}"
+                    await admin.execute(
+                        sql.SQL("CREATE TABLE analytics.{} (record_id bigint)").format(
+                            sql.Identifier(relation_name)
+                        )
+                    )
+                    await admin.execute(
+                        sql.SQL("GRANT SELECT ON analytics.{} TO {}").format(
+                            sql.Identifier(relation_name),
+                            sql.Identifier(database.reader_name),
+                        )
+                    )
+            elif limit_kind == "columns":
+                await admin.execute(
+                    "CREATE TABLE analytics.bounded_columns "
+                    "(record_id bigint, label text, extra_value text)"
+                )
+                await admin.execute(
+                    sql.SQL("GRANT SELECT ON analytics.bounded_columns TO {}").format(
+                        sql.Identifier(database.reader_name)
+                    )
+                )
+            else:
+                await admin.execute(
+                    "CREATE TABLE analytics.bounded_structures "
+                    "(record_id bigint PRIMARY KEY)"
+                )
+                await admin.execute(
+                    "CREATE INDEX bounded_structures_record_id_2 "
+                    "ON analytics.bounded_structures (record_id)"
+                )
+                await admin.execute(
+                    sql.SQL("GRANT SELECT ON analytics.bounded_structures TO {}").format(
+                        sql.Identifier(database.reader_name)
+                    )
+                )
+            await admin.execute(
+                sql.SQL("GRANT USAGE ON SCHEMA analytics TO {}").format(
+                    sql.Identifier(database.reader_name)
+                )
+            )
+        finally:
+            await admin.close()
+
+        if limit_kind == "relations":
+            budget = replace(_BUDGET, max_metadata_relations=2)
+        elif limit_kind == "columns":
+            budget = replace(_BUDGET, max_columns_per_relation=2)
+        else:
+            budget = replace(_BUDGET, max_metadata_columns=2)
+        source = _source_profile(
+            database,
+            f"limit-{limit_kind}",
+            ("table",),
+            budget=budget,
+        )
+        catalog, executor, metadata, _query = _open_services(source)
+        try:
+            with pytest.raises(MetadataUnavailableError):
+                await metadata.get_published(source.source_id)
+
+            admin = await AsyncConnection.connect(database.admin_dsn, autocommit=True)
+            try:
+                if limit_kind == "relations":
+                    await admin.execute("DROP TABLE analytics.bounded_2")
+                elif limit_kind == "columns":
+                    await admin.execute(
+                        "ALTER TABLE analytics.bounded_columns DROP COLUMN extra_value"
+                    )
+                else:
+                    await admin.execute(
+                        "DROP INDEX analytics.bounded_structures_record_id_2"
+                    )
+            finally:
+                await admin.close()
+
+            recovered = await metadata.get_published(source.source_id)
+            assert len(recovered.snapshot.relations) <= budget.max_metadata_relations
+            assert all(
+                len(relation.columns) <= budget.max_columns_per_relation
+                for relation in recovered.snapshot.relations
+            )
+        finally:
+            await executor.close()
+            await catalog.close()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_warm_catalog_limit_drift_does_not_serve_stale_snapshot() -> None:
+    async with _disposable_source_database() as database:
+        admin = await AsyncConnection.connect(database.admin_dsn, autocommit=True)
+        try:
+            await admin.execute("CREATE SCHEMA analytics")
+            await admin.execute("CREATE TABLE analytics.initial_records (record_id bigint)")
+            await admin.execute(
+                sql.SQL("GRANT USAGE ON SCHEMA analytics TO {}").format(
+                    sql.Identifier(database.reader_name)
+                )
+            )
+            await admin.execute(
+                sql.SQL("GRANT SELECT ON analytics.initial_records TO {}").format(
+                    sql.Identifier(database.reader_name)
+                )
+            )
+        finally:
+            await admin.close()
+
+        source = _source_profile(
+            database,
+            "warm-limit-drift",
+            ("table",),
+            budget=replace(_BUDGET, max_metadata_relations=1),
+        )
+        catalog, executor, metadata, _query = _open_services(
+            source,
+            cache_ttl_ms=0,
+        )
+        try:
+            published = await metadata.get_published(source.source_id)
+            assert [
+                relation.qualified_name for relation in published.snapshot.relations
+            ] == ["analytics.initial_records"]
+
+            admin = await AsyncConnection.connect(database.admin_dsn, autocommit=True)
+            try:
+                await admin.execute(
+                    "CREATE TABLE analytics.unexpected_records (record_id bigint)"
+                )
+                await admin.execute(
+                    sql.SQL("GRANT SELECT ON analytics.unexpected_records TO {}").format(
+                        sql.Identifier(database.reader_name)
+                    )
+                )
+            finally:
+                await admin.close()
+
+            with pytest.raises(MetadataUnavailableError):
+                await metadata.get_published(source.source_id)
+        finally:
+            await executor.close()
+            await catalog.close()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_enc_01_characterizes_current_scalar_loss_and_reader_default_drift() -> None:
+    async with _disposable_source_database() as database:
+        connection = await AsyncConnection.connect(
+            make_conninfo(
+                host="127.0.0.1",
+                port=database.port,
+                dbname=database.name,
+                user=database.reader_name,
+                password=database.reader_password,
+                sslmode="disable",
+            )
+        )
+        try:
+            cursor = await connection.execute(
+                "SELECT current_setting('DateStyle'), "
+                "current_setting('IntervalStyle'), "
+                "current_setting('extra_float_digits')"
+            )
+            original_reader_formats = await cursor.fetchone()
+            assert original_reader_formats is not None
+            cursor = await connection.execute(
+                "SELECT pg_catalog.set_config('IntervalStyle', 'postgres', true)"
+            )
+            assert await cursor.fetchone() == ("postgres",)
+            cursor = await connection.execute(
+                "SELECT "
+                "interval '1 month', interval '30 days', "
+                "interval '1 month 2 days 03:04:05.6', "
+                "'{\"amount\":12345678901234567890.1234567890}'::jsonb, "
+                "'{\"amount\":12345678901234567891.1234567890}'::jsonb"
+            )
+            row = await cursor.fetchone()
+            assert row is not None
+            public_values = tuple(encode_result_value(value) for value in row)
+
+            # ponytail: keep as raw-driver evidence; product acceptance follows ENC-01.
+            assert public_values[0] == public_values[1] == "30 days, 0:00:00"
+            assert public_values[2] == "32 days, 3:04:05.600000"
+            assert create_result_hash(("value",), [{"value": public_values[0]}]) == (
+                "sha256:a1d1217174eb9b0ebce121652ec50bec72411619310ca4f1fee427d55f412014"
+            )
+            assert public_values[3] == public_values[4] == {
+                "amount": 1.2345678901234567e19
+            }
+            assert create_result_hash(("value",), [{"value": public_values[3]}]) == (
+                "sha256:3b05810025aca001615bd4e78fdbb40763f9d3ea1ba257043625796ba3783ced"
+            )
+
+            expected_float_values = {
+                "3": 1.2345678901234567,
+                "1": 1.2345678901234567,
+                "0": 1.23456789012346,
+                "-1": 1.2345678901235,
+                "-3": 1.23456789012,
+            }
+            expected_float_hashes = {
+                "3": "sha256:5012f693b02038ecf19d29b94f4c825c6421f2cb480caf3a4fd0df4ff39791a8",
+                "1": "sha256:5012f693b02038ecf19d29b94f4c825c6421f2cb480caf3a4fd0df4ff39791a8",
+                "0": "sha256:5fabe00ed393cc9d9aadcf6e58891e5225e8f9ec520d48ae1427913361aa5d01",
+                "-1": "sha256:d211c3a3fbf6d75876d85050137e537dcc8de6e638be0fa137137f26fd73f292",
+                "-3": "sha256:2f6c93e8967a6b062f6578d8bc82b1439b5b414e193d65757d109fc948b871da",
+            }
+            for setting, expected in expected_float_values.items():
+                await connection.execute(
+                    "SELECT pg_catalog.set_config('extra_float_digits', %s, true)",
+                    (setting,),
+                )
+                cursor = await connection.execute(
+                    "SELECT 1.2345678901234567::float8"
+                )
+                current = await cursor.fetchone()
+                assert current is not None
+                assert current[0] == expected
+                assert create_result_hash(("value",), [{"value": current[0]}]) == (
+                    expected_float_hashes[setting]
+                )
+
+            await connection.execute(
+                "SELECT pg_catalog.set_config('DateStyle', 'ISO, YMD', true)"
+            )
+            with pytest.raises(errors.DatetimeFieldOverflow):
+                cursor = await connection.execute("SELECT '01/02/2024'::date")
+                await cursor.fetchone()
+            await connection.rollback()
+            assert connection.info.transaction_status is TransactionStatus.IDLE
+
+            await connection.execute(
+                "SELECT pg_catalog.set_config('DateStyle', 'SQL, DMY', true)"
+            )
+            cursor = await connection.execute("SELECT '01/02/2024'::date")
+            current = await cursor.fetchone()
+            assert current is not None
+            dmy_value = encode_result_value(current[0])
+            assert dmy_value == "2024-02-01"
+            assert create_result_hash(("value",), [{"value": dmy_value}]) == (
+                "sha256:0b093bfd220af3358ac5940f593a58578460d04b499151027aa1203572c7c1a7"
+            )
+            await connection.execute(
+                "SELECT pg_catalog.set_config('DateStyle', 'Postgres, MDY', true)"
+            )
+            cursor = await connection.execute("SELECT '01/02/2024'::date")
+            current = await cursor.fetchone()
+            assert current is not None
+            mdy_value = encode_result_value(current[0])
+            assert mdy_value == "2024-01-02"
+            assert create_result_hash(("value",), [{"value": mdy_value}]) == (
+                "sha256:93901f78e2d7871228951e121dc4608c12b87813f690408acfd08a8ffd4e2e3b"
+            )
+
+            for date_style in (
+                "SQL, DMY",
+                "Postgres, MDY",
+                "German, DMY",
+            ):
+                await connection.execute(
+                    "SELECT pg_catalog.set_config('DateStyle', %s, true)",
+                    (date_style,),
+                )
+                cursor = await connection.execute(
+                    "SELECT timestamptz '2024-03-10 07:00:00+00'"
+                )
+                with pytest.raises(NotImplementedError):
+                    await cursor.fetchone()
+
+            await connection.execute(
+                "SELECT pg_catalog.set_config('DateStyle', 'ISO, YMD', true)"
+            )
+            for interval_style in (
+                "iso_8601",
+                "sql_standard",
+                "postgres_verbose",
+            ):
+                await connection.execute(
+                    "SELECT pg_catalog.set_config('IntervalStyle', %s, true)",
+                    (interval_style,),
+                )
+                cursor = await connection.execute("SELECT interval '1 month'")
+                with pytest.raises(NotImplementedError):
+                    await cursor.fetchone()
+
+            await connection.rollback()
+            assert connection.info.transaction_status is TransactionStatus.IDLE
+            cursor = await connection.execute(
+                "SELECT current_setting('DateStyle'), "
+                "current_setting('IntervalStyle'), "
+                "current_setting('extra_float_digits')"
+            )
+            assert await cursor.fetchone() == original_reader_formats
+            await connection.rollback()
+            assert connection.info.transaction_status is TransactionStatus.IDLE
+        finally:
+            active_error = sys.exception()
+            cleanup_errors = await _attempt_cleanup_steps(
+                (
+                    ("rollback raw scalar probe", connection.rollback),
+                    ("close raw scalar probe", connection.close),
+                )
+            )
+            if cleanup_errors:
+                if active_error is not None:
+                    raise BaseExceptionGroup(
+                        "Raw scalar probe and cleanup failed",
+                        [active_error, *cleanup_errors],
+                    )
+                raise BaseExceptionGroup("Raw scalar probe cleanup failed", cleanup_errors)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_enc_01_characterizes_empty_multirange_and_unsupported_recovery() -> None:
+    async with _disposable_source_database() as database:
+        admin = await AsyncConnection.connect(database.admin_dsn, autocommit=True)
+        try:
+            await admin.execute("CREATE SCHEMA analytics")
+            await admin.execute(
+                "CREATE TABLE analytics.driver_edges "
+                "(record_id bigint PRIMARY KEY, active_span int4range, "
+                "active_spans int4multirange, empty_spans int4multirange, "
+                "empty_numbers integer[], forever date)"
+            )
+            await admin.execute(
+                "INSERT INTO analytics.driver_edges VALUES "
+                "(1, int4range(1, 5, '[)'), '{[1,5)}'::int4multirange, "
+                "'{}'::int4multirange, '{}'::integer[], 'infinity'::date)"
+            )
+            await admin.execute(
+                sql.SQL("GRANT USAGE ON SCHEMA analytics TO {}").format(
+                    sql.Identifier(database.reader_name)
+                )
+            )
+            await admin.execute(
+                sql.SQL("GRANT SELECT ON analytics.driver_edges TO {}").format(
+                    sql.Identifier(database.reader_name)
+                )
+            )
+        finally:
+            await admin.close()
+
+        source = _source_profile(database, "driver-edges", ("table",))
+        catalog, executor, metadata, query = _open_services(source)
+        try:
+            published = await metadata.get_published(source.source_id)
+            relation = published.snapshot.relations[0]
+            assert [(column.name, column.data_type) for column in relation.columns] == [
+                ("record_id", "bigint"),
+                ("active_span", "int4range"),
+                ("active_spans", "int4multirange"),
+                ("empty_spans", "int4multirange"),
+                ("empty_numbers", "integer[]"),
+                ("forever", "date"),
+            ]
+
+            empty_multirange = await query.query(
+                source.source_id,
+                "SELECT empty_spans AS value FROM analytics.driver_edges",
+                published.revision,
+                SQL_POLICY_REVISION,
+            )
+            empty_array = await query.query(
+                source.source_id,
+                "SELECT empty_numbers AS value FROM analytics.driver_edges",
+                published.revision,
+                SQL_POLICY_REVISION,
+            )
+            # ponytail: defect characterization; empty multirange must follow ENC-01.
+            assert empty_multirange["rows"] == empty_array["rows"] == [{"value": []}]
+            empty_collection_hash = create_result_hash(
+                ("value",), empty_multirange["rows"]
+            )
+            assert empty_collection_hash == create_result_hash(
+                ("value",), empty_array["rows"]
+            )
+            assert empty_collection_hash == (
+                "sha256:77f588e368495248abbd8eb87354efadbd31afa38d0ca675154506624470f06a"
+            )
+
+            for unsupported_sql in (
+                "SELECT active_span FROM analytics.driver_edges",
+                "SELECT active_spans FROM analytics.driver_edges",
+                "SELECT forever FROM analytics.driver_edges",
+            ):
+                with pytest.raises(QueryUnavailableError) as unavailable:
+                    await query.query(
+                        source.source_id,
+                        unsupported_sql,
+                        published.revision,
+                        SQL_POLICY_REVISION,
+                    )
+                assert unavailable.value.details is None
+
+                recovered = await query.query(
+                    source.source_id,
+                    "SELECT record_id FROM analytics.driver_edges",
+                    published.revision,
+                    SQL_POLICY_REVISION,
+                )
+                _assert_canonical_result(
+                    recovered,
+                    published.revision,
+                    ["record_id"],
+                    [{"record_id": 1}],
+                )
+                await _assert_pool_restored_reader_timezone(
+                    executor,
+                    source,
+                    "UTC",
+                )
+        finally:
+            await executor.close()
+            await catalog.close()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_multibyte_result_limit_keeps_only_complete_rows() -> None:
+    first_row = {"record_id": 1, "payload": "한글🙂"}
+    second_row = {"record_id": 2, "payload": "두번째🙂🙂"}
+    first_row_bytes = len(
+        json.dumps(
+            first_row,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    )
+    exact_first_row_limit = 2 + first_row_bytes
+
+    async with _disposable_source_database() as database:
+        admin = await AsyncConnection.connect(database.admin_dsn, autocommit=True)
+        try:
+            await admin.execute("CREATE SCHEMA analytics")
+            await admin.execute(
+                "CREATE TABLE analytics.multibyte_records "
+                "(record_id bigint PRIMARY KEY, payload text NOT NULL)"
+            )
+            await admin.execute(
+                "INSERT INTO analytics.multibyte_records VALUES (1, %s), (2, %s)",
+                (first_row["payload"], second_row["payload"]),
+            )
+            await admin.execute(
+                sql.SQL("GRANT USAGE ON SCHEMA analytics TO {}").format(
+                    sql.Identifier(database.reader_name)
+                )
+            )
+            await admin.execute(
+                sql.SQL("GRANT SELECT ON analytics.multibyte_records TO {}").format(
+                    sql.Identifier(database.reader_name)
+                )
+            )
+        finally:
+            await admin.close()
+
+        source = _source_profile(
+            database,
+            "multibyte",
+            ("table",),
+            budget=replace(_BUDGET, max_result_bytes=exact_first_row_limit),
+        )
+        catalog, executor, metadata, query = _open_services(source)
+        try:
+            published = await metadata.get_published(source.source_id)
+            result = await query.query(
+                source.source_id,
+                "SELECT record_id, payload FROM analytics.multibyte_records ORDER BY record_id",
+                published.revision,
+                SQL_POLICY_REVISION,
+            )
+            assert result["columns"] == ["record_id", "payload"]
+            assert result["rows"] == [first_row]
+            assert result["row_count"] == 1
+            assert result["result_bytes"] == exact_first_row_limit
+            assert result["truncated"] is True
         finally:
             await executor.close()
             await catalog.close()
