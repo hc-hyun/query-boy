@@ -130,15 +130,17 @@ the enforced source-semaphore admission wait. None is the complete HTTP latency.
 
 ## Recovery Evidence Boundary
 
-The automated drill proves a same-cluster/current-PostgreSQL custom
+The automated drill recorded by this historical audit proves a same-cluster/current-PostgreSQL custom
 `pg_dump`/`pg_restore --no-owner --no-privileges` round trip, two error-free applications of the current
 control schema, row-count parity for five tables, four foreign keys, three non-internal user-trigger
 registrations and writer-group ACLs. It does not validate trigger names/definitions or execute an
 immutable mutation rejection. It also does not prove cross-host/version or old-schema migration,
 archive content hashes, source business DB/global role recovery, dedicated LOGIN creation/authentication,
 ciphertext decryption, active generation semantics, runtime/source query success, or actual RPO/RTO.
-Those remain the explicit manual restore checks in
-[disaster recovery](../disaster-recovery.md).
+The later `CTRL-09`
+[control recovery acceptance](2026-08-25-control-recovery-acceptance.md) adds cross-service archive,
+key, zero-bootstrap and two-replica evidence. Source business DB recovery and actual RPO/RTO remain
+explicit deployment checks in [disaster recovery](../disaster-recovery.md).
 
 ## Deliberate Boundaries
 

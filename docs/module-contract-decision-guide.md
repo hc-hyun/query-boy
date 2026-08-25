@@ -563,7 +563,8 @@ type, 성능 상한, consumer와 rollback 범위를 후속 승인안으로 작�
 Control DB schema, replica observation, freshness와 admin response 계약은 2026-08-25 별도 사용자
 승인을 받아 구현됐다. `CTRL-07A` resource/gateway observation도 2026-08-25 별도 승인을 받아
 구현됐다. `CTRL-08` latest resource attempt/last-success와 public usage projection도 2026-08-25
-별도 승인을 받아 구현됐으며 Active TODO의 다음 순서는 recovery acceptance `CTRL-09`다.
+별도 승인을 받아 구현됐고, 기존 계약을 재현한 `CTRL-09` isolated cross-service Control recovery
+fixture acceptance까지 완료됐다. Active TODO의 다음 순서는 Source Onboarding Skill `SKILL-01`이다.
 
 각 단계는 provider contract, 직접 consumer, module 문서와 runnable contract test가 함께
 통과하는 독립 커밋으로 끝낸다. Shared contract file은 single-writer로 편집한다. Provider

@@ -371,7 +371,7 @@ metadata snapshot과 verified query를 읽거나 반환하지 않는다. 이 단
 - 관리자 한 종류와 기존 `budget_profile`만 사용하므로 초기 schema와 API가 작다.
 - Control DB availability, backup, audit integrity와 admin credential 분리는 production-critical
   boundary가 된다.
-- Replica convergence와 resource/gateway usage projection은 구현됐고 DB-native/provider cost와
-  production 복구 검증은 남은 구현 gap이다.
+- Replica convergence, resource/gateway usage projection과 격리 PostgreSQL service 사이의
+  18.4→18.6 recovery fixture acceptance는 구현됐다. DB-native/provider cost는 남은 구현 gap이다.
 - Future per-user/org ACL, quota, tier override, multi-role approval, automated credential broker와
   chargeback은 실제 요구와 threat model이 생길 때 별도 결정으로 추가한다.

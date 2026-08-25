@@ -1,6 +1,6 @@
 # Source Management Plane
 
-Status: Active implementation
+Status: Baseline complete; deferred extensions
 
 Last updated: 2026-08-25
 
@@ -13,8 +13,8 @@ DB가 늘어나도 운영자가 한곳에서 source 정의, 적용 상태, 담�
 
 [ADR 0016](decisions/0016-centralized-source-management-plane.md)이 authority를,
 [ADR 0017](decisions/0017-shared-source-access-and-resource-tier.md)이 초기 access와 resource
-tier를 정한다. 이 문서는 현재 공백과 `CTRL-*` 구현 순서를 관리하며 아직 없는 API나 table을
-현재 기능처럼 안내하지 않는다.
+tier를 정한다. 이 문서는 완료된 `CTRL-*` baseline과 명시적으로 미룬 확장을 구분하며 아직 없는
+API나 table을 현재 기능처럼 안내하지 않는다.
 
 ## Initial Operating Model
 
@@ -27,7 +27,7 @@ tier를 정한다. 이 문서는 현재 공백과 `CTRL-*` 구현 순서를 관�
   비용 집계 기준으로 쓰지 않는다.
 - Query MCP에는 admin tool을 추가하지 않는다.
 
-## Current Baseline And Gaps
+## Current Baseline And Deferred Extensions
 
 이미 구현된 기반:
 
@@ -49,11 +49,13 @@ tier를 정한다. 이 문서는 현재 공백과 `CTRL-*` 구현 순서를 관�
 - Optional physical resource definition, daily current/previous record·storage observation
 - Privacy-safe source/profile/revision hourly gateway usage lower-bound rollup과 reporter cursor
 - Latest resource attempt/last-success와 operator-only five-state resource/global-reporter projection
+- Isolated cross-service PostgreSQL minor-version restore, 13-table fingerprint,
+  encryption-key/receipt recovery,
+  zero-bootstrap와 두 stable managed replica recovery fixture acceptance
 
-현재 구현 중이거나 남은 공백:
+후속 extension track으로 미룬 범위:
 
 - DB-native/provider monetary cost projection
-- Authority table backup/restore, retention과 encryption-key recovery 검증
 
 다단계 management RBAC, caller grant import, 사용자별 quota와 AI mutation executor는 공백이
 아니라 현재 non-goal이다.
@@ -332,9 +334,9 @@ latest current/previous, gateway는 hourly rollup과 source당 1,000행 cap만 �
 
 ## Rollout Checklist
 
-완료된 `CTRL-01`~`CTRL-08` 상태는
-[implementation roadmap ledger](implementation-roadmap.md#14-post-baseline-completion-ledger-and-active-development),
-열린 `CTRL-09`는 [active development TODO](development-todo.md)가 관리한다.
+완료된 `CTRL-01`~`CTRL-09` 상태는
+[implementation roadmap ledger](implementation-roadmap.md#14-post-baseline-completion-ledger-and-active-development)가
+관리한다.
 
 1. **Complete:** versioned migration과 disposable test-store isolation
 2. **Complete:** mutually exclusive source mode, Control DB precedence, zero-bootstrap과
@@ -345,7 +347,7 @@ latest current/previous, gateway는 hourly rollup과 source당 1,000행 cap만 �
 6. **Complete:** Replica convergence/drift observation
 7. **Complete:** Bounded record/storage와 gateway usage observation
 8. **Complete:** Usage availability와 cardinality/logical retention
-9. Backup/restore, encryption-key recovery와 multi-replica end-to-end acceptance
+9. **Complete:** Backup/restore, encryption-key recovery와 multi-replica end-to-end acceptance
 
 DB-native collector와 provider connector는 rollout의 선행 조건이 아니다. 연결되지 않은 값은
 `not_configured`로 표시하고 `COST-*`가 이후 aggregate를 추가한다.
@@ -369,10 +371,13 @@ multi-replica convergence 증거는
 여덟 번째 단계의 latest attempt/last-success, five-state projection, 31일 cutoff, admin wire와
 least-privilege migration 증거는
 [usage projection audit](verification/2026-08-25-usage-projection.md)에 기록한다.
+아홉 번째 단계의 isolated cross-service/minor-version archive, 13-table fingerprint, encryption key,
+logical retention, zero-bootstrap와 두 replica 복구 결과는
+[control recovery acceptance](verification/2026-08-25-control-recovery-acceptance.md)에 기록한다.
 
 ## Release Acceptance
 
-현재 `CTRL-01`~`CTRL-08`이 충족한 acceptance:
+현재 `CTRL-01`~`CTRL-09`가 충족한 acceptance:
 
 - 운영자는 Git checkout 없이 모든 managed source의 owner, active state, history와 resource tier를
   조회한다.
@@ -390,12 +395,15 @@ least-privilege migration 증거는
   않는다. Gateway rollup은 caller/tenant/SQL 없이 source/profile/revision/hour lower bound만 저장한다.
 - Operator usage projection은 resource attempt와 last success, global reporter health, inclusive 31일
   lower-bound rollup을 구분하고 missing/failed 값을 0으로 만들지 않는다.
+- 서로 다른 격리 Compose PostgreSQL service의 18.4→18.6 archive restore에서 13개 Control table,
+  별도 key와 LOGIN, logical retention, receipt replay, source/verified file 없는 두 managed replica 및
+  guarded query가 함께 복구된다.
 
-`CTRL-09`에서 충족할 planned acceptance:
+이 fixture는 물리적으로 다른 production host/network, 실제 backup age와 storage access,
+secret-manager/TLS/IAM, source business DB 또는 production RPO/RTO를 증명하지 않는다. 해당 항목은
+[disaster recovery runbook](disaster-recovery.md)의 deployment change record가 별도로 관리한다.
 
-- Authority table과 encryption key의 backup/restore 검증이 재현 가능하다.
-
-현재와 planned 계약에 모두 적용하는 불변조건:
+현재 계약에 적용하는 불변조건:
 
 - Secret, ad-hoc question/SQL과 내부 DB error가 management response, audit와 metric에 없다.
 

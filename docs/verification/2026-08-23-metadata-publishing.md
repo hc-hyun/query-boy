@@ -34,4 +34,7 @@ uv run mypy src                                   PASS (18 source files)
 - 다중 replica 반영은 push channel 대신 generation 기반 bounded polling으로 구현했다.
 - Source manifest와 encrypted secret의 control-plane 등록/hot reload는 `ONB-01`~`ONB-08`에서
   구현했다.
-- Backup, restore와 복구 훈련은 `OPS-07`에서 완료했다.
+- 이 감사 시점의 five-table same-cluster backup/restore drill은 `OPS-07`에서 완료했다. 이후
+  13-table 격리 service 복구는
+  [CTRL-09 control recovery acceptance](2026-08-25-control-recovery-acceptance.md)에서 별도
+  검증했으며 실제 production RPO/RTO 측정은 아니다.

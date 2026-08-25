@@ -100,6 +100,8 @@ Mutation timeout은 blind retry하지 않고 authoritative Control DB state를 �
   새 topology와 authority를 별도 ADR로 설계한다. DSN-only 조합을 암묵적으로 복원하지 않는다.
 - Automated production import가 필요해지면 idempotent receipt, target-bound credential broker와
   별도 threat model을 먼저 설계한다.
-- Backup restore와 multi-replica zero-bootstrap recovery의 최종 증거는 `CTRL-09`에서 추가한다.
+- Backup restore와 multi-replica zero-bootstrap recovery는 이후 `CTRL-09`의
+  [control recovery acceptance](2026-08-25-control-recovery-acceptance.md)에서 별도 검증했다. 이
+  startup 감사 자체는 같은 DB의 시작 경계만 증명한다.
 - Representative local-load queue flake가 반복 관측되면 timeout을 높이기 전에 test DB resource
   격리와 host/DB saturation 진단을 추가한다.

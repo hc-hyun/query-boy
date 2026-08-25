@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 import re
 import subprocess
@@ -24,14 +25,29 @@ _AUTHORITY_TABLES = (
     "verified_query_contracts",
     "source_mutation_receipts",
 )
+CONTROL_TABLES = (
+    "schema_migrations",
+    *_AUTHORITY_TABLES,
+    "runtime_replicas",
+    "runtime_source_observations",
+    "source_resource_observations",
+    "source_resource_observation_attempts",
+    "gateway_usage_rollups",
+    "gateway_usage_report_cursors",
+)
 _TEST_DATABASE_PREFIX = "query_man_control_test_"
 _TEST_DATABASE_NAME = re.compile(rf"^{_TEST_DATABASE_PREFIX}[0-9a-f]{{32}}$")
+_CONTROL_DATABASE_SERVICES = {
+    "postgres",
+    "postgres-control-recovery-source",
+}
 
 
 @dataclass(frozen=True)
 class DisposableControlDatabase:
     name: str
     dsn: str = field(repr=False)
+    compose_service: str = "postgres"
 
 
 def postgres_environment() -> dict[str, str] | None:
@@ -61,6 +77,8 @@ def apply_control_migrations(
 ) -> None:
     if _TEST_DATABASE_NAME.fullmatch(database.name) is None:
         raise ValueError("Refusing to migrate an unmanaged test database")
+    if database.compose_service not in _CONTROL_DATABASE_SERVICES:
+        raise ValueError("Refusing to use an unmanaged PostgreSQL service")
     if migration_directory is None:
         migration_directory = (
             ROOT_DIRECTORY / "docker" / "postgres" / "init" / "control-migrations"
@@ -88,7 +106,7 @@ def apply_control_migrations(
                 *compose,
                 "exec",
                 "-T",
-                "postgres",
+                database.compose_service,
                 "mkdir",
                 "--mode=700",
                 "--",
@@ -98,7 +116,12 @@ def apply_control_migrations(
         )
         created = True
         subprocess.run(
-            [*compose, "cp", f"{migration_directory}/.", f"postgres:{container_directory}"],
+            [
+                *compose,
+                "cp",
+                f"{migration_directory}/.",
+                f"{database.compose_service}:{container_directory}",
+            ],
             **run_options,
         )
         subprocess.run(
@@ -110,7 +133,7 @@ def apply_control_migrations(
                 f"PGDATABASE={database.name}",
                 "--env",
                 f"PGUSER={os.environ['POSTGRES_USER']}",
-                "postgres",
+                database.compose_service,
                 "bash",
                 f"{container_directory}/apply.sh",
             ],
@@ -119,8 +142,163 @@ def apply_control_migrations(
     finally:
         if created:
             subprocess.run(
-                [*compose, "exec", "-T", "postgres", "rm", "-r", "--", container_directory],
+                [
+                    *compose,
+                    "exec",
+                    "-T",
+                    database.compose_service,
+                    "rm",
+                    "-r",
+                    "--",
+                    container_directory,
+                ],
                 **run_options,
+            )
+
+
+def restore_control_backup(
+    source: DisposableControlDatabase,
+    target: DisposableControlDatabase,
+    archive_path: Path,
+) -> str:
+    for database in (source, target):
+        if _TEST_DATABASE_NAME.fullmatch(database.name) is None:
+            raise ValueError("Refusing to restore an unmanaged test database")
+        if database.compose_service not in _CONTROL_DATABASE_SERVICES:
+            raise ValueError("Refusing to use an unmanaged PostgreSQL service")
+    if (source.compose_service, source.name) == (
+        target.compose_service,
+        target.name,
+    ):
+        raise ValueError("Control backup source and restore target must differ")
+    if (
+        source.compose_service != "postgres-control-recovery-source"
+        or target.compose_service != "postgres"
+    ):
+        raise ValueError("Control recovery must cross the isolated PostgreSQL services")
+    if archive_path.exists() or not archive_path.parent.is_dir():
+        raise ValueError("Control backup archive path must be new")
+
+    archive_path = archive_path.resolve()
+    source_stage = f"/tmp/query-man-control-source-{uuid.uuid4().hex}"
+    target_stage = f"/tmp/query-man-control-target-{uuid.uuid4().hex}"
+    source_archive = f"{source_stage}/control.dump"
+    target_archive = f"{target_stage}/control.dump"
+    compose = ["docker", "compose"]
+    run_options = {
+        "cwd": ROOT_DIRECTORY,
+        "check": True,
+        "capture_output": True,
+        "text": True,
+    }
+    try:
+        for service, path in (
+            (source.compose_service, source_stage),
+            (target.compose_service, target_stage),
+        ):
+            subprocess.run(
+                [*compose, "exec", "-T", service, "mkdir", "--mode=700", "--", path],
+                **run_options,
+            )
+        target_is_empty = subprocess.run(
+            [
+                *compose,
+                "exec",
+                "-T",
+                "--env",
+                f"PGUSER={os.environ['POSTGRES_USER']}",
+                target.compose_service,
+                "psql",
+                "--no-psqlrc",
+                "--tuples-only",
+                "--no-align",
+                "--set=ON_ERROR_STOP=1",
+                f"--dbname={target.name}",
+                "--command=SELECT pg_catalog.to_regnamespace('control') IS NULL",
+            ],
+            **run_options,
+        ).stdout.strip()
+        if target_is_empty != "t":
+            raise ValueError("Control restore target must not contain a control schema")
+        subprocess.run(
+            [
+                *compose,
+                "exec",
+                "-T",
+                "--env",
+                f"PGUSER={os.environ['POSTGRES_USER']}",
+                source.compose_service,
+                "pg_dump",
+                "--format=custom",
+                "--schema=control",
+                "--no-owner",
+                "--no-privileges",
+                f"--dbname={source.name}",
+                f"--file={source_archive}",
+            ],
+            **run_options,
+        )
+        archive_path.touch(mode=0o600, exist_ok=False)
+        with archive_path.open("wb") as archive:
+            subprocess.run(
+                [
+                    *compose,
+                    "exec",
+                    "-T",
+                    source.compose_service,
+                    "cat",
+                    "--",
+                    source_archive,
+                ],
+                cwd=ROOT_DIRECTORY,
+                check=True,
+                stdout=archive,
+                stderr=subprocess.PIPE,
+            )
+        subprocess.run(
+            [
+                *compose,
+                "cp",
+                str(archive_path),
+                f"{target.compose_service}:{target_archive}",
+            ],
+            **run_options,
+        )
+        subprocess.run(
+            [
+                *compose,
+                "exec",
+                "-T",
+                "--env",
+                f"PGUSER={os.environ['POSTGRES_USER']}",
+                target.compose_service,
+                "pg_restore",
+                "--no-owner",
+                "--no-privileges",
+                "--exit-on-error",
+                "--single-transaction",
+                f"--dbname={target.name}",
+                target_archive,
+            ],
+            **run_options,
+        )
+        apply_control_migrations(target)
+        apply_control_migrations(target)
+        with archive_path.open("rb") as archive:
+            digest = hashlib.file_digest(archive, "sha256").hexdigest()
+        return f"sha256:{digest}"
+    finally:
+        archive_path.unlink(missing_ok=True)
+        for service, path in (
+            (source.compose_service, source_stage),
+            (target.compose_service, target_stage),
+        ):
+            subprocess.run(
+                [*compose, "exec", "-T", service, "rm", "-r", "-f", "--", path],
+                cwd=ROOT_DIRECTORY,
+                check=False,
+                capture_output=True,
+                text=True,
             )
 
 
@@ -150,18 +328,52 @@ async def authority_fingerprint(dsn: str) -> tuple[tuple[str, int, str], ...]:
         await connection.close()
 
 
+async def control_table_fingerprint(dsn: str) -> tuple[tuple[str, int, str], ...]:
+    connection = await AsyncConnection.connect(dsn)
+    try:
+        await connection.execute("SET TIME ZONE 'UTC'")
+        fingerprints: list[tuple[str, int, str]] = []
+        for table_name in CONTROL_TABLES:
+            cursor = await connection.execute(
+                sql.SQL(
+                    "SELECT count(*), coalesce(string_agg(to_jsonb(row_value)::text, "
+                    "E'\\n' ORDER BY to_jsonb(row_value)::text COLLATE \"C\"), '') "
+                    "FROM control.{} AS row_value"
+                ).format(sql.Identifier(table_name))
+            )
+            row = await cursor.fetchone()
+            assert row is not None
+            digest = hashlib.sha256(str(row[1]).encode("utf-8")).hexdigest()
+            fingerprints.append((table_name, int(row[0]), f"sha256:{digest}"))
+        return tuple(fingerprints)
+    finally:
+        await connection.close()
+
+
 @asynccontextmanager
 async def disposable_control_database(
     environment: dict[str, str],
     migration_directory: Path | None = None,
+    *,
+    compose_service: str = "postgres",
+    apply_migrations_on_create: bool = True,
 ) -> AsyncIterator[DisposableControlDatabase]:
+    if compose_service not in _CONTROL_DATABASE_SERVICES:
+        raise ValueError("Refusing to use an unmanaged PostgreSQL service")
+    connection_environment = dict(environment)
+    if compose_service == "postgres-control-recovery-source":
+        connection_environment["POSTGRES_PORT"] = os.environ.get(
+            "QUERY_MAN_RECOVERY_POSTGRES_PORT",
+            "55432",
+        )
     database_name = f"{_TEST_DATABASE_PREFIX}{uuid.uuid4().hex}"
     if len(database_name) > 63:
         raise AssertionError("Generated test database name exceeds PostgreSQL's identifier limit")
-    maintenance_dsn = postgres_dsn(environment, "postgres")
+    maintenance_dsn = postgres_dsn(connection_environment, "postgres")
     database = DisposableControlDatabase(
         database_name,
-        postgres_dsn(environment, database_name),
+        postgres_dsn(connection_environment, database_name),
+        compose_service,
     )
     maintenance = await AsyncConnection.connect(maintenance_dsn, autocommit=True)
     created = False
@@ -170,11 +382,12 @@ async def disposable_control_database(
         await maintenance.execute(
             sql.SQL("CREATE DATABASE {} OWNER {} ENCODING 'UTF8' TEMPLATE template0").format(
                 sql.Identifier(database_name),
-                sql.Identifier(environment["POSTGRES_USER"]),
+                sql.Identifier(connection_environment["POSTGRES_USER"]),
             )
         )
         created = True
-        apply_control_migrations(database, migration_directory)
+        if apply_migrations_on_create:
+            apply_control_migrations(database, migration_directory)
         yield database
     finally:
         try:

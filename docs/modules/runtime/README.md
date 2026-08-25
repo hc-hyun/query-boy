@@ -45,6 +45,8 @@ Query Man은 현재 하나의 deployable process인 modular monolith다. Runtime
 - [`__init__.py`](../../../src/query_man/__init__.py): package identity/version
 - [`Dockerfile`](../../../Dockerfile), [`compose.yaml`](../../../compose.yaml),
   [`.env.example`](../../../.env.example): image, process, network, secret/config와 health lifecycle
+- `compose.yaml`의 `recovery` profile: Assurance의 PostgreSQL 18.4→18.6 Control recovery에서만
+  사용하는 tmpfs source fixture; production Runtime topology가 아님
 - [`verify-container.sh`](../../../scripts/verify-container.sh): Assurance가 소유하고 Runtime
   container contract를 소비하는 shared transition acceptance script
 - [`pyproject.toml`](../../../pyproject.toml), [`uv.lock`](../../../uv.lock): application
@@ -318,8 +320,9 @@ uv run pytest tests/test_registry.py tests/test_runtime_config.py tests/test_ope
 
 Lifecycle/disconnect 변경은 query/MCP/integration tests를, reload 변경은 source-admin tests를,
 managed startup/authority 변경은 `tests/test_control_startup.py` integration을, 실제 process signal이나
-container 경계는 container shutdown smoke를 추가한다. 완료 전 root `AGENTS.md`의 전체 gate를
-실행한다.
+container 경계는 container shutdown smoke를 추가한다. Control restore/startup 경계는
+`tests/test_control_recovery.py`에서 별도 key와 원래 두 stable slot의 zero-bootstrap 수렴을 함께
+확인한다. 완료 전 root `AGENTS.md`의 전체 gate를 실행한다.
 
 ## 집중해서 읽을 범위
 

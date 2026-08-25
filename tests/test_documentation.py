@@ -115,6 +115,12 @@ USAGE_PROJECTION_AUDIT = (
     / "verification"
     / "2026-08-25-usage-projection.md"
 )
+CONTROL_RECOVERY_AUDIT = (
+    ROOT_DIRECTORY
+    / "docs"
+    / "verification"
+    / "2026-08-25-control-recovery-acceptance.md"
+)
 EXPECTED_ID_COUNTS = {
     "BASE": 10,
     "DEC": 9,
@@ -132,7 +138,6 @@ EXPECTED_ID_COUNTS = {
     "MCPX": 8,
 }
 EXPECTED_OPEN_TODO_IDS = (
-    "CTRL-09",
     "SKILL-01",
     "SKILL-02",
     "SKILL-03",
@@ -165,6 +170,7 @@ EXPECTED_POST_BASELINE_COMPLETED_IDS = (
     "CTRL-06",
     "CTRL-07",
     "CTRL-08",
+    "CTRL-09",
     "SQLX-01",
     "QCORR-01",
     "MOD-01",
@@ -284,6 +290,7 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
     container_audit = CONTAINER_AUDIT.read_text(encoding="utf-8")
     mcp_server_audit = MCP_SERVER_AUDIT.read_text(encoding="utf-8")
     development_todo = DEVELOPMENT_TODO.read_text(encoding="utf-8")
+    readme = (ROOT_DIRECTORY / "README.md").read_text(encoding="utf-8")
     source_management_plan = SOURCE_MANAGEMENT_PLAN.read_text(encoding="utf-8")
     central_source_adr = CENTRAL_SOURCE_ADR.read_text(encoding="utf-8")
     shared_access_adr = SHARED_ACCESS_ADR.read_text(encoding="utf-8")
@@ -302,6 +309,7 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
         RESOURCE_AND_GATEWAY_OBSERVATION_AUDIT.read_text(encoding="utf-8")
     )
     usage_projection_audit = USAGE_PROJECTION_AUDIT.read_text(encoding="utf-8")
+    control_recovery_audit = CONTROL_RECOVERY_AUDIT.read_text(encoding="utf-8")
 
     assert "Status: Production ready" in roadmap
     assert "Status: Production ready" in architecture
@@ -310,7 +318,7 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
     assert "Status: Complete" in container_audit
     assert "Status: Complete" in mcp_server_audit
     assert "Status: Active" in development_todo
-    assert "Status: Active implementation" in source_management_plan
+    assert "Status: Baseline complete; deferred extensions" in source_management_plan
     assert "Status: Accepted" in central_source_adr
     assert "Status: Accepted" in shared_access_adr
     assert "Status: Complete" in mcp_soak_audit
@@ -320,6 +328,7 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
     assert "Status: Complete" in runtime_replica_observation_audit
     assert "Status: Complete" in resource_and_gateway_observation_audit
     assert "Status: Complete" in usage_projection_audit
+    assert "Status: Complete" in control_recovery_audit
     assert REFACTORING_AUDIT.name in roadmap
     assert REFACTORING_AUDIT.name in architecture
     assert CONTAINER_AUDIT.name in roadmap
@@ -356,6 +365,10 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
     assert USAGE_PROJECTION_AUDIT.name in roadmap
     assert USAGE_PROJECTION_AUDIT.name in architecture
     assert USAGE_PROJECTION_AUDIT.name in source_management_plan
+    assert CONTROL_RECOVERY_AUDIT.name in roadmap
+    assert CONTROL_RECOVERY_AUDIT.name in architecture
+    assert CONTROL_RECOVERY_AUDIT.name in source_management_plan
+    assert CONTROL_RECOVERY_AUDIT.name in readme
     for prefix, count in EXPECTED_ID_COUNTS.items():
         audit = {
             "DEP": container_audit,
@@ -390,6 +403,7 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
         RESOURCE_AND_GATEWAY_OBSERVATION_AUDIT.read_text(encoding="utf-8")
     )
     usage_projection_audit = USAGE_PROJECTION_AUDIT.read_text(encoding="utf-8")
+    control_recovery_audit = CONTROL_RECOVERY_AUDIT.read_text(encoding="utf-8")
     matches = re.findall(r"^- \[([ x])\] `([A-Z]+)-(\d{2})`", todo, re.MULTILINE)
     ids = [f"{prefix}-{number}" for _checked, prefix, number in matches]
 
@@ -407,7 +421,7 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
         "Start gate",
         "Verification",
     ):
-        assert todo.count(f"| {field} |") == 4
+        assert todo.count(f"| {field} |") == 3
 
     assert "Lower-track의 `read-only prework`" in todo
     assert "**plan 승인은 contract 선택" in todo
@@ -415,8 +429,8 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
     assert "## P0.5 — Module Contract Hardening" not in todo
     assert "offline composition `MOD-08`은 모두" in todo
     assert "Ledger의 `RTSAFE-01` 완료 및 `MOD-04`~`MOD-08`과 `CTRL-*` 완료" in todo
-    assert "`CTRL-07A` resource/gateway observation" in todo
-    assert "`CTRL-08` latest-attempt/public usage projection 계약" in todo
+    assert "`CTRL-07A` observation method/freshness/logical retention" in todo
+    assert "`CTRL-08` usage/cost state" in todo
     assert "각 단계 구현 전 사용자 승인이 필요하다" in todo
     assert "`RTSAFE-*`, `MOD-*`" not in todo
 
@@ -435,6 +449,7 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
     assert "`CTRL-07`" in resource_and_gateway_observation_audit
     assert "`CTRL-07A`" in resource_and_gateway_observation_audit
     assert "`CTRL-08`" in usage_projection_audit
+    assert "`CTRL-09`" in control_recovery_audit
 
 
 def test_mutation_receipt_docs_preserve_terminal_and_secret_boundaries() -> None:

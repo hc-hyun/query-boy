@@ -332,6 +332,7 @@ client와 실제 PostgreSQL fixture를 사용해야 한다. 실행 결과와 남
 | `CTRL-06` | Stable managed replica가 desired/applied generation·state·metadata drift와 DB-clock freshness를 latest-only로 보고하고 operator가 source별로 조회하게 했다. | [runtime replica observation audit](verification/2026-08-25-runtime-replica-observations.md) |
 | `CTRL-07` | Optional manifest observability, bounded catalog resource sample과 privacy-safe gateway hourly lower-bound rollup을 migration 4에 저장했다. 31일은 logical visibility/input window이고 source당 최신 1,000행만 physical cap으로 유지한다. | [resource and gateway observation audit](verification/2026-08-25-resource-and-gateway-observations.md) |
 | `CTRL-08` | Migration 5의 latest resource attempt/last-success와 operator-only usage endpoint를 추가해 five-state resource availability, global gateway reporter health, inclusive 31일 lower-bound를 missing-to-zero 없이 제공했다. Provider monetary cost는 근거가 없어 not configured로 유지했다. | [usage projection audit](verification/2026-08-25-usage-projection.md) |
+| `CTRL-09` | PostgreSQL 18.4의 격리 Control DB를 18.6 fresh DB로 복원하고 13-table fingerprint, 원래 key의 모든 generation decrypt, logical retention, zero-bootstrap, receipt replay와 두 managed replica의 query/convergence를 하나의 격리 recovery fixture acceptance로 재현했다. | [control recovery acceptance](verification/2026-08-25-control-recovery-acceptance.md) |
 | `SQLX-01` | 기존 SQL validation baseline 뒤 window·ordered-set·문자열·JSON 함수 정책과 corpus를 보강했다. | Commit `de2b364`; [ADR 0001](decisions/0001-postgresql-ast-validation.md), [`test_sql_validation.py`](../tests/test_sql_validation.py) |
 | `QCORR-01` | 수정 가능한 query/argument 오류에 bounded reason별 correction action을 추가하고 한 번의 retry workflow를 고정했다. | Commit `de2b364`; [ADR 0002](decisions/0002-guarded-query-contract.md), [ADR 0006](decisions/0006-mcp-transport-and-workflow.md), [`test_query.py`](../tests/test_query.py), [`test_mcp.py`](../tests/test_mcp.py) |
 | `MOD-01` | 논리 module owner, 허용 dependency, 계약 승인과 module-scoped agent 절차를 문서·테스트로 고정했다. | Commit `de2b364`; [ADR 0018](decisions/0018-module-ownership-and-contract-governance.md), [module index](modules/README.md), [`test_documentation.py`](../tests/test_documentation.py) |
@@ -369,6 +370,5 @@ evidence가 해당 완료 작업의 상세 경계와 실행 증거를 보존한�
 | M14 Cost Attribution | `COST-*` | DB-native 사용량을 source/resource-tier time bucket으로 bounded 집계하고 운영 threshold를 고정한다. |
 | M15 Workflow Trace | `TRACE-*` | 여러 tool call과 retry를 bounded trace ID로 안전하게 연결한다. |
 
-M1부터 M11까지는 완료됐고 M12는 `CTRL-01`~`CTRL-08`까지 완료된 상태다. M12의
-`CTRL-09`와 M13 이후는 active plan이다. 새로운 기능은 기존 완료 ID나 설명을
+M1부터 M12까지는 완료됐다. M13 이후는 active plan이다. 새로운 기능은 기존 완료 ID나 설명을
 소급 변경하지 않고 별도 roadmap 항목과 검증 가능한 exit condition을 추가한다.

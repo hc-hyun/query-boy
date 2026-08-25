@@ -98,15 +98,39 @@ immutable history/receipt UPDATE·DELETE 거부와 writer group/receipt-sequence
 Production data가 아닌 격리 fixture/복제본에서 분기별로 실행하고 결과를 change record에
 첨부한다.
 
-현재 자동 drill은 같은 cluster/current PostgreSQL에서의 archive restore, ledger checksum,
+현재 빠른 drill은 같은 cluster/current PostgreSQL에서의 archive restore, ledger checksum,
 current migration 2회 무오류, row count, FK/user-trigger 개수, immutable mutation 거부와 group 및
-replica-table ACL까지 증명한다. Trigger definition 전체, archive content hash, cross-host/version 또는 실제
-N-1→N old-schema upgrade는 확인하지 않는다. Source business DB/global role, dedicated LOGIN
-생성·실제 인증, ciphertext decrypt, active generation/metadata의 의미 일치와 실제 source query는
-위 Restore 3~7단계에서 별도로 확인해야 한다. 이를 실행하지 않은 drill을 full service
-recovery로 기록하지 않는다. 위 RPO/RTO는 운영 목표이며 현재 repository drill이 실제 backup
-age나 end-to-end recovery 시간을 측정했다는 뜻이 아니다. 전체 복구와 multi-replica acceptance는
-`CTRL-09` 범위다.
+replica-table ACL까지 증명한다. Trigger definition 전체, archive content hash, 별도 service/version,
+실제 N-1→N old-schema upgrade, dedicated LOGIN 실제 인증, ciphertext decrypt와 runtime query는
+확인하지 않으므로 이 결과만 Control recovery fixture acceptance로 기록하지 않는다.
+
+## Isolated Control Recovery Fixture Acceptance
+
+`CTRL-09`의 별도 integration acceptance는 위 schema drill의 공백을 production 계약 변경 없이
+격리된 다른 PostgreSQL service에서 재현한다. `.env`와 현재 source fixture가 준비되고
+migration/restore job이 다른 Control 작업과
+겹치지 않는 상태에서 실행한다.
+
+```bash
+docker compose up -d --wait postgres
+./scripts/apply-db.sh
+uv run pytest -m integration -q tests/test_control_recovery.py
+```
+
+이 test는 기존 `postgres-control-recovery-source` service가 있으면 덮어쓰지 않는다. `recovery`
+profile의 tmpfs PostgreSQL 18.4에 13개 table을 모두 채우고 custom archive를 만들어 현재 18.6의
+완전히 빈 random-prefix DB로 single-transaction restore한다. Migration runner 2회 뒤 UTC/C row
+fingerprint를 비교하고 archive와 분리된 원래 key로 모든 generation decrypt, wrong-key 거부,
+별도 finite writer LOGIN, 기존 receipt replay, 31일 밖 rollup의 물리 보존/조회 제외를 확인한다.
+Source/verified directory 없이 원래 두 stable slot을 다시 시작해 새 incarnation,
+`available`, `drift=[]`, L2 metadata와 guarded verified query까지 통과해야 한다. 임시 service,
+archive, DB, LOGIN과 connection은 항상 정리한다. 상세 결과는
+[control recovery acceptance](verification/2026-08-25-control-recovery-acceptance.md)에 기록한다.
+
+Source business DB, production TLS/IAM과 실제 secret manager 복구는 여전히 위 Restore 절차와 각
+deployment authority가 확인한다. RPO/RTO는 운영 목표이며 fixture test 시간이 실제 backup age나
+end-to-end production recovery 시간을 측정했다는 뜻이 아니다. Fixture source에도 현재 migration을
+적용한 뒤 archive하므로 실제 N-1 schema archive upgrade 증거도 아니다.
 
 ## Master-Key Change Boundary
 

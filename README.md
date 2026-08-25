@@ -64,7 +64,10 @@ receipt 증거는 각각
 내부 resource/gateway usage 수집 증거는
 [resource and gateway observation audit](docs/verification/2026-08-25-resource-and-gateway-observations.md),
 operator usage projection 증거는
-[usage projection audit](docs/verification/2026-08-25-usage-projection.md)을 참고합니다. 각 audit는
+[usage projection audit](docs/verification/2026-08-25-usage-projection.md), 격리 Control archive와
+key/zero-bootstrap/two-replica 복구 증거는
+[control recovery acceptance](docs/verification/2026-08-25-control-recovery-acceptance.md)을 참고합니다.
+각 audit는
 적힌 scope의 실행 시점 증거이며, 나중 audit을 모두 포괄하는 단일 “현재 최종” 증거로
 해석하지 않습니다.
 

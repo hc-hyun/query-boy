@@ -14,6 +14,11 @@
 | Security automation | dependency, git secret, filesystem/config와 PostgreSQL image scan CI 추가 |
 | Update automation | Python, GitHub Actions와 Docker weekly Dependabot 추가 |
 
+위 5-table 수치는 이 감사 시점의 same-cluster drill 결과다. 이후 13-table 격리 service archive,
+key/zero-bootstrap와 두 replica 복구는
+[CTRL-09 control recovery acceptance](2026-08-25-control-recovery-acceptance.md)에서 별도 검증했다.
+어느 fixture도 실제 production backup age나 RPO/RTO 측정은 아니다.
+
 ```text
 ./scripts/control-plane-drill.sh PASS
 pip-audit: No known vulnerabilities found

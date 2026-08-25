@@ -143,6 +143,27 @@ development authority fingerprint가 동일한지 확인한다. CI가 비정상 
 해당 ephemeral Compose volume을 폐기한다. 운영 DB나 사용자가 지정한 임의 DB를 test cleanup
 대상으로 삼지 않는다.
 
+### Control Recovery Release Gate
+
+빠른 same-cluster schema drill과 isolated Control recovery fixture acceptance를 구분한다.
+
+```bash
+./scripts/control-plane-drill.sh
+uv run pytest -m integration -q tests/test_control_recovery.py
+```
+
+두 번째 command는 `recovery` profile의 격리 PostgreSQL 18.4 source에서 현재 18.6 fresh DB로
+archive를 복원하고 13-table fingerprint, archive 밖 writer LOGIN/key, 모든 generation decrypt,
+logical retention, receipt replay, source/verified file 없는 두 stable replica와 실제 guarded query를
+검증한다. Existing recovery service를 덮어쓰지 않고 random-prefix database와 임시 artifact만
+정리한다. Global writer reconciliation이 있으므로 production migration, 빠른 drill이나 다른
+disposable migration test와 동시에 실행하지 않는다.
+
+이 repository gate는 production backup scheduler, archive age/access audit, TLS/IAM, secret-manager와
+source business DB 복구를 대신하지 않는다. Release change record에는
+[disaster recovery runbook](disaster-recovery.md)의 실제 RPO/RTO와 환경별 Restore 3~7단계 결과를
+별도로 남긴다.
+
 ## Source Authority Startup And Cutover
 
 Runtime은 process 전체의 source authority를 한 mode로 고정한다.

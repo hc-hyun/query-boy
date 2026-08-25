@@ -22,6 +22,8 @@ membership과 offline 품질 증거를 제공하고 동일 기준을 회귀 검�
 - `query-man-evaluate`와 `query-man-verify` command의 exit/result contract
 - Bootstrap/acceptance quality 및 verified configuration
 - CTRL-08 resource/gateway projection의 migration, state, cutoff, redaction과 기존 surface 회귀 증거
+- CTRL-09 isolated cross-service Control archive, key/LOGIN, logical retention, zero-bootstrap와
+  multi-replica recovery fixture acceptance
 
 ## 소유하지 않는 책임
 
@@ -58,7 +60,8 @@ membership과 offline 품질 증거를 제공하고 동일 기준을 회귀 검�
   [`test_verified.py`](../../../tests/test_verified.py),
   [`test_assurance_cli.py`](../../../tests/test_assurance_cli.py),
   [`test_quality_level.py`](../../../tests/test_quality_level.py),
-  [`test_result_encoding.py`](../../../tests/test_result_encoding.py)
+  [`test_result_encoding.py`](../../../tests/test_result_encoding.py),
+  [`test_control_recovery.py`](../../../tests/test_control_recovery.py)
 
 [`quality_level.py`](../../../src/query_man/quality_level.py)는 Metadata owner이고 Assurance가 검증하는
 cross-module 계약이다. `verified.py`의 DTO/hash는 Control Plane이 직접 소비하는 shared contract이며
@@ -149,8 +152,28 @@ upgrade/least privilege, current-generation success/failure fencing, fresh last-
 aggregate, inclusive 31일 cutoff와 최대 1,000행, missing-to-zero 금지와 response redaction을 포함한다.
 
 기존 admin/MCP/health response가 바뀌지 않는지와 code rollback이 migration ledger/table/data를
-보존하는지도 함께 확인한다. Full authority backup/key/zero-bootstrap multi-replica recovery는
-`CTRL-09`가 소유하며 CTRL-08 evidence를 완료 근거로 대신하지 않는다.
+보존하는지도 함께 확인한다. 이 evidence는 아래 CTRL-09 recovery fixture acceptance를 대신하지
+않는다.
+
+### Control recovery acceptance contract (`CTRL-09`)
+
+Assurance는 production schema나 Runtime 복구 의미를 다시 정의하지 않고 Control Plane과 Runtime의
+기존 계약을 하나의 runnable scenario로 조립한다. 격리 PostgreSQL 18.4 Control DB의 custom archive를
+현재 18.6 fresh DB에 복원하고 migration runner를 두 번 적용한다. Restore 전후 비교 대상은
+migration ledger 1개, core authority 6개와 bounded operational projection 6개를 합친 13개 table의
+UTC/C canonical count와 SHA-256 fingerprint다.
+
+원래 key는 DB archive와 분리된 test input으로 재주입하고 모든 immutable generation decrypt,
+wrong-key 거부와 기존 mutation receipt exact replay를 확인한다. Source/verified directory가 없는
+managed mode에서 원래 stable replica ID 두 개가 새 incarnation으로 `available`, `drift=[]`에
+수렴하고 양쪽 metadata/guarded verified query가 같아야 한다. 31일 밖 under-cap rollup은 DB에
+남지만 `/usage`에는 보이지 않아야 한다. Test 전용 recovery service, archive, finite writer LOGIN,
+database와 connection은 성공·실패와 무관하게 정리한다.
+
+이 acceptance는 actual production backup age/RPO, archive storage access, secret-manager provider,
+TLS/IAM, source business DB recovery나 60분 RTO 측정이 아니다. 이를 test fixture 결과로 대체하지
+않는다. Key rotation/versioning, physical age deletion이나 supported PostgreSQL major 범위를 바꾸지
+않는다.
 
 ## 소비 계약
 
@@ -214,6 +237,13 @@ uv run pytest tests/test_registry.py tests/test_quality.py tests/test_verified.p
   tests/test_assurance_cli.py tests/test_quality_level.py tests/test_result_encoding.py
 ```
 
+Control recovery fixture는 격리된 두 PostgreSQL service가 필요하므로 별도 integration gate로
+실행한다.
+
+```text
+uv run pytest -m integration tests/test_control_recovery.py
+```
+
 Configured live sources가 필요한 acceptance는 별도로 실행한다.
 
 ```text
@@ -237,7 +267,8 @@ Assurance 작업은 기본적으로 다음만 읽는다.
    [ADR 0007](../../decisions/0007-immutable-metadata-publishing.md),
    [ADR 0011](../../decisions/0011-metadata-quality-level-publish-gate.md)과
    [ADR 0013](../../decisions/0013-control-plane-verified-query-publishing.md) 중 변경과 직접 관련된 결정
-5. Persistence를 바꾸는 경우 Control Plane contract
+5. Persistence를 바꾸거나 recovery acceptance를 조립하는 경우 Control Plane/Runtime contract와
+   [disaster recovery runbook](../../disaster-recovery.md)
 
 HTTP/MCP middleware, source store transaction과 query pool 내부는 계약을 바꾸지 않는 한 읽을
 필요가 없다.

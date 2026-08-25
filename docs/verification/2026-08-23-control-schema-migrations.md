@@ -69,7 +69,7 @@ uv run pytest -m integration
 초기 `CTRL-01` 검증 시 migration 전후 development authority row count는 각각
 `143|8|458|4|38`이었고 ledger만 version 1로 추가됐다. 현재 restore drill 계약은 migration
 ledger를 포함한 7개 table, 4개 FK, 4개 immutable trigger, 실제 immutable history/receipt
-UPDATE·DELETE 거부와 writer/identity-sequence ACL이다. `CTRL-05`의 focused migration integration은
+UPDATE·DELETE 거부와 writer/identity-sequence ACL이었다. `CTRL-05`의 focused migration integration은
 11건 모두 통과했으며 최종 전체 suite 결과는
 [source mutation receipt audit](2026-08-23-source-mutation-receipts.md)에 기록한다.
 
@@ -82,7 +82,7 @@ generation 적용까지 끝난 것으로 오판하는 test convergence race를 �
 
 - Version-1 writer의 additive schema 호환성은 증명했지만 이전 application은 receipt를 쓰지 않는다.
   Rolling release에서 admin mutation traffic은 새 replica로만 보내고 old admin replica를 drain해야
-  한다. Cross-host/PostgreSQL-version upgrade는 `CTRL-09` 범위다.
+  한다. 이 감사 당시 별도 PostgreSQL service/version restore는 아직 검증하지 않았다.
 - Database advisory lock은 cluster-global writer role을 서로 다른 Control DB 사이에서 직렬화하지
   않는다. 현재 migration, restore drill과 disposable migration job은 cluster 단위로 겹치지 않게
   실행한다. 병렬 Control DB 운영이 필요해지면 fixed-database/external coordination을 설계한다.
@@ -91,5 +91,8 @@ generation 적용까지 끝난 것으로 오판하는 test convergence race를 �
 - Test process crash로 남은 scratch database가 반복 관측되기 전에는 prefix/age cleanup service를
   만들지 않는다. CI 비정상 종료 잔여물은 ephemeral Compose volume 폐기로 정리한다.
 - Existing local development history는 사용자 데이터로 취급해 자동 삭제하지 않았다.
-- Cross-host/version restore, encryption-key decrypt, zero-bootstrap과 multi-replica service
-  recovery는 `CTRL-09`에서 검증한다.
+- Isolated cross-service/minor-version restore, encryption-key decrypt, zero-bootstrap과 multi-replica
+  service
+  recovery는 이후 `CTRL-09`의
+  [control recovery acceptance](2026-08-25-control-recovery-acceptance.md)에서 검증했다. 이 문서의
+  역사적인 migration 결과가 그 별도 증거를 대신하지 않는다.

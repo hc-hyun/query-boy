@@ -104,7 +104,9 @@ change readiness. Operators diagnose the dedicated projection and bounded proces
   retirement remain visible as stale because this contract has no delete/retirement lifecycle.
 - The tables retain latest state rather than a heartbeat history. Historical rollout evidence belongs in the
   deployment/change system, not an unbounded Control DB event stream.
-- `CTRL-07`/`CTRL-08` own size, usage and cost observation contracts; `CTRL-09` retains full production
-  backup/key-recovery and multi-replica recovery acceptance beyond the schema-level drill updated here.
+- `CTRL-07`/`CTRL-08` own size, usage and cost observation contracts. The later `CTRL-09`
+  [control recovery acceptance](2026-08-25-control-recovery-acceptance.md) covers cross-service
+  backup/key recovery and two-replica recovery beyond the schema-level drill updated here; it does not
+  turn this observation audit into production RPO/RTO evidence.
 - Changing identity, target-set membership, freshness, status/drift/reason, persisted schema, endpoint or
   observation isolation requires a new explicit module-contract approval.

@@ -10,10 +10,11 @@ Status: Production ready
 않는 것을 최종 성공 기준으로 삼는다.
 
 이 문서의 `Production ready` 상태는 완료된 query/data-plane baseline을 뜻한다. 중앙
-management plane은 단계적으로 구현 중이다. Source inventory/history, mutation receipt, replica
-convergence, 내부 규모·gateway usage observation과 public availability projection은
-`CTRL-01`~`CTRL-08`로 구현됐다. DB-native/provider cost와 전체 recovery acceptance는
-[active development TODO](development-todo.md)의 이후 목표다.
+management plane baseline은 source inventory/history, mutation receipt, replica convergence,
+내부 규모·gateway usage observation, public availability projection과 격리된 Control recovery
+fixture acceptance까지
+`CTRL-01`~`CTRL-09`로 구현됐다. DB-native/provider cost는
+[active development TODO](development-todo.md)의 후속 목표다.
 
 완전한 무설정 자동화를 목표로 하지 않는다. 자동으로 알 수 없는 비즈니스 의미는
 희소한 선언형 metadata와 curated view로 제공한다.
@@ -71,6 +72,11 @@ Resource/gateway observation의 실행 증거는
 [resource and gateway observation audit](verification/2026-08-25-resource-and-gateway-observations.md)에
 기록하고, latest attempt와 operator usage projection의 실행 증거는
 [usage projection audit](verification/2026-08-25-usage-projection.md)에 기록한다.
+서로 다른 격리 PostgreSQL service 사이의 minor-version archive, key recovery, zero-bootstrap와
+두 managed replica 복구 증거는
+[control recovery acceptance](verification/2026-08-25-control-recovery-acceptance.md)에 기록한다.
+물리적으로 다른 production host/network, source business DB와 실제 RPO/RTO는 이 fixture의 증명
+범위가 아니다.
 
 ## Development Module Boundaries
 

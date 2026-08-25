@@ -62,7 +62,8 @@ Control Plane은 “어떤 source 정의와 metadata/verified revision이 현재
   [`test_secrets.py`](../../../tests/test_secrets.py),
   [`test_control_migrations.py`](../../../tests/test_control_migrations.py),
   [`test_control_startup.py`](../../../tests/test_control_startup.py),
-  [`test_managed_mode.py`](../../../tests/test_managed_mode.py)
+  [`test_managed_mode.py`](../../../tests/test_managed_mode.py),
+  [`test_control_recovery.py`](../../../tests/test_control_recovery.py)
 
 `metadata_store.py`에서 Metadata는 `MetadataStore` capability와 snapshot codec/compatibility를,
 Control Plane은 PostgreSQL pool, SQL, lock과 transaction을 소유한다. 현재 shared file이라는 이유로
@@ -452,11 +453,15 @@ Persistence tests는 기본 pytest marker에서 제외되므로 다음을 별도
 
 ```text
 uv run pytest -m integration tests/test_source_store.py tests/test_metadata_store.py \
-  tests/test_control_migrations.py tests/test_control_startup.py
+  tests/test_control_migrations.py tests/test_control_startup.py \
+  tests/test_control_recovery.py
 ```
 
 Schema, transaction, lock/CAS 또는 runtime projection 경계를 바꾸면 전체 integration gate와 관련
-control-plane 복구 절차를 실행한다. 완료 전 root `AGENTS.md`의 전체 gate도 실행한다.
+control-plane 복구 절차를 실행한다. 격리 Control recovery fixture는 13-table fingerprint,
+encryption-key decrypt, logical retention, zero-bootstrap와 두 replica convergence를 같은
+scenario에서 확인한다. 물리적 production host/network, source business DB와 실제 RPO/RTO를
+대신하지 않는다. 완료 전 root `AGENTS.md`의 전체 gate도 실행한다.
 Public administration input 또는 verified mapping을 바꾸면 Delivery `test_http.py`,
 [`test_documentation.py`](../../../tests/test_documentation.py)의 import guard와
 `test_control_startup.py`도 함께 실행한다.

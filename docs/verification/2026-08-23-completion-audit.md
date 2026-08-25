@@ -91,6 +91,11 @@ bootstrap manifest나 source별 code branch 없이 control plane에서 publish�
 | `OPS-07` | Migration/backup/restore runbook와 five-table isolated restore drill | PASS |
 | `OPS-08` | Locked dependency audit, Gitleaks, Trivy fs/image와 weekly Dependabot | PASS |
 
+`OPS-07`의 five-table 수치는 이 completion audit 당시 same-cluster drill 범위다. 이후 13-table
+격리 service archive, key/zero-bootstrap와 두 replica 복구는
+[CTRL-09 control recovery acceptance](2026-08-25-control-recovery-acceptance.md)에서 별도 검증했다.
+어느 결과도 실제 production backup age나 RPO/RTO 측정으로 해석하지 않는다.
+
 Operator contract와 alert 기준은 [operations guide](../operations.md), credential과 generation
 rollback은 [source onboarding](../source-onboarding.md), RPO/RTO와 복구 순서는
 [disaster recovery](../disaster-recovery.md)가 담당한다.

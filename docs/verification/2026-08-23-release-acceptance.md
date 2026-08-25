@@ -53,6 +53,12 @@ query pool 2개와 metadata connection 1개를 의도적으로 강제했다. 현
 | Control revision rollback | 이전 immutable revision pin, 명시적 resume 후 신규 revision 활성화 | metadata store regression |
 | Control-plane loss | 격리 DB restore 후 5개 table count 일치 | `control-plane-drill.sh` PASS |
 
+이 표의 5-table 항목은 2026-08-23 same-cluster release fixture의 역사적 결과다. 이후 13-table
+격리 service archive, key/zero-bootstrap와 두 replica 복구는
+[CTRL-09 control recovery acceptance](2026-08-25-control-recovery-acceptance.md)에서 별도 검증했다.
+실제 production backup age와 RPO/RTO는 두 fixture 모두가 아니라 deployment change record가
+증명한다.
+
 ## Operations Review
 
 - Dashboard contract와 alert threshold: [`operations.md`](../operations.md)
