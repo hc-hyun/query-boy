@@ -370,6 +370,70 @@ def test_relation_projection_bytes_match_pre_immutability_golden() -> None:
     )
 
 
+def test_common_question_matches_do_not_exceed_wide_relation_column_target() -> None:
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+    relation = next(
+        item
+        for item in minimal_development_snapshot().relations
+        if item.qualified_name == "ai.issue_overview"
+    )
+    semantic = next(
+        item
+        for item in source.semantic_overlay.relations
+        if item.relation == relation.qualified_name
+    )
+    common_columns = tuple(
+        replace(
+            column(f"common_value_{number:02d}"),
+            ordinal=len(relation.columns) + number,
+            comment="공통 값",
+        )
+        for number in range(12, 0, -1)
+    )
+    relation = replace(relation, columns=relation.columns + common_columns)
+    candidate = RankedRelation(
+        relation,
+        semantic,
+        1.0,
+        [SelectionReason("relation_alias", "개발 문제")],
+    )
+
+    response = _to_relation_response(
+        candidate,
+        1,
+        source.semantic_overlay.joins,
+        source.semantic_overlay.business_terms,
+        "공통 값",
+        6,
+    )
+
+    assert response["returned_column_count"] == 6
+    assert [item["name"] for item in response["columns"]] == [
+        "issue_id",
+        "discovered_at",
+        "comment_count",
+        "common_value_01",
+        "common_value_02",
+        "common_value_03",
+    ]
+
+    required_only = _to_relation_response(
+        candidate,
+        1,
+        source.semantic_overlay.joins,
+        source.semantic_overlay.business_terms,
+        "공통 값",
+        2,
+    )
+    assert required_only["returned_column_count"] == 3
+    assert [item["name"] for item in required_only["columns"]] == [
+        "issue_id",
+        "discovered_at",
+        "comment_count",
+    ]
+
+
 @pytest.mark.asyncio
 async def test_returns_verified_user_activity_composition() -> None:
     service = MetadataService(load_test_registry(), StaticCatalog(minimal_development_snapshot()))

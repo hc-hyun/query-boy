@@ -24,6 +24,9 @@ membership과 offline 품질 증거를 제공하고 동일 기준을 회귀 검�
 - CTRL-08 resource/gateway projection의 migration, state, cutoff, redaction과 기존 surface 회귀 증거
 - CTRL-09 isolated cross-service Control archive, key/LOGIN, logical retention, zero-bootstrap와
   multi-replica recovery fixture acceptance
+- Source onboarding Skill의 독립 trigger/adversarial evaluation과 repository/DB/admin 무변경 증거
+- UUID별 disposable source DB의 wide/untrusted metadata, temporal/scalar, partition/materialized/empty
+  result integration acceptance와 leak-free cleanup 증거
 
 ## 소유하지 않는 책임
 
@@ -61,7 +64,14 @@ membership과 offline 품질 증거를 제공하고 동일 기준을 회귀 검�
   [`test_assurance_cli.py`](../../../tests/test_assurance_cli.py),
   [`test_quality_level.py`](../../../tests/test_quality_level.py),
   [`test_result_encoding.py`](../../../tests/test_result_encoding.py),
-  [`test_control_recovery.py`](../../../tests/test_control_recovery.py)
+  [`test_control_recovery.py`](../../../tests/test_control_recovery.py),
+  [`test_onboarding_skill.py`](../../../tests/test_onboarding_skill.py),
+  [`test_text_to_sql_skill.py`](../../../tests/test_text_to_sql_skill.py),
+  [`test_source_database_corners.py`](../../../tests/test_source_database_corners.py)
+- [`source onboarding Skill acceptance`](../../verification/2026-08-25-source-onboarding-skill.md):
+  fresh-context forward evaluation, spy admin endpoint와 deterministic zero-mutation evidence
+- [`source database corner acceptance`](../../verification/2026-08-25-source-database-corners.md):
+  세 disposable PostgreSQL source와 wide-column fix, timezone contract gap, zero-residue evidence
 
 [`quality_level.py`](../../../src/query_man/quality_level.py)는 Metadata owner이고 Assurance가 검증하는
 cross-module 계약이다. `verified.py`의 DTO/hash는 Control Plane이 직접 소비하는 shared contract이며
@@ -234,7 +244,8 @@ acceptance evidence 갱신 계획을 포함한다.
 
 ```text
 uv run pytest tests/test_registry.py tests/test_quality.py tests/test_verified.py \
-  tests/test_assurance_cli.py tests/test_quality_level.py tests/test_result_encoding.py
+  tests/test_assurance_cli.py tests/test_quality_level.py tests/test_result_encoding.py \
+  tests/test_onboarding_skill.py tests/test_text_to_sql_skill.py
 ```
 
 Control recovery fixture는 격리된 두 PostgreSQL service가 필요하므로 별도 integration gate로
@@ -242,6 +253,7 @@ Control recovery fixture는 격리된 두 PostgreSQL service가 필요하므로 
 
 ```text
 uv run pytest -m integration tests/test_control_recovery.py
+uv run pytest -m integration tests/test_source_database_corners.py
 ```
 
 Configured live sources가 필요한 acceptance는 별도로 실행한다.

@@ -121,6 +121,18 @@ CONTROL_RECOVERY_AUDIT = (
     / "verification"
     / "2026-08-25-control-recovery-acceptance.md"
 )
+SOURCE_ONBOARDING_SKILL_AUDIT = (
+    ROOT_DIRECTORY
+    / "docs"
+    / "verification"
+    / "2026-08-25-source-onboarding-skill.md"
+)
+SOURCE_DATABASE_CORNERS_AUDIT = (
+    ROOT_DIRECTORY
+    / "docs"
+    / "verification"
+    / "2026-08-25-source-database-corners.md"
+)
 EXPECTED_ID_COUNTS = {
     "BASE": 10,
     "DEC": 9,
@@ -138,12 +150,9 @@ EXPECTED_ID_COUNTS = {
     "MCPX": 8,
 }
 EXPECTED_OPEN_TODO_IDS = (
-    "SKILL-01",
-    "SKILL-02",
-    "SKILL-03",
-    "SKILL-04",
-    "SKILL-05",
-    "SKILL-06",
+    "TIME-01",
+    "TIME-02",
+    "TIME-03",
     "COST-01",
     "COST-02",
     "COST-03",
@@ -182,6 +191,13 @@ EXPECTED_POST_BASELINE_COMPLETED_IDS = (
     "MOD-06",
     "MOD-07",
     "MOD-08",
+    "SKILL-01",
+    "SKILL-02",
+    "SKILL-03",
+    "SKILL-04",
+    "SKILL-05",
+    "SKILL-06",
+    "DBEDGE-01",
 )
 CRITICAL_NON_PYTHON_MODULE_MAPPINGS = (
     "| `config/sources/`, `config/budget-profiles.yaml` | Source Catalog |",
@@ -198,6 +214,7 @@ CRITICAL_NON_PYTHON_MODULE_MAPPINGS = (
     "| `scripts/apply-db.sh` | Assurance |",
     "| `.github/workflows/ci.yml`, `.github/workflows/mcp-soak.yml` | Assurance |",
     "| `skills/query-man-text-to-sql/` | Delivery |",
+    "| `skills/query-man-source-onboarding/` | Source Catalog |",
     "| `pyproject.toml` package/dependency/entrypoint sections | Runtime |",
     "| `pyproject.toml` Ruff/mypy/pytest sections | Assurance |",
     "| `uv.lock` | Runtime |",
@@ -404,6 +421,9 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
     )
     usage_projection_audit = USAGE_PROJECTION_AUDIT.read_text(encoding="utf-8")
     control_recovery_audit = CONTROL_RECOVERY_AUDIT.read_text(encoding="utf-8")
+    source_onboarding_skill_audit = SOURCE_ONBOARDING_SKILL_AUDIT.read_text(
+        encoding="utf-8"
+    )
     matches = re.findall(r"^- \[([ x])\] `([A-Z]+)-(\d{2})`", todo, re.MULTILINE)
     ids = [f"{prefix}-{number}" for _checked, prefix, number in matches]
 
@@ -428,7 +448,9 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
     assert "승인이 아니다**" in todo
     assert "## P0.5 — Module Contract Hardening" not in todo
     assert "offline composition `MOD-08`은 모두" in todo
-    assert "Ledger의 `RTSAFE-01` 완료 및 `MOD-04`~`MOD-08`과 `CTRL-*` 완료" in todo
+    assert "## P2 — Source Onboarding Skill" not in todo
+    assert "`TIME-01` 결정·승인이 다음 순서" in todo
+    assert "`TIME-*` 완료 뒤 `COST-01`부터 진행" in todo
     assert "`CTRL-07A` observation method/freshness/logical retention" in todo
     assert "`CTRL-08` usage/cost state" in todo
     assert "각 단계 구현 전 사용자 승인이 필요하다" in todo
@@ -450,6 +472,48 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
     assert "`CTRL-07A`" in resource_and_gateway_observation_audit
     assert "`CTRL-08`" in usage_projection_audit
     assert "`CTRL-09`" in control_recovery_audit
+    for number in range(1, 7):
+        assert f"`SKILL-{number:02}`" in source_onboarding_skill_audit
+
+
+def test_source_onboarding_skill_docs_record_plan_only_adoption_and_evidence() -> None:
+    readme = (ROOT_DIRECTORY / "README.md").read_text(encoding="utf-8")
+    onboarding = (ROOT_DIRECTORY / "docs" / "source-onboarding.md").read_text(
+        encoding="utf-8"
+    )
+    plan = (ROOT_DIRECTORY / "docs" / "source-onboarding-skill-plan.md").read_text(
+        encoding="utf-8"
+    )
+    source_contract = (
+        ROOT_DIRECTORY / "docs" / "modules" / "source-catalog" / "README.md"
+    ).read_text(encoding="utf-8")
+    assurance_contract = (
+        ROOT_DIRECTORY / "docs" / "modules" / "assurance" / "README.md"
+    ).read_text(encoding="utf-8")
+    audit = SOURCE_ONBOARDING_SKILL_AUDIT.read_text(encoding="utf-8")
+
+    for document in (readme, onboarding, plan, source_contract, audit):
+        assert "query-man-source-onboarding" in document
+    assert "Status: Complete; adopted plan-only workflow" in plan
+    assert SOURCE_ONBOARDING_SKILL_AUDIT.name in onboarding
+    assert SOURCE_ONBOARDING_SKILL_AUDIT.name in assurance_contract
+    assert "request log는 0건" in audit
+    assert "mutation_count: 0" in audit
+
+
+def test_source_database_corner_docs_record_isolation_findings_and_contract_stop() -> None:
+    audit = SOURCE_DATABASE_CORNERS_AUDIT.read_text(encoding="utf-8")
+    module_index = MODULE_INDEX.read_text(encoding="utf-8")
+    assurance = (
+        ROOT_DIRECTORY / "docs" / "modules" / "assurance" / "README.md"
+    ).read_text(encoding="utf-8")
+
+    assert "`DBEDGE-01`" in audit
+    assert "test_source_database_corners.py" in module_index
+    assert SOURCE_DATABASE_CORNERS_AUDIT.name in assurance
+    assert "database `0`, role `0`" in audit
+    assert "reader-session/canonical-result/verified-hash 계약 변경" in audit
+    assert "사용자가 승인하기 전에는 구현하지" in audit
 
 
 def test_mutation_receipt_docs_preserve_terminal_and_secret_boundaries() -> None:
@@ -643,6 +707,12 @@ def test_module_boundary_docs_cover_owners_contracts_and_current_python_files() 
     assert "여러 agent가 같은 worktree를 공유하면" in agents
     assert "docs/modules/README.md" in readme
     assert "modules/README.md" in architecture
+    assert "Source Catalog onboarding workflow (plan-only)" in index
+    source_catalog_contract = (
+        MODULE_INDEX.parent / "source-catalog" / "README.md"
+    ).read_text(encoding="utf-8")
+    assert "Plan-only `query-man-source-onboarding` workflow" in source_catalog_contract
+    assert "production dependency로 확대하지 않는다" in source_catalog_contract
 
     for module_name in MODULE_NAMES:
         path = MODULE_INDEX.parent / module_name / "README.md"

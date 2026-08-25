@@ -49,7 +49,8 @@ Guarded Query는 이미 선택된 source와 published metadata revision을 기�
 - Focused tests: [`test_sql_validation.py`](../../../tests/test_sql_validation.py),
   [`test_security_evaluation.py`](../../../tests/test_security_evaluation.py),
   [`test_query.py`](../../../tests/test_query.py),
-  [`test_result_encoding.py`](../../../tests/test_result_encoding.py)
+  [`test_result_encoding.py`](../../../tests/test_result_encoding.py),
+  [`test_source_database_corners.py`](../../../tests/test_source_database_corners.py)
 
 `QueryService`는 `execute/cancel/close`만 제공하는 작은 `QueryExecutor`를 계속 소비한다. Runtime은
 이를 확장한 `RuntimeQueryExecutor`를 요구하므로 application-only fake나 adapter가 운영 lifecycle
@@ -239,7 +240,13 @@ uv run pytest tests/test_registry.py tests/test_sql_validation.py tests/test_sec
 
 Result/error contract를 건드리면 HTTP/MCP tests를, concurrency/cancel 경계를 건드리면 load/server
 tests를 추가한다. PostgreSQL transaction, reader, RLS 또는 pool 경계를 바꾸면
-`uv run pytest -m integration`도 실행한다. 완료 전 root `AGENTS.md`의 전체 gate를 실행한다.
+`uv run pytest -m integration`도 실행한다. Disposable source corner gate는 다음과 같다.
+
+```text
+uv run pytest -m integration tests/test_source_database_corners.py
+```
+
+완료 전 root `AGENTS.md`의 전체 gate를 실행한다.
 
 ## 집중해서 읽을 범위
 

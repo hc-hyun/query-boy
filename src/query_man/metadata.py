@@ -586,12 +586,19 @@ def _select_context_columns(
         ):
             matched.add(column.name)
 
-    selected = required | matched
-    for column in relation.columns:
-        if len(selected) >= max(max_columns, len(required)):
+    ordered_columns = sorted(relation.columns, key=lambda column: (column.ordinal, column.name))
+    target = max(max_columns, len(required))
+    selected = set(required)
+    for column in ordered_columns:
+        if len(selected) >= target:
+            break
+        if column.name in matched:
+            selected.add(column.name)
+    for column in ordered_columns:
+        if len(selected) >= target:
             break
         selected.add(column.name)
-    return [column for column in relation.columns if column.name in selected]
+    return [column for column in ordered_columns if column.name in selected]
 
 
 def _reason_dict(reason: SelectionReason) -> dict[str, str]:

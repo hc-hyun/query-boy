@@ -23,6 +23,7 @@ metadata revision/context 생성은 [Metadata](../metadata/README.md)가 담당�
 - Runtime `SourceRegistry`의 논리적 read projection
 - 논리적으로 Control Plane만 사용하는 registry upsert/remove projection capability
 - Public source summary에서 credential과 internal state를 제거하는 규칙
+- Plan-only source onboarding Skill의 trigger, owner/admin handoff와 secret/mutation 금지 경계
 
 ## 소유하지 않는 책임
 
@@ -43,6 +44,8 @@ metadata revision/context 생성은 [Metadata](../metadata/README.md)가 담당�
 - `config/onboarding/<source>.yaml`과 `config/onboarding/<source>-l2.yaml`: Control Plane
   candidate staging이 소비하는 fixture source/semantic input; 같은 directory의
   `<source>-verified-query.yaml`은 Assurance 소유
+- [`query-man-source-onboarding`](../../../skills/query-man-source-onboarding/SKILL.md): production
+  authority가 아닌 plan-only DB-owner/administrator handoff workflow
 - [`tests/test_registry.py`](../../../tests/test_registry.py),
   [`tests/test_runtime_config.py`](../../../tests/test_runtime_config.py): focused tests
 
@@ -157,8 +160,12 @@ role restriction, schema privilege, resource setting, search path, RLS와 tenant
   bootstrap mode의 source directory/environment
 - Control Plane이 복호화하고 검증 대상으로 전달하는 credential과 stored manifest
 - Accepted source/reader/tenant ADR의 identity와 privilege 정책
+- Plan-only `query-man-source-onboarding` workflow에 한해 Control Plane public administration,
+  Delivery public admin transport와 Assurance onboarding acceptance 문서를 읽어 human handoff를
+  만든다. Python import, API 호출, concrete composition과 production mutation은 하지 않는다.
 
-Source Catalog는 Control DB table이나 HTTP/MCP type을 직접 알지 않는다.
+Production Source Catalog code는 Control DB table이나 HTTP/MCP type을 직접 알지 않는다. 위
+plan-only 공개 문서 소비를 production dependency로 확대하지 않는다.
 
 ## 불변조건
 
@@ -209,7 +216,7 @@ Source Catalog는 Control DB table이나 HTTP/MCP type을 직접 알지 않는�
 ```text
 uv run pytest tests/test_registry.py tests/test_runtime_config.py tests/test_metadata.py \
   tests/test_query.py tests/test_http.py tests/test_source_admin.py tests/test_quality.py \
-  tests/test_verified.py tests/test_managed_mode.py
+  tests/test_verified.py tests/test_managed_mode.py tests/test_onboarding_skill.py
 ```
 
 Manifest, budget, tenant 또는 reader DB 경계를 바꾸면 관련 metadata/query tests와 reader

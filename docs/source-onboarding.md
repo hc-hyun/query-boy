@@ -28,9 +28,11 @@ Table 전체를 Python 객체로 다시 모델링하거나 `COMMENT` 문장에�
 
 Source manifest는 임의 host로 연결할 수 있는 운영 설정이므로 application code와 같은
 trust boundary에서 review·publish한다. 낮은 권한의 self-service 입력으로 직접 받지 않는다.
-Codex가 이 절차를 반복 가능하게 안내하는 repository Skill은 아직 설계 검토 중이며,
-[source onboarding Skill plan](source-onboarding-skill-plan.md)에서 책임·권한·검증 gate를
-관리한다. Skill이 완성돼도 이 문서와 server-side validation이 기준 계약이다.
+Codex가 이 절차를 반복 가능하게 안내할 때는 repository의
+[`query-man-source-onboarding`](../skills/query-man-source-onboarding/SKILL.md) Skill을 사용한다.
+[source onboarding Skill plan](source-onboarding-skill-plan.md)과
+[acceptance evidence](verification/2026-08-25-source-onboarding-skill.md)가 책임·권한·검증 gate를
+기록한다. Skill은 plan-only이며 이 문서와 server-side validation이 계속 기준 계약이다.
 
 ## Source Authority And Artifacts
 

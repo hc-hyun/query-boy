@@ -564,7 +564,10 @@ Control DB schema, replica observation, freshness와 admin response 계약은 20
 승인을 받아 구현됐다. `CTRL-07A` resource/gateway observation도 2026-08-25 별도 승인을 받아
 구현됐다. `CTRL-08` latest resource attempt/last-success와 public usage projection도 2026-08-25
 별도 승인을 받아 구현됐고, 기존 계약을 재현한 `CTRL-09` isolated cross-service Control recovery
-fixture acceptance까지 완료됐다. Active TODO의 다음 순서는 Source Onboarding Skill `SKILL-01`이다.
+fixture acceptance까지 완료됐다. 이후 plan-only Source Onboarding Skill `SKILL-01`~`SKILL-06`도
+독립 forward evaluation과 mutation 0 증거로 완료됐다. 세 disposable source DB의 `DBEDGE-01`도
+완료했고, 발견한 reader TimeZone/canonical hash 변경은 `TIME-01`~`TIME-03`으로 별도 승인 대상으로
+동결했다. Active TODO의 다음 순서는 정확한 계약안을 결정하는 `TIME-01`이며, `COST-01`은 그 뒤다.
 
 각 단계는 provider contract, 직접 consumer, module 문서와 runnable contract test가 함께
 통과하는 독립 커밋으로 끝낸다. Shared contract file은 single-writer로 편집한다. Provider

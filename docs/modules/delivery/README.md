@@ -55,7 +55,8 @@ HTTP와 MCP parity는 모든 endpoint가 같다는 뜻이 아니다. 공통 data
 - Focused tests: [`test_access.py`](../../../tests/test_access.py),
   [`test_http.py`](../../../tests/test_http.py),
   [`test_mcp.py`](../../../tests/test_mcp.py),
-  [`test_mcp_server.py`](../../../tests/test_mcp_server.py)
+  [`test_mcp_server.py`](../../../tests/test_mcp_server.py),
+  [`test_text_to_sql_skill.py`](../../../tests/test_text_to_sql_skill.py)
 
 현재 `GetContextSuccessOutput`은 `mcp_server.py`에 있지만 HTTP `/meta`도 이를 사용한다. 위치와
 달리 의미상 Delivery 공통 wire contract다. `app.py`와 `errors.py`를 수정할 때는
@@ -280,7 +281,7 @@ module은 자신이 생성하는 audit field의 비노출을 책임진다.
 
 ```text
 uv run pytest tests/test_registry.py tests/test_access.py tests/test_http.py tests/test_mcp.py \
-  tests/test_runtime_startup_cleanup.py
+  tests/test_runtime_startup_cleanup.py tests/test_text_to_sql_skill.py
 ```
 
 실제 MCP server tests는 기본 pytest marker에서 제외되므로 다음을 별도로 실행한다.

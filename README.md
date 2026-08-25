@@ -237,6 +237,10 @@ managed mode로 시작합니다. Startup import, 별도 marker와 filesystem wri
 자세한 설치·이관·복구 순서는
 [source onboarding](docs/source-onboarding.md)과
 [disaster recovery](docs/disaster-recovery.md)를 따릅니다.
+신규 source의 준비 상태와 DB-owner/admin 인계 계획은
+[`query-man-source-onboarding`](skills/query-man-source-onboarding/SKILL.md) Skill로 반복할 수
+있습니다. 이 Skill은 계획만 작성하며 DB·Control DB·admin API·production YAML을 변경하거나
+credential을 읽지 않습니다.
 Control schema는 filename/checksum을 기록하는 numbered migration이며 integration test는
 개발 Control DB가 아니라 test마다 생성·삭제되는 임시 database를 사용합니다.
 

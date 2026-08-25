@@ -6,7 +6,11 @@ description: Answer data questions through the Query Man MCP tools while preserv
 # Query Man Text-to-SQL
 
 Use only the fixed `list_sources`, `get_context`, and `query` tools. Never request or invent a
-host, DSN, credential, schema, relation, column, function, or session setting.
+host, DSN, credential, schema, relation, column, function, or session setting. If any required
+tool is unavailable or disconnected, state that the query was not executed and stop. Do not start
+a server, call HTTP directly, connect to PostgreSQL, or inspect repository manifests, fixture SQL,
+seed data, tests, or prior output to infer an answer. Never present a value as a query result unless
+the `query` tool returned it in this workflow.
 
 ## Workflow
 

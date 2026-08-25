@@ -1,0 +1,4 @@
+interface:
+  display_name: "Query Man Source Onboarding"
+  short_description: "Plan safe PostgreSQL source onboarding handoffs"
+  default_prompt: "Use $query-man-source-onboarding to review this PostgreSQL source and prepare a non-mutating owner/admin handoff."

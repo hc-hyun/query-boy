@@ -344,6 +344,13 @@ client와 실제 PostgreSQL fixture를 사용해야 한다. 실행 결과와 남
 | `MOD-06` | 작은 Query/Catalog application Protocol을 유지하면서 Runtime 전용 lifecycle composite를 추가하고, 모든 required callable을 composition에서 검증해 누락 adapter를 ready 전에 거부하며 기존 drain/invalidation 순서를 보존했다. | [Guarded Query lifecycle contract](modules/guarded-query/README.md#executor-lifecycle-contract), [Metadata catalog capability](modules/metadata/README.md#catalog-provider-capability-contract), [Runtime composition](modules/runtime/README.md#composition-contract), [`test_query.py`](../tests/test_query.py), [`test_catalog.py`](../tests/test_catalog.py), [`test_managed_mode.py`](../tests/test_managed_mode.py), [`test_http.py`](../tests/test_http.py), [`test_runtime_startup_cleanup.py`](../tests/test_runtime_startup_cleanup.py) |
 | `MOD-07` | `SourceProfile`/semantic과 published catalog/prepared metadata graph를 tuple·alias-copy read-only mapping·frozen dataclass로 재귀적으로 immutable하게 만들고 provider/decoder boundary에서 freeze했다. Persisted/wire JSON array/object, metadata revision golden, snapshot codec와 result-hash 계약은 유지해 DB migration 없이 rolling compatibility를 보존했다. | [Source immutability contract](modules/source-catalog/README.md#published-source-immutability-contract), [Metadata published contract](modules/metadata/README.md#published-metadata-contract), [`test_registry.py`](../tests/test_registry.py), [`test_catalog.py`](../tests/test_catalog.py), [`test_revision.py`](../tests/test_revision.py), [`test_metadata_store.py`](../tests/test_metadata_store.py), [`test_metadata.py`](../tests/test_metadata.py) |
 | `MOD-08` | Assurance quality/verified core에서 concrete adapter 조립을 제거하고 두 bootstrap-only offline command를 전용 `assurance_cli.py` composition root로 격리했다. Command/`--root`/JSON/exit, Guarded Query safety·RLS fail-closed path와 cleanup 순서는 유지하고 production Runtime/Control staging wiring은 바꾸지 않았다. | [Assurance offline CLI contract](modules/assurance/README.md#offline-cli-composition-contract), [`assurance_cli.py`](../src/query_man/assurance_cli.py), [`test_assurance_cli.py`](../tests/test_assurance_cli.py), [`test_verified.py`](../tests/test_verified.py), [`test_registry.py`](../tests/test_registry.py) |
+| `SKILL-01` | Source onboarding planning의 positive trigger와 manual admin/query workflow negative boundary를 확정했다. | [Skill plan](source-onboarding-skill-plan.md), [Skill acceptance](verification/2026-08-25-source-onboarding-skill.md) |
+| `SKILL-02` | 비밀 아닌 입력, 8-section output, DB-owner/admin handoff, shared visibility와 secret/mutation threat 경계를 확정했다. | [Skill plan](source-onboarding-skill-plan.md), [Skill acceptance](verification/2026-08-25-source-onboarding-skill.md) |
+| `SKILL-03` | Plan-only repository Skill과 progressive-disclosure reference를 구현했다. | [`query-man-source-onboarding`](../skills/query-man-source-onboarding/SKILL.md), [`test_onboarding_skill.py`](../tests/test_onboarding_skill.py) |
+| `SKILL-04` | 정상·누락·negative-routing·DBA·prompt-injection·secret/immediate-publish 요청을 fresh-context forward evaluation으로 검증했다. | [Skill acceptance](verification/2026-08-25-source-onboarding-skill.md) |
+| `SKILL-05` | `support-tickets` owner/admin handoff를 재현하고 repository, source DB, Control authority/roles와 spy admin endpoint의 mutation 0을 검증했다. | [Skill acceptance](verification/2026-08-25-source-onboarding-skill.md) |
+| `SKILL-06` | Skill validator, 정적 회귀, 운영 문서와 기본 onboarding planning workflow 채택 기록을 완료했다. | [Skill acceptance](verification/2026-08-25-source-onboarding-skill.md), [source onboarding](source-onboarding.md) |
+| `DBEDGE-01` | 세 UUID별 disposable PostgreSQL source에서 wide/untrusted metadata, temporal/rich scalar, partition/materialized/empty result와 leak-free cleanup을 검증하고 기존 ADR을 위반한 wide-match overflow를 수정했다. TimeZone canonicalization gap은 계약 승인 전 미구현으로 분리했다. | [source database corner acceptance](verification/2026-08-25-source-database-corners.md), [`test_source_database_corners.py`](../tests/test_source_database_corners.py), [`test_metadata.py`](../tests/test_metadata.py) |
 
 Ledger의 완료 결과 column은 찾기 쉬운 요약일 뿐 acceptance를 축소하지 않는다. 각 ID에 연결된
 evidence가 해당 완료 작업의 상세 경계와 실행 증거를 보존한다. Audit가 연결된 row에서 각 audit는
@@ -367,8 +374,9 @@ evidence가 해당 완료 작업의 상세 경계와 실행 증거를 보존한�
 | M11 Multi-Replica Soak | `SOAK-*` | 두 Docker replica의 exact result, 독립 포화·복구와 1,000-session resource gate를 통과한다. |
 | M12 Centralized Source Management | `CTRL-*` | Admin 한곳에서 source authority, 공통 resource tier, 상태·규모·비용 freshness를 관리한다. |
 | M13 Onboarding Planning Skill | `SKILL-*` | Credential·mutation 없이 반복 가능한 source plan과 admin handoff를 만든다. |
-| M14 Cost Attribution | `COST-*` | DB-native 사용량을 source/resource-tier time bucket으로 bounded 집계하고 운영 threshold를 고정한다. |
-| M15 Workflow Trace | `TRACE-*` | 여러 tool call과 retry를 bounded trace ID로 안전하게 연결한다. |
+| M14 Canonical Time Stability | `TIME-*` | 같은 PostgreSQL instant의 public value와 verified hash를 reader timezone과 무관하게 고정한다. |
+| M15 Cost Attribution | `COST-*` | DB-native 사용량을 source/resource-tier time bucket으로 bounded 집계하고 운영 threshold를 고정한다. |
+| M16 Workflow Trace | `TRACE-*` | 여러 tool call과 retry를 bounded trace ID로 안전하게 연결한다. |
 
-M1부터 M12까지는 완료됐다. M13 이후는 active plan이다. 새로운 기능은 기존 완료 ID나 설명을
+M1부터 M13과 별도 assurance `DBEDGE-01`은 완료됐다. M14 이후는 approval-gated active plan이다. 새로운 기능은 기존 완료 ID나 설명을
 소급 변경하지 않고 별도 roadmap 항목과 검증 가능한 exit condition을 추가한다.

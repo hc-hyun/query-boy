@@ -34,40 +34,30 @@ Status: Active
 - MCP는 현재 지원 버전 `2026-07-28`만 받는다. 이전 handshake와 protocol version을 위한
   compatibility branch는 만들지 않으며 version 변경은 명시적인 upgrade 작업으로 처리한다.
 
-## P2 — Source Onboarding Skill
+## P2.5 — Canonical Timestamptz Stability
 
-Status: Accepted planning baseline; `SKILL-01`/`SKILL-02` release reviews pending; implementation pending
-
-목표: 기존 no-restart source onboarding 계약을 Codex가 반복 가능한 plan과 관리자 handoff로
-정리한다. V1은 plan-only이며 credential을 읽거나 admin API를 호출하지 않는다. 상세 설계와
-단계별 gate는 [source onboarding Skill plan](source-onboarding-skill-plan.md)에서 관리한다.
+목표: 같은 PostgreSQL instant가 reader session `TimeZone`과 무관하게 같은 public canonical value와
+verified result hash를 갖도록 정확한 정책, migration과 rollback을 확정한다. Business calendar
+timezone은 별도 의미이므로 UTC transport/session 정책과 혼동하지 않는다.
 
 | 작업 경계 | 내용 |
 |---|---|
-| Primary module | Source Catalog |
-| Direct consumers | DB owner와 Query Man admin/operator handoff workflow; production module runtime dependency는 없음 |
-| Affected providers/verifiers | Source onboarding/config 계약, Control Plane 공개 admin 계약, Delivery의 기존 query Skill negative-routing 경계와 Assurance evaluation |
-| Contract baseline | Source onboarding/runbook, ADR 0016/0017과 accepted plan-only Skill boundary |
-| Approval gate | 현재 accepted plan의 구현은 가능하다. Output schema, trigger/scope, secret·mutation 경계 또는 production authority를 바꾸면 사용자 승인을 먼저 받는다. |
-| Single writer | Source Catalog owner가 Skill과 plan을 쓰고 shared onboarding/config 문서는 coordinating agent가 직렬화한다. |
-| Start gate | Ledger의 `RTSAFE-01` 완료 및 `MOD-04`~`MOD-08`과 `CTRL-*` 완료 뒤 `SKILL-01`부터 진행; 아래의 “다음”은 track-local 순서다. |
-| Verification | Positive/negative/adversarial Skill eval, mutation 0 증거, 관련 onboarding/Delivery/Assurance 회귀와 root gate |
+| Primary module | Guarded Query |
+| Direct consumers | Delivery public result, Assurance verified result hash와 Control Plane verified publish |
+| Affected providers/verifiers | Source Catalog reader-session policy, Metadata catalog/revision, Runtime composition, cross-timezone Assurance acceptance |
+| Contract baseline | 공통 reader policy는 `TimeZone`을 설정·검사하지 않고 aware datetime은 psycopg가 반환한 offset을 `isoformat()`으로 보존한다. [`DBEDGE-01`](verification/2026-08-25-source-database-corners.md)이 같은 instant의 UTC/Asia-Seoul canonical value와 hash 차이를 재현했다. |
+| Approval gate | Reader `TimeZone` 강제, aware datetime 정규화, metadata/SQL policy revision 재료와 verified hash migration은 public/policy 계약 변경이다. `TIME-01`의 정확한 선택과 영향을 사용자가 승인하기 전에는 구현하지 않는다. |
+| Single writer | Coordinating agent가 Guarded Query canonical contract와 revision 전환을 먼저 직렬화하고, 확정된 baseline 뒤 provider/consumer 구현과 검증을 분리한다. |
+| Start gate | `DBEDGE-01` 완료 뒤 `TIME-01` 결정·승인이 다음 순서다. `TIME-*` 완료 전 낮은 priority track은 read-only prework만 한다. |
+| Verification | UTC/non-UTC의 같은 instant/hash, DST와 calendar 함수, naive timestamp/date/time/timetz 비변경, revision fail-closed, verified migration/rollback과 root integration gate |
 
-- [ ] `SKILL-01` Skill scope, repository 위치, request/trigger 경계와 manual runbook·query
-  Skill의 책임 분리를 설계 review로 확정한다.
-- [ ] `SKILL-02` 입력/evidence/output schema, DB owner와 Query Man admin handoff, secret·mutation
-  금지, shared-access 영향과 source `budget_profile` 선택을 threat review한다.
-- [ ] `SKILL-03` 최소 repository Skill을 구현하고 source onboarding, extension checklist,
-  budget/cost 문서를 progressive-disclosure reference로 연결한다.
-- [ ] `SKILL-04` Positive/negative/adversarial trigger와 credential·admin mutation 거부를
-  realistic prompt 및 독립 forward test로 검증한다.
-- [ ] `SKILL-05` `support-tickets` fixture 입력으로 L0 review plan, 누락 정보와 admin handoff를
-  생성하되 repository/DB/Control DB/admin API mutation이 0건임을 검증한다.
-- [ ] `SKILL-06` Skill validation, 관련 회귀, 운영 문서와 재현 증거를 완료한 뒤 기본
-  onboarding planning workflow 채택 여부를 기록한다.
-
-Production mutation executor는 이 track에 없다. 필요해지면 credential broker와 admin apply
-계약을 별도 ADR에서 먼저 설계하고 승인받는다.
+- [ ] `TIME-01` Reader session과 aware datetime의 정확한 canonical timezone 정책, metadata/SQL
+  policy revision 영향, compatibility, cutover와 rollback을 decision record로 확정하고 사용자 승인을
+  받는다.
+- [ ] `TIME-02` 승인된 reader-session 설정·검사와 result encoding을 Metadata/Guarded Query에
+  구현하고 Delivery, Control Plane과 Assurance 직접 consumer를 새 revision baseline에 맞춘다.
+- [ ] `TIME-03` Timezone-sensitive verified contract만 새 revision/hash로 재검토해 publish하고
+  UTC/non-UTC·DST·rolling/rollback integration과 운영 절차를 검증한다.
 
 ## P3 — Database-Native Cost Attribution
 
@@ -82,7 +72,7 @@ Production mutation executor는 이 track에 없다. 필요해지면 credential 
 | Contract baseline | [ADR 0016](decisions/0016-centralized-source-management-plane.md), [ADR 0017](decisions/0017-shared-source-access-and-resource-tier.md)와 [source management plane](source-management-plane.md), 완료된 `CTRL-07A` observation method/freshness/logical retention과 `CTRL-08` usage/cost state |
 | Approval gate | Monitoring identity, collector/rollup schema, retention, status와 admin projection은 새 persisted/public 계약이므로 각 단계 구현 전 사용자 승인이 필요하다. |
 | Single writer | Control Plane owner가 observation 계약을 먼저 확정하고 signal producer와 Delivery consumer는 이후 병렬화한다. |
-| Start gate | 완료된 `CTRL-07` baseline과 `CTRL-08` projection 및 앞선 priority 완료 뒤 `COST-01`부터 진행; 아래의 “다음”은 track-local 순서다. |
+| Start gate | 완료된 `CTRL-07` baseline과 `CTRL-08` projection 및 `TIME-*` 완료 뒤 `COST-01`부터 진행; 아래의 “다음”은 track-local 순서다. |
 | Verification | 최소 권한 DB integration, reset/eviction/replica/cardinality 경계, redaction과 root gate |
 
 - [ ] `COST-01` 대상 PostgreSQL의 monitoring identity, 최소 권한, 지원 extension과 reset/보존

@@ -46,6 +46,20 @@ Assurance -> Source Catalog(read), Metadata, Guarded Query
 Runtime -> every production implementation, for server composition and lifecycle only
 ```
 
+이 graph는 production Python/runtime dependency다. Source Catalog 소유의 plan-only onboarding
+workflow에는 다음 문서 소비 방향을 별도로 허용한다.
+
+```text
+Source Catalog onboarding workflow (plan-only)
+  -> Control Plane public administration contract,
+     Delivery public admin transport contract,
+     Assurance onboarding acceptance
+```
+
+이 방향은 공개 문서를 읽어 human handoff를 작성하는 데만 쓰며 Python import, API 호출, concrete
+composition 또는 production mutation을 허용하지 않는다. 따라서 production Source Catalog code가
+Control Plane/Delivery implementation에 의존할 수 있다는 뜻이 아니다.
+
 다음 의존은 금지한다.
 
 - Delivery가 catalog 또는 PostgreSQL query adapter를 직접 호출하는 것
@@ -114,7 +128,10 @@ owner는 주의점에 기록하며 primary owner와 같은 뜻으로 해석하�
 | `tests/test_assurance_cli.py` | Assurance contract; Runtime entrypoint verification | Offline concrete construction 허용 위치, console-script target, bootstrap path, help/output/exit와 cleanup 순서를 검증한다. `pyproject.toml`과 함께 coordinating agent가 single-writer로 편집한다. |
 | `tests/test_mcp.py`, `tests/test_mcp_server*.py` | Delivery contract; Assurance acceptance | Delivery의 MCP wire/workflow 의미를 Assurance가 실제 SDK/load/soak로 검증한다. Protocol fixture와 공통 helper는 coordinating single-writer로 다룬다. |
 | `tests/test_integration.py`, `tests/test_load.py`, `tests/test_security_evaluation.py` | Assurance | Source Catalog, Metadata, Guarded Query, Delivery와 Runtime의 end-to-end acceptance를 조립한다. Provider 의미는 각 module이 검토하고 coordinating agent만 cross-module test file을 편집한다. |
+| `tests/test_source_database_corners.py` | Assurance; Source Catalog/Metadata/Guarded Query integration verification | UUID별 disposable PostgreSQL source에서 wide/untrusted metadata, rich scalar/time, partition/materialized/empty-result 경계를 실제 public service 흐름으로 검증한다. Provider 계약 변경은 각 owner가 먼저 검토하고 test fixture는 Assurance가 쓴다. |
 | `tests/test_control_recovery.py` | Assurance; Control Plane/Runtime recovery verification | PostgreSQL 18.4→18.6 custom archive, 13-table fingerprint, 별도 key/LOGIN, logical retention, zero-bootstrap와 두 managed replica/query 복구를 하나의 acceptance로 조립한다. Coordinating agent가 provider/consumer 순서와 격리 service ownership을 확인한다. |
+| `tests/test_onboarding_skill.py` | Assurance; Source Catalog workflow verification | Plan-only Skill metadata/reference, 8-section handoff, secret/mutation 금지와 owner/admin 경계를 검증한다. Behavioral forward evaluation과 zero-mutation evidence는 별도 acceptance가 보완한다. |
+| `tests/test_text_to_sql_skill.py` | Assurance; Delivery workflow verification | Query Man 세 MCP tool이 없을 때 server/HTTP/DB/fixture fallback과 추정 결과를 금지하는 fail-closed consumer workflow를 검증한다. |
 | `docker/postgres/init/05-control-plane.sh`, `docker/postgres/init/control-migrations/` | Control Plane | Migration ledger/checksum, 번호, FK, lock, CAS와 privilege는 하나의 owner가 관리한다. |
 | `config/sources/`, `config/budget-profiles.yaml` | Source Catalog | Bootstrap/fixture definition과 versioned resource tier다. Managed production authority로 해석하지 않는다. |
 | `config/access-policies*.yaml` | Delivery | Caller identity/capability 입력이며 source visibility와 tier 의미는 ADR 0017을 함께 따른다. |
@@ -128,6 +145,7 @@ owner는 주의점에 기록하며 primary owner와 같은 뜻으로 해석하�
 | `docker/postgres/init/00-bootstrap.sql`, `01-source-bootstrap.sh`, source fixture SQL `10`~`90` | Assurance | Production source schema authority가 아닌 fixture infrastructure다. `05-control-plane.sh`와 `control-migrations/`는 포함하지 않는다. |
 | `.github/workflows/ci.yml`, `.github/workflows/mcp-soak.yml` | Assurance | 모든 provider의 repository gate와 실행 증거를 조립하는 shared transition artifact다. |
 | `skills/query-man-text-to-sql/` | Delivery | Metadata/Guarded Query 계약을 소비하는 workflow이며 module contract나 enforcement boundary가 아니다. |
+| `skills/query-man-source-onboarding/` | Source Catalog | Onboarding/runbook, Control Plane public administration, Delivery public admin transport와 Assurance acceptance 계약을 읽어 plan-only owner/admin handoff를 만든다. 공개 문서 소비일 뿐 Python/runtime dependency가 아니며 credential, mutation, authorization 또는 validation boundary가 아니다. |
 | `pyproject.toml` package/dependency/entrypoint sections | Runtime | 모든 module이 소비하는 shared transition toolchain이다. Offline command 이름은 유지하고 내부 target은 Assurance의 `assurance_cli.py`를 가리킨다. |
 | `pyproject.toml` Ruff/mypy/pytest sections | Assurance | Runtime-owned package section과 같은 file이므로 coordinating agent가 single-writer로 편집한다. |
 | `uv.lock` | Runtime | 모든 module이 소비하는 shared transition lockfile이며 dependency owner 변경과 함께 갱신한다. |

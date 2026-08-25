@@ -1,8 +1,8 @@
 # Source Onboarding Skill Plan
 
-Status: Accepted planning baseline; `SKILL-01`/`SKILL-02` release reviews pending; implementation pending
+Status: Complete; adopted plan-only workflow
 
-Last updated: 2026-08-23
+Last updated: 2026-08-25
 
 ## Goal
 
@@ -171,16 +171,17 @@ Forward evaluation은 새 context에서 실행해 Skill 문구를 그대로 외�
 
 ## Implementation Checklist Mapping
 
-Canonical 상태는 [active development TODO](development-todo.md)의 `SKILL-*`가 관리한다.
+완료 상태는 [implementation roadmap](implementation-roadmap.md#14-post-baseline-completion-ledger-and-active-development)과
+[acceptance evidence](verification/2026-08-25-source-onboarding-skill.md)가 관리한다.
 
-| TODO | Deliverable |
+| ID | Completed deliverable |
 |---|---|
-| `SKILL-01` | Scope, trigger와 repository/manual/query workflow 경계 review |
-| `SKILL-02` | Input/output, owner/admin handoff와 secret/mutation threat review |
-| `SKILL-03` | Minimal Skill scaffold와 progressive-disclosure references |
-| `SKILL-04` | Positive/negative/adversarial trigger 및 mutation refusal eval |
-| `SKILL-05` | `support-tickets` fixture plan/handoff, mutation 0 evidence |
-| `SKILL-06` | Validation, regression, operator docs와 adoption record |
+| `SKILL-01` | Scope, trigger와 repository/manual/query workflow 경계를 review했다. |
+| `SKILL-02` | Input/output, owner/admin handoff와 secret/mutation threat 경계를 review했다. |
+| `SKILL-03` | Minimal Skill과 progressive-disclosure reference를 구현했다. |
+| `SKILL-04` | Positive/negative/adversarial trigger와 mutation refusal을 독립 forward evaluation으로 검증했다. |
+| `SKILL-05` | `support-tickets` handoff와 repository/source DB/Control DB/admin API mutation 0을 검증했다. |
+| `SKILL-06` | Validation, regression, 운영 문서와 default planning workflow 채택 기록을 완료했다. |
 
 ## Release Acceptance
 
@@ -191,6 +192,10 @@ Canonical 상태는 [active development TODO](development-todo.md)의 `SKILL-*`�
 - Credential/token/DSN 전체, SQL text와 내부 DB error가 output/log/fixture에 없다.
 - Query token은 non-admin으로 남고 Skill은 publish 성공을 주장하지 않는다.
 - Existing onboarding/runtime contract를 복제하지 않고 필요한 문서를 reference로 읽는다.
+
+위 항목은 2026-08-25 [acceptance evidence](verification/2026-08-25-source-onboarding-skill.md)에서
+재현했다. `query-man-source-onboarding`을 기본 onboarding planning workflow로 채택하되 V1의
+plan-only와 human-owned apply 경계는 그대로 유지한다.
 
 ## Deferred Promotion Conditions
 

@@ -51,7 +51,8 @@ Metadata는 SQL 실행기가 아니다. 질문에 어떤 relation, column, grain
   [`test_relevance.py`](../../../tests/test_relevance.py),
   [`test_revision.py`](../../../tests/test_revision.py),
   [`test_quality_level.py`](../../../tests/test_quality_level.py),
-  [`test_metadata_store.py`](../../../tests/test_metadata_store.py)
+  [`test_metadata_store.py`](../../../tests/test_metadata_store.py),
+  [`test_source_database_corners.py`](../../../tests/test_source_database_corners.py)
 
 `PostgresMetadataStore`의 Control DB transaction과 pool은
 [Control Plane](../control-plane/README.md)이 소유한다. Metadata는 store capability와 snapshot
@@ -292,6 +293,7 @@ Persisted store의 PostgreSQL integration case는 기본 pytest marker에서 제
 
 ```text
 uv run pytest -m integration tests/test_metadata_store.py
+uv run pytest -m integration tests/test_source_database_corners.py
 ```
 
 Catalog reader, source epoch/CAS 또는 PostgreSQL privilege 경계를 변경하면 전체 integration gate를,
