@@ -186,3 +186,28 @@ def test_revision_ignores_source_provenance() -> None:
     assert create_metadata_revision(changed_owner, snapshot) == revision
     assert create_metadata_revision(changed_migration, snapshot) == revision
     assert create_metadata_revision(changed_environment, snapshot) == revision
+
+
+def test_revision_ignores_resource_observation_definition() -> None:
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+    assert source.observability is not None
+    snapshot = minimal_development_snapshot()
+    revision = create_metadata_revision(source, snapshot)
+    changed_definition = replace(
+        source,
+        observability=replace(
+            source.observability,
+            representative_records=replace(
+                source.observability.representative_records,
+                grain="changed_grain",
+            ),
+            storage_relations=(
+                "development.issues",
+                "development.issue_comments",
+            ),
+        ),
+    )
+
+    assert create_metadata_revision(replace(source, observability=None), snapshot) == revision
+    assert create_metadata_revision(changed_definition, snapshot) == revision

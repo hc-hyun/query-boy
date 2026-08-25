@@ -45,11 +45,11 @@ user/organization별 tier, host cgroup CPU/memory quota와 일·월 통화 budge
 [multi-replica soak audit](verification/2026-08-23-mcp-multi-replica-soak.md)에서 검증한다.
 이 결과는 distributed global quota를 뜻하지 않는다. DB-native 비용 귀속의 구현 순서와
 종료 조건은 [active development TODO](development-todo.md)의 `COST-*`에서 관리한다. Source
-규모·증가량의 측정 방법과 freshness 계약은 먼저 `CTRL-07`에서 구현하고, 최종 운영 projection은
+규모·증가량의 측정 방법과 gateway usage lower-bound 수집은 `CTRL-07`에서 구현됐고, 최종 운영 projection은
 [source management plane](source-management-plane.md)의 한 management surface에서 제공한다.
 `CTRL-08`은 비용 신호를 `not_configured|pending|available|stale|unavailable`로 구분하고 마지막
 시도 시각과 bounded reason을 제공하며, missing/failed 값을 0으로 표시하지 않는다. 이 항목들은
-모두 현재는 구현 목표다.
+public projection 구현 목표이며 DB-native/provider monetary collector는 여전히 범위 밖이다.
 
 ## What Is Measured
 

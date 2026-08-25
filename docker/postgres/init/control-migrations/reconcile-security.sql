@@ -89,6 +89,12 @@ GRANT SELECT, INSERT, UPDATE ON control.runtime_replicas
   TO query_man_control_writer;
 GRANT SELECT, INSERT, UPDATE ON control.runtime_source_observations
   TO query_man_control_writer;
+GRANT SELECT, INSERT, UPDATE ON control.source_resource_observations
+  TO query_man_control_writer;
+GRANT SELECT, INSERT, UPDATE, DELETE ON control.gateway_usage_rollups
+  TO query_man_control_writer;
+GRANT SELECT, INSERT, UPDATE ON control.gateway_usage_report_cursors
+  TO query_man_control_writer;
 
 DO $$
 DECLARE
@@ -299,7 +305,10 @@ BEGIN
             'verified_query_contracts',
             'source_mutation_receipts',
             'runtime_replicas',
-            'runtime_source_observations'
+            'runtime_source_observations',
+            'source_resource_observations',
+            'gateway_usage_rollups',
+            'gateway_usage_report_cursors'
           )
           WHEN 'INSERT' THEN relation_row.relname IN (
             'metadata_snapshots',
@@ -309,14 +318,21 @@ BEGIN
             'verified_query_contracts',
             'source_mutation_receipts',
             'runtime_replicas',
-            'runtime_source_observations'
+            'runtime_source_observations',
+            'source_resource_observations',
+            'gateway_usage_rollups',
+            'gateway_usage_report_cursors'
           )
           WHEN 'UPDATE' THEN relation_row.relname IN (
             'active_metadata_revisions',
             'active_source_profiles',
             'runtime_replicas',
-            'runtime_source_observations'
+            'runtime_source_observations',
+            'source_resource_observations',
+            'gateway_usage_rollups',
+            'gateway_usage_report_cursors'
           )
+          WHEN 'DELETE' THEN relation_row.relname = 'gateway_usage_rollups'
           ELSE false
         END;
         IF pg_catalog.has_table_privilege(
@@ -346,7 +362,10 @@ BEGIN
               'verified_query_contracts',
               'source_mutation_receipts',
               'runtime_replicas',
-              'runtime_source_observations'
+              'runtime_source_observations',
+              'source_resource_observations',
+              'gateway_usage_rollups',
+              'gateway_usage_report_cursors'
             )
             WHEN 'INSERT' THEN relation_row.relname IN (
               'metadata_snapshots',
@@ -356,13 +375,19 @@ BEGIN
               'verified_query_contracts',
               'source_mutation_receipts',
               'runtime_replicas',
-              'runtime_source_observations'
+              'runtime_source_observations',
+              'source_resource_observations',
+              'gateway_usage_rollups',
+              'gateway_usage_report_cursors'
             )
             WHEN 'UPDATE' THEN relation_row.relname IN (
               'active_metadata_revisions',
               'active_source_profiles',
               'runtime_replicas',
-              'runtime_source_observations'
+              'runtime_source_observations',
+              'source_resource_observations',
+              'gateway_usage_rollups',
+              'gateway_usage_report_cursors'
             )
             ELSE false
           END;

@@ -46,10 +46,12 @@ tier를 정한다. 이 문서는 현재 공백과 `CTRL-*` 구현 순서를 관�
 - 여섯 direct admin mutation의 공통 idempotency/state precondition과 immutable terminal receipt
 - Operator-only receipt lookup과 source별 lifecycle event keyset history
 - Ever-registered managed replica별 desired/applied drift, DB-clock freshness와 bounded failure projection
+- Optional physical resource definition, daily current/previous record·storage observation
+- Privacy-safe source/profile/revision hourly gateway usage lower-bound rollup과 reporter cursor
 
 현재 구현 중이거나 남은 공백:
 
-- Bounded record/storage/growth observation과 source/profile별 usage/cost projection
+- Resource/usage availability 상태와 public admin cost projection
 - Authority table backup/restore, retention과 encryption-key recovery 검증
 
 다단계 management RBAC, caller grant import, 사용자별 quota와 AI mutation executor는 공백이
@@ -123,8 +125,8 @@ Host/database/user는 mutation 검토에 필요한 admin에게만 제한적으�
 bearer, master key, provider secret path, raw database error, ad-hoc question과 SQL은 response와
 audit에서 제외한다.
 
-아래 replica contract는 구현됐고, data-size와 usage/cost 투영은 `CTRL-07`~`CTRL-08`의
-후속 목표다.
+아래 replica contract와 내부 data-size/gateway usage 수집은 구현됐다. Public availability와
+usage/cost admin projection은 `CTRL-08`의 후속 목표다.
 
 ### Implemented Replica State (`CTRL-06`)
 
@@ -146,7 +148,7 @@ audit에서 제외한다.
   않는다. 기존 list/detail/health/metrics/MCP는 그대로다.
 - Observation failure는 data plane, readiness, mutation receipt와 shutdown lifecycle을 바꾸지 않는다.
 
-### Approved Data Size And Growth (`CTRL-07A`, implementation pending)
+### Implemented Data Size And Growth (`CTRL-07A`)
 
 관측값은 configuration revision과 분리하고 다음 bounded shape를 사용한다.
 
@@ -165,17 +167,19 @@ Manifest v2의 optional `observability`가 DB owner의 representative grain/phys
 Resource는 UTC daily bucket, 24시간 cadence와 Control DB clock 72시간 freshness를 사용한다. 같은
 metric/method/definition만 previous로 이동하며 정의가 바뀌면 comparison을 초기화한다. Definition은
 metric, method, grain/relation 목록과 DB migration reference의 canonical SHA-256이다. 이 수집 계약은
-승인됐지만 아직 구현되지 않았다.
+Source apply 직후와 이후 24시간마다 best-effort로 실행되며 public availability projection은 아직 없다.
 
-### Approved Gateway Usage (`CTRL-07A`, implementation pending) And Planned Cost (`CTRL-08`)
+### Implemented Gateway Usage (`CTRL-07A`) And Planned Cost (`CTRL-08`)
 
-초기 집계 key는 bounded한 `source_id + budget_profile + metadata_revision + time bucket`이다.
+초기 집계 key는 bounded한
+`source_id + budget_profile + metadata_revision + definition_revision + time bucket`이다.
 Budget 정의가 metadata revision 재료이므로 별도 tier revision entity를 만들지 않는다.
 
 - Gateway query/success/reject/timeout/overload/cancel/failure, queue/elapsed, rows/result bytes와 truncation
-- 승인된 PostgreSQL execution/block/temp/WAL aggregate
-- Database/table/index storage와 증가량
-- 연결된 경우에만 provider amount, currency, period와 allocation method
+
+PostgreSQL execution/block/temp/WAL aggregate, provider amount/currency와 allocation method는 현재
+수집하지 않는다. Database/table/index storage는 위 resource observation에만 포함되고 gateway
+usage dimension과 섞지 않는다.
 
 Caller/tenant는 security audit에 남을 수 있지만 비용, quota와 metric label dimension으로 쓰지
 않는다. Provider billing이 없으면 자원 사용과 추세만 표시한다. Availability는
@@ -183,10 +187,11 @@ Caller/tenant는 security audit에 남을 수 있지만 비용, quota와 metric 
 reason을 함께 제공한다. Missing/failed 값은 0으로 표시하지 않는다.
 
 승인된 gateway V1은 trusted active profile/revision을 terminal event 시점에 붙인 UTC hourly delta를
-별도 60초 reporter가 전송한다. Replica incarnation/sequence/payload hash로 retry를 deduplicate하고
-31일 및 source당 1,000행을 상한으로 둔다. 값은 성공적으로 보고된 lower bound다. Public status와
-admin response는 아직 `CTRL-08` 목표이며 기존 `/admin/metrics`, replica heartbeat와 MCP는 바뀌지
-않는다.
+별도 60초 reporter가 트래픽이 없어도 전송한다. Replica incarnation/sequence/payload hash로 retry를
+deduplicate한다. 31일은 DB clock 기준 logical visibility/input window여서 window 밖 input과 향후
+조회 결과를 제외하지만 age-only physical deletion은 하지 않는다. Source당 최신 1,000행은 physical
+cap이다. 값은 성공적으로 보고된 lower bound다. Public status와 admin response는 아직 `CTRL-08`
+목표이며 기존 `/admin/metrics`, replica heartbeat와 MCP는 바뀌지 않는다.
 
 ## Access Boundary
 
@@ -297,18 +302,19 @@ managed authority를 모두 표현한다. 따라서 mode, origin 또는 bootstra
 - **Implemented:** mutation event/receipt의 idempotency, actor, reason, request hash와 outcome
 - **Implemented (`CTRL-06`):** migration 3과 replica별 latest desired/applied state, DB-clock
   freshness, Runtime report 및 bounded Delivery projection
-- **Planned (`CTRL-07`):** source observation의 record/storage/growth method, definition revision과 snapshot
-- **Planned (`CTRL-07`, `CTRL-08`):** usage/cost rollup의 bounded source/profile time bucket,
-  availability와 provider provenance
+- **Implemented (`CTRL-07`):** migration 4, source observation의 record/storage method, definition
+  revision/current/previous와 gateway usage의 bounded source/profile/revision hourly rollup
+- **Planned (`CTRL-08`):** resource/usage availability, 31일 logical cutoff를 적용한 admin projection과
+  optional provider provenance
 
-계획된 observation storage는 high-frequency raw event를 Control DB에 무제한 적재하지 않는다.
-초기에는 latest snapshot과 hour/day rollup만 저장하고 retention/cardinality 상한을 둔다.
+Observation storage는 high-frequency raw event를 Control DB에 적재하지 않는다. Resource는
+latest current/previous, gateway는 hourly rollup과 source당 1,000행 cap만 저장한다.
 
 ## Rollout Checklist
 
-완료된 `CTRL-01`~`CTRL-06` 상태는
+완료된 `CTRL-01`~`CTRL-07` 상태는
 [implementation roadmap ledger](implementation-roadmap.md#14-post-baseline-completion-ledger-and-active-development),
-열린 `CTRL-07`~`CTRL-09`는 [active development TODO](development-todo.md)가 관리한다.
+열린 `CTRL-08`~`CTRL-09`는 [active development TODO](development-todo.md)가 관리한다.
 
 1. **Complete:** versioned migration과 disposable test-store isolation
 2. **Complete:** mutually exclusive source mode, Control DB precedence, zero-bootstrap과
@@ -317,7 +323,7 @@ managed authority를 모두 표현한다. 따라서 mode, origin 또는 bootstra
 4. **Complete:** immutable provenance, minimal catalog와 admin list/detail/history
 5. **Complete:** existing mutations의 idempotency, receipt와 durable audit
 6. **Complete:** Replica convergence/drift observation
-7. Bounded record/storage/usage/cost observation
+7. **Complete:** Bounded record/storage와 gateway usage observation
 8. Usage/cost availability와 cardinality/retention
 9. Backup/restore, encryption-key recovery와 multi-replica end-to-end acceptance
 
@@ -337,10 +343,13 @@ operator-first validation 증거는
 여섯 번째 단계의 replica identity, latest observation, failure isolation, HTTP projection과
 multi-replica convergence 증거는
 [runtime replica observation audit](verification/2026-08-25-runtime-replica-observations.md)에 기록한다.
+일곱 번째 단계의 manifest/provider, resource/gateway persistence, reporter fencing, privacy와 migration
+증거는 [resource and gateway observation audit](verification/2026-08-25-resource-and-gateway-observations.md)에
+기록한다.
 
 ## Release Acceptance
 
-현재 `CTRL-01`~`CTRL-06`이 충족한 acceptance:
+현재 `CTRL-01`~`CTRL-07`이 충족한 acceptance:
 
 - 운영자는 Git checkout 없이 모든 managed source의 owner, active state, history와 resource tier를
   조회한다.
@@ -354,11 +363,11 @@ multi-replica convergence 증거는
 - Production/development/test Control DB가 분리된다.
 - 모든 ever-registered target replica의 desired/applied 차이와 freshness를 source별 전용 admin
   endpoint에서 확인한다.
+- Record/storage 값은 method/definition revision/time/freshness를 포함하고 unbounded count를 실행하지
+  않는다. Gateway rollup은 caller/tenant/SQL 없이 source/profile/revision/hour lower bound만 저장한다.
 
-`CTRL-07`~`CTRL-09`에서 충족할 planned acceptance:
+`CTRL-08`~`CTRL-09`에서 충족할 planned acceptance:
 
-- Record/storage 값은 method/definition revision/time/freshness를 포함하고 unbounded count를
-  실행하지 않는다.
 - Cost는 근거가 있을 때만 표시하며 미구성/미시도/오래됨/실패 상태를 구분한다.
 - Authority table과 encryption key의 backup/restore 검증이 재현 가능하다.
 

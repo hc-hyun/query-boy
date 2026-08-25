@@ -60,7 +60,9 @@ docker compose down
 receipt 증거는 각각
 [source management catalog audit](docs/verification/2026-08-23-source-management-catalog.md)과
 [source mutation receipt audit](docs/verification/2026-08-23-source-mutation-receipts.md), replica convergence
-증거는 [runtime replica observation audit](docs/verification/2026-08-25-runtime-replica-observations.md)을
+증거는 [runtime replica observation audit](docs/verification/2026-08-25-runtime-replica-observations.md),
+내부 resource/gateway usage 수집 증거는
+[resource and gateway observation audit](docs/verification/2026-08-25-resource-and-gateway-observations.md)을
 참고합니다. 각 audit는
 적힌 scope의 실행 시점 증거이며, 나중 audit을 모두 포괄하는 단일 “현재 최종” 증거로
 해석하지 않습니다.

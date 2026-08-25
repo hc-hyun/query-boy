@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from psycopg import errors
@@ -52,6 +53,10 @@ class MutationReplay(Exception):
 
 
 class ReplicaObservationConflictError(Exception):
+    pass
+
+
+class GatewayUsageConflictError(Exception):
     pass
 
 
@@ -170,6 +175,36 @@ class _ReplicaSourceObservationWrite:
 
 
 @dataclass(frozen=True)
+class _ResourceObservationWrite:
+    metric: str
+    value: int
+    unit: str
+    method: str
+    definition_revision: str
+
+
+@dataclass(frozen=True)
+class _GatewayUsageDeltaWrite:
+    source_id: str
+    budget_profile: str
+    metadata_revision: str
+    definition_revision: str
+    bucket_start: datetime
+    query_count: int
+    success_count: int
+    rejected_count: int
+    timeout_count: int
+    overloaded_count: int
+    cancelled_count: int
+    failed_count: int
+    queue_ms_sum: int
+    elapsed_ms_sum: int
+    returned_rows_sum: int
+    result_bytes_sum: int
+    truncated_count: int
+
+
+@dataclass(frozen=True)
 class ReplicaObservationRecord:
     replica_id: str
     observed_at: datetime
@@ -283,6 +318,17 @@ _REPLICA_SOURCE_REASONS = frozenset(
 _SOURCE_HEALTH_VALUES = frozenset(
     {"initializing", "healthy", "stale", "unavailable"}
 )
+_RESOURCE_METRIC_CONTRACT = {
+    "representative_records": ("rows", "postgres_catalog_estimate"),
+    "table_bytes": ("bytes", "postgres_relation_size"),
+    "index_bytes": ("bytes", "postgres_relation_size"),
+    "total_storage_bytes": ("bytes", "postgres_relation_size"),
+}
+_RESOURCE_FRESHNESS = timedelta(hours=72)
+_GATEWAY_USAGE_MAX_BATCH = 100
+_GATEWAY_USAGE_MAX_ROWS_PER_SOURCE = 1_000
+_GATEWAY_USAGE_RETENTION = timedelta(days=31)
+_GATEWAY_REPORT_FRESHNESS = timedelta(seconds=180)
 
 
 class PostgresSourceStore:
@@ -516,6 +562,298 @@ class PostgresSourceStore:
                         source.reason_code,
                     ),
                 )
+
+    async def report_resource_observations(
+        self,
+        source_id: str,
+        metadata_revision: str,
+        observations: tuple[_ResourceObservationWrite, ...],
+    ) -> None:
+        _validate_source_id(source_id)
+        if not _is_revision(metadata_revision):
+            raise ValueError("Resource observation metadata revision is invalid")
+        if not 1 <= len(observations) <= len(_RESOURCE_METRIC_CONTRACT):
+            raise ValueError("Resource observation batch size is invalid")
+        metrics: set[str] = set()
+        for observation in observations:
+            _validate_resource_observation(observation)
+            if observation.metric in metrics:
+                raise ValueError("Resource observation metrics must be unique")
+            metrics.add(observation.metric)
+
+        pool = await self._get_pool()
+        async with pool.connection() as connection, connection.transaction():
+            await _lock_resource_observation(connection, source_id)
+            clock_cursor = await connection.execute(
+                "WITH read_clock AS MATERIALIZED ("
+                "SELECT clock_timestamp() AS observed_at"
+                ") SELECT observed_at, "
+                "date_trunc('day', observed_at AT TIME ZONE 'UTC') "
+                "AT TIME ZONE 'UTC' AS sample_bucket_start "
+                "FROM read_clock"
+            )
+            clock_row = await clock_cursor.fetchone()
+            if clock_row is None:
+                raise RuntimeError("Control resource observation clock is unavailable")
+            observed_at = _required_timestamp(clock_row, "observed_at")
+            sample_bucket_start = _required_timestamp(
+                clock_row,
+                "sample_bucket_start",
+            )
+            fresh_until = observed_at + _RESOURCE_FRESHNESS
+            for observation in sorted(observations, key=lambda item: item.metric):
+                await connection.execute(
+                    "INSERT INTO control.source_resource_observations "
+                    "(source_id, metric, unit, method, definition_revision, value, "
+                    "metadata_revision, sample_bucket_start, observed_at, fresh_until) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                    "ON CONFLICT (source_id, metric) DO UPDATE SET "
+                    "unit = EXCLUDED.unit, method = EXCLUDED.method, "
+                    "definition_revision = EXCLUDED.definition_revision, "
+                    "previous_value = CASE "
+                    "WHEN EXCLUDED.sample_bucket_start > "
+                    "control.source_resource_observations.sample_bucket_start "
+                    "AND EXCLUDED.method = control.source_resource_observations.method "
+                    "AND EXCLUDED.definition_revision = "
+                    "control.source_resource_observations.definition_revision "
+                    "THEN control.source_resource_observations.value "
+                    "WHEN EXCLUDED.method <> control.source_resource_observations.method "
+                    "OR EXCLUDED.definition_revision <> "
+                    "control.source_resource_observations.definition_revision "
+                    "THEN NULL ELSE control.source_resource_observations.previous_value END, "
+                    "previous_metadata_revision = CASE "
+                    "WHEN EXCLUDED.sample_bucket_start > "
+                    "control.source_resource_observations.sample_bucket_start "
+                    "AND EXCLUDED.method = control.source_resource_observations.method "
+                    "AND EXCLUDED.definition_revision = "
+                    "control.source_resource_observations.definition_revision "
+                    "THEN control.source_resource_observations.metadata_revision "
+                    "WHEN EXCLUDED.method <> control.source_resource_observations.method "
+                    "OR EXCLUDED.definition_revision <> "
+                    "control.source_resource_observations.definition_revision "
+                    "THEN NULL ELSE "
+                    "control.source_resource_observations.previous_metadata_revision END, "
+                    "previous_sample_bucket_start = CASE "
+                    "WHEN EXCLUDED.sample_bucket_start > "
+                    "control.source_resource_observations.sample_bucket_start "
+                    "AND EXCLUDED.method = control.source_resource_observations.method "
+                    "AND EXCLUDED.definition_revision = "
+                    "control.source_resource_observations.definition_revision "
+                    "THEN control.source_resource_observations.sample_bucket_start "
+                    "WHEN EXCLUDED.method <> control.source_resource_observations.method "
+                    "OR EXCLUDED.definition_revision <> "
+                    "control.source_resource_observations.definition_revision "
+                    "THEN NULL ELSE "
+                    "control.source_resource_observations.previous_sample_bucket_start END, "
+                    "previous_observed_at = CASE "
+                    "WHEN EXCLUDED.sample_bucket_start > "
+                    "control.source_resource_observations.sample_bucket_start "
+                    "AND EXCLUDED.method = control.source_resource_observations.method "
+                    "AND EXCLUDED.definition_revision = "
+                    "control.source_resource_observations.definition_revision "
+                    "THEN control.source_resource_observations.observed_at "
+                    "WHEN EXCLUDED.method <> control.source_resource_observations.method "
+                    "OR EXCLUDED.definition_revision <> "
+                    "control.source_resource_observations.definition_revision "
+                    "THEN NULL ELSE "
+                    "control.source_resource_observations.previous_observed_at END, "
+                    "previous_fresh_until = CASE "
+                    "WHEN EXCLUDED.sample_bucket_start > "
+                    "control.source_resource_observations.sample_bucket_start "
+                    "AND EXCLUDED.method = control.source_resource_observations.method "
+                    "AND EXCLUDED.definition_revision = "
+                    "control.source_resource_observations.definition_revision "
+                    "THEN control.source_resource_observations.fresh_until "
+                    "WHEN EXCLUDED.method <> control.source_resource_observations.method "
+                    "OR EXCLUDED.definition_revision <> "
+                    "control.source_resource_observations.definition_revision "
+                    "THEN NULL ELSE "
+                    "control.source_resource_observations.previous_fresh_until END, "
+                    "value = EXCLUDED.value, "
+                    "metadata_revision = EXCLUDED.metadata_revision, "
+                    "sample_bucket_start = EXCLUDED.sample_bucket_start, "
+                    "observed_at = EXCLUDED.observed_at, "
+                    "fresh_until = EXCLUDED.fresh_until "
+                    "WHERE EXCLUDED.sample_bucket_start >= "
+                    "control.source_resource_observations.sample_bucket_start",
+                    (
+                        source_id,
+                        observation.metric,
+                        observation.unit,
+                        observation.method,
+                        observation.definition_revision,
+                        observation.value,
+                        metadata_revision,
+                        sample_bucket_start,
+                        observed_at,
+                        fresh_until,
+                    ),
+                )
+
+    async def report_gateway_usage(
+        self,
+        replica_id: str,
+        incarnation: int,
+        sequence: int,
+        deltas: tuple[_GatewayUsageDeltaWrite, ...],
+    ) -> None:
+        _validate_replica_id(replica_id)
+        _validate_positive_bigint(incarnation, "Gateway reporter incarnation")
+        _validate_positive_bigint(sequence, "Gateway report sequence")
+        if len(deltas) > _GATEWAY_USAGE_MAX_BATCH:
+            raise ValueError("Gateway usage report batch is too large")
+        for delta in deltas:
+            _validate_gateway_usage_delta(delta)
+        payload_hash = _gateway_usage_payload_hash(deltas)
+
+        pool = await self._get_pool()
+        async with pool.connection() as connection, connection.transaction():
+            await _lock_gateway_reporter(connection, replica_id)
+            clock_cursor = await connection.execute("SELECT clock_timestamp() AS read_at")
+            clock_row = await clock_cursor.fetchone()
+            if clock_row is None:
+                raise RuntimeError("Control database clock is unavailable")
+            read_at = _required_timestamp(clock_row, "read_at")
+            current_bucket = _utc_hour(read_at)
+            oldest_bucket = current_bucket - _GATEWAY_USAGE_RETENTION
+
+            cursor = await connection.execute(
+                "SELECT incarnation, last_sequence, last_payload_hash "
+                "FROM control.gateway_usage_report_cursors "
+                "WHERE replica_id = %s FOR UPDATE",
+                (replica_id,),
+            )
+            stored_cursor = await cursor.fetchone()
+            is_replay = False
+            if stored_cursor is None:
+                if sequence != 1:
+                    raise GatewayUsageConflictError
+            elif int(stored_cursor["incarnation"]) == incarnation:
+                last_sequence = int(stored_cursor["last_sequence"])
+                if sequence == last_sequence:
+                    if stored_cursor["last_payload_hash"] == payload_hash:
+                        is_replay = True
+                    else:
+                        raise GatewayUsageConflictError
+                if sequence != last_sequence + 1:
+                    if not is_replay:
+                        raise GatewayUsageConflictError
+            elif sequence != 1:
+                raise GatewayUsageConflictError
+
+            source_ids = sorted({delta.source_id for delta in deltas})
+            if not is_replay:
+                if any(
+                    delta.bucket_start < oldest_bucket
+                    or delta.bucket_start > current_bucket
+                    for delta in deltas
+                ):
+                    raise ValueError("Gateway usage bucket is outside the retention window")
+                for source_id in source_ids:
+                    await _lock_gateway_usage(connection, source_id)
+                for delta in deltas:
+                    await connection.execute(
+                        "INSERT INTO control.gateway_usage_rollups "
+                        "(source_id, budget_profile, metadata_revision, "
+                        "definition_revision, bucket_start, query_count, success_count, "
+                        "rejected_count, timeout_count, overloaded_count, cancelled_count, "
+                        "failed_count, queue_ms_sum, elapsed_ms_sum, returned_rows_sum, "
+                        "result_bytes_sum, truncated_count, observed_at) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
+                        "%s, %s, %s, %s, %s, %s) "
+                        "ON CONFLICT (source_id, budget_profile, metadata_revision, "
+                        "definition_revision, bucket_start) DO UPDATE SET "
+                        "query_count = control.gateway_usage_rollups.query_count + "
+                        "EXCLUDED.query_count, "
+                        "success_count = control.gateway_usage_rollups.success_count + "
+                        "EXCLUDED.success_count, "
+                        "rejected_count = control.gateway_usage_rollups.rejected_count + "
+                        "EXCLUDED.rejected_count, "
+                        "timeout_count = control.gateway_usage_rollups.timeout_count + "
+                        "EXCLUDED.timeout_count, "
+                        "overloaded_count = control.gateway_usage_rollups.overloaded_count + "
+                        "EXCLUDED.overloaded_count, "
+                        "cancelled_count = control.gateway_usage_rollups.cancelled_count + "
+                        "EXCLUDED.cancelled_count, "
+                        "failed_count = control.gateway_usage_rollups.failed_count + "
+                        "EXCLUDED.failed_count, "
+                        "queue_ms_sum = control.gateway_usage_rollups.queue_ms_sum + "
+                        "EXCLUDED.queue_ms_sum, "
+                        "elapsed_ms_sum = control.gateway_usage_rollups.elapsed_ms_sum + "
+                        "EXCLUDED.elapsed_ms_sum, "
+                        "returned_rows_sum = control.gateway_usage_rollups.returned_rows_sum + "
+                        "EXCLUDED.returned_rows_sum, "
+                        "result_bytes_sum = control.gateway_usage_rollups.result_bytes_sum + "
+                        "EXCLUDED.result_bytes_sum, "
+                        "truncated_count = control.gateway_usage_rollups.truncated_count + "
+                        "EXCLUDED.truncated_count, observed_at = GREATEST("
+                        "control.gateway_usage_rollups.observed_at, "
+                        "EXCLUDED.observed_at)",
+                        (
+                            delta.source_id,
+                            delta.budget_profile,
+                            delta.metadata_revision,
+                            delta.definition_revision,
+                            delta.bucket_start,
+                            delta.query_count,
+                            delta.success_count,
+                            delta.rejected_count,
+                            delta.timeout_count,
+                            delta.overloaded_count,
+                            delta.cancelled_count,
+                            delta.failed_count,
+                            delta.queue_ms_sum,
+                            delta.elapsed_ms_sum,
+                            delta.returned_rows_sum,
+                            delta.result_bytes_sum,
+                            delta.truncated_count,
+                            read_at,
+                        ),
+                    )
+                for source_id in source_ids:
+                    await connection.execute(
+                        "DELETE FROM control.gateway_usage_rollups WHERE ctid IN ("
+                        "SELECT ctid FROM control.gateway_usage_rollups "
+                        "WHERE source_id = %s "
+                        "ORDER BY bucket_start DESC, observed_at DESC, budget_profile, "
+                        "metadata_revision, definition_revision "
+                        "OFFSET %s)",
+                        (source_id, _GATEWAY_USAGE_MAX_ROWS_PER_SOURCE),
+                    )
+
+            replica_cursor = await connection.execute(
+                "WITH report_clock AS MATERIALIZED ("
+                "SELECT clock_timestamp() AS reported_at"
+                ") SELECT replica.incarnation, report_clock.reported_at "
+                "FROM control.runtime_replicas AS replica CROSS JOIN report_clock "
+                "WHERE replica.replica_id = %s FOR UPDATE OF replica",
+                (replica_id,),
+            )
+            replica_row = await replica_cursor.fetchone()
+            if replica_row is None or int(replica_row["incarnation"]) != incarnation:
+                raise GatewayUsageConflictError
+            if is_replay:
+                return
+            reported_at = _required_timestamp(replica_row, "reported_at")
+            await connection.execute(
+                "INSERT INTO control.gateway_usage_report_cursors "
+                "(replica_id, incarnation, last_sequence, last_payload_hash, "
+                "observed_at, fresh_until) VALUES (%s, %s, %s, %s, %s, %s) "
+                "ON CONFLICT (replica_id) DO UPDATE SET "
+                "incarnation = EXCLUDED.incarnation, "
+                "last_sequence = EXCLUDED.last_sequence, "
+                "last_payload_hash = EXCLUDED.last_payload_hash, "
+                "observed_at = EXCLUDED.observed_at, "
+                "fresh_until = EXCLUDED.fresh_until",
+                (
+                    replica_id,
+                    incarnation,
+                    sequence,
+                    payload_hash,
+                    reported_at,
+                    reported_at + _GATEWAY_REPORT_FRESHNESS,
+                ),
+            )
 
     async def list_replica_observations(
         self,
@@ -1232,6 +1570,27 @@ async def _lock_source_transition(connection: Any, source_id: str) -> None:
     )
 
 
+async def _lock_gateway_usage(connection: Any, source_id: str) -> None:
+    await connection.execute(
+        "SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(%s, 0))",
+        (f"query-man/gateway-usage/{source_id}",),
+    )
+
+
+async def _lock_resource_observation(connection: Any, source_id: str) -> None:
+    await connection.execute(
+        "SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(%s, 0))",
+        (f"query-man/resource-observation/{source_id}",),
+    )
+
+
+async def _lock_gateway_reporter(connection: Any, replica_id: str) -> None:
+    await connection.execute(
+        "SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(%s, 0))",
+        (f"query-man/gateway-reporter/{replica_id}",),
+    )
+
+
 async def _lock_mutation(connection: Any, idempotency_key: str) -> None:
     await connection.execute(
         "SELECT pg_catalog.pg_advisory_xact_lock("
@@ -1548,6 +1907,15 @@ def _validate_replica_id(replica_id: str) -> None:
         raise ValueError("Replica ID must be a stable slug")
 
 
+def _validate_source_id(source_id: str) -> None:
+    if (
+        not isinstance(source_id, str)
+        or not 1 <= len(source_id) <= STABLE_SLUG_MAX_LENGTH
+        or _STABLE_SLUG.fullmatch(source_id) is None
+    ):
+        raise ValueError("Source ID must be a stable slug")
+
+
 def _validate_heartbeat_interval(heartbeat_interval_ms: int) -> None:
     if (
         isinstance(heartbeat_interval_ms, bool)
@@ -1566,6 +1934,119 @@ def _validate_positive_bigint(value: int, label: str) -> None:
         or not 1 <= value <= POSTGRES_BIGINT_MAX
     ):
         raise ValueError(f"{label} must be a positive PostgreSQL bigint")
+
+
+def _validate_non_negative_bigint(value: int, label: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= POSTGRES_BIGINT_MAX:
+        raise ValueError(f"{label} must be a non-negative PostgreSQL bigint")
+
+
+def _validate_resource_observation(observation: _ResourceObservationWrite) -> None:
+    contract = _RESOURCE_METRIC_CONTRACT.get(observation.metric)
+    if contract is None or contract != (observation.unit, observation.method):
+        raise ValueError("Resource observation metric contract is invalid")
+    _validate_non_negative_bigint(observation.value, "Resource observation value")
+    if not _is_revision(observation.definition_revision):
+        raise ValueError("Resource observation definition revision is invalid")
+
+
+def _validate_gateway_usage_delta(delta: _GatewayUsageDeltaWrite) -> None:
+    _validate_source_id(delta.source_id)
+    if not isinstance(delta.budget_profile, str) or _IDENTIFIER.fullmatch(delta.budget_profile) is None:
+        raise ValueError("Gateway usage budget profile is invalid")
+    if not _is_revision(delta.metadata_revision):
+        raise ValueError("Gateway usage metadata revision is invalid")
+    if not _is_revision(delta.definition_revision):
+        raise ValueError("Gateway usage definition revision is invalid")
+    if not isinstance(delta.bucket_start, datetime) or delta.bucket_start.utcoffset() is None:
+        raise ValueError("Gateway usage bucket must be timezone-aware")
+    if delta.bucket_start != _utc_hour(delta.bucket_start):
+        raise ValueError("Gateway usage bucket must be UTC-hour aligned")
+    values = {
+        "query count": delta.query_count,
+        "success count": delta.success_count,
+        "rejected count": delta.rejected_count,
+        "timeout count": delta.timeout_count,
+        "overloaded count": delta.overloaded_count,
+        "cancelled count": delta.cancelled_count,
+        "failed count": delta.failed_count,
+        "queue milliseconds": delta.queue_ms_sum,
+        "elapsed milliseconds": delta.elapsed_ms_sum,
+        "returned rows": delta.returned_rows_sum,
+        "result bytes": delta.result_bytes_sum,
+        "truncated count": delta.truncated_count,
+    }
+    for label, value in values.items():
+        _validate_non_negative_bigint(value, f"Gateway usage {label}")
+    terminal_count = (
+        delta.success_count
+        + delta.rejected_count
+        + delta.timeout_count
+        + delta.overloaded_count
+        + delta.cancelled_count
+        + delta.failed_count
+    )
+    if delta.query_count != terminal_count:
+        raise ValueError("Gateway usage terminal counts are inconsistent")
+    if delta.truncated_count > delta.success_count:
+        raise ValueError("Gateway usage truncated count is inconsistent")
+    if delta.success_count == 0 and any(
+        (
+            delta.queue_ms_sum,
+            delta.elapsed_ms_sum,
+            delta.returned_rows_sum,
+            delta.result_bytes_sum,
+            delta.truncated_count,
+        )
+    ):
+        raise ValueError("Gateway usage success-only sums are inconsistent")
+
+
+def _utc_hour(value: datetime) -> datetime:
+    return value.astimezone(UTC).replace(minute=0, second=0, microsecond=0)
+
+
+def _gateway_usage_payload_hash(
+    deltas: tuple[_GatewayUsageDeltaWrite, ...],
+) -> str:
+    payload = [
+        {
+            "source_id": delta.source_id,
+            "budget_profile": delta.budget_profile,
+            "metadata_revision": delta.metadata_revision,
+            "definition_revision": delta.definition_revision,
+            "bucket_start": delta.bucket_start.astimezone(UTC).isoformat(),
+            "query_count": delta.query_count,
+            "success_count": delta.success_count,
+            "rejected_count": delta.rejected_count,
+            "timeout_count": delta.timeout_count,
+            "overloaded_count": delta.overloaded_count,
+            "cancelled_count": delta.cancelled_count,
+            "failed_count": delta.failed_count,
+            "queue_ms_sum": delta.queue_ms_sum,
+            "elapsed_ms_sum": delta.elapsed_ms_sum,
+            "returned_rows_sum": delta.returned_rows_sum,
+            "result_bytes_sum": delta.result_bytes_sum,
+            "truncated_count": delta.truncated_count,
+        }
+        for delta in sorted(
+            deltas,
+            key=lambda item: (
+                item.source_id,
+                item.budget_profile,
+                item.metadata_revision,
+                item.definition_revision,
+                item.bucket_start,
+            ),
+        )
+    ]
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()}"
 
 
 def _validate_replica_source_observation(

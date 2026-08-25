@@ -85,6 +85,18 @@ Application rollback은 migration 3을 그대로 남긴 채 수행한다. 이전
 retirement 또는 shutdown deregistration이 없으므로 ID를 바꿔 stale slot을 숨기거나 적용된 migration을
 수정·삭제하지 않는다. 새 version을 다시 배포할 때 원래 stable ID를 재사용한다.
 
+`0004_source_resource_and_gateway_usage.sql`도 세 table만 추가하는 additive migration이다. Schema를
+먼저 적용하고 새 application을 순차 교체한다. 이전 application은 resource/gateway observation을
+쓰지 않지만 기존 source/query path를 계속 사용한다. 새 Runtime은 optional manifest target을 기존
+reader/catalog pool로 관측하고, 기존 Control source store max-two pool 안에서 resource/gateway write를
+직렬화하므로 process당 metadata/source Control connection 최대 4는 바뀌지 않는다. Gateway는 트래픽이
+없어도 60초 empty report로 cursor freshness를 갱신한다.
+
+Migration 4 application rollback은 table, ledger와 이미 집계된 data를 남긴다. 31일은 logical
+visibility/input window여서 age-only DELETE를 하지 않고, source당 최신 1,000행 cap을 넘긴 rollup만
+writer가 DELETE할 수 있다. Resource/cursor에는 DELETE가 없고 rollup에도 TRUNCATE는 없다. 새 HTTP/MCP
+또는 availability status는 `CTRL-08` 전까지 없으므로 rollout 중 기존 public surface는 동일하다.
+
 Schema migration과 global `query_man_control_writer`/DB ACL은 의도적으로 분리돼 있다.
 `reconcile-security.sql`은 매 실행마다 role을 harden하고 현재 DB의 최소 권한을 복구한다. 따라서
 `pg_dump --no-privileges` restore에서도 pending migration이 없어도 ACL이 복구된다. Runtime

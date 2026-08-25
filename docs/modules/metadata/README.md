@@ -147,7 +147,7 @@ Canonicalizer는 list와 tuple, dict와 immutable mapping을 같은 canonical ar
 - Fresh cache hit는 PostgreSQL reader policy를 다시 조회하지 않으며 drift는 다음 refresh에서
   검출한다. Cache hit를 live privilege probe로 해석하지 않는다.
 
-### Resource observation provider (`CTRL-07A`, implementation pending)
+### Resource observation provider (`CTRL-07A`, implemented)
 
 Runtime-only catalog capability는 Source Catalog가 검증한 optional observability definition의 exact
 physical relation만 조회한다. 대상 전체를 열거하지 않고 system schema와 unsupported relkind를
@@ -188,6 +188,7 @@ CatalogProvider:
 
 RuntimeCatalogProvider extends CatalogProvider:
   async invalidate(source_id: str) -> None
+  async observe_resources(source) -> ResourceObservation
   async close() -> None  # inherited
 ```
 

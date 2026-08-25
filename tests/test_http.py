@@ -19,7 +19,12 @@ from query_man.errors import (
     SourceNotFoundError,
 )
 from query_man.mcp_server import MCP_PROTOCOL_VERSION
-from query_man.models import CatalogSnapshot, RuntimeCatalogProvider, SourceProfile
+from query_man.models import (
+    CatalogSnapshot,
+    ResourceObservation,
+    RuntimeCatalogProvider,
+    SourceProfile,
+)
 from query_man.operations import operations
 from query_man.query import RuntimeQueryExecutor
 from query_man.registry import SourceRegistry
@@ -43,6 +48,12 @@ class NeverCalledCatalog:
 
     async def invalidate(self, _source_id: str) -> None:
         pass
+
+    async def observe_resources(
+        self,
+        _source: SourceProfile,
+    ) -> ResourceObservation:
+        raise RuntimeError("Resource observation should not be called")
 
 
 class FailingCatalog(NeverCalledCatalog):

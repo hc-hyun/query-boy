@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import re
 import uuid
+from contextlib import suppress
 from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from typing import cast
@@ -13,6 +14,7 @@ import yaml
 from psycopg import AsyncConnection, Error
 from psycopg.errors import RaiseException
 
+import query_man.source_store as source_store_module
 from query_man.metadata_store import PostgresMetadataStore
 from query_man.models import PreparedMetadata
 from query_man.registry import (
@@ -27,6 +29,7 @@ from query_man.source_store import (
     _CATALOG_PROJECTION,
     _MUTATION_PROJECTION,
     POSTGRES_BIGINT_MAX,
+    GatewayUsageConflictError,
     MutationIdempotencyConflictError,
     MutationReplay,
     MutationRequest,
@@ -38,7 +41,9 @@ from query_man.source_store import (
     _decode_desired_replica_state,
     _decode_mutation,
     _decode_replica_observation,
+    _GatewayUsageDeltaWrite,
     _ReplicaSourceObservationWrite,
+    _ResourceObservationWrite,
 )
 from query_man.verified import ExpectedResult, VerifiedQuery, create_result_hash
 from tests.helpers import ROOT_DIRECTORY, minimal_development_snapshot
@@ -100,6 +105,57 @@ def _publish_result(
         "metadata_revision": metadata_revision,
         "quality_level": "L0",
     }
+
+
+async def _publish_observation_source(
+    dsn: str,
+    source_id: str,
+) -> tuple[PostgresSourceStore, str]:
+    validated, metadata = _source_fixture(source_id)
+    store = PostgresSourceStore(dsn)
+    generation = await store.next_generation(source_id)
+    await store.publish(
+        source_id,
+        0,
+        generation,
+        validated.document,
+        SourceSecretCipher(b"u" * 32).encrypt(
+            source_id,
+            generation,
+            "reader-secret",
+        ),
+        metadata,
+        expected_state_version=0,
+    )
+    return store, metadata.revision
+
+
+def _gateway_usage_delta(
+    source_id: str,
+    metadata_revision: str,
+    *,
+    bucket_start: datetime | None = None,
+) -> _GatewayUsageDeltaWrite:
+    return _GatewayUsageDeltaWrite(
+        source_id=source_id,
+        budget_profile="interactive",
+        metadata_revision=metadata_revision,
+        definition_revision=f"sha256:{'d' * 64}",
+        bucket_start=bucket_start
+        or datetime.now(UTC).replace(minute=0, second=0, microsecond=0),
+        query_count=1,
+        success_count=1,
+        rejected_count=0,
+        timeout_count=0,
+        overloaded_count=0,
+        cancelled_count=0,
+        failed_count=0,
+        queue_ms_sum=2,
+        elapsed_ms_sum=3,
+        returned_rows_sum=4,
+        result_bytes_sum=5,
+        truncated_count=0,
+    )
 
 
 @pytest.mark.asyncio
@@ -1301,6 +1357,1236 @@ async def _replica_rows(dsn: str) -> tuple[list[tuple[object, ...]], list[tuple[
         return await replicas.fetchall(), await observations.fetchall()
     finally:
         await connection.close()
+
+
+async def _gateway_usage_rows(
+    dsn: str,
+    source_id: str,
+    replica_id: str,
+) -> tuple[list[tuple[object, ...]], list[tuple[object, ...]]]:
+    connection = await AsyncConnection.connect(dsn)
+    try:
+        rollups = await connection.execute(
+            "SELECT source_id, budget_profile, metadata_revision, "
+            "definition_revision, bucket_start, query_count, success_count, "
+            "rejected_count, timeout_count, overloaded_count, cancelled_count, "
+            "failed_count, queue_ms_sum, elapsed_ms_sum, returned_rows_sum, "
+            "result_bytes_sum, truncated_count FROM control.gateway_usage_rollups "
+            "WHERE source_id = %s ORDER BY bucket_start, budget_profile",
+            (source_id,),
+        )
+        cursors = await connection.execute(
+            "SELECT replica_id, incarnation, last_sequence, last_payload_hash, "
+            "observed_at, fresh_until "
+            "FROM control.gateway_usage_report_cursors WHERE replica_id = %s",
+            (replica_id,),
+        )
+        return await rollups.fetchall(), await cursors.fetchall()
+    finally:
+        await connection.close()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_resource_observations_coalesce_shift_and_reset_definition(
+    disposable_control_dsn: str,
+) -> None:
+    source_id = "resource-observation-source"
+    store, metadata_revision = await _publish_observation_source(
+        disposable_control_dsn,
+        source_id,
+    )
+    definition = f"sha256:{'a' * 64}"
+    initial = (
+        _ResourceObservationWrite(
+            "representative_records",
+            100,
+            "rows",
+            "postgres_catalog_estimate",
+            definition,
+        ),
+        _ResourceObservationWrite(
+            "table_bytes",
+            10,
+            "bytes",
+            "postgres_relation_size",
+            definition,
+        ),
+        _ResourceObservationWrite(
+            "index_bytes",
+            2,
+            "bytes",
+            "postgres_relation_size",
+            definition,
+        ),
+        _ResourceObservationWrite(
+            "total_storage_bytes",
+            12,
+            "bytes",
+            "postgres_relation_size",
+            definition,
+        ),
+    )
+    table_sample = initial[1]
+    try:
+        await store.report_resource_observations(
+            source_id,
+            metadata_revision,
+            initial,
+        )
+        await store.report_resource_observations(
+            source_id,
+            metadata_revision,
+            (replace(table_sample, value=20),),
+        )
+
+        connection = await AsyncConnection.connect(disposable_control_dsn)
+        try:
+            cursor = await connection.execute(
+                "SELECT count(*), value, previous_value, "
+                "fresh_until - observed_at "
+                "FROM control.source_resource_observations "
+                "WHERE source_id = %s AND metric = 'table_bytes' "
+                "GROUP BY value, previous_value, fresh_until, observed_at",
+                (source_id,),
+            )
+            assert await cursor.fetchone() == (1, 20, None, timedelta(hours=72))
+            cursor = await connection.execute(
+                "SELECT count(*) FROM control.source_resource_observations "
+                "WHERE source_id = %s",
+                (source_id,),
+            )
+            assert await cursor.fetchone() == (4,)
+
+            await connection.execute(
+                "UPDATE control.source_resource_observations "
+                "SET sample_bucket_start = sample_bucket_start - interval '1 day', "
+                "observed_at = observed_at - interval '1 day', "
+                "fresh_until = fresh_until - interval '1 day' "
+                "WHERE source_id = %s AND metric = 'table_bytes'",
+                (source_id,),
+            )
+            await connection.commit()
+        finally:
+            await connection.close()
+
+        await store.report_resource_observations(
+            source_id,
+            metadata_revision,
+            (replace(table_sample, value=30),),
+        )
+        connection = await AsyncConnection.connect(disposable_control_dsn)
+        try:
+            cursor = await connection.execute(
+                "SELECT value, previous_value, metadata_revision, "
+                "previous_metadata_revision, "
+                "sample_bucket_start - previous_sample_bucket_start, "
+                "fresh_until - observed_at, "
+                "previous_fresh_until - previous_observed_at "
+                "FROM control.source_resource_observations "
+                "WHERE source_id = %s AND metric = 'table_bytes'",
+                (source_id,),
+            )
+            assert await cursor.fetchone() == (
+                30,
+                20,
+                metadata_revision,
+                metadata_revision,
+                timedelta(days=1),
+                timedelta(hours=72),
+                timedelta(hours=72),
+            )
+        finally:
+            await connection.close()
+
+        changed_definition = f"sha256:{'b' * 64}"
+        await store.report_resource_observations(
+            source_id,
+            metadata_revision,
+            (
+                replace(
+                    table_sample,
+                    value=40,
+                    definition_revision=changed_definition,
+                ),
+            ),
+        )
+        connection = await AsyncConnection.connect(disposable_control_dsn)
+        try:
+            cursor = await connection.execute(
+                "SELECT value, definition_revision, previous_value, "
+                "previous_metadata_revision, previous_sample_bucket_start, "
+                "previous_observed_at, previous_fresh_until "
+                "FROM control.source_resource_observations "
+                "WHERE source_id = %s AND metric = 'table_bytes'",
+                (source_id,),
+            )
+            assert await cursor.fetchone() == (
+                40,
+                changed_definition,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+        finally:
+            await connection.close()
+    finally:
+        await store.close()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_resource_observation_batch_rolls_back_atomically(
+    disposable_control_dsn: str,
+) -> None:
+    source_id = "resource-atomic-source"
+    store, metadata_revision = await _publish_observation_source(
+        disposable_control_dsn,
+        source_id,
+    )
+    definition = f"sha256:{'c' * 64}"
+    connection = await AsyncConnection.connect(disposable_control_dsn)
+    try:
+        await connection.execute(
+            "ALTER TABLE control.source_resource_observations "
+            "ADD CONSTRAINT resource_atomic_test_reject_index "
+            "CHECK (metric <> 'index_bytes')"
+        )
+        await connection.commit()
+    finally:
+        await connection.close()
+
+    try:
+        with pytest.raises(Error):
+            await store.report_resource_observations(
+                source_id,
+                metadata_revision,
+                (
+                    _ResourceObservationWrite(
+                        "table_bytes",
+                        10,
+                        "bytes",
+                        "postgres_relation_size",
+                        definition,
+                    ),
+                    _ResourceObservationWrite(
+                        "index_bytes",
+                        2,
+                        "bytes",
+                        "postgres_relation_size",
+                        definition,
+                    ),
+                ),
+            )
+        connection = await AsyncConnection.connect(disposable_control_dsn)
+        try:
+            cursor = await connection.execute(
+                "SELECT count(*) FROM control.source_resource_observations "
+                "WHERE source_id = %s",
+                (source_id,),
+            )
+            assert await cursor.fetchone() == (0,)
+        finally:
+            await connection.close()
+    finally:
+        await store.close()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_concurrent_resource_reports_preserve_latest_db_clock_sample(
+    disposable_control_dsn: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_id = "resource-concurrent-source"
+    store_a, metadata_revision = await _publish_observation_source(
+        disposable_control_dsn,
+        source_id,
+    )
+    store_b = PostgresSourceStore(disposable_control_dsn)
+    definition = f"sha256:{'4' * 64}"
+    first_acquired = asyncio.Event()
+    second_reached = asyncio.Event()
+    release_first = asyncio.Event()
+    call_count = 0
+    original_lock = source_store_module._lock_resource_observation
+
+    async def coordinated_lock(connection: object, locked_source_id: str) -> None:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            await original_lock(connection, locked_source_id)
+            first_acquired.set()
+            await release_first.wait()
+            return
+        second_reached.set()
+        await original_lock(connection, locked_source_id)
+
+    monkeypatch.setattr(
+        source_store_module,
+        "_lock_resource_observation",
+        coordinated_lock,
+    )
+    first_task: asyncio.Task[None] | None = None
+    second_task: asyncio.Task[None] | None = None
+    try:
+        first_task = asyncio.create_task(
+            store_a.report_resource_observations(
+                source_id,
+                metadata_revision,
+                (
+                    _ResourceObservationWrite(
+                        "table_bytes",
+                        10,
+                        "bytes",
+                        "postgres_relation_size",
+                        definition,
+                    ),
+                    _ResourceObservationWrite(
+                        "index_bytes",
+                        2,
+                        "bytes",
+                        "postgres_relation_size",
+                        definition,
+                    ),
+                ),
+            )
+        )
+        await asyncio.wait_for(first_acquired.wait(), timeout=1)
+        second_task = asyncio.create_task(
+            store_b.report_resource_observations(
+                source_id,
+                metadata_revision,
+                (
+                    _ResourceObservationWrite(
+                        "index_bytes",
+                        4,
+                        "bytes",
+                        "postgres_relation_size",
+                        definition,
+                    ),
+                    _ResourceObservationWrite(
+                        "table_bytes",
+                        20,
+                        "bytes",
+                        "postgres_relation_size",
+                        definition,
+                    ),
+                ),
+            )
+        )
+        await asyncio.wait_for(second_reached.wait(), timeout=1)
+        release_first.set()
+        async with asyncio.timeout(10):
+            await asyncio.gather(first_task, second_task)
+
+        connection = await AsyncConnection.connect(disposable_control_dsn)
+        try:
+            cursor = await connection.execute(
+                "SELECT metric, value, previous_value, "
+                "fresh_until - observed_at "
+                "FROM control.source_resource_observations "
+                "WHERE source_id = %s ORDER BY metric",
+                (source_id,),
+            )
+            assert await cursor.fetchall() == [
+                ("index_bytes", 4, None, timedelta(hours=72)),
+                ("table_bytes", 20, None, timedelta(hours=72)),
+            ]
+        finally:
+            await connection.close()
+    finally:
+        release_first.set()
+        for task in (first_task, second_task):
+            if task is not None and not task.done():
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+        await store_b.close()
+        await store_a.close()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_empty_gateway_report_advances_and_replays_cursor_without_rollup(
+    disposable_control_dsn: str,
+) -> None:
+    replica_id = "gateway-empty-replica"
+    store = PostgresSourceStore(disposable_control_dsn)
+    try:
+        incarnation = await store.register_replica(replica_id, 5_000)
+        await store.report_gateway_usage(replica_id, incarnation, 1, ())
+        first = await _gateway_usage_rows(
+            disposable_control_dsn,
+            "missing-empty-source",
+            replica_id,
+        )
+        assert first[0] == []
+        assert len(first[1]) == 1
+        assert first[1][0][0:3] == (replica_id, incarnation, 1)
+        assert first[1][0][3].startswith("sha256:")
+        assert first[1][0][5] - first[1][0][4] == timedelta(seconds=180)
+
+        await store.report_gateway_usage(replica_id, incarnation, 1, ())
+        assert await _gateway_usage_rows(
+            disposable_control_dsn,
+            "missing-empty-source",
+            replica_id,
+        ) == first
+
+        await store.report_gateway_usage(replica_id, incarnation, 2, ())
+        advanced = await _gateway_usage_rows(
+            disposable_control_dsn,
+            "missing-empty-source",
+            replica_id,
+        )
+        assert advanced[0] == []
+        assert advanced[1][0][0:3] == (replica_id, incarnation, 2)
+        assert advanced[1][0][5] - advanced[1][0][4] == timedelta(seconds=180)
+    finally:
+        await store.close()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_gateway_usage_rejects_buckets_outside_logical_window_atomically(
+    disposable_control_dsn: str,
+) -> None:
+    source_id = "gateway-window-source"
+    replica_id = "gateway-window-replica"
+    store, metadata_revision = await _publish_observation_source(
+        disposable_control_dsn,
+        source_id,
+    )
+    try:
+        incarnation = await store.register_replica(replica_id, 5_000)
+        current_bucket = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+        for bucket_start in (
+            current_bucket - timedelta(days=31, hours=1),
+            current_bucket + timedelta(hours=1),
+        ):
+            with pytest.raises(ValueError, match="outside the retention window"):
+                await store.report_gateway_usage(
+                    replica_id,
+                    incarnation,
+                    1,
+                    (
+                        _gateway_usage_delta(
+                            source_id,
+                            metadata_revision,
+                            bucket_start=bucket_start,
+                        ),
+                    ),
+                )
+
+        assert await _gateway_usage_rows(
+            disposable_control_dsn,
+            source_id,
+            replica_id,
+        ) == ([], [])
+
+        old_delta = _gateway_usage_delta(
+            source_id,
+            metadata_revision,
+            bucket_start=current_bucket - timedelta(days=31, hours=1),
+        )
+        payload_hash = source_store_module._gateway_usage_payload_hash((old_delta,))
+        connection = await AsyncConnection.connect(disposable_control_dsn)
+        try:
+            await connection.execute(
+                "WITH old_clock AS MATERIALIZED ("
+                "SELECT clock_timestamp() - interval '32 days' AS observed_at"
+                ") INSERT INTO control.gateway_usage_report_cursors "
+                "(replica_id, incarnation, last_sequence, last_payload_hash, "
+                "observed_at, fresh_until) SELECT %s, %s, 1, %s, observed_at, "
+                "observed_at + interval '180 seconds' FROM old_clock",
+                (replica_id, incarnation, payload_hash),
+            )
+            await connection.commit()
+        finally:
+            await connection.close()
+
+        before_replay = await _gateway_usage_rows(
+            disposable_control_dsn,
+            source_id,
+            replica_id,
+        )
+        await store.report_gateway_usage(
+            replica_id,
+            incarnation,
+            1,
+            (old_delta,),
+        )
+        assert await _gateway_usage_rows(
+            disposable_control_dsn,
+            source_id,
+            replica_id,
+        ) == before_replay
+    finally:
+        await store.close()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_gateway_source_lock_wait_does_not_block_replica_heartbeat(
+    disposable_control_dsn: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_id = "gateway-lock-source"
+    replica_id = "gateway-lock-replica"
+    store, metadata_revision = await _publish_observation_source(
+        disposable_control_dsn,
+        source_id,
+    )
+    blocker = await AsyncConnection.connect(disposable_control_dsn)
+    gateway_task: asyncio.Task[None] | None = None
+    original_lock = source_store_module._lock_gateway_usage
+    gateway_reached_lock = asyncio.Event()
+
+    async def tracked_lock(connection: object, locked_source_id: str) -> None:
+        gateway_reached_lock.set()
+        await original_lock(connection, locked_source_id)
+
+    monkeypatch.setattr(source_store_module, "_lock_gateway_usage", tracked_lock)
+    try:
+        incarnation = await store.register_replica(replica_id, 5_000)
+        async with blocker.transaction():
+            await original_lock(blocker, source_id)
+            gateway_task = asyncio.create_task(
+                store.report_gateway_usage(
+                    replica_id,
+                    incarnation,
+                    1,
+                    (_gateway_usage_delta(source_id, metadata_revision),),
+                )
+            )
+            await asyncio.wait_for(gateway_reached_lock.wait(), timeout=1)
+            await asyncio.sleep(0)
+
+            await asyncio.wait_for(
+                store.report_replica(
+                    replica_id,
+                    incarnation,
+                    reason_code="CONTROL_SCAN_FAILED",
+                    sources=(),
+                ),
+                timeout=1,
+            )
+            assert not gateway_task.done()
+
+        await asyncio.wait_for(gateway_task, timeout=5)
+        rollups, cursors = await _gateway_usage_rows(
+            disposable_control_dsn,
+            source_id,
+            replica_id,
+        )
+        assert len(rollups) == 1
+        assert cursors[0][0:3] == (replica_id, incarnation, 1)
+    finally:
+        if gateway_task is not None and not gateway_task.done():
+            gateway_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await gateway_task
+        await blocker.close()
+        await store.close()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_concurrent_gateway_reports_do_not_regress_rollup_observed_at(
+    disposable_control_dsn: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_id = "gateway-observed-at-source"
+    store_a, metadata_revision = await _publish_observation_source(
+        disposable_control_dsn,
+        source_id,
+    )
+    store_b = PostgresSourceStore(disposable_control_dsn)
+    replica_a = "gateway-observed-at-a"
+    replica_b = "gateway-observed-at-b"
+    first_reached = asyncio.Event()
+    release_first = asyncio.Event()
+    call_count = 0
+    original_lock = source_store_module._lock_gateway_usage
+
+    async def delay_first_lock(connection: object, locked_source_id: str) -> None:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            first_reached.set()
+            await release_first.wait()
+        await original_lock(connection, locked_source_id)
+
+    monkeypatch.setattr(source_store_module, "_lock_gateway_usage", delay_first_lock)
+    first_task: asyncio.Task[None] | None = None
+    try:
+        incarnation_a = await store_a.register_replica(replica_a, 5_000)
+        incarnation_b = await store_b.register_replica(replica_b, 5_000)
+        delta = _gateway_usage_delta(source_id, metadata_revision)
+        first_task = asyncio.create_task(
+            store_a.report_gateway_usage(
+                replica_a,
+                incarnation_a,
+                1,
+                (delta,),
+            )
+        )
+        await asyncio.wait_for(first_reached.wait(), timeout=1)
+        await store_b.report_gateway_usage(
+            replica_b,
+            incarnation_b,
+            1,
+            (delta,),
+        )
+
+        connection = await AsyncConnection.connect(disposable_control_dsn)
+        try:
+            cursor = await connection.execute(
+                "SELECT observed_at FROM control.gateway_usage_rollups "
+                "WHERE source_id = %s AND budget_profile = 'interactive'",
+                (source_id,),
+            )
+            newer_row = await cursor.fetchone()
+            assert newer_row is not None
+            newer_observed_at = newer_row[0]
+        finally:
+            await connection.close()
+
+        release_first.set()
+        await asyncio.wait_for(first_task, timeout=5)
+        connection = await AsyncConnection.connect(disposable_control_dsn)
+        try:
+            cursor = await connection.execute(
+                "SELECT query_count, success_count, observed_at "
+                "FROM control.gateway_usage_rollups "
+                "WHERE source_id = %s AND budget_profile = 'interactive'",
+                (source_id,),
+            )
+            assert await cursor.fetchone() == (2, 2, newer_observed_at)
+        finally:
+            await connection.close()
+    finally:
+        release_first.set()
+        if first_task is not None and not first_task.done():
+            first_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await first_task
+        await store_b.close()
+        await store_a.close()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_concurrent_first_gateway_reports_are_idempotent_and_conflict_safe(
+    disposable_control_dsn: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_id = "gateway-first-report-source"
+    store_a, metadata_revision = await _publish_observation_source(
+        disposable_control_dsn,
+        source_id,
+    )
+    store_b = PostgresSourceStore(disposable_control_dsn)
+    same_replica = "gateway-first-report-same"
+    conflict_replica = "gateway-first-report-conflict"
+    original_lock = source_store_module._lock_gateway_reporter
+    barrier = asyncio.Barrier(2)
+
+    async def synchronized_lock(connection: object, replica_id: str) -> None:
+        await barrier.wait()
+        await original_lock(connection, replica_id)
+
+    monkeypatch.setattr(source_store_module, "_lock_gateway_reporter", synchronized_lock)
+    delta = _gateway_usage_delta(source_id, metadata_revision)
+    try:
+        same_incarnation = await store_a.register_replica(same_replica, 5_000)
+        async with asyncio.timeout(10):
+            await asyncio.gather(
+                store_a.report_gateway_usage(
+                    same_replica,
+                    same_incarnation,
+                    1,
+                    (delta,),
+                ),
+                store_b.report_gateway_usage(
+                    same_replica,
+                    same_incarnation,
+                    1,
+                    (delta,),
+                ),
+            )
+        rollups, cursors = await _gateway_usage_rows(
+            disposable_control_dsn,
+            source_id,
+            same_replica,
+        )
+        assert len(rollups) == 1
+        assert rollups[0][5:] == (1, 1, 0, 0, 0, 0, 0, 2, 3, 4, 5, 0)
+        assert cursors[0][0:3] == (same_replica, same_incarnation, 1)
+
+        barrier = asyncio.Barrier(2)
+        conflict_incarnation = await store_a.register_replica(conflict_replica, 5_000)
+        payloads = ((delta,), (replace(delta, result_bytes_sum=6),))
+        async with asyncio.timeout(10):
+            results = await asyncio.gather(
+                store_a.report_gateway_usage(
+                    conflict_replica,
+                    conflict_incarnation,
+                    1,
+                    payloads[0],
+                ),
+                store_b.report_gateway_usage(
+                    conflict_replica,
+                    conflict_incarnation,
+                    1,
+                    payloads[1],
+                ),
+                return_exceptions=True,
+            )
+        assert sum(result is None for result in results) == 1
+        assert sum(
+            isinstance(result, GatewayUsageConflictError) for result in results
+        ) == 1
+        winner = next(index for index, result in enumerate(results) if result is None)
+        rollups, cursors = await _gateway_usage_rows(
+            disposable_control_dsn,
+            source_id,
+            conflict_replica,
+        )
+        assert rollups[0][5:7] == (2, 2)
+        assert rollups[0][15] in (10, 11)
+        assert cursors[0][0:4] == (
+            conflict_replica,
+            conflict_incarnation,
+            1,
+            source_store_module._gateway_usage_payload_hash(payloads[winner]),
+        )
+    finally:
+        await store_b.close()
+        await store_a.close()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_gateway_usage_is_fenced_idempotent_additive_and_atomic(
+    disposable_control_dsn: str,
+) -> None:
+    source_id = "gateway-usage-source"
+    replica_id = "gateway-replica"
+    store, metadata_revision = await _publish_observation_source(
+        disposable_control_dsn,
+        source_id,
+    )
+    delta = _gateway_usage_delta(source_id, metadata_revision)
+    maximum_batch = (delta,) * 100
+    try:
+        incarnation = await store.register_replica(replica_id, 5_000)
+        await store.report_gateway_usage(
+            replica_id,
+            incarnation,
+            1,
+            maximum_batch,
+        )
+        first = await _gateway_usage_rows(
+            disposable_control_dsn,
+            source_id,
+            replica_id,
+        )
+        assert len(first[0]) == 1
+        assert first[0][0][5:] == (
+            100,
+            100,
+            0,
+            0,
+            0,
+            0,
+            0,
+            200,
+            300,
+            400,
+            500,
+            0,
+        )
+        assert len(first[1]) == 1
+        assert first[1][0][0:3] == (replica_id, incarnation, 1)
+        assert first[1][0][3].startswith("sha256:")
+        assert first[1][0][5] - first[1][0][4] == timedelta(seconds=180)
+
+        await store.report_gateway_usage(
+            replica_id,
+            incarnation,
+            1,
+            maximum_batch,
+        )
+        assert await _gateway_usage_rows(
+            disposable_control_dsn,
+            source_id,
+            replica_id,
+        ) == first
+
+        changed_payload = (
+            replace(delta, result_bytes_sum=delta.result_bytes_sum + 1),
+            *maximum_batch[1:],
+        )
+        with pytest.raises(GatewayUsageConflictError):
+            await store.report_gateway_usage(
+                replica_id,
+                incarnation,
+                1,
+                changed_payload,
+            )
+        with pytest.raises(GatewayUsageConflictError):
+            await store.report_gateway_usage(
+                replica_id,
+                incarnation,
+                3,
+                (delta,),
+            )
+        assert await _gateway_usage_rows(
+            disposable_control_dsn,
+            source_id,
+            replica_id,
+        ) == first
+
+        await store.report_gateway_usage(
+            replica_id,
+            incarnation,
+            2,
+            (delta,),
+        )
+        added = await _gateway_usage_rows(
+            disposable_control_dsn,
+            source_id,
+            replica_id,
+        )
+        assert added[0][0][5:] == (
+            101,
+            101,
+            0,
+            0,
+            0,
+            0,
+            0,
+            202,
+            303,
+            404,
+            505,
+            0,
+        )
+        assert added[1][0][0:3] == (replica_id, incarnation, 2)
+
+        with pytest.raises(Error):
+            await store.report_gateway_usage(
+                replica_id,
+                incarnation,
+                3,
+                (
+                    delta,
+                    replace(delta, source_id="missing-gateway-source"),
+                ),
+            )
+        assert await _gateway_usage_rows(
+            disposable_control_dsn,
+            source_id,
+            replica_id,
+        ) == added
+
+        new_incarnation = await store.register_replica(replica_id, 5_000)
+        assert new_incarnation == incarnation + 1
+        with pytest.raises(GatewayUsageConflictError):
+            await store.report_gateway_usage(
+                replica_id,
+                incarnation,
+                3,
+                (delta,),
+            )
+        await store.report_gateway_usage(
+            replica_id,
+            new_incarnation,
+            1,
+            (delta,),
+        )
+        restarted = await _gateway_usage_rows(
+            disposable_control_dsn,
+            source_id,
+            replica_id,
+        )
+        assert restarted[0][0][5:] == (
+            102,
+            102,
+            0,
+            0,
+            0,
+            0,
+            0,
+            204,
+            306,
+            408,
+            510,
+            0,
+        )
+        assert restarted[1][0][0:3] == (replica_id, new_incarnation, 1)
+    finally:
+        await store.close()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_gateway_usage_caps_touched_source_without_age_based_deletion(
+    disposable_control_dsn: str,
+) -> None:
+    source_id = "gateway-pruning-source"
+    other_source_id = "gateway-pruning-other"
+    store, metadata_revision = await _publish_observation_source(
+        disposable_control_dsn,
+        source_id,
+    )
+    other_store, other_metadata_revision = await _publish_observation_source(
+        disposable_control_dsn,
+        other_source_id,
+    )
+    replica_id = "gateway-pruning-replica"
+    definition_revision = f"sha256:{'1' * 64}"
+    connection = await AsyncConnection.connect(disposable_control_dsn)
+    try:
+        cursor = await connection.execute(
+            "SELECT date_trunc('hour', clock_timestamp() AT TIME ZONE 'UTC') "
+            "AT TIME ZONE 'UTC'"
+        )
+        clock_row = await cursor.fetchone()
+        assert clock_row is not None
+        current_bucket = clock_row[0]
+        assert isinstance(current_bucket, datetime)
+        old_bucket = current_bucket - timedelta(days=31, hours=1)
+
+        await connection.execute(
+            "INSERT INTO control.gateway_usage_rollups "
+            "(source_id, budget_profile, metadata_revision, "
+            "definition_revision, bucket_start, query_count, success_count, "
+            "rejected_count, timeout_count, overloaded_count, cancelled_count, "
+            "failed_count, queue_ms_sum, elapsed_ms_sum, returned_rows_sum, "
+            "result_bytes_sum, truncated_count, observed_at) "
+            "SELECT %s, 'profile_' || lpad(item::text, 4, '0'), %s, %s, %s, "
+            "1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "
+            "%s - (1001 - item) * interval '1 second' "
+            "FROM generate_series(0, 1000) AS item",
+            (
+                source_id,
+                metadata_revision,
+                definition_revision,
+                current_bucket,
+                current_bucket,
+            ),
+        )
+        await connection.execute(
+            "INSERT INTO control.gateway_usage_rollups "
+            "(source_id, budget_profile, metadata_revision, "
+            "definition_revision, bucket_start, query_count, success_count, "
+            "rejected_count, timeout_count, overloaded_count, cancelled_count, "
+            "failed_count, queue_ms_sum, elapsed_ms_sum, returned_rows_sum, "
+            "result_bytes_sum, truncated_count, observed_at) "
+            "VALUES (%s, 'old_profile', %s, %s, %s, "
+            "1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, %s)",
+            (
+                other_source_id,
+                other_metadata_revision,
+                definition_revision,
+                old_bucket,
+                old_bucket,
+            ),
+        )
+        await connection.commit()
+
+        cursor = await connection.execute(
+            "SELECT source_id, count(*) FROM control.gateway_usage_rollups "
+            "GROUP BY source_id ORDER BY source_id"
+        )
+        assert await cursor.fetchall() == [
+            (other_source_id, 1),
+            (source_id, 1_001),
+        ]
+    finally:
+        await connection.close()
+
+    try:
+        incarnation = await store.register_replica(replica_id, 5_000)
+        await store.report_gateway_usage(
+            replica_id,
+            incarnation,
+            1,
+            (
+                _gateway_usage_delta(
+                    source_id,
+                    metadata_revision,
+                    bucket_start=current_bucket,
+                ),
+                _gateway_usage_delta(
+                    other_source_id,
+                    other_metadata_revision,
+                    bucket_start=current_bucket,
+                ),
+            ),
+        )
+
+        connection = await AsyncConnection.connect(disposable_control_dsn)
+        try:
+            cursor = await connection.execute(
+                "SELECT count(*), "
+                "bool_or(budget_profile = 'profile_0000'), "
+                "bool_or(budget_profile = 'profile_0001'), "
+                "bool_or(budget_profile = 'profile_0002'), "
+                "bool_or(budget_profile = 'profile_1000'), "
+                "bool_or(budget_profile = 'interactive') "
+                "FROM control.gateway_usage_rollups WHERE source_id = %s",
+                (source_id,),
+            )
+            assert await cursor.fetchone() == (
+                1_000,
+                False,
+                False,
+                True,
+                True,
+                True,
+            )
+            cursor = await connection.execute(
+                "SELECT count(*), "
+                "bool_or(budget_profile = 'old_profile'), "
+                "bool_or(budget_profile = 'interactive'), "
+                "min(bucket_start) < %s "
+                "FROM control.gateway_usage_rollups WHERE source_id = %s",
+                (current_bucket - timedelta(days=31), other_source_id),
+            )
+            assert await cursor.fetchone() == (2, True, True, True)
+        finally:
+            await connection.close()
+    finally:
+        await other_store.close()
+        await store.close()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_two_replicas_preserve_gateway_cap_and_replay_concurrently(
+    disposable_control_dsn: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_id = "gateway-concurrent-source"
+    store_a, metadata_revision = await _publish_observation_source(
+        disposable_control_dsn,
+        source_id,
+    )
+    store_b = PostgresSourceStore(disposable_control_dsn)
+    replica_a = "gateway-concurrent-a"
+    replica_b = "gateway-concurrent-b"
+    connection = await AsyncConnection.connect(disposable_control_dsn)
+    try:
+        cursor = await connection.execute(
+            "SELECT date_trunc('hour', clock_timestamp() AT TIME ZONE 'UTC') "
+            "AT TIME ZONE 'UTC'"
+        )
+        clock_row = await cursor.fetchone()
+        assert clock_row is not None
+        current_bucket = clock_row[0]
+        assert isinstance(current_bucket, datetime)
+        await connection.execute(
+            "INSERT INTO control.gateway_usage_rollups "
+            "(source_id, budget_profile, metadata_revision, "
+            "definition_revision, bucket_start, query_count, success_count, "
+            "observed_at) "
+            "SELECT %s, 'seed_' || lpad(item::text, 4, '0'), %s, %s, %s, 1, 1, "
+            "%s - (998 - item) * interval '1 second' "
+            "FROM generate_series(0, 997) AS item",
+            (
+                source_id,
+                metadata_revision,
+                f"sha256:{'2' * 64}",
+                current_bucket,
+                current_bucket,
+            ),
+        )
+        await connection.commit()
+    finally:
+        await connection.close()
+
+    original_lock = source_store_module._lock_gateway_usage
+    barrier = asyncio.Barrier(2)
+
+    async def synchronized_lock(connection: object, locked_source_id: str) -> None:
+        await barrier.wait()
+        await original_lock(connection, locked_source_id)
+
+    monkeypatch.setattr(source_store_module, "_lock_gateway_usage", synchronized_lock)
+    shared = replace(
+        _gateway_usage_delta(
+            source_id,
+            metadata_revision,
+            bucket_start=current_bucket,
+        ),
+        budget_profile="shared",
+    )
+    alpha_only = replace(shared, budget_profile="alpha_only")
+    beta_only = replace(shared, budget_profile="beta_only")
+    try:
+        incarnation_a = await store_a.register_replica(replica_a, 5_000)
+        incarnation_b = await store_b.register_replica(replica_b, 5_000)
+        reports = (
+            store_a.report_gateway_usage(
+                replica_a,
+                incarnation_a,
+                1,
+                (shared, alpha_only),
+            ),
+            store_b.report_gateway_usage(
+                replica_b,
+                incarnation_b,
+                1,
+                (shared, beta_only),
+            ),
+        )
+        async with asyncio.timeout(10):
+            await asyncio.gather(*reports)
+
+        connection = await AsyncConnection.connect(disposable_control_dsn)
+        try:
+            cursor = await connection.execute(
+                "SELECT count(*), "
+                "bool_or(budget_profile = 'seed_0000'), "
+                "bool_and(budget_profile IN ('shared', 'alpha_only', 'beta_only')) "
+                "FILTER (WHERE budget_profile IN "
+                "('shared', 'alpha_only', 'beta_only')) "
+                "FROM control.gateway_usage_rollups WHERE source_id = %s",
+                (source_id,),
+            )
+            assert await cursor.fetchone() == (1_000, False, True)
+            cursor = await connection.execute(
+                "SELECT query_count, success_count, queue_ms_sum, elapsed_ms_sum, "
+                "returned_rows_sum, result_bytes_sum "
+                "FROM control.gateway_usage_rollups "
+                "WHERE source_id = %s AND budget_profile = 'shared'",
+                (source_id,),
+            )
+            assert await cursor.fetchone() == (2, 2, 4, 6, 8, 10)
+            cursor = await connection.execute(
+                "SELECT replica_id, incarnation, last_sequence "
+                "FROM control.gateway_usage_report_cursors "
+                "WHERE replica_id IN (%s, %s) ORDER BY replica_id",
+                (replica_a, replica_b),
+            )
+            assert await cursor.fetchall() == [
+                (replica_a, incarnation_a, 1),
+                (replica_b, incarnation_b, 1),
+            ]
+            cursor = await connection.execute(
+                "SELECT md5(string_agg(row_to_json(rollup)::text, '|' "
+                "ORDER BY budget_profile, metadata_revision, definition_revision, "
+                "bucket_start)) FROM control.gateway_usage_rollups AS rollup "
+                "WHERE source_id = %s",
+                (source_id,),
+            )
+            before_replay = await cursor.fetchone()
+        finally:
+            await connection.close()
+
+        await asyncio.gather(
+            store_a.report_gateway_usage(
+                replica_a,
+                incarnation_a,
+                1,
+                (shared, alpha_only),
+            ),
+            store_b.report_gateway_usage(
+                replica_b,
+                incarnation_b,
+                1,
+                (shared, beta_only),
+            ),
+        )
+        connection = await AsyncConnection.connect(disposable_control_dsn)
+        try:
+            cursor = await connection.execute(
+                "SELECT md5(string_agg(row_to_json(rollup)::text, '|' "
+                "ORDER BY budget_profile, metadata_revision, definition_revision, "
+                "bucket_start)) FROM control.gateway_usage_rollups AS rollup "
+                "WHERE source_id = %s",
+                (source_id,),
+            )
+            assert await cursor.fetchone() == before_replay
+        finally:
+            await connection.close()
+    finally:
+        await store_b.close()
+        await store_a.close()
+
+
+@pytest.mark.asyncio
+async def test_resource_and_gateway_reports_reject_batches_above_contract_limits() -> None:
+    store = PostgresSourceStore("postgresql://unused")
+    definition = f"sha256:{'e' * 64}"
+    sample = _ResourceObservationWrite(
+        "table_bytes",
+        1,
+        "bytes",
+        "postgres_relation_size",
+        definition,
+    )
+    delta = _gateway_usage_delta("bounded-source", f"sha256:{'f' * 64}")
+
+    with pytest.raises(ValueError, match="batch size"):
+        await store.report_resource_observations(
+            "bounded-source",
+            f"sha256:{'f' * 64}",
+            (),
+        )
+    with pytest.raises(ValueError, match="batch size"):
+        await store.report_resource_observations(
+            "bounded-source",
+            f"sha256:{'f' * 64}",
+            (sample,) * 5,
+        )
+    with pytest.raises(ValueError, match="batch is too large"):
+        await store.report_gateway_usage(
+            "bounded-replica",
+            1,
+            1,
+            (delta,) * 101,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "success_only_field",
+    [
+        "queue_ms_sum",
+        "elapsed_ms_sum",
+        "returned_rows_sum",
+        "result_bytes_sum",
+    ],
+)
+async def test_gateway_report_rejects_success_only_sums_without_success_before_io(
+    success_only_field: str,
+) -> None:
+    store = PostgresSourceStore("postgresql://unused")
+    delta = replace(
+        _gateway_usage_delta("bounded-source", f"sha256:{'f' * 64}"),
+        success_count=0,
+        rejected_count=1,
+        queue_ms_sum=0,
+        elapsed_ms_sum=0,
+        returned_rows_sum=0,
+        result_bytes_sum=0,
+    )
+    invalid_delta = replace(delta, **{success_only_field: 1})
+
+    with pytest.raises(ValueError, match="success-only sums"):
+        await store.report_gateway_usage(
+            "bounded-replica",
+            1,
+            1,
+            (invalid_delta,),
+        )
 
 
 @pytest.mark.asyncio

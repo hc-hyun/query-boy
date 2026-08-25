@@ -38,7 +38,7 @@ from query_man.errors import (
 )
 from query_man.mcp_server import MCP_PROTOCOL_VERSION
 from query_man.metadata import MetadataService
-from query_man.models import CatalogSnapshot, SourceProfile
+from query_man.models import CatalogSnapshot, ResourceObservation, SourceProfile
 from query_man.query import PostgresQueryExecutor, QueryService
 from query_man.reader_policy import (
     ReaderSessionPolicyError,
@@ -196,6 +196,12 @@ class DisconnectCatalog:
 
     async def invalidate(self, _source_id: str) -> None:
         pass
+
+    async def observe_resources(
+        self,
+        _source: SourceProfile,
+    ) -> ResourceObservation:
+        raise RuntimeError("Resource observation should not be called")
 
 
 class DisconnectExecutor:

@@ -13,9 +13,11 @@ from query_man.app import _until_disconnect
 from query_man.errors import (
     MetadataRevisionMismatchError,
     QueryInvalidError,
+    QueryOverloadedError,
     QueryRejectedError,
     QueryTimeoutError,
     QueryUnavailableError,
+    SourceNotFoundError,
 )
 from query_man.metadata import MetadataService
 from query_man.models import CatalogSnapshot, SourceProfile
@@ -120,6 +122,25 @@ class RecordingExecutor:
 
     async def cancel(self, _query_id: str) -> bool:
         return False
+
+
+class FailingExecutor(RecordingExecutor):
+    def __init__(self, error: BaseException) -> None:
+        super().__init__()
+        self.error = error
+
+    async def execute(
+        self,
+        source: SourceProfile,
+        sql: str,
+        metadata_revision: str,
+        validated: ValidatedSql,
+        *,
+        query_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> dict[str, object]:
+        self.calls.append((source, sql, metadata_revision, validated))
+        raise self.error
 
 
 class _PlanCursor:
@@ -243,6 +264,232 @@ async def test_validates_revision_and_sql_before_execution() -> None:
     assert response["status"] == "ok"
     assert len(executor.calls) == 1
     assert executor.calls[0][3].relations == ("ai.issue_overview",)
+
+
+@pytest.mark.asyncio
+async def test_success_records_one_gateway_terminal_with_success_only_sums() -> None:
+    service, metadata, _executor = query_service()
+    published = await metadata.get_published("development-issues")
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+    operations.reset()
+    try:
+        response = await service.query(
+            source.source_id,
+            "SELECT count(*) AS issue_count FROM ai.issue_overview",
+            published.revision,
+            SQL_POLICY_REVISION,
+        )
+
+        snapshot = operations.gateway_usage_report_snapshot()
+        assert snapshot is not None
+        assert len(snapshot.deltas) == 1
+        delta = snapshot.deltas[0]
+        assert delta.source_id == source.source_id
+        assert delta.budget_profile == source.budget.name
+        assert delta.metadata_revision == published.revision
+        assert delta.query_count == 1
+        assert (
+            delta.success_count,
+            delta.rejected_count,
+            delta.timeout_count,
+            delta.overloaded_count,
+            delta.cancelled_count,
+            delta.failed_count,
+        ) == (1, 0, 0, 0, 0, 0)
+        assert delta.queue_ms_sum == response["queue_ms"] == 0
+        assert delta.elapsed_ms_sum == response["elapsed_ms"] == 1
+        assert delta.returned_rows_sum == response["row_count"] == 1
+        assert delta.result_bytes_sum == response["result_bytes"] == 19
+        assert delta.truncated_count == 0
+    finally:
+        operations.reset()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("terminal_error", "counts"),
+    [
+        (QueryRejectedError("QUERY_PLAN_COST_EXCEEDED"), (0, 1, 0, 0, 0, 0)),
+        (QueryInvalidError("QUERY_INVALID_CAST"), (0, 1, 0, 0, 0, 0)),
+        (QueryOverloadedError(), (0, 0, 0, 1, 0, 0)),
+        (QueryTimeoutError(), (0, 0, 1, 0, 0, 0)),
+        (query_module._QueryCancelledTimeoutError(), (0, 0, 0, 0, 1, 0)),
+        (query_module._QueryCancelledUnavailableError(), (0, 0, 0, 0, 1, 0)),
+        (asyncio.CancelledError(), (0, 0, 0, 0, 1, 0)),
+        (QueryUnavailableError(), (0, 0, 0, 0, 0, 1)),
+        (RuntimeError("bounded internal failure"), (0, 0, 0, 0, 0, 1)),
+    ],
+    ids=[
+        "rejected",
+        "invalid-user-sql",
+        "overloaded",
+        "timeout",
+        "operator-or-shutdown-cancelled",
+        "queued-shutdown-cancelled",
+        "disconnect-cancelled",
+        "unavailable",
+        "unexpected-failure",
+    ],
+)
+async def test_query_service_maps_each_terminal_to_exactly_one_gateway_category(
+    terminal_error: BaseException,
+    counts: tuple[int, int, int, int, int, int],
+) -> None:
+    registry = load_test_registry()
+    metadata = MetadataService(registry, StaticCatalog())
+    published = await metadata.get_published("development-issues")
+    service = QueryService(registry, metadata, FailingExecutor(terminal_error))
+    operations.reset()
+    try:
+        with pytest.raises(type(terminal_error)):
+            await service.query(
+                "development-issues",
+                "SELECT count(*) FROM ai.issue_overview",
+                published.revision,
+                SQL_POLICY_REVISION,
+            )
+
+        snapshot = operations.gateway_usage_report_snapshot()
+        assert snapshot is not None
+        assert len(snapshot.deltas) == 1
+        delta = snapshot.deltas[0]
+        assert delta.query_count == 1
+        assert (
+            delta.success_count,
+            delta.rejected_count,
+            delta.timeout_count,
+            delta.overloaded_count,
+            delta.cancelled_count,
+            delta.failed_count,
+        ) == counts
+        assert (
+            delta.queue_ms_sum,
+            delta.elapsed_ms_sum,
+            delta.returned_rows_sum,
+            delta.result_bytes_sum,
+            delta.truncated_count,
+        ) == (0, 0, 0, 0, 0)
+    finally:
+        operations.reset()
+
+
+@pytest.mark.asyncio
+async def test_revision_and_ast_rejections_are_each_recorded_once() -> None:
+    service, metadata, executor = query_service()
+    published = await metadata.get_published("development-issues")
+    operations.reset()
+    try:
+        with pytest.raises(MetadataRevisionMismatchError):
+            await service.query(
+                "development-issues",
+                "SELECT 1",
+                f"sha256:{'0' * 64}",
+                SQL_POLICY_REVISION,
+            )
+        with pytest.raises(QueryRejectedError):
+            await service.query(
+                "development-issues",
+                "DELETE FROM ai.issue_overview",
+                published.revision,
+                SQL_POLICY_REVISION,
+            )
+
+        snapshot = operations.gateway_usage_report_snapshot()
+        assert snapshot is not None
+        assert {delta.metadata_revision for delta in snapshot.deltas} == {
+            published.revision
+        }
+        assert sum(delta.query_count for delta in snapshot.deltas) == 2
+        assert sum(delta.rejected_count for delta in snapshot.deltas) == 2
+        assert all(
+            (
+                delta.success_count,
+                delta.timeout_count,
+                delta.overloaded_count,
+                delta.cancelled_count,
+                delta.failed_count,
+                delta.queue_ms_sum,
+                delta.elapsed_ms_sum,
+                delta.returned_rows_sum,
+                delta.result_bytes_sum,
+                delta.truncated_count,
+            )
+            == (0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+            for delta in snapshot.deltas
+        )
+        assert executor.calls == []
+    finally:
+        operations.reset()
+
+
+@pytest.mark.asyncio
+async def test_gateway_usage_excludes_failures_before_trusted_revision_attribution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, metadata, _executor = query_service()
+    operations.reset()
+    try:
+        with pytest.raises(SourceNotFoundError):
+            await service.query(
+                "unknown-source",
+                "SELECT 1",
+                "revision",
+                SQL_POLICY_REVISION,
+            )
+        assert operations.gateway_usage_report_snapshot() is None
+
+        async def fail_active_revision(_source_id: str) -> object:
+            raise RuntimeError("bounded active revision failure")
+
+        monkeypatch.setattr(metadata, "get_published", fail_active_revision)
+        with pytest.raises(RuntimeError, match="active revision"):
+            await service.query(
+                "development-issues",
+                "SELECT 1",
+                "revision",
+                SQL_POLICY_REVISION,
+            )
+        assert operations.gateway_usage_report_snapshot() is None
+    finally:
+        operations.reset()
+
+
+@pytest.mark.asyncio
+async def test_gateway_usage_recorder_failure_never_changes_query_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, metadata, _executor = query_service()
+    published = await metadata.get_published("development-issues")
+    operations.reset()
+
+    def fail_recorder(**_values: object) -> None:
+        raise RuntimeError("bounded recorder failure")
+
+    try:
+        monkeypatch.setattr(operations, "record_gateway_usage", fail_recorder)
+        response = await service.query(
+            "development-issues",
+            "SELECT count(*) AS issue_count FROM ai.issue_overview",
+            published.revision,
+            SQL_POLICY_REVISION,
+        )
+        assert response["status"] == "ok"
+
+        failed_service = QueryService(
+            load_test_registry(),
+            metadata,
+            FailingExecutor(QueryOverloadedError()),
+        )
+        with pytest.raises(QueryOverloadedError):
+            await failed_service.query(
+                "development-issues",
+                "SELECT count(*) FROM ai.issue_overview",
+                published.revision,
+                SQL_POLICY_REVISION,
+            )
+    finally:
+        operations.reset()
 
 
 @pytest.mark.asyncio
@@ -690,17 +937,20 @@ async def test_executor_distinguishes_operator_cancel_from_statement_timeout() -
         )
         await started.wait()
         assert await executor.cancel(query_id)
-        with pytest.raises(QueryTimeoutError):
+        with pytest.raises(QueryTimeoutError) as operator_cancelled:
             await pending
+        assert type(operator_cancelled.value) is query_module._QueryCancelledTimeoutError
+        assert operator_cancelled.value.code == "QUERY_TIMEOUT"
 
         wait_for_operator = False
-        with pytest.raises(QueryTimeoutError):
+        with pytest.raises(QueryTimeoutError) as timed_out:
             await executor.execute(
                 source,
                 "SELECT 1",
                 "test-revision",
                 validated,
             )
+        assert type(timed_out.value) is QueryTimeoutError
 
         metrics = {
             (metric["name"], metric.get("source_id")): metric["value"]
@@ -776,10 +1026,14 @@ async def test_drain_cancels_active_and_queued_admitted_queries() -> None:
 
     await executor.drain(0)
 
-    with pytest.raises(QueryTimeoutError):
+    with pytest.raises(QueryTimeoutError) as active_cancelled:
         await active
-    with pytest.raises(QueryUnavailableError):
+    assert type(active_cancelled.value) is query_module._QueryCancelledTimeoutError
+    assert active_cancelled.value.code == "QUERY_TIMEOUT"
+    with pytest.raises(QueryUnavailableError) as queued_cancelled:
         await queued
+    assert type(queued_cancelled.value) is query_module._QueryCancelledUnavailableError
+    assert queued_cancelled.value.code == "QUERY_UNAVAILABLE"
     assert executor._inflight == set()
     assert any(
         metric["name"] == "query_shutdown_cancelled"
@@ -839,8 +1093,10 @@ async def test_drain_cancels_admitted_query_waiting_for_pool_connection() -> Non
         await asyncio.wait_for(lease_waiting.wait(), 1)
         await asyncio.wait_for(executor.drain(1), 2)
 
-        with pytest.raises(QueryUnavailableError):
+        with pytest.raises(QueryUnavailableError) as queued_cancelled:
             await asyncio.wait_for(pending, 1)
+        assert type(queued_cancelled.value) is query_module._QueryCancelledUnavailableError
+        assert queued_cancelled.value.code == "QUERY_UNAVAILABLE"
         assert lease_released.is_set()
         assert executor._inflight == set()
         assert not executor._semaphores[source.source_id].locked()

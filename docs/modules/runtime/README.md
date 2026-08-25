@@ -37,7 +37,7 @@ Query Man은 현재 하나의 deployable process인 modular monolith다. Runtime
 ## 현재 코드 위치
 
 - [`app.py`](../../../src/query_man/app.py): `build_app`, dependency composition, lifespan, reload loop와
-  startup probe; middleware/routes/DTO는 Delivery 소유
+  startup probe, resource/gateway reporter; middleware/routes/DTO는 Delivery 소유
 - [`server.py`](../../../src/query_man/server.py): Uvicorn process와 shutdown signal ordering
 - [`runtime_config.py`](../../../src/query_man/runtime_config.py): environment model/validation과
   `RuntimeConfig`
@@ -186,7 +186,7 @@ Runtime이 공개 `ReplicaObservationWriter`와 `ReplicaSourceObservation`을 �
 Control Plane dependency다. `source_store.py`, observation table 또는 persistence-private type을
 직접 import하지 않는다.
 
-### Resource and gateway reporting contract (`CTRL-07A`, implementation pending)
+### Resource and gateway reporting contract (`CTRL-07A`, implemented)
 
 Managed Runtime은 source가 성공적으로 apply된 뒤 bounded catalog resource sample을 한 번 시도하고
 이후 24시간 cadence로 갱신한다. 같은 UTC day의 여러 replica report는 Control Plane에서 한 current
@@ -197,11 +197,15 @@ production observation을 publish하지 않는다.
 Gateway query의 trusted active `SourceProfile.budget.name`과 published metadata revision은 terminal
 event 시점에 Runtime-owned recorder로 전달한다. Recorder는 caller/tenant/query/SQL/fingerprint 없이
 UTC hourly delta를 만들고 최대 1,000 group만 보관한다. Reporter는 CTRL-06 heartbeat payload를
-확장하지 않는 별도 60초 best-effort loop이며 한 report에 최대 100 delta를 보낸다. Overflow는
-가장 오래된 pending group을 버리므로 값은 lower bound다.
+확장하지 않는 별도 60초 best-effort loop이며 트래픽이 없어도 empty payload를 보내 cursor
+freshness를 갱신한다. 한 report에는 최대 100 delta를 보내며 overflow는 가장 오래된 pending
+group을 버리므로 값은 lower bound다.
 
 Reporter는 existing stable replica ID/incarnation과 process-local monotonic sequence를 사용한다.
 Control success 뒤에만 pending delta를 제거하고 실패 시 같은 sequence/payload를 재시도한다.
+Resource와 gateway Control write는 하나의 process-local lock으로 직렬화해 기존 source store의
+max-two pool을 동시에 점유하지 않는다. Metadata max-two와 합친 process당 Control connection 최대
+4는 바뀌지 않으며 새 Control/source reader pool이나 identity를 만들지 않는다.
 Reporting/resource collection failure는 startup, readiness, query admission/result, source health,
 replica heartbeat, mutation receipt와 shutdown 성공을 바꾸지 않으며 cancellation은 삼키지 않는다.
 Bootstrap mode에는 Control observation writer/task가 없다. Existing `operations.snapshot()`,

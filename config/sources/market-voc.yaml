@@ -22,6 +22,16 @@ allowed_relation_kinds:
   - view
 budget_profile: interactive
 minimum_quality_level: L2
+observability:
+  representative_records:
+    grain: market_voc_case
+    physical_relation: voc.cases
+  storage_relations:
+    - voc.users
+    - voc.product_models
+    - voc.devices
+    - voc.cases
+    - voc.case_comments
 
 semantic_overlay:
   default_relation: ai.voc_overview

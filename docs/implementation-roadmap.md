@@ -330,6 +330,7 @@ client와 실제 PostgreSQL fixture를 사용해야 한다. 실행 결과와 남
 | `CTRL-04` | Strict manifest v2 provenance와 secret-free admin catalog/history를 구현했다. | [source management catalog audit](verification/2026-08-23-source-management-catalog.md) |
 | `CTRL-05` | Expected-state mutation, authoritative receipt와 append-only lifecycle history를 구현했다. | [source mutation receipt audit](verification/2026-08-23-source-mutation-receipts.md) |
 | `CTRL-06` | Stable managed replica가 desired/applied generation·state·metadata drift와 DB-clock freshness를 latest-only로 보고하고 operator가 source별로 조회하게 했다. | [runtime replica observation audit](verification/2026-08-25-runtime-replica-observations.md) |
+| `CTRL-07` | Optional manifest observability, bounded catalog resource sample과 privacy-safe gateway hourly lower-bound rollup을 migration 4에 저장했다. 31일은 logical visibility/input window이고 source당 최신 1,000행만 physical cap으로 유지한다. | [resource and gateway observation audit](verification/2026-08-25-resource-and-gateway-observations.md) |
 | `SQLX-01` | 기존 SQL validation baseline 뒤 window·ordered-set·문자열·JSON 함수 정책과 corpus를 보강했다. | Commit `de2b364`; [ADR 0001](decisions/0001-postgresql-ast-validation.md), [`test_sql_validation.py`](../tests/test_sql_validation.py) |
 | `QCORR-01` | 수정 가능한 query/argument 오류에 bounded reason별 correction action을 추가하고 한 번의 retry workflow를 고정했다. | Commit `de2b364`; [ADR 0002](decisions/0002-guarded-query-contract.md), [ADR 0006](decisions/0006-mcp-transport-and-workflow.md), [`test_query.py`](../tests/test_query.py), [`test_mcp.py`](../tests/test_mcp.py) |
 | `MOD-01` | 논리 module owner, 허용 dependency, 계약 승인과 module-scoped agent 절차를 문서·테스트로 고정했다. | Commit `de2b364`; [ADR 0018](decisions/0018-module-ownership-and-contract-governance.md), [module index](modules/README.md), [`test_documentation.py`](../tests/test_documentation.py) |
@@ -367,6 +368,6 @@ evidence가 해당 완료 작업의 상세 경계와 실행 증거를 보존한�
 | M14 Cost Attribution | `COST-*` | DB-native 사용량을 source/resource-tier time bucket으로 bounded 집계하고 운영 threshold를 고정한다. |
 | M15 Workflow Trace | `TRACE-*` | 여러 tool call과 retry를 bounded trace ID로 안전하게 연결한다. |
 
-M1부터 M11까지는 완료됐고 M12는 `CTRL-01`~`CTRL-06`까지 완료된 상태다. M12의
-`CTRL-07`~`CTRL-09`와 M13 이후는 active plan이다. 새로운 기능은 기존 완료 ID나 설명을
+M1부터 M11까지는 완료됐고 M12는 `CTRL-01`~`CTRL-07`까지 완료된 상태다. M12의
+`CTRL-08`~`CTRL-09`와 M13 이후는 active plan이다. 새로운 기능은 기존 완료 ID나 설명을
 소급 변경하지 않고 별도 roadmap 항목과 검증 가능한 exit condition을 추가한다.

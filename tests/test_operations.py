@@ -4,10 +4,14 @@ import json
 import logging
 import sys
 from dataclasses import FrozenInstanceError
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
 from query_man.operations import (
+    GATEWAY_USAGE_DEFINITION_REVISION,
+    GatewayUsageDelta,
+    GatewayUsageReportSnapshot,
     OperationalState,
     ReplicaRuntimeSnapshot,
     ReplicaSourceRuntimeState,
@@ -159,6 +163,228 @@ def test_metric_snapshot_sorts_global_and_source_labels_together() -> None:
             "value": 7.0,
         },
     ]
+
+
+def test_gateway_usage_groups_terminal_events_by_trusted_dimensions_and_utc_hour() -> None:
+    current = [datetime(2026, 8, 25, 10, 45, tzinfo=timezone(timedelta(hours=9)))]
+    state = OperationalState(clock=lambda: current[0])
+
+    state.record_gateway_usage(
+        source_id="source-a",
+        budget_profile="standard",
+        metadata_revision="revision-1",
+        outcome="success",
+        queue_ms=2,
+        elapsed_ms=7,
+        returned_rows=3,
+        result_bytes=41,
+        truncated=True,
+    )
+    state.record_gateway_usage(
+        source_id="source-a",
+        budget_profile="standard",
+        metadata_revision="revision-1",
+        outcome="rejected",
+        queue_ms=999,
+        elapsed_ms=999,
+        returned_rows=999,
+        result_bytes=999,
+        truncated=True,
+    )
+    state.record_gateway_usage(
+        source_id="source-a",
+        budget_profile="strict",
+        metadata_revision="revision-1",
+        outcome="timeout",
+    )
+    state.record_gateway_usage(
+        source_id="source-a",
+        budget_profile="standard",
+        metadata_revision="revision-2",
+        outcome="failed",
+    )
+    current[0] += timedelta(hours=1)
+    state.record_gateway_usage(
+        source_id="source-a",
+        budget_profile="standard",
+        metadata_revision="revision-1",
+        outcome="overloaded",
+    )
+
+    snapshot = state.gateway_usage_report_snapshot()
+
+    assert isinstance(snapshot, GatewayUsageReportSnapshot)
+    assert GATEWAY_USAGE_DEFINITION_REVISION.startswith("sha256:")
+    assert len(GATEWAY_USAGE_DEFINITION_REVISION) == 71
+    assert snapshot.deltas == tuple(
+        sorted(
+            snapshot.deltas,
+            key=lambda delta: (
+                delta.bucket_start,
+                delta.source_id,
+                delta.budget_profile,
+                delta.metadata_revision,
+                delta.definition_revision,
+            ),
+        )
+    )
+    by_dimension = {
+        (delta.budget_profile, delta.metadata_revision, delta.bucket_start): delta
+        for delta in snapshot.deltas
+    }
+    first_bucket = datetime(2026, 8, 25, 1, tzinfo=UTC)
+    combined = by_dimension[("standard", "revision-1", first_bucket)]
+    assert combined == GatewayUsageDelta(
+        source_id="source-a",
+        budget_profile="standard",
+        metadata_revision="revision-1",
+        definition_revision=GATEWAY_USAGE_DEFINITION_REVISION,
+        bucket_start=first_bucket,
+        query_count=2,
+        success_count=1,
+        rejected_count=1,
+        timeout_count=0,
+        overloaded_count=0,
+        cancelled_count=0,
+        failed_count=0,
+        queue_ms_sum=2,
+        elapsed_ms_sum=7,
+        returned_rows_sum=3,
+        result_bytes_sum=41,
+        truncated_count=1,
+    )
+    assert by_dimension[("strict", "revision-1", first_bucket)].timeout_count == 1
+    assert by_dimension[("standard", "revision-2", first_bucket)].failed_count == 1
+    assert (
+        by_dimension[("standard", "revision-1", first_bucket + timedelta(hours=1))]
+        .overloaded_count
+        == 1
+    )
+    with pytest.raises(FrozenInstanceError):
+        combined.query_count = 3  # type: ignore[misc]
+    with pytest.raises(TypeError):
+        snapshot.deltas[0] = combined  # type: ignore[index]
+
+
+def test_gateway_usage_snapshot_ack_is_retry_safe_and_preserves_new_events() -> None:
+    observed_at = datetime(2026, 8, 25, 4, 30, tzinfo=UTC)
+    state = OperationalState(clock=lambda: observed_at)
+    state.record_gateway_usage(
+        source_id="source-a",
+        budget_profile="standard",
+        metadata_revision="revision-1",
+        outcome="success",
+        queue_ms=1,
+        elapsed_ms=2,
+        returned_rows=3,
+        result_bytes=4,
+    )
+
+    first = state.gateway_usage_report_snapshot()
+    assert first is not None
+    assert state.gateway_usage_report_snapshot() is first
+
+    state.record_gateway_usage(
+        source_id="source-a",
+        budget_profile="standard",
+        metadata_revision="revision-1",
+        outcome="success",
+        queue_ms=10,
+        elapsed_ms=20,
+        returned_rows=30,
+        result_bytes=40,
+        truncated=True,
+    )
+    state.record_gateway_usage(
+        source_id="source-b",
+        budget_profile="standard",
+        metadata_revision="revision-1",
+        outcome="failed",
+    )
+    state.ack_gateway_usage_report(first.snapshot_id + 1)
+    assert state.gateway_usage_report_snapshot() is first
+
+    state.ack_gateway_usage_report(first.snapshot_id)
+    state.ack_gateway_usage_report(first.snapshot_id)
+    remaining = state.gateway_usage_report_snapshot()
+
+    assert remaining is not None
+    assert remaining.snapshot_id > first.snapshot_id
+    by_source = {delta.source_id: delta for delta in remaining.deltas}
+    assert by_source["source-a"].query_count == 1
+    assert by_source["source-a"].queue_ms_sum == 10
+    assert by_source["source-a"].elapsed_ms_sum == 20
+    assert by_source["source-a"].returned_rows_sum == 30
+    assert by_source["source-a"].result_bytes_sum == 40
+    assert by_source["source-a"].truncated_count == 1
+    assert by_source["source-b"].failed_count == 1
+    state.ack_gateway_usage_report(remaining.snapshot_id)
+    assert state.gateway_usage_report_snapshot() is None
+
+
+def test_gateway_usage_caps_batches_and_evicts_the_oldest_pending_group() -> None:
+    current = [datetime(2026, 8, 24, 23, 30, tzinfo=UTC)]
+    state = OperationalState(clock=lambda: current[0])
+    state.record_gateway_usage(
+        source_id="oldest-source",
+        budget_profile="standard",
+        metadata_revision="revision-oldest",
+        outcome="failed",
+    )
+    current[0] += timedelta(hours=1)
+    for index in range(1_000):
+        state.record_gateway_usage(
+            source_id=f"source-{index:04d}",
+            budget_profile="standard",
+            metadata_revision="revision-1",
+            outcome="failed",
+        )
+
+    with pytest.raises(ValueError, match="between 1 and 100"):
+        state.gateway_usage_report_snapshot(101)
+    deltas: list[GatewayUsageDelta] = []
+    while (snapshot := state.gateway_usage_report_snapshot()) is not None:
+        assert len(snapshot.deltas) <= 100
+        deltas.extend(snapshot.deltas)
+        state.ack_gateway_usage_report(snapshot.snapshot_id)
+
+    assert len(deltas) == 1_000
+    assert "oldest-source" not in {delta.source_id for delta in deltas}
+    assert sum(delta.query_count for delta in deltas) == 1_000
+
+
+def test_gateway_usage_reset_clears_pending_without_changing_public_metrics() -> None:
+    state = OperationalState(clock=lambda: datetime(2026, 8, 25, tzinfo=UTC))
+    state.increment("query_execution_started", "source-a")
+    public_before = state.snapshot()
+    state.record_gateway_usage(
+        source_id="source-a",
+        budget_profile="standard",
+        metadata_revision="revision-1",
+        outcome="cancelled",
+    )
+    outstanding = state.gateway_usage_report_snapshot()
+    assert outstanding is not None
+    assert state.snapshot() == public_before
+
+    state.reset()
+    assert state.gateway_usage_report_snapshot() is None
+    assert state.snapshot() == {
+        "accepting": True,
+        "sources": {},
+        "components": {},
+        "metrics": [],
+    }
+
+    state.record_gateway_usage(
+        source_id="source-b",
+        budget_profile="standard",
+        metadata_revision="revision-2",
+        outcome="failed",
+    )
+    after_reset = state.gateway_usage_report_snapshot()
+    assert after_reset is not None
+    assert after_reset.snapshot_id == 1
 
 
 def test_staging_scope_does_not_mutate_production_source_health() -> None:

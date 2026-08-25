@@ -9,7 +9,12 @@ from fastapi import FastAPI
 
 import query_man.app as app_module
 from query_man.access import AccessPolicy
-from query_man.models import CatalogSnapshot, RuntimeCatalogProvider, SourceProfile
+from query_man.models import (
+    CatalogSnapshot,
+    ResourceObservation,
+    RuntimeCatalogProvider,
+    SourceProfile,
+)
 from query_man.query import RuntimeQueryExecutor
 from query_man.runtime_config import RuntimeConfig
 from tests.helpers import ROOT_DIRECTORY
@@ -109,6 +114,12 @@ def _build_failing_app(
         async def invalidate(self, _source_id: str) -> None:
             pass
 
+        async def observe_resources(
+            self,
+            _source: SourceProfile,
+        ) -> ResourceObservation:
+            raise AssertionError("resource observation is not expected")
+
     class FakeQueryExecutor:
         def __init__(self) -> None:
             self.accepting = True
@@ -139,6 +150,12 @@ def _build_failing_app(
         async def invalidate(self, _source_id: str) -> None:
             pass
 
+        async def observe_resources(
+            self,
+            _source: SourceProfile,
+        ) -> ResourceObservation:
+            raise AssertionError("resource observation is not expected")
+
     class FailingChildLifespan:
         async def __aenter__(self) -> None:
             events.append("child_enter")
@@ -155,7 +172,10 @@ def _build_failing_app(
 
             return FastAPI(lifespan=failing_lifespan)
 
-    async def tracked_reload_task(*_args: object) -> None:
+    async def tracked_reload_task(
+        *_args: object,
+        **_kwargs: object,
+    ) -> None:
         events.append("reload_started")
         try:
             await asyncio.Future()

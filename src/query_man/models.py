@@ -60,6 +60,21 @@ class SourceProvenance:
 
 
 @dataclass(frozen=True)
+class RepresentativeRecordsTarget:
+    grain: str
+    physical_relation: str
+
+
+@dataclass(frozen=True)
+class ResourceObservationDefinition:
+    representative_records: RepresentativeRecordsTarget
+    storage_relations: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "storage_relations", tuple(self.storage_relations))
+
+
+@dataclass(frozen=True)
 class GrainDefinition:
     name: str
     description: str
@@ -205,6 +220,7 @@ class SourceProfile:
     tenant_isolation: TenantIsolation = "none"
     control_generation: int | None = None
     control_state_version: int | None = None
+    observability: ResourceObservationDefinition | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "allowed_schemas", tuple(self.allowed_schemas))
@@ -280,6 +296,14 @@ class PreparedMetadata:
     freshness_age_ms: int | None = field(default=None, compare=False)
 
 
+@dataclass(frozen=True)
+class ResourceObservation:
+    representative_records: int | None
+    table_bytes: int
+    index_bytes: int
+    total_storage_bytes: int
+
+
 class CatalogProvider(Protocol):
     async def load(self, source: SourceProfile) -> CatalogSnapshot: ...
 
@@ -288,6 +312,8 @@ class CatalogProvider(Protocol):
 
 class RuntimeCatalogProvider(CatalogProvider, Protocol):
     async def invalidate(self, source_id: str) -> None: ...
+
+    async def observe_resources(self, source: SourceProfile) -> ResourceObservation: ...
 
 
 def _freeze_string_sequences(

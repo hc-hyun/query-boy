@@ -135,16 +135,20 @@ Managed Runtime은 CTRL-06 payload와 별개로 60초마다 최대 100 delta를 
 process당 1,000개로 제한하고 overflow는 오래된 group을 버려 lower-bound 의미를 유지한다.
 Stable replica ID와 incarnation, monotonic sequence와 canonical payload SHA-256으로 fence/deduplicate한다.
 Same sequence/hash replay는 no-op이고 different hash, sequence gap과 old incarnation은 거부한다.
-Reporter cursor freshness는 Control DB clock의 180초다. Rollup은 31일과 source당 최신 1,000행을
-동시에 상한으로 삼는다. Common Control writer는 이 non-authoritative rollup table에만 bounded
-pruning용 DELETE를 가지며 authority, receipt, replica observation, resource/cursor table에는 DELETE를
-얻지 않는다.
+Reporter cursor freshness는 Control DB clock의 180초다. 2026-08-25 추가 승인에 따라 31일은
+물리 삭제 기한이 아니라 DB clock 기준 logical visibility/input window다. Writer는 window 밖의
+오래된/future bucket을 거부하고, 향후 `CTRL-08` 조회는 31일 초과 row를 반환하지 않는다. 나이만으로
+row를 삭제하지 않지만 source당 최신 1,000행 physical cap은 유지한다. Common Control writer는
+이 cap을 넘긴 non-authoritative rollup row만 정리하도록 rollup table에만 DELETE를 가지며 authority,
+receipt, replica observation, resource/cursor table에는 DELETE를 얻지 않는다.
 
 Additive migration 4는 `source_resource_observations`, `gateway_usage_rollups`와
 `gateway_usage_report_cursors`만 추가한다. Resource는 source당 최대 네 current/previous row,
 rollup은 위 aggregate, cursor는 replica incarnation/sequence/hash/DB-clock freshness를 저장한다.
 Observation failure는 query data plane, source authority, readiness, health, mutation receipt와 shutdown
-성공 의미를 바꾸지 않는다. Code rollback은 migration ledger/table/data를 drop하지 않는다.
+성공 의미를 바꾸지 않는다. 기존 process당 Control connection budget 4를 유지하고 resource/gateway
+write를 process 안에서 직렬화해 source store의 두 connection을 동시에 점유하지 않는다. Code
+rollback은 migration ledger/table/data를 drop하지 않는다.
 
 `CTRL-07A`는 새 HTTP/MCP endpoint와 availability status, last attempt/reason을 추가하지 않는다.
 `not_configured|pending|available|stale|unavailable` 및 exact admin response는 `CTRL-08`에서 별도
@@ -256,8 +260,8 @@ metadata snapshot과 verified query를 읽거나 반환하지 않는다. 이 단
 ## Consequences
 
 - 운영자는 Git checkout 없이 모든 managed source의 상태, 이력, resource tier와 replica
-  convergence를 한곳에서 확인한다. 규모와 비용 freshness는 후속 `CTRL-*`가 같은 surface에
-  추가한다.
+  convergence를 한곳에서 확인한다. 내부 규모/사용량 수집은 `CTRL-07A`로 구현됐고 public
+  availability와 비용 projection은 후속 `CTRL-08`이 같은 surface에 추가한다.
 - Git은 platform schema와 fixture authority이며 production source catalog가 아니다.
 - 단일 관리 화면을 위해 business data, plaintext secret 또는 raw metric을 Control DB에
   복제하지 않는다.

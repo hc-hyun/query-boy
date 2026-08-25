@@ -51,7 +51,8 @@ ownership, state, history, size와 cost를 조회하는 목표 계약은
 | Owner, environment and DB migration reference | Control DB immutable manifest generation |
 | Mutation audit and authoritative receipt | Control DB management plane; implemented |
 | Replica desired/applied drift and freshness | Control DB latest observation; implemented |
-| Size/growth and cost projection | Control DB management plane; implementation pending |
+| Size/growth observation | Control DB current/previous observation; implemented, public projection pending |
+| Gateway usage/cost projection | Control DB internal usage rollup implemented; public cost projection pending |
 | Bootstrap and acceptance input | Repository YAML seed/fixture only |
 
 `config/sources/*.yaml`은 local/CI bootstrap seed이고 `config/onboarding/*.yaml`은 integration
@@ -228,6 +229,8 @@ Registry와 metadata refresh는 다음 조건을 만족하지 않으면 source�
 - Grain key, 대표 시간 column과 column alias 대상이 실제 catalog에 존재함
 - 승인된 join 양쪽 column이 존재하고 data type이 같음
 - Relation/column 수와 metadata response가 budget 상한 안에 있음
+- `observability`를 구성했다면 representative relation과 1~16개 storage relation이 같은 DB의
+  non-system ordinary table/materialized view이고 representative relation이 목록에 포함됨
 
 Manifest의 `minimum_quality_level`은 publish 가능한 최소 수준을 선언한다. `L0`는 물리
 catalog 기반 best-effort, `L1`은 모든 공개 relation의 설명·grain과 시간 역할이 완성된
@@ -239,6 +242,12 @@ reference를 모두 명시한다. Query Man은 migration reference가 가리키�
 검증하지 않는다. Owner나 migration reference 변경은 새 immutable generation을 만들지만 query
 metadata revision은 바꾸지 않는다. 누락 값을 `unknown`으로 자동 채우거나 이전 manifest version을
 runtime에서 변환하지 않는다.
+
+Optional `observability`는 대표 record grain과 physical relation, 그리고 그 relation을 포함한
+1~16개 storage relation을 DB owner가 명시할 때만 사용한다. 이는 query allowlist나 public relation을
+넓히지 않으며 ordinary table/materialized view만 허용한다. Definition 변경은 새 source generation을
+만들지만 metadata revision은 바꾸지 않는다. 값이 없으면 resource observation 미구성으로 유지하고
+임의 `COUNT(*)`, predicate나 SQL expression으로 대신하지 않는다.
 
 Bootstrap manifest의 선택적 `host_env`와 `port_env`는 host/Compose처럼 deployment network가
 다를 때만 사용한다. 환경변수가 없으면 manifest의 host와 port를 사용한다. Control-plane

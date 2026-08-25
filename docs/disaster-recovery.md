@@ -3,9 +3,10 @@
 ## Scope And Targets
 
 Control plane의 migration ledger, source profile generations, encrypted credentials, metadata
-snapshots, verified contracts, immutable mutation receipts와 runtime replica latest observation이
-대상이다. Replica table은 source authority가 아니라 ever-registered target과 latest operational
-projection을 복원한다. Source business database backup은 각 source owner의 별도 정책을 따른다. Repository source/verified file은 local/CI
+snapshots, verified contracts, immutable mutation receipts, runtime replica latest observation,
+resource current/previous와 gateway usage rollup/cursor가 대상이다. Observation table은 source
+authority나 완전한 billing ledger가 아니라 bounded operational projection을 복원한다. Source
+business database backup은 각 source owner의 별도 정책을 따른다. Repository source/verified file은 local/CI
 bootstrap fixture이며 managed production desired-state backup이나 recovery authority가 아니다.
 
 - 목표 RPO: control schema backup 주기 이하, production 권장 24시간 이내
@@ -32,7 +33,7 @@ bootstrap fixture이며 managed production desired-state backup이나 recovery a
    0건인지 확인한다. Migration은 immutable revision table의 update/delete trigger를 제거하지
    않는다.
 
-Migration 3의 schema-first rolling release와 application rollback 절차는
+Migration 3과 4의 schema-first rolling release와 application rollback 절차는
 [operations](operations.md#control-db-migration-and-environment-isolation)를 따른다.
 
 ## Backup
@@ -67,7 +68,9 @@ record/IaC로 복구한다.
 4. Migration ledger를 포함한 모든 control table row count, FK, immutable trigger와 실제
    immutable UPDATE/DELETE 거부를 확인한다. Runtime writer가 receipt table에는 SELECT/INSERT와
    identity sequence USAGE만, replica observation 두 table에는 SELECT/INSERT/UPDATE만 갖고
-   DELETE/TRUNCATE는 못 하는지도 실제 role로 검증한다.
+   DELETE/TRUNCATE는 못 하는지도 실제 role로 검증한다. Resource/cursor table도
+   SELECT/INSERT/UPDATE만, gateway rollup은 SELECT/INSERT/UPDATE/DELETE만 있고 TRUNCATE가 없는지
+   확인한다.
 5. `QUERY_MAN_SOURCE_MODE=managed`, 원래 `QUERY_MAN_SOURCE_ENCRYPTION_KEY`, 새 control-writer
    DSN, version 2 query/admin access policy와 deployment slot별 원래 `QUERY_MAN_REPLICA_ID`를 runtime에
    함께 주입한다. Bootstrap mode, API-token/anonymous auth나 DSN/key/replica ID 일부만으로 복구하지
@@ -88,8 +91,8 @@ record/IaC로 복구한다.
 `./scripts/control-plane-drill.sh`는 기존 `query_man_restore_drill` DB가 있으면 덮어쓰지 않고
 중단한다. 임시 DB를 생성해 live control schema의 custom archive를 `--no-owner
 --no-privileges`로 restore하고 production과 같은 migration runner를 두 번 실행한다. Migration
-ledger를 포함한 9개 control table row count, 8개 FK, 4개 non-internal user trigger, 실제
-immutable history/receipt UPDATE·DELETE 거부와 writer group/receipt-sequence 및 replica-table ACL을
+ledger를 포함한 12개 control table row count, 14개 FK, 4개 non-internal user trigger, 실제
+immutable history/receipt UPDATE·DELETE 거부와 writer group/receipt-sequence 및 observation-table ACL을
 확인한 뒤 임시 DB를 삭제한다.
 Production data가 아닌 격리 fixture/복제본에서 분기별로 실행하고 결과를 change record에
 첨부한다.

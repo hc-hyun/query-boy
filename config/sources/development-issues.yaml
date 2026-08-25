@@ -22,6 +22,16 @@ allowed_relation_kinds:
   - view
 budget_profile: interactive
 minimum_quality_level: L2
+observability:
+  representative_records:
+    grain: development_issue
+    physical_relation: development.issues
+  storage_relations:
+    - development.users
+    - development.product_models
+    - development.test_units
+    - development.issues
+    - development.issue_comments
 
 semantic_overlay:
   default_relation: ai.issue_overview

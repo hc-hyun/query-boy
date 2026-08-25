@@ -27,6 +27,10 @@ Managed runtime은 source scope가 없는 version 2 access policy와 explicit qu
   environment와 실제 DB migration/change reference를 명시해 admin API에서 stage/publish하고
   generation과 metadata revision을 기록한다. 같은 `source_id`는 host, port, database,
   user, TLS mode 또는 environment가 다른 endpoint로 다시 묶지 않는다.
+- [ ] Resource observation을 구성할지 결정한다. 구성한다면 representative grain/physical relation과
+  이를 포함하는 1~16개 distinct storage relation이 같은 DB의 non-system ordinary
+  table/materialized view인지 DB owner가 검증한다. Query allowlist를 넓히거나 SQL expression을 넣지
+  않는다.
 - [ ] 활성화 시 모든 인증된 query 사용자가 source를 본다는 영향을 확인한다. 서로 다른 두
   query identity가 같은 source 목록을 보고, caller override 없이 같은 source-resolved budget
   정의가 적용되며, admin API는 모두 거부되는지 검증한다. Admin 기록에는 선택한
@@ -50,6 +54,7 @@ Managed runtime은 source scope가 없는 version 2 access policy와 explicit qu
 | Wide relation 또는 큰 결과 | 질문별 column disclosure, context/result byte, row limit과 truncation UX를 측정한다. |
 | Quoted PostgreSQL identifier | Manifest에는 `Identifier`/`schema.relation` 규칙을 만족하는 canonical 이름을 쓰고 metadata의 `sql_name`을 SQL에 그대로 사용한다. 공백·Unicode identifier는 curated view에서 안전한 이름으로 바꾼다. |
 | Production network | TLS certificate 검증, 방화벽/allowlist와 replica별 target DB connectivity를 확인한다. |
+| Resource observation 구성 | Reader의 기존 권한으로 exact target의 `reltuples`와 relation size 함수를 읽을 수 있는지 staging하고, 새 monitoring role이나 무제한 `COUNT(*)`를 만들지 않는다. |
 
 ## 보통 필요하지 않은 작업
 

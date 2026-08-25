@@ -19,7 +19,12 @@ from query_man.errors import (
     MutationIdempotencyConflictError as MutationIdempotencyConflictAppError,
 )
 from query_man.metadata import MetadataService
-from query_man.models import CatalogSnapshot, PreparedMetadata, SourceProfile
+from query_man.models import (
+    CatalogSnapshot,
+    PreparedMetadata,
+    ResourceObservation,
+    SourceProfile,
+)
 from query_man.operations import operations
 from query_man.query import QueryService
 from query_man.reader_policy import ReaderSessionPolicyError
@@ -35,10 +40,14 @@ from query_man.source_admin import (
     REPLICA_HEARTBEAT_INTERVAL_MAX_MS,
     REPLICA_HEARTBEAT_INTERVAL_MIN_MS,
     ControlReplicaObservationWriter,
+    GatewayUsageDelta,
+    GatewayUsageWriter,
     MutationContext,
     PublishVerifiedQueryInput,
     ReplicaObservationWriter,
     ReplicaSourceObservation,
+    ResourceObservationSample,
+    ResourceObservationWriter,
     SourceAdminService,
     SourceReloader,
     VerifiedExpectedInput,
@@ -143,6 +152,81 @@ def test_replica_observation_input_is_frozen_control_contract() -> None:
     )
     with pytest.raises(FrozenInstanceError):
         observation.source_health = "stale"  # type: ignore[misc]
+
+
+def test_resource_and_gateway_write_inputs_are_frozen_control_contracts() -> None:
+    sample = ResourceObservationSample(
+        metric="representative_records",
+        value=10,
+        unit="rows",
+        method="postgres_catalog_estimate",
+        definition_revision=f"sha256:{'1' * 64}",
+    )
+    delta = GatewayUsageDelta(
+        source_id="third-source",
+        budget_profile="interactive",
+        metadata_revision=f"sha256:{'2' * 64}",
+        definition_revision=f"sha256:{'3' * 64}",
+        bucket_start=datetime(2026, 8, 25, 1, tzinfo=UTC),
+        query_count=1,
+        success_count=1,
+        rejected_count=0,
+        timeout_count=0,
+        overloaded_count=0,
+        cancelled_count=0,
+        failed_count=0,
+        queue_ms_sum=1,
+        elapsed_ms_sum=2,
+        returned_rows_sum=3,
+        result_bytes_sum=4,
+        truncated_count=0,
+    )
+
+    assert tuple(field.name for field in fields(ResourceObservationSample)) == (
+        "metric",
+        "value",
+        "unit",
+        "method",
+        "definition_revision",
+    )
+    assert tuple(field.name for field in fields(GatewayUsageDelta)) == (
+        "source_id",
+        "budget_profile",
+        "metadata_revision",
+        "definition_revision",
+        "bucket_start",
+        "query_count",
+        "success_count",
+        "rejected_count",
+        "timeout_count",
+        "overloaded_count",
+        "cancelled_count",
+        "failed_count",
+        "queue_ms_sum",
+        "elapsed_ms_sum",
+        "returned_rows_sum",
+        "result_bytes_sum",
+        "truncated_count",
+    )
+    assert get_type_hints(
+        ResourceObservationWriter.report_resource_observations
+    ) == {
+        "source_id": str,
+        "metadata_revision": str,
+        "samples": tuple[ResourceObservationSample, ...],
+        "return": type(None),
+    }
+    assert get_type_hints(GatewayUsageWriter.report_gateway_usage) == {
+        "replica_id": str,
+        "incarnation": int,
+        "sequence": int,
+        "deltas": tuple[GatewayUsageDelta, ...],
+        "return": type(None),
+    }
+    with pytest.raises(FrozenInstanceError):
+        sample.value = 11  # type: ignore[misc]
+    with pytest.raises(FrozenInstanceError):
+        delta.query_count = 2  # type: ignore[misc]
 
 
 class MemoryMetadataStore:
@@ -661,11 +745,34 @@ class MemorySourceStore:
 
 
 class StaticCatalog:
-    def __init__(self, snapshot: CatalogSnapshot | None = None) -> None:
+    def __init__(
+        self,
+        snapshot: CatalogSnapshot | None = None,
+        *,
+        observed_sources: list[str] | None = None,
+        observation_error: Exception | None = None,
+    ) -> None:
         self.snapshot = snapshot or minimal_development_snapshot()
+        self.observed_sources = observed_sources
+        self.observation_error = observation_error
 
     async def load(self, _source: SourceProfile) -> CatalogSnapshot:
         return self.snapshot
+
+    async def observe_resources(self, source: SourceProfile) -> ResourceObservation:
+        if self.observation_error is not None:
+            raise self.observation_error
+        if self.observed_sources is not None:
+            self.observed_sources.append(source.source_id)
+        return ResourceObservation(
+            representative_records=10,
+            table_bytes=20,
+            index_bytes=5,
+            total_storage_bytes=25,
+        )
+
+    async def invalidate(self, _source_id: str) -> None:
+        pass
 
     async def close(self) -> None:
         pass
@@ -675,10 +782,16 @@ class SwitchingCatalogFactory:
     def __init__(self) -> None:
         self.snapshot = minimal_development_snapshot()
         self.calls = 0
+        self.observed_sources: list[str] = []
+        self.observation_error: Exception | None = None
 
     def __call__(self) -> StaticCatalog:
         self.calls += 1
-        return StaticCatalog(self.snapshot)
+        return StaticCatalog(
+            self.snapshot,
+            observed_sources=self.observed_sources,
+            observation_error=self.observation_error,
+        )
 
 
 class RecordingInvalidator:
@@ -976,6 +1089,27 @@ async def test_failed_staging_preserves_current_source() -> None:
 
     assert store.active["third-source"] == before
     assert registry.get("third-source").connection.password == "first-secret"  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+async def test_staging_validates_configured_resource_targets() -> None:
+    catalog_factory = SwitchingCatalogFactory()
+    admin, _registry, store, _invalidator, _cipher, _reloader = _services(
+        catalog_factory
+    )
+
+    await admin.publish("third-source", _manifest(), "first-secret")
+
+    assert catalog_factory.observed_sources == ["third-source"]
+    before = store.active["third-source"]
+    catalog_factory.observation_error = RuntimeError(
+        "configured resource target is unavailable"
+    )
+    with pytest.raises(SourceValidationError):
+        await admin.publish("third-source", _manifest(), "bad-update-secret")
+
+    assert store.active["third-source"] == before
+    assert catalog_factory.observed_sources == ["third-source"]
 
 
 @pytest.mark.asyncio

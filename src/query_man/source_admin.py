@@ -6,6 +6,7 @@ import logging
 import math
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
+from datetime import datetime
 from typing import Final, Literal, Protocol
 
 from query_man.errors import (
@@ -25,7 +26,12 @@ from query_man.errors import (
 from query_man.errors import SourceGenerationConflictError as SourceGenerationConflictAppError
 from query_man.metadata import MetadataService
 from query_man.metadata_store import MetadataStore
-from query_man.models import BudgetProfile, CatalogProvider, PreparedMetadata, SourceProfile
+from query_man.models import (
+    BudgetProfile,
+    PreparedMetadata,
+    RuntimeCatalogProvider,
+    SourceProfile,
+)
 from query_man.operations import operations
 from query_man.quality_level import assess_quality_level
 from query_man.query import QueryService
@@ -54,7 +60,9 @@ from query_man.source_store import (
     SourcePublishPinnedError,
     StoredSource,
     StoredSourceNotFoundError,
+    _GatewayUsageDeltaWrite,
     _ReplicaSourceObservationWrite,
+    _ResourceObservationWrite,
 )
 from query_man.sql_validation import SQL_POLICY_REVISION, SqlValidationError, validate_sql
 from query_man.verified import ExpectedResult, VerifiedQuery, create_result_hash
@@ -71,6 +79,14 @@ ReplicaSourceReason = Literal[
     "RUNTIME_APPLY_FAILED",
     "METADATA_PROBE_FAILED",
 ]
+ResourceMetric = Literal[
+    "representative_records",
+    "table_bytes",
+    "index_bytes",
+    "total_storage_bytes",
+]
+ResourceUnit = Literal["rows", "bytes"]
+ResourceMethod = Literal["postgres_catalog_estimate", "postgres_relation_size"]
 
 
 @dataclass(frozen=True)
@@ -119,6 +135,55 @@ class ReplicaObservationWriter(Protocol):
     ) -> None: ...
 
 
+@dataclass(frozen=True)
+class ResourceObservationSample:
+    metric: ResourceMetric
+    value: int
+    unit: ResourceUnit
+    method: ResourceMethod
+    definition_revision: str
+
+
+class ResourceObservationWriter(Protocol):
+    async def report_resource_observations(
+        self,
+        source_id: str,
+        metadata_revision: str,
+        samples: tuple[ResourceObservationSample, ...],
+    ) -> None: ...
+
+
+@dataclass(frozen=True)
+class GatewayUsageDelta:
+    source_id: str
+    budget_profile: str
+    metadata_revision: str
+    definition_revision: str
+    bucket_start: datetime
+    query_count: int
+    success_count: int
+    rejected_count: int
+    timeout_count: int
+    overloaded_count: int
+    cancelled_count: int
+    failed_count: int
+    queue_ms_sum: int
+    elapsed_ms_sum: int
+    returned_rows_sum: int
+    result_bytes_sum: int
+    truncated_count: int
+
+
+class GatewayUsageWriter(Protocol):
+    async def report_gateway_usage(
+        self,
+        replica_id: str,
+        incarnation: int,
+        sequence: int,
+        deltas: tuple[GatewayUsageDelta, ...],
+    ) -> None: ...
+
+
 class SourceStore(Protocol):
     async def list_active(self) -> list[StoredSource]: ...
 
@@ -152,6 +217,21 @@ class SourceStore(Protocol):
         *,
         reason_code: str | None,
         sources: tuple[_ReplicaSourceObservationWrite, ...],
+    ) -> None: ...
+
+    async def report_resource_observations(
+        self,
+        source_id: str,
+        metadata_revision: str,
+        observations: tuple[_ResourceObservationWrite, ...],
+    ) -> None: ...
+
+    async def report_gateway_usage(
+        self,
+        replica_id: str,
+        incarnation: int,
+        sequence: int,
+        deltas: tuple[_GatewayUsageDeltaWrite, ...],
     ) -> None: ...
 
     async def list_replica_observations(
@@ -281,6 +361,72 @@ class ControlReplicaObservationWriter:
                     reason_code=source.reason_code,
                 )
                 for source in sources
+            ),
+        )
+
+
+class ControlResourceObservationWriter:
+    def __init__(self, store: SourceStore) -> None:
+        self._store = store
+
+    async def report_resource_observations(
+        self,
+        source_id: str,
+        metadata_revision: str,
+        samples: tuple[ResourceObservationSample, ...],
+    ) -> None:
+        await self._store.report_resource_observations(
+            source_id,
+            metadata_revision,
+            tuple(
+                _ResourceObservationWrite(
+                    metric=sample.metric,
+                    value=sample.value,
+                    unit=sample.unit,
+                    method=sample.method,
+                    definition_revision=sample.definition_revision,
+                )
+                for sample in samples
+            ),
+        )
+
+
+class ControlGatewayUsageWriter:
+    def __init__(self, store: SourceStore) -> None:
+        self._store = store
+
+    async def report_gateway_usage(
+        self,
+        replica_id: str,
+        incarnation: int,
+        sequence: int,
+        deltas: tuple[GatewayUsageDelta, ...],
+    ) -> None:
+        await self._store.report_gateway_usage(
+            replica_id,
+            incarnation,
+            sequence,
+            tuple(
+                _GatewayUsageDeltaWrite(
+                    source_id=delta.source_id,
+                    budget_profile=delta.budget_profile,
+                    metadata_revision=delta.metadata_revision,
+                    definition_revision=delta.definition_revision,
+                    bucket_start=delta.bucket_start,
+                    query_count=delta.query_count,
+                    success_count=delta.success_count,
+                    rejected_count=delta.rejected_count,
+                    timeout_count=delta.timeout_count,
+                    overloaded_count=delta.overloaded_count,
+                    cancelled_count=delta.cancelled_count,
+                    failed_count=delta.failed_count,
+                    queue_ms_sum=delta.queue_ms_sum,
+                    elapsed_ms_sum=delta.elapsed_ms_sum,
+                    returned_rows_sum=delta.returned_rows_sum,
+                    result_bytes_sum=delta.result_bytes_sum,
+                    truncated_count=delta.truncated_count,
+                )
+                for delta in deltas
             ),
         )
 
@@ -510,7 +656,7 @@ class SourceAdminService:
         cipher: SourceSecretCipher,
         budgets: Mapping[str, BudgetProfile],
         verified_revisions: dict[str, frozenset[str]],
-        catalog_factory: Callable[[], CatalogProvider],
+        catalog_factory: Callable[[], RuntimeCatalogProvider],
     ) -> None:
         self._store = store
         self._reloader = reloader
@@ -1383,17 +1529,27 @@ class SourceAdminService:
         )
         with operations.suppress_source_health_updates():
             try:
-                return await service.get_published(source.source_id)
-            except MetadataUnavailableError as error:
-                details = error.details
-                if (
-                    isinstance(details, dict)
-                    and isinstance(details.get("contract_violations"), list)
-                ) or isinstance(error.__cause__, ReaderSessionPolicyError):
-                    raise SourceValidationError from error
-                raise SourceControlUnavailableError from error
-            except Exception as error:
-                raise SourceControlUnavailableError from error
+                try:
+                    prepared = await service.get_published(source.source_id)
+                except MetadataUnavailableError as error:
+                    details = error.details
+                    if (
+                        isinstance(details, dict)
+                        and isinstance(details.get("contract_violations"), list)
+                    ) or isinstance(error.__cause__, ReaderSessionPolicyError):
+                        raise SourceValidationError from error
+                    raise SourceControlUnavailableError from error
+                except Exception as error:
+                    raise SourceControlUnavailableError from error
+
+                if source.observability is not None:
+                    try:
+                        await catalog.observe_resources(source)
+                    except (ReaderSessionPolicyError, RuntimeError) as error:
+                        raise SourceValidationError from error
+                    except Exception as error:
+                        raise SourceControlUnavailableError from error
+                return prepared
             finally:
                 await catalog.close()
 

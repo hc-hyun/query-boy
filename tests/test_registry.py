@@ -17,7 +17,7 @@ import query_man.assurance_cli as assurance_cli_module
 from query_man.app import _probe_registered_sources
 from query_man.gateway import GatewayService
 from query_man.metadata import MetadataService
-from query_man.models import SourceProfile
+from query_man.models import ResourceObservation, SourceProfile
 from query_man.query import QueryService
 from query_man.registry import (
     POSTGRES_IDENTIFIER_MAX_LENGTH,
@@ -50,6 +50,16 @@ def _local_annotation(function: object, variable: str) -> str | None:
         ):
             return ast.unparse(node.annotation)
     return None
+
+
+def _development_manifest() -> dict[str, object]:
+    raw: object = yaml.safe_load(
+        (
+            ROOT_DIRECTORY / "config" / "sources" / "development-issues.yaml"
+        ).read_text(encoding="utf-8")
+    )
+    assert isinstance(raw, dict)
+    return raw
 
 
 def test_source_capability_protocols_have_exact_approved_shapes() -> None:
@@ -104,6 +114,8 @@ def test_published_source_profile_graph_is_recursively_immutable() -> None:
 
     assert isinstance(source.allowed_schemas, tuple)
     assert isinstance(source.allowed_relation_kinds, tuple)
+    assert source.observability is not None
+    assert isinstance(source.observability.storage_relations, tuple)
     assert isinstance(overlay.relations, tuple)
     assert isinstance(overlay.joins, tuple)
     assert isinstance(overlay.business_terms, tuple)
@@ -137,6 +149,8 @@ def test_published_source_profile_graph_is_recursively_immutable() -> None:
 
     with pytest.raises(FrozenInstanceError):
         source.name = "mutated"  # type: ignore[misc]
+    with pytest.raises(FrozenInstanceError):
+        source.observability.representative_records.grain = "mutated"  # type: ignore[misc]
     with pytest.raises(TypeError):
         overlay.relations[0].column_aliases["mutated"] = ()  # type: ignore[index]
     with pytest.raises(TypeError):
@@ -150,12 +164,18 @@ def test_source_profile_construction_does_not_retain_mutable_aliases() -> None:
     assert source is not None
     relation = source.semantic_overlay.relations[0]
     join = source.semantic_overlay.joins[0]
+    assert source.observability is not None
     schemas = list(source.allowed_schemas)
+    storage_relations = list(source.observability.storage_relations)
     aliases = ["original-alias"]
     column_aliases = {"issue_id": ["original-column-alias"]}
     pair = {"left": "issue_id", "right": "issue_id"}
 
     copied_source = replace(source, allowed_schemas=schemas)  # type: ignore[arg-type]
+    copied_observability = replace(  # type: ignore[arg-type]
+        source.observability,
+        storage_relations=storage_relations,
+    )
     copied_relation = replace(  # type: ignore[arg-type]
         relation,
         aliases=aliases,
@@ -163,16 +183,30 @@ def test_source_profile_construction_does_not_retain_mutable_aliases() -> None:
     )
     copied_join = replace(join, column_pairs=[pair])  # type: ignore[arg-type]
     schemas.append("mutated")
+    storage_relations.append("application.mutated")
     aliases.append("mutated")
     column_aliases["issue_id"].append("mutated")
     pair["left"] = "mutated"
 
     assert "mutated" not in copied_source.allowed_schemas
+    assert "application.mutated" not in copied_observability.storage_relations
     assert copied_relation.aliases == ("original-alias",)
     assert copied_relation.column_aliases["issue_id"] == (
         "original-column-alias",
     )
     assert copied_join.column_pairs[0]["left"] == "issue_id"
+
+
+def test_resource_observation_is_immutable() -> None:
+    observation = ResourceObservation(
+        representative_records=None,
+        table_bytes=1,
+        index_bytes=2,
+        total_storage_bytes=3,
+    )
+
+    with pytest.raises(FrozenInstanceError):
+        observation.total_storage_bytes = 4  # type: ignore[misc]
 
 
 def test_loads_public_source_fields_only() -> None:
@@ -186,14 +220,221 @@ def test_loads_public_source_fields_only() -> None:
     assert len(registry) == 2
     assert registry.get("development-issues").connection.host == "postgres"  # type: ignore[union-attr]
     assert registry.get("development-issues").connection.port == 55_432  # type: ignore[union-attr]
-    assert [item["source_id"] for item in registry.list()] == [
-        "development-issues",
-        "market-voc",
+    assert registry.list() == [
+        {
+            "source_id": "development-issues",
+            "name": "개발 문제점",
+            "description": "개발 및 검증 과정에서 발견한 문제, 원인, 대책과 댓글",
+        },
+        {
+            "source_id": "market-voc",
+            "name": "시장 VOC",
+            "description": "시장에서 접수된 불량, 제품 기기, 원인, 대응과 댓글",
+        },
     ]
     serialized = str(registry.list())
     assert "development-test-secret" not in serialized
     assert "password" not in serialized
     assert "database" not in serialized
+    assert "development.issues" not in serialized
+
+
+def test_loads_optional_resource_observation_definition() -> None:
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+    assert source.observability is not None
+
+    assert source.observability.representative_records.grain == "development_issue"
+    assert (
+        source.observability.representative_records.physical_relation
+        == "development.issues"
+    )
+    assert source.observability.storage_relations == (
+        "development.users",
+        "development.product_models",
+        "development.test_units",
+        "development.issues",
+        "development.issue_comments",
+    )
+
+
+@pytest.mark.parametrize("extra_location", ["observability", "representative_records"])
+def test_rejects_unapproved_resource_observation_fields(
+    extra_location: str,
+) -> None:
+    raw = _development_manifest()
+    observability = raw["observability"]
+    assert isinstance(observability, dict)
+    if extra_location == "observability":
+        observability["approved_counter"] = "pg_stat_user_tables"
+    else:
+        representative = observability["representative_records"]
+        assert isinstance(representative, dict)
+        representative["provider"] = "postgres"
+
+    with pytest.raises(RegistryConfigurationError, match="observability"):
+        validate_source_manifest(
+            raw,
+            load_budget_profiles(
+                ROOT_DIRECTORY / "config" / "budget-profiles.yaml"
+            ),
+            "reader-secret",
+        )
+
+
+def test_manifest_without_observability_remains_valid() -> None:
+    raw = _development_manifest()
+    raw.pop("observability")
+
+    validated = validate_source_manifest(
+        raw,
+        load_budget_profiles(ROOT_DIRECTORY / "config" / "budget-profiles.yaml"),
+        "reader-secret",
+    )
+
+    assert validated.profile.observability is None
+    assert "observability" not in validated.document
+
+
+@pytest.mark.parametrize("relation_count", [1, 16])
+def test_accepts_storage_relation_bounds(relation_count: int) -> None:
+    raw = _development_manifest()
+    storage_relations = [f"application.table_{index}" for index in range(relation_count)]
+    raw["observability"] = {
+        "representative_records": {
+            "grain": "application_record",
+            "physical_relation": storage_relations[0],
+        },
+        "storage_relations": storage_relations,
+    }
+
+    validated = validate_source_manifest(
+        raw,
+        load_budget_profiles(ROOT_DIRECTORY / "config" / "budget-profiles.yaml"),
+        "reader-secret",
+    )
+
+    assert validated.profile.observability is not None
+    assert validated.profile.observability.storage_relations == tuple(storage_relations)
+
+
+@pytest.mark.parametrize("relation_count", [0, 17])
+def test_rejects_storage_relations_outside_bounds(relation_count: int) -> None:
+    raw = _development_manifest()
+    raw["observability"] = {
+        "representative_records": {
+            "grain": "application_record",
+            "physical_relation": "application.table_0",
+        },
+        "storage_relations": [
+            f"application.table_{index}" for index in range(relation_count)
+        ],
+    }
+
+    with pytest.raises(RegistryConfigurationError, match="storage_relations"):
+        validate_source_manifest(
+            raw,
+            load_budget_profiles(
+                ROOT_DIRECTORY / "config" / "budget-profiles.yaml"
+            ),
+            "reader-secret",
+        )
+
+
+def test_rejects_duplicate_storage_relations() -> None:
+    raw = _development_manifest()
+    raw["observability"] = {
+        "representative_records": {
+            "grain": "development_issue",
+            "physical_relation": "development.issues",
+        },
+        "storage_relations": ["development.issues", "development.issues"],
+    }
+
+    with pytest.raises(RegistryConfigurationError, match="must be distinct"):
+        validate_source_manifest(
+            raw,
+            load_budget_profiles(
+                ROOT_DIRECTORY / "config" / "budget-profiles.yaml"
+            ),
+            "reader-secret",
+        )
+
+
+@pytest.mark.parametrize(
+    "relation",
+    [
+        "information_schema.tables",
+        "pg_catalog.pg_class",
+        "pg_toast.internal_table",
+        "pg_temp_1.temporary_table",
+        "pg_toast_temp_1.temporary_table",
+    ],
+)
+def test_rejects_observability_system_schema(relation: str) -> None:
+    raw = _development_manifest()
+    raw["observability"] = {
+        "representative_records": {
+            "grain": "system_record",
+            "physical_relation": relation,
+        },
+        "storage_relations": [relation],
+    }
+
+    with pytest.raises(RegistryConfigurationError, match="system schema"):
+        validate_source_manifest(
+            raw,
+            load_budget_profiles(
+                ROOT_DIRECTORY / "config" / "budget-profiles.yaml"
+            ),
+            "reader-secret",
+        )
+
+
+def test_rejects_representative_relation_outside_storage_relations() -> None:
+    raw = _development_manifest()
+    raw["observability"] = {
+        "representative_records": {
+            "grain": "development_issue",
+            "physical_relation": "development.issues",
+        },
+        "storage_relations": ["development.issue_comments"],
+    }
+
+    with pytest.raises(RegistryConfigurationError, match="must be in storage_relations"):
+        validate_source_manifest(
+            raw,
+            load_budget_profiles(
+                ROOT_DIRECTORY / "config" / "budget-profiles.yaml"
+            ),
+            "reader-secret",
+        )
+
+
+@pytest.mark.parametrize(
+    "representative_records",
+    [
+        {"grain": "not-a-postgres-identifier", "physical_relation": "data.records"},
+        {"grain": "record", "physical_relation": "unqualified_relation"},
+    ],
+)
+def test_rejects_invalid_representative_record_identifiers(
+    representative_records: dict[str, str],
+) -> None:
+    raw = _development_manifest()
+    raw["observability"] = {
+        "representative_records": representative_records,
+        "storage_relations": ["data.records"],
+    }
+
+    with pytest.raises(RegistryConfigurationError, match="observability"):
+        validate_source_manifest(
+            raw,
+            load_budget_profiles(
+                ROOT_DIRECTORY / "config" / "budget-profiles.yaml"
+            ),
+            "reader-secret",
+        )
 
 
 def test_loads_versioned_hard_session_budget() -> None:
@@ -461,6 +702,7 @@ def test_validates_control_plane_manifest_without_storing_secret(
     assert isinstance(validated.document["allowed_relation_kinds"], list)
     assert isinstance(validated.document["semantic_overlay"], dict)
     assert isinstance(validated.document["semantic_overlay"]["relations"], list)  # type: ignore[index]
+    assert validated.document["observability"] == raw["observability"]
     assert validated.document["version"] == 2
     assert validated.document["provenance"] == raw["provenance"]
     assert validated.profile.provenance.owner == "query-man"
@@ -473,6 +715,8 @@ def test_validates_control_plane_manifest_without_storing_secret(
     assert validated.document["connection"]["host"] == "postgres"  # type: ignore[index]
     assert validated.profile.connection.port == 55_432
     assert validated.document["connection"]["port"] == 55_432  # type: ignore[index]
+    assert validated.profile.observability is not None
+    assert isinstance(validated.profile.observability.storage_relations, tuple)
     assert "host_env" not in validated.document["connection"]  # type: ignore[operator]
     assert "port_env" not in validated.document["connection"]  # type: ignore[operator]
 

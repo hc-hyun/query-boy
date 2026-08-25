@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import hashlib
+import json
 import logging
 import time
 import uuid
@@ -28,7 +30,7 @@ from query_man.mcp_server import (
 )
 from query_man.metadata import MetadataService
 from query_man.metadata_store import PostgresMetadataStore
-from query_man.models import RuntimeCatalogProvider
+from query_man.models import ResourceObservation, RuntimeCatalogProvider, SourceProfile
 from query_man.operations import operations
 from query_man.query import PostgresQueryExecutor, QueryService, RuntimeQueryExecutor
 from query_man.registry import SourceReader, SourceRegistry, load_budget_profiles
@@ -36,9 +38,15 @@ from query_man.runtime_config import RuntimeConfig
 from query_man.secrets import SourceSecretCipher
 from query_man.source_admin import (
     REPLICA_HEARTBEAT_INTERVAL_MIN_MS,
+    ControlGatewayUsageWriter,
     ControlReplicaObservationWriter,
+    ControlResourceObservationWriter,
+    GatewayUsageDelta,
+    GatewayUsageWriter,
     ReplicaObservationWriter,
     ReplicaSourceObservation,
+    ResourceObservationSample,
+    ResourceObservationWriter,
     SourceAdminService,
     SourcePoolInvalidator,
     SourceReloader,
@@ -54,6 +62,8 @@ _current_caller: contextvars.ContextVar[CallerContext | None] = contextvars.Cont
     "query_man_current_caller",
     default=None,
 )
+_GATEWAY_USAGE_REPORT_INTERVAL_SECONDS = 60.0
+_RESOURCE_OBSERVATION_INTERVAL_SECONDS = 24 * 60 * 60.0
 
 
 def _unexpected_error_response() -> JSONResponse:
@@ -233,7 +243,7 @@ def build_app(
     _require_runtime_capabilities(
         "catalog",
         catalog,
-        ("load", "close", "invalidate"),
+        ("load", "close", "invalidate", "observe_resources"),
     )
     source_ids = [source["source_id"] for source in registry.list()]
     verified_revisions = (
@@ -280,6 +290,8 @@ def build_app(
     source_reloader: SourceReloader | None = None
     source_admin: SourceAdminService | None = None
     replica_observation_writer: ReplicaObservationWriter | None = None
+    resource_observation_writer: ResourceObservationWriter | None = None
+    gateway_usage_writer: GatewayUsageWriter | None = None
     if runtime_config.source_mode == "managed":
         control_dsn = runtime_config.control_dsn
         encryption_key = runtime_config.source_encryption_key
@@ -287,6 +299,8 @@ def build_app(
             raise ValueError("Managed source mode configuration is incomplete")
         source_store = PostgresSourceStore(control_dsn)
         replica_observation_writer = ControlReplicaObservationWriter(source_store)
+        resource_observation_writer = ControlResourceObservationWriter(source_store)
+        gateway_usage_writer = ControlGatewayUsageWriter(source_store)
         cipher = SourceSecretCipher.from_base64(encryption_key)
         invalidators: tuple[SourcePoolInvalidator, ...] = (catalog, query_executor)
         budgets = load_budget_profiles(runtime_config.budget_file)
@@ -370,7 +384,12 @@ def build_app(
         await _probe_registered_sources(registry, metadata)
         if source_reloader is not None:
             replica_id = runtime_config.replica_id
-            if replica_id is None or replica_observation_writer is None:
+            if (
+                replica_id is None
+                or replica_observation_writer is None
+                or resource_observation_writer is None
+                or gateway_usage_writer is None
+            ):
                 raise ValueError("Managed replica observation configuration is incomplete")
             reload_task = asyncio.create_task(
                 _reload_sources(
@@ -378,6 +397,11 @@ def build_app(
                     runtime_config.source_reload_interval_ms,
                     replica_observation_writer,
                     replica_id,
+                    registry=registry,
+                    catalog=catalog,
+                    metadata=metadata,
+                    resource_writer=resource_observation_writer,
+                    gateway_writer=gateway_usage_writer,
                 )
             )
         child_entered = False
@@ -660,12 +684,23 @@ async def _reload_sources(
     interval_ms: int,
     observation_writer: ReplicaObservationWriter | None = None,
     replica_id: str | None = None,
+    *,
+    registry: SourceReader | None = None,
+    catalog: RuntimeCatalogProvider | None = None,
+    metadata: MetadataService | None = None,
+    resource_writer: ResourceObservationWriter | None = None,
+    gateway_writer: GatewayUsageWriter | None = None,
 ) -> None:
     loop = asyncio.get_running_loop()
     reload_interval = interval_ms / 1_000
     heartbeat_interval_ms = max(interval_ms, REPLICA_HEARTBEAT_INTERVAL_MIN_MS)
     report_interval = heartbeat_interval_ms / 1_000
     incarnation: int | None = None
+    resource_dependencies = (registry, catalog, metadata, resource_writer)
+    if any(dependency is not None for dependency in resource_dependencies) and any(
+        dependency is None for dependency in resource_dependencies
+    ):
+        raise ValueError("Resource observation reporting configuration is incomplete")
 
     if observation_writer is not None:
         if replica_id is None:
@@ -686,21 +721,62 @@ async def _reload_sources(
 
     next_reload = loop.time() + reload_interval
     next_report = loop.time() + report_interval
-    while True:
-        deadline = next_reload if incarnation is None else min(next_reload, next_report)
-        await asyncio.sleep(max(0.0, deadline - loop.time()))
-        if loop.time() >= next_reload:
-            await reloader.sync()
-            next_reload = loop.time() + reload_interval
-        if incarnation is not None and loop.time() >= next_report:
-            assert observation_writer is not None
-            assert replica_id is not None
-            await _report_replica_observation(
-                observation_writer,
-                replica_id,
-                incarnation,
+    reporting_tasks: list[asyncio.Task[None]] = []
+    # ponytail: process-local serialization preserves one slot in the fixed
+    # two-connection Control source pool for authority and replica operations.
+    observation_write_lock = asyncio.Lock()
+    if (
+        registry is not None
+        and catalog is not None
+        and metadata is not None
+        and resource_writer is not None
+    ):
+        reporting_tasks.append(
+            asyncio.create_task(
+                _resource_observation_loop(
+                    registry,
+                    catalog,
+                    metadata,
+                    resource_writer,
+                    reload_interval,
+                    observation_write_lock,
+                )
             )
-            next_report = loop.time() + report_interval
+        )
+    if gateway_writer is not None and incarnation is not None:
+        assert replica_id is not None
+        reporting_tasks.append(
+            asyncio.create_task(
+                _gateway_usage_loop(
+                    gateway_writer,
+                    replica_id,
+                    incarnation,
+                    observation_write_lock,
+                )
+            )
+        )
+
+    try:
+        while True:
+            deadline = next_reload if incarnation is None else min(next_reload, next_report)
+            await asyncio.sleep(max(0.0, deadline - loop.time()))
+            if loop.time() >= next_reload:
+                await reloader.sync()
+                next_reload = loop.time() + reload_interval
+            if incarnation is not None and loop.time() >= next_report:
+                assert observation_writer is not None
+                assert replica_id is not None
+                await _report_replica_observation(
+                    observation_writer,
+                    replica_id,
+                    incarnation,
+                )
+                next_report = loop.time() + report_interval
+    finally:
+        for task in reporting_tasks:
+            task.cancel()
+        if reporting_tasks:
+            await asyncio.gather(*reporting_tasks, return_exceptions=True)
 
 
 async def _report_replica_observation(
@@ -734,6 +810,315 @@ async def _report_replica_observation(
         )
     except Exception:
         logger.exception("replica_observation_report_failed")
+
+
+def _registered_profiles(registry: SourceReader) -> dict[str, SourceProfile]:
+    profiles: dict[str, SourceProfile] = {}
+    for source_id in sorted(registry.source_ids()):
+        source = registry.get(source_id)
+        if source is not None:
+            profiles[source_id] = source
+    return profiles
+
+
+async def _resource_observation_loop(
+    registry: SourceReader,
+    catalog: RuntimeCatalogProvider,
+    metadata: MetadataService,
+    writer: ResourceObservationWriter,
+    poll_interval: float,
+    write_lock: asyncio.Lock | None = None,
+) -> None:
+    loop = asyncio.get_running_loop()
+    tracked_profiles = _registered_profiles(registry)
+    initial_profiles = tuple(
+        source
+        for source in tracked_profiles.values()
+        if source.observability is not None
+    )
+    next_observation_by_source: dict[str, float] = {}
+    if initial_profiles:
+        await _collect_resource_observations(
+            initial_profiles,
+            catalog,
+            metadata,
+            writer,
+            write_lock,
+        )
+        next_observation_by_source.update(
+            {
+                source.source_id: loop.time()
+                + _RESOURCE_OBSERVATION_INTERVAL_SECONDS
+                for source in initial_profiles
+            }
+        )
+    while True:
+        next_due = min(next_observation_by_source.values(), default=None)
+        await asyncio.sleep(
+            min(
+                poll_interval,
+                (
+                    max(0.0, next_due - loop.time())
+                    if next_due is not None
+                    else poll_interval
+                ),
+            )
+        )
+        current_profiles = _registered_profiles(registry)
+        now = loop.time()
+        profiles = tuple(
+            source
+            for source_id, source in current_profiles.items()
+            if source.observability is not None
+            and (
+                tracked_profiles.get(source_id) is not source
+                or source_id not in next_observation_by_source
+                or now >= next_observation_by_source[source_id]
+            )
+        )
+        active_configured = {
+            source_id
+            for source_id, source in current_profiles.items()
+            if source.observability is not None
+        }
+        next_observation_by_source = {
+            source_id: deadline
+            for source_id, deadline in next_observation_by_source.items()
+            if source_id in active_configured
+        }
+        tracked_profiles = current_profiles
+        if profiles:
+            await _collect_resource_observations(
+                profiles,
+                catalog,
+                metadata,
+                writer,
+                write_lock,
+            )
+            attempted_at = loop.time()
+            next_observation_by_source.update(
+                {
+                    source.source_id: attempted_at
+                    + _RESOURCE_OBSERVATION_INTERVAL_SECONDS
+                    for source in profiles
+                }
+            )
+
+
+async def _gateway_usage_loop(
+    writer: GatewayUsageWriter,
+    replica_id: str,
+    incarnation: int,
+    write_lock: asyncio.Lock | None = None,
+) -> None:
+    loop = asyncio.get_running_loop()
+    sequence = 1
+    pending: tuple[int | None, tuple[GatewayUsageDelta, ...]] | None = None
+    next_report = loop.time() + _GATEWAY_USAGE_REPORT_INTERVAL_SECONDS
+    while True:
+        await asyncio.sleep(max(0.0, next_report - loop.time()))
+        sequence, pending = await _report_gateway_usage(
+            writer,
+            replica_id,
+            incarnation,
+            sequence,
+            pending,
+            write_lock,
+        )
+        while next_report <= loop.time():
+            next_report += _GATEWAY_USAGE_REPORT_INTERVAL_SECONDS
+
+
+def _definition_revision(material: dict[str, object]) -> str:
+    encoded = json.dumps(
+        material,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def _resource_observation_samples(
+    source: SourceProfile,
+    observation: ResourceObservation,
+) -> tuple[ResourceObservationSample, ...]:
+    definition = source.observability
+    if definition is None:
+        return ()
+    migration_ref = source.provenance.database_migration_ref
+    samples: list[ResourceObservationSample] = []
+    if observation.representative_records is not None:
+        representative = definition.representative_records
+        samples.append(
+            ResourceObservationSample(
+                metric="representative_records",
+                value=observation.representative_records,
+                unit="rows",
+                method="postgres_catalog_estimate",
+                definition_revision=_definition_revision(
+                    {
+                        "database_migration_ref": migration_ref,
+                        "grain": representative.grain,
+                        "method": "postgres_catalog_estimate",
+                        "metric": "representative_records",
+                        "physical_relation": representative.physical_relation,
+                    }
+                ),
+            )
+        )
+    relations = sorted(definition.storage_relations)
+    samples.extend(
+        (
+            ResourceObservationSample(
+                metric="table_bytes",
+                value=observation.table_bytes,
+                unit="bytes",
+                method="postgres_relation_size",
+                definition_revision=_definition_revision(
+                    {
+                        "database_migration_ref": migration_ref,
+                        "method": "postgres_relation_size",
+                        "metric": "table_bytes",
+                        "relations": relations,
+                    }
+                ),
+            ),
+            ResourceObservationSample(
+                metric="index_bytes",
+                value=observation.index_bytes,
+                unit="bytes",
+                method="postgres_relation_size",
+                definition_revision=_definition_revision(
+                    {
+                        "database_migration_ref": migration_ref,
+                        "method": "postgres_relation_size",
+                        "metric": "index_bytes",
+                        "relations": relations,
+                    }
+                ),
+            ),
+            ResourceObservationSample(
+                metric="total_storage_bytes",
+                value=observation.total_storage_bytes,
+                unit="bytes",
+                method="postgres_relation_size",
+                definition_revision=_definition_revision(
+                    {
+                        "database_migration_ref": migration_ref,
+                        "method": "postgres_relation_size",
+                        "metric": "total_storage_bytes",
+                        "relations": relations,
+                    }
+                ),
+            ),
+        )
+    )
+    return tuple(samples)
+
+
+async def _collect_resource_observations(
+    sources: tuple[SourceProfile, ...],
+    catalog: RuntimeCatalogProvider,
+    metadata: MetadataService,
+    writer: ResourceObservationWriter,
+    write_lock: asyncio.Lock | None = None,
+) -> None:
+    for source in sources:
+        if source.observability is None:
+            continue
+        try:
+            with operations.suppress_source_health_updates():
+                prepared = await metadata.get_published(source.source_id)
+                observation = await catalog.observe_resources(source)
+                samples = _resource_observation_samples(source, observation)
+                if write_lock is None:
+                    await writer.report_resource_observations(
+                        source.source_id,
+                        prepared.revision,
+                        samples,
+                    )
+                else:
+                    async with write_lock:
+                        await writer.report_resource_observations(
+                            source.source_id,
+                            prepared.revision,
+                            samples,
+                        )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning(
+                "resource_observation_report_failed",
+                extra={"source_id": source.source_id},
+            )
+
+
+async def _report_gateway_usage(
+    writer: GatewayUsageWriter,
+    replica_id: str,
+    incarnation: int,
+    sequence: int,
+    pending: tuple[int | None, tuple[GatewayUsageDelta, ...]] | None = None,
+    write_lock: asyncio.Lock | None = None,
+) -> tuple[int, tuple[int | None, tuple[GatewayUsageDelta, ...]] | None]:
+    if pending is None:
+        snapshot = operations.gateway_usage_report_snapshot(100)
+        pending = (
+            None,
+            (),
+        )
+        if snapshot is not None:
+            pending = (
+                snapshot.snapshot_id,
+                tuple(
+                    GatewayUsageDelta(
+                        source_id=delta.source_id,
+                        budget_profile=delta.budget_profile,
+                        metadata_revision=delta.metadata_revision,
+                        definition_revision=delta.definition_revision,
+                        bucket_start=delta.bucket_start,
+                        query_count=delta.query_count,
+                        success_count=delta.success_count,
+                        rejected_count=delta.rejected_count,
+                        timeout_count=delta.timeout_count,
+                        overloaded_count=delta.overloaded_count,
+                        cancelled_count=delta.cancelled_count,
+                        failed_count=delta.failed_count,
+                        queue_ms_sum=delta.queue_ms_sum,
+                        elapsed_ms_sum=delta.elapsed_ms_sum,
+                        returned_rows_sum=delta.returned_rows_sum,
+                        result_bytes_sum=delta.result_bytes_sum,
+                        truncated_count=delta.truncated_count,
+                    )
+                    for delta in snapshot.deltas
+                ),
+            )
+    snapshot_id, deltas = pending
+    try:
+        if write_lock is None:
+            await writer.report_gateway_usage(
+                replica_id,
+                incarnation,
+                sequence,
+                deltas,
+            )
+        else:
+            async with write_lock:
+                await writer.report_gateway_usage(
+                    replica_id,
+                    incarnation,
+                    sequence,
+                    deltas,
+                )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.warning("gateway_usage_report_failed")
+        return sequence, pending
+    if snapshot_id is not None:
+        operations.ack_gateway_usage_report(snapshot_id)
+    return sequence + 1, None
 
 
 async def _probe_registered_sources(

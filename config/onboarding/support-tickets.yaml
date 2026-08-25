@@ -19,3 +19,8 @@ allowed_schemas: [ai]
 allowed_relation_kinds: [view]
 budget_profile: interactive
 minimum_quality_level: L0
+observability:
+  representative_records:
+    grain: support_ticket
+    physical_relation: support.tickets
+  storage_relations: [support.tickets]

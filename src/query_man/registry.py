@@ -28,7 +28,9 @@ from query_man.models import (
     QualityLevel,
     QuestionRule,
     RelationSemantic,
+    RepresentativeRecordsTarget,
     ResolvedConnection,
+    ResourceObservationDefinition,
     SemanticOverlay,
     SourceEnvironment,
     SourceProfile,
@@ -77,6 +79,10 @@ _FORBIDDEN_SCHEMA = re.compile(
     r"^(?:information_schema|pg_catalog|pg_toast|pg_temp(?:_\d+)?|pg_toast_temp_\d+)$",
     re.IGNORECASE,
 )
+
+
+def _is_forbidden_schema(schema: str) -> bool:
+    return bool(_FORBIDDEN_SCHEMA.match(schema)) or schema.casefold().startswith("pg_")
 
 
 class RegistryConfigurationError(Exception):
@@ -153,6 +159,30 @@ class _Provenance(_StrictModel):
         ):
             raise ValueError("database_migration_ref cannot contain ASCII control characters")
         return value
+
+
+class _RepresentativeRecords(_StrictModel):
+    grain: Identifier
+    physical_relation: RelationName
+
+
+class _Observability(_StrictModel):
+    representative_records: _RepresentativeRecords
+    storage_relations: list[RelationName] = Field(min_length=1, max_length=16)
+
+    @model_validator(mode="after")
+    def validate_relations(self) -> _Observability:
+        if len(set(self.storage_relations)) != len(self.storage_relations):
+            raise ValueError("storage_relations must be distinct")
+        if self.representative_records.physical_relation not in self.storage_relations:
+            raise ValueError("representative physical_relation must be in storage_relations")
+        for relation in self.storage_relations:
+            schema = relation.split(".", 1)[0]
+            if _is_forbidden_schema(schema):
+                raise ValueError(
+                    "observability cannot reference PostgreSQL system schema"
+                )
+        return self
 
 
 class _Grain(_StrictModel):
@@ -302,6 +332,7 @@ class _SourceFile(_StrictModel):
     minimum_quality_level: QualityLevel = "L0"
     tenant_isolation: TenantIsolation = "none"
     semantic_overlay: _SemanticOverlay = Field(default_factory=_SemanticOverlay)
+    observability: _Observability | None = None
 
     @model_validator(mode="after")
     def valid_values(self) -> _SourceFile:
@@ -482,7 +513,7 @@ def _resolve_source(
     _require_unique(path, "allowed_schemas", parsed.allowed_schemas)
     _require_unique(path, "allowed_relation_kinds", parsed.allowed_relation_kinds)
     for schema in parsed.allowed_schemas:
-        if _FORBIDDEN_SCHEMA.match(schema) or schema.casefold().startswith("pg_"):
+        if _is_forbidden_schema(schema):
             raise RegistryConfigurationError(f"{path} cannot publish PostgreSQL system schema: {schema}")
 
     overlay = _build_overlay(parsed.semantic_overlay)
@@ -510,6 +541,19 @@ def _resolve_source(
         ),
         minimum_quality_level=parsed.minimum_quality_level,
         tenant_isolation=parsed.tenant_isolation,
+        observability=(
+            ResourceObservationDefinition(
+                representative_records=RepresentativeRecordsTarget(
+                    grain=parsed.observability.representative_records.grain,
+                    physical_relation=(
+                        parsed.observability.representative_records.physical_relation
+                    ),
+                ),
+                storage_relations=tuple(parsed.observability.storage_relations),
+            )
+            if parsed.observability is not None
+            else None
+        ),
     )
 
 

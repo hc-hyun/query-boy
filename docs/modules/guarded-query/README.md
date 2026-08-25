@@ -106,7 +106,7 @@ encoding하고 mapping key는 string만 허용한다. 지원하지 않는 type�
 row 상한을 넘으면 그 행을 넣지 않고 `truncated=true`로 반환한다. Duplicate result column은
 dictionary row value 손실을 막기 위해 fetch 전에 거부한다.
 
-### Gateway usage signal contract (`CTRL-07A`, implementation pending)
+### Gateway usage signal contract (`CTRL-07A`, implemented)
 
 Guarded Query는 Runtime이 제공하는 bounded usage recorder에 server-resolved source ID,
 `SourceProfile.budget.name`, active published metadata revision과 canonical terminal outcome만 보낸다.

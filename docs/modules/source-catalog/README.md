@@ -72,7 +72,7 @@ type 이동은 동작 변경과 섞지 않는 별도 mechanical refactoring으�
 - `minimum_quality_level`과 `tenant_isolation`은 publish/query gate의 입력이다.
 - `control_generation`과 `control_state_version`은 Control DB projection의 freshness/CAS identity다.
 
-### Resource observation definition contract (`CTRL-07A`, implementation pending)
+### Resource observation definition contract (`CTRL-07A`, implemented)
 
 Manifest v2의 optional `observability`는 `representative_records.grain`, 하나의
 `physical_relation`과 그 relation을 포함하는 1~16개의 distinct `storage_relations`를 가진다. Relation은

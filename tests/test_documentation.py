@@ -103,6 +103,12 @@ RUNTIME_REPLICA_OBSERVATION_AUDIT = (
     / "verification"
     / "2026-08-25-runtime-replica-observations.md"
 )
+RESOURCE_AND_GATEWAY_OBSERVATION_AUDIT = (
+    ROOT_DIRECTORY
+    / "docs"
+    / "verification"
+    / "2026-08-25-resource-and-gateway-observations.md"
+)
 EXPECTED_ID_COUNTS = {
     "BASE": 10,
     "DEC": 9,
@@ -120,7 +126,6 @@ EXPECTED_ID_COUNTS = {
     "MCPX": 8,
 }
 EXPECTED_OPEN_TODO_IDS = (
-    "CTRL-07",
     "CTRL-08",
     "CTRL-09",
     "SKILL-01",
@@ -153,6 +158,7 @@ EXPECTED_POST_BASELINE_COMPLETED_IDS = (
     "CTRL-04",
     "CTRL-05",
     "CTRL-06",
+    "CTRL-07",
     "SQLX-01",
     "QCORR-01",
     "MOD-01",
@@ -286,6 +292,9 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
     runtime_replica_observation_audit = RUNTIME_REPLICA_OBSERVATION_AUDIT.read_text(
         encoding="utf-8"
     )
+    resource_and_gateway_observation_audit = (
+        RESOURCE_AND_GATEWAY_OBSERVATION_AUDIT.read_text(encoding="utf-8")
+    )
 
     assert "Status: Production ready" in roadmap
     assert "Status: Production ready" in architecture
@@ -302,6 +311,7 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
     assert "Status: Complete" in source_management_catalog_audit
     assert "Status: Complete" in source_mutation_receipt_audit
     assert "Status: Complete" in runtime_replica_observation_audit
+    assert "Status: Complete" in resource_and_gateway_observation_audit
     assert REFACTORING_AUDIT.name in roadmap
     assert REFACTORING_AUDIT.name in architecture
     assert CONTAINER_AUDIT.name in roadmap
@@ -332,6 +342,9 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
     assert RUNTIME_REPLICA_OBSERVATION_AUDIT.name in roadmap
     assert RUNTIME_REPLICA_OBSERVATION_AUDIT.name in architecture
     assert RUNTIME_REPLICA_OBSERVATION_AUDIT.name in source_management_plan
+    assert RESOURCE_AND_GATEWAY_OBSERVATION_AUDIT.name in roadmap
+    assert RESOURCE_AND_GATEWAY_OBSERVATION_AUDIT.name in architecture
+    assert RESOURCE_AND_GATEWAY_OBSERVATION_AUDIT.name in source_management_plan
     for prefix, count in EXPECTED_ID_COUNTS.items():
         audit = {
             "DEP": container_audit,
@@ -362,6 +375,9 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
     runtime_replica_observation_audit = RUNTIME_REPLICA_OBSERVATION_AUDIT.read_text(
         encoding="utf-8"
     )
+    resource_and_gateway_observation_audit = (
+        RESOURCE_AND_GATEWAY_OBSERVATION_AUDIT.read_text(encoding="utf-8")
+    )
     matches = re.findall(r"^- \[([ x])\] `([A-Z]+)-(\d{2})`", todo, re.MULTILINE)
     ids = [f"{prefix}-{number}" for _checked, prefix, number in matches]
 
@@ -387,8 +403,9 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
     assert "## P0.5 — Module Contract Hardening" not in todo
     assert "offline composition `MOD-08`은 모두" in todo
     assert "Ledger의 `RTSAFE-01` 완료 및 `MOD-04`~`MOD-08`과 `CTRL-*` 완료" in todo
-    assert "`CTRL-07`~`CTRL-08`의 새 Control DB schema" in todo
-    assert "구현 전 정확한 계약 승인이 필요하다" in todo
+    assert "`CTRL-07A`의 resource/gateway observation 계약" in todo
+    assert "`CTRL-08`의 public availability/admin response" in todo
+    assert "구현하기 전에는 다시 승인받는다" in todo
     assert "`RTSAFE-*`, `MOD-*`" not in todo
 
     for item_id in EXPECTED_POST_BASELINE_COMPLETED_IDS:
@@ -403,6 +420,8 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
     assert "`CTRL-04`" in source_management_catalog_audit
     assert "`CTRL-05`" in source_mutation_receipt_audit
     assert "`CTRL-06`" in runtime_replica_observation_audit
+    assert "`CTRL-07`" in resource_and_gateway_observation_audit
+    assert "`CTRL-07A`" in resource_and_gateway_observation_audit
 
 
 def test_mutation_receipt_docs_preserve_terminal_and_secret_boundaries() -> None:
@@ -460,6 +479,36 @@ def test_runtime_replica_observation_docs_preserve_contract_boundaries() -> None
         assert reason in audit
     assert "question과 SQL" in audit
     assert "data plane, readiness" in audit
+
+
+def test_resource_and_gateway_observation_docs_preserve_contract_boundaries() -> None:
+    decision = CENTRAL_SOURCE_ADR.read_text(encoding="utf-8")
+    runtime_contract = (
+        ROOT_DIRECTORY / "docs" / "modules" / "runtime" / "README.md"
+    ).read_text(encoding="utf-8")
+    control_contract = (
+        ROOT_DIRECTORY / "docs" / "modules" / "control-plane" / "README.md"
+    ).read_text(encoding="utf-8")
+    audit = RESOURCE_AND_GATEWAY_OBSERVATION_AUDIT.read_text(encoding="utf-8")
+
+    for document in (decision, control_contract, audit):
+        assert "logical visibility/input window" in document
+        assert (
+            "나이만으로" in document
+            or "나이만을 이유로" in document
+            or "age-only" in document
+        )
+        assert "1,000" in document
+    assert "process당 최대 4" in audit
+    assert "process당 Control connection 최대" in runtime_contract
+    for table_name in (
+        "source_resource_observations",
+        "gateway_usage_rollups",
+        "gateway_usage_report_cursors",
+    ):
+        assert table_name in audit
+    assert "새 HTTP/MCP endpoint" in audit
+    assert "`CTRL-08`" in audit
 
 
 def test_initial_access_and_resource_tier_decision_stays_minimal() -> None:

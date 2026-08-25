@@ -25,7 +25,7 @@ from query_man.errors import (
 )
 from query_man.metadata import MetadataService
 from query_man.models import SourceProfile
-from query_man.operations import operations
+from query_man.operations import GatewayUsageOutcome, operations
 from query_man.reader_policy import (
     READER_SESSION_BUDGET_SETTERS,
     reader_session_budget_values,
@@ -154,6 +154,14 @@ class RuntimeQueryExecutor(QueryExecutor, Protocol):
     async def invalidate(self, source_id: str) -> None: ...
 
 
+class _QueryCancelledTimeoutError(QueryTimeoutError):
+    """Preserve the public timeout envelope while classifying a terminal cancel."""
+
+
+class _QueryCancelledUnavailableError(QueryUnavailableError):
+    """Preserve the public unavailable envelope while classifying a terminal cancel."""
+
+
 class QueryService:
     def __init__(
         self,
@@ -186,6 +194,11 @@ class QueryService:
             or sql_policy_revision != SQL_POLICY_REVISION
         ):
             operations.increment("query_revision_rejected", source.source_id)
+            _record_gateway_usage_safely(
+                source,
+                published.revision,
+                "rejected",
+            )
             raise MetadataRevisionMismatchError
         try:
             validated = validate_sql(
@@ -195,23 +208,128 @@ class QueryService:
             )
         except SqlValidationError as error:
             operations.increment("query_rejected", source.source_id)
+            _record_gateway_usage_safely(
+                source,
+                published.revision,
+                "rejected",
+            )
             raise QueryRejectedError(
                 error.code,
                 rejected_construct=error.rejected_construct,
             ) from error
-        result = await self._executor.execute(
-            source,
-            sql,
-            published.revision,
-            validated,
-            query_id=query_id,
-            tenant_id=tenant_id,
-        )
+        except Exception:
+            _record_gateway_usage_safely(
+                source,
+                published.revision,
+                "failed",
+            )
+            raise
+        try:
+            result = await self._executor.execute(
+                source,
+                sql,
+                published.revision,
+                validated,
+                query_id=query_id,
+                tenant_id=tenant_id,
+            )
+        except (_QueryCancelledTimeoutError, _QueryCancelledUnavailableError):
+            _record_gateway_usage_safely(
+                source,
+                published.revision,
+                "cancelled",
+            )
+            raise
+        except asyncio.CancelledError:
+            _record_gateway_usage_safely(
+                source,
+                published.revision,
+                "cancelled",
+            )
+            raise
+        except (QueryRejectedError, QueryInvalidError):
+            _record_gateway_usage_safely(
+                source,
+                published.revision,
+                "rejected",
+            )
+            raise
+        except QueryOverloadedError:
+            _record_gateway_usage_safely(
+                source,
+                published.revision,
+                "overloaded",
+            )
+            raise
+        except QueryTimeoutError:
+            _record_gateway_usage_safely(
+                source,
+                published.revision,
+                "timeout",
+            )
+            raise
+        except Exception:
+            _record_gateway_usage_safely(
+                source,
+                published.revision,
+                "failed",
+            )
+            raise
         result["sql_policy_revision"] = SQL_POLICY_REVISION
+        _record_gateway_usage_safely(
+            source,
+            published.revision,
+            "success",
+            result=result,
+        )
         return result
 
     async def cancel(self, query_id: str) -> bool:
         return await self._executor.cancel(query_id)
+
+
+def _record_gateway_usage_safely(
+    source: SourceProfile,
+    metadata_revision: str,
+    outcome: GatewayUsageOutcome,
+    *,
+    result: dict[str, object] | None = None,
+) -> None:
+    try:
+        if outcome != "success":
+            operations.record_gateway_usage(
+                source_id=source.source_id,
+                budget_profile=source.budget.name,
+                metadata_revision=metadata_revision,
+                outcome=outcome,
+            )
+            return
+        if result is None:
+            raise ValueError("Successful gateway usage requires a result")
+        truncated = result.get("truncated")
+        if not isinstance(truncated, bool):
+            raise ValueError("Successful gateway usage requires a truncation flag")
+        operations.record_gateway_usage(
+            source_id=source.source_id,
+            budget_profile=source.budget.name,
+            metadata_revision=metadata_revision,
+            outcome=outcome,
+            queue_ms=_gateway_usage_success_value(result, "queue_ms"),
+            elapsed_ms=_gateway_usage_success_value(result, "elapsed_ms"),
+            returned_rows=_gateway_usage_success_value(result, "row_count"),
+            result_bytes=_gateway_usage_success_value(result, "result_bytes"),
+            truncated=truncated,
+        )
+    except Exception:
+        # Usage is a best-effort lower-bound observation and cannot change query behavior.
+        return
+
+
+def _gateway_usage_success_value(result: dict[str, object], field: str) -> int:
+    value = result.get(field)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError("Successful gateway usage value is invalid")
+    return value
 
 
 class PostgresQueryExecutor:
@@ -267,7 +385,7 @@ class PostgresQueryExecutor:
                         "error_code": "QUERY_UNAVAILABLE",
                     },
                 )
-                raise QueryUnavailableError from error
+                raise _QueryCancelledUnavailableError from error
             operations.increment("query_interrupted", source.source_id)
             audit_logger.info(
                 "query_execution_interrupted query_id=%s source_id=%s fingerprint=%s",
@@ -375,6 +493,8 @@ class PostgresQueryExecutor:
                     None: "query_timeout",
                 }[reason]
                 operations.increment(metric, source.source_id)
+                if reason is not None:
+                    raise _QueryCancelledTimeoutError from error
                 raise QueryTimeoutError from error
             except QueryRejectedError:
                 operations.increment("query_rejected", source.source_id)

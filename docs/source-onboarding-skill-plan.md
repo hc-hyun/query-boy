@@ -88,7 +88,7 @@ Skill이 받을 수 있는 비밀이 아닌 입력:
 - TLS 요구와 analytics replica 여부
 - 공개할 curated schema/view 목록과 각 grain
 - 대표 질문, 시간 column, 필요한 join/measure
-- 예상 규모와 대표 record-volume metric
+- 예상 규모, 대표 record grain/physical relation과 최대 16개 storage relation 또는 명시적 미구성 결정
 - 기존 `budget_profile` 후보와 workload 특성
 - DB migration/change reference
 - RLS 사용 여부와 DB owner가 검증할 정책 증거
@@ -109,7 +109,8 @@ Skill은 다음 section을 가진 bounded Markdown 또는 구조화된 plan을 �
    전후 확인과 rollback 조건
 6. **Verification**: staging, metadata/quality, representative query, HTTP/MCP parity,
    resource-limit/profile 확인
-7. **Observability**: representative volume/storage method, freshness, expected cost signal 상태
+7. **Observability**: optional representative grain/table, storage table/materialized-view 목록,
+   24시간 cadence/72시간 freshness와 expected public cost signal 상태
 8. **Stop conditions**: publish하면 안 되는 오류와 미확정 항목
 
 Output에는 실제 credential, arbitrary SQL text, unredacted DB error와 실행 성공 주장을 넣지
@@ -136,7 +137,8 @@ classify request
 4. 기존 `budget_profile`의 time/concurrency/result/temp/plan 상한 적합성
 5. Metadata L0/L1/L2에 필요한 semantic/verified evidence
 6. 모든 query user 공개 영향
-7. 대표 record/storage observation 방법과 freshness
+7. Optional representative grain/physical relation과 1~16개 storage relation 또는 미구성 결정,
+   catalog estimate/relation-size 방법과 freshness
 8. Admin publish, smoke verification와 rollback handoff
 
 ## Safety Rules

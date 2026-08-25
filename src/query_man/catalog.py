@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from psycopg import AsyncConnection
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
@@ -16,6 +17,7 @@ from query_man.models import (
     CatalogRelation,
     CatalogRelationKind,
     CatalogSnapshot,
+    ResourceObservation,
     SourceProfile,
 )
 from query_man.reader_policy import (
@@ -232,6 +234,55 @@ STRUCTURE_QUERY = """
   LIMIT %s
 """
 
+RESOURCE_OBSERVATION_QUERY = """
+  WITH requested_relations AS MATERIALIZED (
+    SELECT
+      schema_target.schema_name,
+      relation_target.relation_name,
+      schema_target.position
+    FROM pg_catalog.unnest(%s::text[])
+      WITH ORDINALITY AS schema_target(schema_name, position)
+    JOIN pg_catalog.unnest(%s::text[])
+      WITH ORDINALITY AS relation_target(relation_name, position)
+      USING (position)
+  ),
+  resolved_relations AS MATERIALIZED (
+    SELECT
+      requested.position,
+      relation.oid AS relation_oid,
+      relation.reltuples
+    FROM requested_relations AS requested
+    JOIN pg_catalog.pg_namespace AS namespace
+      ON namespace.nspname::text = requested.schema_name
+    JOIN pg_catalog.pg_class AS relation
+      ON relation.relnamespace = namespace.oid
+      AND relation.relname::text = requested.relation_name
+    WHERE relation.relkind IN ('r', 'm')
+  )
+  SELECT
+    pg_catalog.max(
+      CASE
+        WHEN resolved.position = %s AND resolved.reltuples >= 0
+          THEN resolved.reltuples::double precision
+        ELSE NULL
+      END
+    ) AS representative_records,
+    pg_catalog.sum(pg_catalog.pg_table_size(resolved.relation_oid)) AS table_bytes,
+    pg_catalog.sum(pg_catalog.pg_indexes_size(resolved.relation_oid)) AS index_bytes,
+    pg_catalog.sum(pg_catalog.pg_total_relation_size(resolved.relation_oid))
+      AS total_storage_bytes
+  FROM resolved_relations AS resolved
+  HAVING NOT EXISTS (
+    SELECT 1
+    FROM requested_relations AS requested
+    WHERE NOT EXISTS (
+      SELECT 1
+      FROM resolved_relations AS matched
+      WHERE matched.position = requested.position
+    )
+  )
+"""
+
 _POSTGRES_KINDS = {
     "table": "r",
     "partitioned_table": "p",
@@ -247,6 +298,27 @@ _CATALOG_KINDS = {
 }
 
 
+async def _begin_catalog_transaction(
+    connection: AsyncConnection[Any],
+    source: SourceProfile,
+) -> None:
+    await connection.execute("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+    try:
+        await connection.execute(
+            _CATALOG_SESSION_SETTINGS,
+            (
+                f"{source.budget.metadata_statement_timeout_ms}ms",
+                f"{source.budget.lock_timeout_ms}ms",
+                *reader_session_budget_values(source),
+            ),
+        )
+    except Exception as error:
+        raise ReaderSessionPolicyError(
+            "Source reader session budget could not be applied"
+        ) from error
+    await require_reader_session_policy(connection, source)
+
+
 class PostgresCatalog:
     def __init__(self) -> None:
         self._pools: dict[str, AsyncConnectionPool[Any]] = {}
@@ -256,21 +328,7 @@ class PostgresCatalog:
         pool = await self._get_pool(source)
         async with pool.connection() as connection:
             try:
-                await connection.execute("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
-                try:
-                    await connection.execute(
-                        _CATALOG_SESSION_SETTINGS,
-                        (
-                            f"{source.budget.metadata_statement_timeout_ms}ms",
-                            f"{source.budget.lock_timeout_ms}ms",
-                            *reader_session_budget_values(source),
-                        ),
-                    )
-                except Exception as error:
-                    raise ReaderSessionPolicyError(
-                        "Source reader session budget could not be applied"
-                    ) from error
-                await require_reader_session_policy(connection, source)
+                await _begin_catalog_transaction(connection, source)
                 cursor = await connection.execute(
                     CATALOG_QUERY,
                     (
@@ -307,6 +365,73 @@ class PostgresCatalog:
         return CatalogSnapshot(
             relations=_apply_structures(frozen_relations, structures)
         )
+
+    async def observe_resources(self, source: SourceProfile) -> ResourceObservation:
+        definition = source.observability
+        if definition is None:
+            raise RuntimeError("Resource observation is not configured")
+
+        storage_relations = definition.storage_relations
+        representative_relation = definition.representative_records.physical_relation
+        if (
+            not 1 <= len(storage_relations) <= 16
+            or len(set(storage_relations)) != len(storage_relations)
+            or representative_relation not in storage_relations
+        ):
+            raise RuntimeError("Resource observation definition is invalid")
+
+        relation_parts: list[tuple[str, str]] = []
+        for qualified_name in storage_relations:
+            parts = qualified_name.split(".")
+            if len(parts) != 2 or not all(parts):
+                raise RuntimeError("Resource observation definition is invalid")
+            schema_name, relation_name = parts
+            folded_schema = schema_name.casefold()
+            if folded_schema == "information_schema" or folded_schema.startswith("pg_"):
+                raise RuntimeError("Resource observation definition is invalid")
+            relation_parts.append((schema_name, relation_name))
+
+        representative_position = storage_relations.index(representative_relation) + 1
+        pool = await self._get_pool(source)
+        async with pool.connection() as connection:
+            try:
+                await _begin_catalog_transaction(connection, source)
+                cursor = await connection.execute(
+                    RESOURCE_OBSERVATION_QUERY,
+                    (
+                        [schema_name for schema_name, _ in relation_parts],
+                        [relation_name for _, relation_name in relation_parts],
+                        representative_position,
+                    ),
+                )
+                row = await cursor.fetchone()
+                if row is None:
+                    raise RuntimeError("Resource observation targets are unavailable")
+                try:
+                    estimated = row["representative_records"]
+                    representative_records = (
+                        None if estimated is None else round(float(estimated))
+                    )
+                    table_bytes = int(row["table_bytes"])
+                    index_bytes = int(row["index_bytes"])
+                    total_storage_bytes = int(row["total_storage_bytes"])
+                except (KeyError, TypeError, ValueError, OverflowError) as error:
+                    raise RuntimeError("Resource observation result is invalid") from error
+                if representative_records is not None and representative_records < 0:
+                    raise RuntimeError("Resource observation result is invalid")
+                if min(table_bytes, index_bytes, total_storage_bytes) < 0:
+                    raise RuntimeError("Resource observation result is invalid")
+                observation = ResourceObservation(
+                    representative_records=representative_records,
+                    table_bytes=table_bytes,
+                    index_bytes=index_bytes,
+                    total_storage_bytes=total_storage_bytes,
+                )
+                await connection.execute("COMMIT")
+            except Exception:
+                await connection.rollback()
+                raise
+        return observation
 
     async def close(self) -> None:
         for pool in self._pools.values():
