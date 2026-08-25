@@ -46,18 +46,16 @@ timezone은 별도 의미이므로 UTC transport/session 정책과 혼동하지 
 | Direct consumers | Delivery public result, Assurance verified result hash와 Control Plane verified publish |
 | Affected providers/verifiers | Source Catalog reader-session policy, Metadata catalog/revision, Runtime composition, cross-timezone Assurance acceptance |
 | Contract baseline | 공통 reader policy는 `TimeZone`을 설정·검사하지 않고 aware datetime은 psycopg가 반환한 offset을 `isoformat()`으로 보존한다. [`DBEDGE-01`](verification/2026-08-25-source-database-corners.md)이 같은 instant의 UTC/Asia-Seoul canonical value와 hash 차이를 재현했다. |
-| Approval gate | Reader `TimeZone` 강제, aware datetime 정규화, metadata/SQL policy revision 재료와 verified hash migration은 public/policy 계약 변경이다. `TIME-01`의 정확한 선택과 영향을 사용자가 승인하기 전에는 구현하지 않는다. |
+| Approval gate | Reader `TimeZone` 강제, aware datetime 정규화, metadata/SQL policy revision 재료와 verified migration은 public/policy 계약 변경이다. 사용자가 2026-08-25 [`TIME-01` 결정](decisions/0019-canonical-time-stability.md)의 정확한 정책·영향·cutover·rollback을 승인했다. 승인 범위를 넘는 의미 변경은 다시 승인받는다. |
 | Single writer | Coordinating agent가 Guarded Query canonical contract와 revision 전환을 먼저 직렬화하고, 확정된 baseline 뒤 provider/consumer 구현과 검증을 분리한다. |
-| Start gate | `DBEDGE-01` 완료 뒤 `TIME-01` 결정·승인이 다음 순서다. `TIME-*` 완료 전 낮은 priority track은 read-only prework만 한다. |
+| Start gate | `DBEDGE-01`과 `TIME-01` 결정·승인이 완료되어 `TIME-02` 구현이 다음 순서다. `TIME-02`~`TIME-03` 완료 전 낮은 priority track은 read-only prework만 한다. |
 | Verification | UTC/non-UTC의 같은 instant/hash, DST와 calendar 함수, naive timestamp/date/time/timetz 비변경, revision fail-closed, verified migration/rollback과 root integration gate |
 
-- [ ] `TIME-01` Reader session과 aware datetime의 정확한 canonical timezone 정책, metadata/SQL
-  policy revision 영향, compatibility, cutover와 rollback을 decision record로 확정하고 사용자 승인을
-  받는다.
 - [ ] `TIME-02` 승인된 reader-session 설정·검사와 result encoding을 Metadata/Guarded Query에
   구현하고 Delivery, Control Plane과 Assurance 직접 consumer를 새 revision baseline에 맞춘다.
-- [ ] `TIME-03` Timezone-sensitive verified contract만 새 revision/hash로 재검토해 publish하고
-  UTC/non-UTC·DST·rolling/rollback integration과 운영 절차를 검증한다.
+- [ ] `TIME-03` Repository fixture 11개와 managed current/rollback-preserved verified contract 전체를
+  새 revision/hash로 재실행·재발행하고 UTC/non-UTC·DST·cutover/rollback integration과 운영 절차를
+  검증한다.
 
 ## P3 — Database-Native Cost Attribution
 

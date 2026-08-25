@@ -351,6 +351,7 @@ client와 실제 PostgreSQL fixture를 사용해야 한다. 실행 결과와 남
 | `SKILL-05` | `support-tickets` owner/admin handoff를 재현하고 repository, source DB, Control authority/roles와 spy admin endpoint의 mutation 0을 검증했다. | [Skill acceptance](verification/2026-08-25-source-onboarding-skill.md) |
 | `SKILL-06` | Skill validator, 정적 회귀, 운영 문서와 기본 onboarding planning workflow 채택 기록을 완료했다. | [Skill acceptance](verification/2026-08-25-source-onboarding-skill.md), [source onboarding](source-onboarding.md) |
 | `DBEDGE-01` | 세 UUID별 disposable PostgreSQL source에서 wide/untrusted metadata, temporal/rich scalar, partition/materialized/empty result와 leak-free cleanup을 검증하고 기존 ADR을 위반한 wide-match overflow를 수정했다. TimeZone canonicalization gap은 계약 승인 전 미구현으로 분리했다. | [source database corner acceptance](verification/2026-08-25-source-database-corners.md), [`test_source_database_corners.py`](../tests/test_source_database_corners.py), [`test_metadata.py`](../tests/test_metadata.py) |
+| `TIME-01` | Reader session UTC, aware datetime UTC `+00:00`, business calendar `Asia/Seoul`, SQL-policy/metadata revision 재료, full verified reissue, coordinated cutover와 immutable rollback 보존을 하나의 정확한 계약으로 확정하고 사용자 승인을 받았다. R1에서 업무 날짜 SQL을 명시하고 dev/market 9개 계약의 기존 결과를 보존했다. | [ADR 0019](decisions/0019-canonical-time-stability.md), [canonical time verification](verification/2026-08-25-canonical-time-stability.md) |
 
 Ledger의 완료 결과 column은 찾기 쉬운 요약일 뿐 acceptance를 축소하지 않는다. 각 ID에 연결된
 evidence가 해당 완료 작업의 상세 경계와 실행 증거를 보존한다. Audit가 연결된 row에서 각 audit는

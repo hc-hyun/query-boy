@@ -150,7 +150,6 @@ EXPECTED_ID_COUNTS = {
     "MCPX": 8,
 }
 EXPECTED_OPEN_TODO_IDS = (
-    "TIME-01",
     "TIME-02",
     "TIME-03",
     "COST-01",
@@ -198,6 +197,7 @@ EXPECTED_POST_BASELINE_COMPLETED_IDS = (
     "SKILL-05",
     "SKILL-06",
     "DBEDGE-01",
+    "TIME-01",
 )
 CRITICAL_NON_PYTHON_MODULE_MAPPINGS = (
     "| `config/sources/`, `config/budget-profiles.yaml` | Source Catalog |",
@@ -449,7 +449,7 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
     assert "## P0.5 — Module Contract Hardening" not in todo
     assert "offline composition `MOD-08`은 모두" in todo
     assert "## P2 — Source Onboarding Skill" not in todo
-    assert "`TIME-01` 결정·승인이 다음 순서" in todo
+    assert "`TIME-02` 구현이 다음 순서" in todo
     assert "`TIME-*` 완료 뒤 `COST-01`부터 진행" in todo
     assert "`CTRL-07A` observation method/freshness/logical retention" in todo
     assert "`CTRL-08` usage/cost state" in todo

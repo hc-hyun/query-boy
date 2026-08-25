@@ -183,7 +183,7 @@ SELECT
   issue.id AS issue_id,
   issue.issue_no,
   issue.discovered_at,
-  issue.discovered_at::date AS discovered_on,
+  (issue.discovered_at AT TIME ZONE 'Asia/Seoul')::date AS discovered_on,
   reporter.user_id AS reporter_user_id,
   reporter.display_name AS reporter_name,
   reporter.team_name AS reporter_team,

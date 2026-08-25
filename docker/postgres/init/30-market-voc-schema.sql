@@ -223,7 +223,7 @@ SELECT
   case_row.voc_no,
   case_row.occurred_at,
   case_row.received_at,
-  case_row.received_at::date AS received_on,
+  (case_row.received_at AT TIME ZONE 'Asia/Seoul')::date AS received_on,
   registrant.user_id AS registered_by_user_id,
   registrant.display_name AS registered_by_name,
   registrant.team_name AS registered_by_team,
