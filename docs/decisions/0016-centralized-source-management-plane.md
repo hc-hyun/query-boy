@@ -86,6 +86,71 @@ Observation availability는 `not_configured`, `pending`, `available`, `stale`, `
 Provider billing이 없으면 통화 비용 대신 source/profile별 resource usage와 추세만 제공한다.
 User/organization별 allocation과 chargeback은 현재 범위가 아니다.
 
+### CTRL-07A resource and gateway observation contract
+
+`CTRL-07A`의 구현 계약은 2026-08-25에 승인됐다. Strict source manifest v2는 optional
+`observability` object를 additive하게 받는다. Configured object는 representative record grain과
+physical relation 하나, 그리고 그 relation을 포함하는 1~16개의 distinct physical storage
+relation을 지정한다. 대상은 system schema가 아닌 같은 database의 ordinary table 또는
+materialized view다. 이 이름은 DB owner가 제공하는 관측 계약이며 query relation allowlist나
+public projection에 추가되지 않는다. Staging은 기존 reader로 exact 대상의 catalog estimate와
+size 함수를 bounded하게 검증하고 새 reader/monitoring privilege를 요구하지 않는다.
+
+V1 resource method는 `postgres_catalog_estimate`와 `postgres_relation_size`뿐이다. 일반 view의
+`COUNT(*)`, caller-provided SQL과 `EXPLAIN ANALYZE`는 실행하지 않는다. Source-level metric은 다음
+네 개로 고정하며 per-relation/index 이름을 Control observation dimension으로 저장하지 않는다.
+
+```text
+representative_records (rows)
+table_bytes (bytes)
+index_bytes (bytes)
+total_storage_bytes (bytes)
+```
+
+`observability` definition 변경은 immutable source generation을 만들지만 metadata revision 재료는
+아니다. 관측값도 generation/revision을 만들지 않는다. Metric별 `definition_revision`은 metric,
+method, grain 또는 정렬된 relation 목록과 `database_migration_ref`의 canonical SHA-256이다.
+Resource는 UTC daily bucket의 current와 같은 definition의 previous sample만 유지한다. 같은 날의
+중복 보고는 previous를 밀지 않고, definition/method 변경은 previous를 null로 초기화한다. Runtime은
+source apply 뒤 한 번, 이후 24시간마다 best-effort 수집하며 Control DB clock의 `observed_at`과
+`fresh_until = observed_at + 72 hours`를 저장한다. 이는 catalog를 읽은 시각의 freshness이며
+PostgreSQL `ANALYZE` 정확성 보장은 아니다. 실패나 missing을 0으로 쓰지 않는다.
+
+Gateway usage는 trusted active source/profile/published revision을 확인한 query의 canonical terminal
+event를 다음 key로 UTC hourly rollup한다.
+
+```text
+source_id + budget_profile + metadata_revision + definition_revision + bucket_start
+```
+
+`query_count`는 `success|rejected|timeout|overloaded|cancelled|failed`의 합이다. Revision/policy,
+SQL allowlist, plan admission과 allowlisted user-SQL 오류는 rejected, queue/pool 포화는 overloaded,
+operator/disconnect/shutdown 취소는 cancelled다. 성공 query만 `queue_ms_sum`, `elapsed_ms_sum`,
+`returned_rows_sum`, `result_bytes_sum`과 `truncated_count`에 기여한다. Attribution 전에 실패한
+authentication, unknown source와 active revision read failure는 rollup에 넣지 않는다. Caller,
+tenant, question, SQL, query/fingerprint/PG query ID와 raw 오류도 저장하지 않는다. 이 값은 모든
+replica의 완전한 청구 원장이 아니라 Control DB에 성공적으로 보고된 사용량의 lower bound다.
+
+Managed Runtime은 CTRL-06 payload와 별개로 60초마다 최대 100 delta를 report한다. Pending group은
+process당 1,000개로 제한하고 overflow는 오래된 group을 버려 lower-bound 의미를 유지한다.
+Stable replica ID와 incarnation, monotonic sequence와 canonical payload SHA-256으로 fence/deduplicate한다.
+Same sequence/hash replay는 no-op이고 different hash, sequence gap과 old incarnation은 거부한다.
+Reporter cursor freshness는 Control DB clock의 180초다. Rollup은 31일과 source당 최신 1,000행을
+동시에 상한으로 삼는다. Common Control writer는 이 non-authoritative rollup table에만 bounded
+pruning용 DELETE를 가지며 authority, receipt, replica observation, resource/cursor table에는 DELETE를
+얻지 않는다.
+
+Additive migration 4는 `source_resource_observations`, `gateway_usage_rollups`와
+`gateway_usage_report_cursors`만 추가한다. Resource는 source당 최대 네 current/previous row,
+rollup은 위 aggregate, cursor는 replica incarnation/sequence/hash/DB-clock freshness를 저장한다.
+Observation failure는 query data plane, source authority, readiness, health, mutation receipt와 shutdown
+성공 의미를 바꾸지 않는다. Code rollback은 migration ledger/table/data를 drop하지 않는다.
+
+`CTRL-07A`는 새 HTTP/MCP endpoint와 availability status, last attempt/reason을 추가하지 않는다.
+`not_configured|pending|available|stale|unavailable` 및 exact admin response는 `CTRL-08`에서 별도
+승인한다. DB-native statistics, provider billing, monetary cost, exact counter view와 caller/tenant
+allocation도 이 계약 밖이다.
+
 ### CTRL-06 replica observation contract
 
 `CTRL-06`의 구현 계약은 2026-08-25에 다음과 같이 확정했다. Managed process는

@@ -18,6 +18,7 @@ metadata revision/context 생성은 [Metadata](../metadata/README.md)가 담당�
 - Grain, measure, join, business term과 question rule을 포함한 semantic overlay definition
 - Source-scoped credential environment naming과 host/port resolution 검증
 - Owner, environment와 source DB migration reference의 bounded provenance definition
+- Optional manifest v2 observability definition과 bounded physical resource targets
 - System schema 거부, overlay referential integrity와 source identity 검증
 - Runtime `SourceRegistry`의 논리적 read projection
 - 논리적으로 Control Plane만 사용하는 registry upsert/remove projection capability
@@ -70,6 +71,19 @@ type 이동은 동작 변경과 섞지 않는 별도 mechanical refactoring으�
   migration reference다. 권한 principal이나 migration artifact 검증 결과가 아니다.
 - `minimum_quality_level`과 `tenant_isolation`은 publish/query gate의 입력이다.
 - `control_generation`과 `control_state_version`은 Control DB projection의 freshness/CAS identity다.
+
+### Resource observation definition contract (`CTRL-07A`, implementation pending)
+
+Manifest v2의 optional `observability`는 `representative_records.grain`, 하나의
+`physical_relation`과 그 relation을 포함하는 1~16개의 distinct `storage_relations`를 가진다. Relation은
+system schema가 아닌 같은 database의 ordinary table 또는 materialized view여야 한다. 이는 DB
+owner가 승인한 관측 target일 뿐 `allowed_schemas`, `allowed_relation_kinds`나 query metadata에 추가되지
+않으며 public source summary에도 relation 이름을 노출하지 않는다.
+
+Validated `SourceProfile`은 이 definition을 immutable tuple/value로 제공한다. Definition 변경은
+source generation을 만들지만 `create_metadata_revision` 재료는 아니다. Missing object는 관측 미구성
+의미이고 기존 v2 manifest와 호환된다. Parser는 SQL, predicate, counter expression, provider account와
+arbitrary method를 받지 않는다.
 
 `SourceProfile`에는 resolved plaintext reader password가 들어 있으므로 process 내부의 sensitive
 object다. Profile 자체를 wire response, persisted JSON, log 또는 metric에 serialize하지 않는다.

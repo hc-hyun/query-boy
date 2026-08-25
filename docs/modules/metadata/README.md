@@ -22,6 +22,7 @@ Metadata는 SQL 실행기가 아니다. 질문에 어떤 relation, column, grain
 - Revision-scoped relevance index와 question-scoped relation/column disclosure
 - Grain, measure, join, business term, ambiguity와 answerability response projection
 - Metadata response byte limit과 untrusted comment sanitization
+- DB-owner-declared physical relation의 bounded catalog estimate/size observation
 
 ## 소유하지 않는 책임
 
@@ -145,6 +146,21 @@ Canonicalizer는 list와 tuple, dict와 immutable mapping을 같은 canonical ar
   별도 stale path로 제공할 수 있다.
 - Fresh cache hit는 PostgreSQL reader policy를 다시 조회하지 않으며 drift는 다음 refresh에서
   검출한다. Cache hit를 live privilege probe로 해석하지 않는다.
+
+### Resource observation provider (`CTRL-07A`, implementation pending)
+
+Runtime-only catalog capability는 Source Catalog가 검증한 optional observability definition의 exact
+physical relation만 조회한다. 대상 전체를 열거하지 않고 system schema와 unsupported relkind를
+거부하며 한 representative relation과 최대 16개의 distinct storage relation으로 제한한다. Existing
+`PostgresCatalog`의 max-one reader pool, read-only transaction과 metadata statement timeout을
+재사용하므로 monitoring role이나 별도 connection budget을 추가하지 않는다.
+
+Provider는 representative `pg_class.reltuples`가 non-negative일 때 rounded rows와 configured
+relations의 `pg_table_size`, `pg_indexes_size`, `pg_total_relation_size` 합계만 반환한다. Relation 이름,
+OID, catalog row와 SQL은 Control payload에 넣지 않는다. Ordinary view `COUNT(*)`, caller SQL,
+`EXPLAIN ANALYZE`와 provider billing/statistics는 이 capability에 없다. `reltuples`가 unavailable이면
+record sample만 생략하고 storage failure는 전체 resource attempt를 실패시킨다. Observation data는
+`CatalogSnapshot`, metadata cache/persistence와 metadata revision에 들어가지 않는다.
 
 ### Runtime observation signal (`CTRL-06`)
 

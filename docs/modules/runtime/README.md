@@ -186,6 +186,27 @@ Runtime이 공개 `ReplicaObservationWriter`와 `ReplicaSourceObservation`을 �
 Control Plane dependency다. `source_store.py`, observation table 또는 persistence-private type을
 직접 import하지 않는다.
 
+### Resource and gateway reporting contract (`CTRL-07A`, implementation pending)
+
+Managed Runtime은 source가 성공적으로 apply된 뒤 bounded catalog resource sample을 한 번 시도하고
+이후 24시간 cadence로 갱신한다. 같은 UTC day의 여러 replica report는 Control Plane에서 한 current
+sample로 합쳐진다. 수집은 기존 catalog pool의 max-one connection 경계를 재사용하고 새 monitoring
+identity나 query pool connection을 만들지 않는다. Candidate staging은 target을 검증할 수 있지만
+production observation을 publish하지 않는다.
+
+Gateway query의 trusted active `SourceProfile.budget.name`과 published metadata revision은 terminal
+event 시점에 Runtime-owned recorder로 전달한다. Recorder는 caller/tenant/query/SQL/fingerprint 없이
+UTC hourly delta를 만들고 최대 1,000 group만 보관한다. Reporter는 CTRL-06 heartbeat payload를
+확장하지 않는 별도 60초 best-effort loop이며 한 report에 최대 100 delta를 보낸다. Overflow는
+가장 오래된 pending group을 버리므로 값은 lower bound다.
+
+Reporter는 existing stable replica ID/incarnation과 process-local monotonic sequence를 사용한다.
+Control success 뒤에만 pending delta를 제거하고 실패 시 같은 sequence/payload를 재시도한다.
+Reporting/resource collection failure는 startup, readiness, query admission/result, source health,
+replica heartbeat, mutation receipt와 shutdown 성공을 바꾸지 않으며 cancellation은 삼키지 않는다.
+Bootstrap mode에는 Control observation writer/task가 없다. Existing `operations.snapshot()`,
+`/admin/metrics`, health/readiness와 MCP output도 바뀌지 않는다.
+
 ### Runtime authentication configuration contract
 
 - Bootstrap loopback에서 token/access-policy 설정이 없으면 Delivery의 anonymous query-only local

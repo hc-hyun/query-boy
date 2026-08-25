@@ -106,6 +106,20 @@ encoding하고 mapping key는 string만 허용한다. 지원하지 않는 type�
 row 상한을 넘으면 그 행을 넣지 않고 `truncated=true`로 반환한다. Duplicate result column은
 dictionary row value 손실을 막기 위해 fetch 전에 거부한다.
 
+### Gateway usage signal contract (`CTRL-07A`, implementation pending)
+
+Guarded Query는 Runtime이 제공하는 bounded usage recorder에 server-resolved source ID,
+`SourceProfile.budget.name`, active published metadata revision과 canonical terminal outcome만 보낸다.
+Revision/policy, SQL allowlist, plan admission과 allowlisted user-SQL 오류는 `rejected`; queue/pool
+포화는 `overloaded`; operator/disconnect/shutdown 취소는 `cancelled`; 나머지 timeout/unavailable은
+각각 `timeout|failed`다. 성공만 queue/elapsed/returned rows/result bytes/truncation 합계에 기여한다.
+
+한 query의 여러 audit event를 각각 세지 않고 attribution 이후 terminal outcome을 정확히 한 번
+기록한다. Attribution 전에 끝난 authentication, unknown source와 active revision read failure는
+record하지 않는다. Recorder failure는 query 결과나 오류를 바꾸지 않고 SQL, question, caller,
+tenant, fingerprint, query ID와 raw database error를 payload에 넣지 않는다. 기존 public query
+result/error와 audit event 의미는 유지한다.
+
 ### Error contract
 
 Public query error category는 `SOURCE_NOT_FOUND`, `METADATA_REVISION_MISMATCH`, `QUERY_REJECTED`,

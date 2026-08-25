@@ -203,6 +203,34 @@ stale/unavailable observation은 조회 자체의 실패가 아니다. Unknown s
 projection 실패는 내부 정보를 숨긴 503으로 매핑한다. Existing source list/detail/history,
 health/metrics와 MCP response는 바꾸지 않는다.
 
+### Resource and gateway observation contract (`CTRL-07A`, implementation pending)
+
+Control Plane은 persistence-private row 대신 다음 두 bounded write capability를 Runtime에 제공한다.
+
+```text
+ResourceObservationWriter.report_resource_observations(source_id, metadata_revision, samples)
+GatewayUsageWriter.report_gateway_usage(replica_id, incarnation, sequence, deltas)
+```
+
+Resource sample은 `representative_records|table_bytes|index_bytes|total_storage_bytes`와 exact
+unit/method/definition revision/value만 허용한다. Migration 4의
+`source_resource_observations`는 `(source_id, metric)` 네 row 이하에서 UTC daily current와 comparable
+previous만 저장한다. Same bucket은 current만 교체하고 method/definition 변경은 previous를 지운다.
+DB clock observed time과 72시간 freshness를 사용하며 failure/missing은 기존 값을 0으로 덮지 않는다.
+
+Gateway delta는 trusted `source_id + budget_profile + metadata_revision + definition_revision + UTC
+hour` key와 fixed terminal counter/sum만 받는다. `gateway_usage_report_cursors`가 current replica
+incarnation, sequence와 payload SHA-256을 fence/deduplicate하고 `gateway_usage_rollups`가 aggregate를
+저장한다. Same sequence/hash는 exact no-op이며 different hash, gap과 fenced incarnation은 transaction
+전체를 거부한다. Reporter cursor freshness는 DB clock 180초다. Rollup은 31일 및 source당 1,000행을
+상한으로 유지한다.
+
+Control writer는 resource/cursor table에 SELECT/INSERT/UPDATE, rollup에는 bounded pruning을 위한
+DELETE까지 가진다. 다른 table의 DELETE/TRUNCATE와 schema ownership은 얻지 않는다. Rollup은
+성공적으로 보고된 lower bound이며 observation write/cleanup 실패는 source authority, query data
+plane, readiness, health, receipt와 shutdown 의미를 바꾸지 않는다. Public status/admin response는
+`CTRL-08` 전까지 제공하지 않는다.
+
 ### Runtime projection contract
 
 Control DB commit은 desired-state 원자성을 보장하지만 모든 process의 in-memory 적용까지 하나의

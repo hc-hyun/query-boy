@@ -146,7 +146,7 @@ audit에서 제외한다.
   않는다. 기존 list/detail/health/metrics/MCP는 그대로다.
 - Observation failure는 data plane, readiness, mutation receipt와 shutdown lifecycle을 바꾸지 않는다.
 
-### Planned Data Size And Growth (`CTRL-07`)
+### Approved Data Size And Growth (`CTRL-07A`, implementation pending)
 
 관측값은 configuration revision과 분리하고 다음 bounded shape를 사용한다.
 
@@ -155,17 +155,24 @@ source_id, scope, metric, value, unit, method,
 definition_revision, metadata_revision?, observed_at, fresh_until
 ```
 
-기본 method는 catalog estimate, 명시적으로 승인된 cheap counter, owner/provider reported 값이다.
-일반 view에 무제한 `COUNT(*)` 또는 `EXPLAIN ANALYZE`를 실행하지 않는다. 대표 volume metric과
-grain은 DB owner가 지정한다. Growth는 같은 metric, method와 `definition_revision` 사이에서만
-계산한다.
+Manifest v2의 optional `observability`가 DB owner의 representative grain/physical relation과 이를
+포함한 최대 16개 storage relation을 지정한다. V1은 ordinary table/materialized view의
+`postgres_catalog_estimate`와 `postgres_relation_size`만 사용한다. `representative_records`,
+`table_bytes`, `index_bytes`, `total_storage_bytes`를 source-level current/previous로 저장하고 relation
+이름은 public dimension으로 내보내지 않는다. 일반 view에 무제한 `COUNT(*)` 또는
+`EXPLAIN ANALYZE`를 실행하지 않는다.
 
-### Planned Usage And Cost (`CTRL-07`, `CTRL-08`)
+Resource는 UTC daily bucket, 24시간 cadence와 Control DB clock 72시간 freshness를 사용한다. 같은
+metric/method/definition만 previous로 이동하며 정의가 바뀌면 comparison을 초기화한다. Definition은
+metric, method, grain/relation 목록과 DB migration reference의 canonical SHA-256이다. 이 수집 계약은
+승인됐지만 아직 구현되지 않았다.
+
+### Approved Gateway Usage (`CTRL-07A`, implementation pending) And Planned Cost (`CTRL-08`)
 
 초기 집계 key는 bounded한 `source_id + budget_profile + metadata_revision + time bucket`이다.
 Budget 정의가 metadata revision 재료이므로 별도 tier revision entity를 만들지 않는다.
 
-- Gateway query/success/reject/timeout, queue/elapsed, rows/result bytes와 truncation
+- Gateway query/success/reject/timeout/overload/cancel/failure, queue/elapsed, rows/result bytes와 truncation
 - 승인된 PostgreSQL execution/block/temp/WAL aggregate
 - Database/table/index storage와 증가량
 - 연결된 경우에만 provider amount, currency, period와 allocation method
@@ -174,6 +181,12 @@ Caller/tenant는 security audit에 남을 수 있지만 비용, quota와 metric 
 않는다. Provider billing이 없으면 자원 사용과 추세만 표시한다. Availability는
 `not_configured|pending|available|stale|unavailable`을 구분하고 last attempt, freshness와 bounded
 reason을 함께 제공한다. Missing/failed 값은 0으로 표시하지 않는다.
+
+승인된 gateway V1은 trusted active profile/revision을 terminal event 시점에 붙인 UTC hourly delta를
+별도 60초 reporter가 전송한다. Replica incarnation/sequence/payload hash로 retry를 deduplicate하고
+31일 및 source당 1,000행을 상한으로 둔다. 값은 성공적으로 보고된 lower bound다. Public status와
+admin response는 아직 `CTRL-08` 목표이며 기존 `/admin/metrics`, replica heartbeat와 MCP는 바뀌지
+않는다.
 
 ## Access Boundary
 
