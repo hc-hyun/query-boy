@@ -569,7 +569,10 @@ fixture acceptance까지 완료됐다. 이후 plan-only Source Onboarding Skill 
 `DBEDGE-01`~`DBEDGE-05`도 완료했다. 이 과정에서 별도로 발견한 hidden base RLS policy drift는
 accepted tenant isolation 위반이므로 완료 DBEDGE로 흡수하지 않고
 [open security finding](verification/2026-08-26-rls-policy-drift.md)과 최우선 `RLS-01`~`RLS-03`으로
-분리했다. Reader TimeZone/canonical hash 변경은 별도 승인된
+분리했다. Recursive strict policy identity, lock-first query admission, snapshot/revision v2와
+cutover/rollback의 implementation-ready `RLS-01-A`는
+[proposed ADR 0024](decisions/0024-rls-policy-drift-attestation.md)에 작성했지만 exact 사용자 승인은
+아직 없어 현재 계약이나 구현이 아니다. Reader TimeZone/canonical hash 변경은 별도 승인된
 `TIME-01`과 `TIME-02`에서
 결정·구현했고 완료 이력을 roadmap ledger로 옮겼다. 후속 database corner에서 발견한
 lossless scalar/JSON/time, source encoding/collation, semantic GUC, result OID와 array identity gap은

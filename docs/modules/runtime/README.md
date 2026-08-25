@@ -153,11 +153,18 @@ catalog와 query executor를 같은 순서의 두 `SourcePoolInvalidator`로 빠
 Transaction-local UTC는 commit, rollback과 shutdown cancel 뒤 pool에 남지 않는다. Canonical-time
 rollback은 R2를 같은 순서로 drain한 뒤 보존된 R1 binary/generation/revision/L2를 복구하고 route한다.
 
-ADR 0020 exact A는 아직 승인 대기 제안이다. 승인되면 Runtime은 encoding,
-fingerprint 또는 snapshot codec을 소유하지 않고, old fleet/source connection을 0까지 drain한
-뒤 v2 counterpart를 route 밖에서 조립하는 coordinated cutover만 소유한다. V1/V2 serving
-fleet는 섞지 않고 rollback은 보존된 v1 pointer/L2와 old release를 다시 조립하며 v2 row를
-삭제하지 않는다. 이 순서는 exact A 승인 전에는 현재 Runtime contract가 아니다.
+[Proposed ADR 0024](../../decisions/0024-rls-policy-drift-attestation.md)의 `RLS-01-A` target에서 Runtime은
+RLS fingerprint/codec을 소유하지 않고 old fleet와 source connection을 0까지 drain한 뒤 route 밖 v2
+fleet, verified current/rollback counterpart와 replica convergence를 조립한다. V1/V2 serving fleet를
+섞지 않고 safe functional rollback은 verified v2로만 수행하며 old binary rollback은 RLS source를
+deactivate/unroute한 채 non-RLS만 제공한다.
+
+ADR 0020 exact A도 아직 승인 대기 제안이다. Encoding/source-semantics release는 RLS v2의 field
+shape/semantics를 누적한 v3를 사용하되 RLS attestation은 current live graph에서 새로 계산하고 source별 pre-ENC v1/v2
+baseline을 보존한다. Combined direct-v3 cutover는 route하지 않을 production v2 row를 만들지 않고
+verified v3 rollback generation을 준비한다. V3→v2 RLS rollback은 별도로 실제 배포·검증해 captured한
+counterpart가 있을 때만 허용하고 v3→v1 binary rollback은 위 RLS deactivate 규칙을 따른다. 이 모든
+순서는 exact A 승인 전에는 현재 Runtime contract가 아니다.
 
 ### Health and operations contract
 

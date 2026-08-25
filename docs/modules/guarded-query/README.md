@@ -131,7 +131,7 @@ PostgreSQL type과 실제 driver Python type을 같은 것으로 간주하지 �
 현재 `QUERY_UNAVAILABLE`로 rollback하지만 record/composite와 Python int/string/list로 내려오는
 unknown 또는 non-allowlisted result OID의 fail-closed gate는 아직 없다.
 
-Exact A 제안이 승인되면 Guarded Query는 v2 published snapshot의 required
+Exact A 제안이 승인되면 Guarded Query는 cumulative v3 published snapshot의 required
 `source_semantics_fingerprint`를 받고 Metadata-owned helper로 user planning 전 live value를 비교한다.
 User-result text cursor에만 loader를 SQL 실행 전 등록하고 RowDescription OID 전체를 fetch
 전에 allowlist한다. Catalog/`EXPLAIN`/Control JSON loader와 HTTP/MCP field는 확장하지 않는다.
@@ -213,8 +213,11 @@ resolved-object 검증과 commit에서 같은 SQLSTATE가 발생해도 사용자
 security-invoker view를 확인하지만 hidden base relation의 RLS flag/policy 의미를 attest하지 않는다.
 [RLS policy drift finding](../../verification/2026-08-26-rls-policy-drift.md)은 이 gap에서 다른 tenant
 행이 성공함을 재현했으며 strict xfail sentinel로 남아 있다. 이는 안전 contract의 예외 승인이
-아니다. Same-transaction lock/check order, provider fingerprint와 public error는 `RLS-01` exact 승인
-전 임의로 구현하지 않는다.
+아니다. [Proposed ADR 0024](../../decisions/0024-rls-policy-drift-attestation.md)의 `RLS-01-A` target은
+`BEGIN` 직후 referenced root view `ACCESS SHARE NOWAIT` lock을 첫 relation action으로 두고, settings와
+reader probe 뒤 Metadata-owned live fingerprint를 비교한 다음 resolved-object/`EXPLAIN`/user SQL로
+진행한다. V2 bundle 존재를 tenant-required authority로 사용하고 source generation/state를 다시
+확인한다. Exact 승인 전에는 위 현재 1~9단계나 `QueryExecutor`/error 계약을 교체하지 않는다.
 
 ### Executor lifecycle contract
 

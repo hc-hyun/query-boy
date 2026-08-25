@@ -69,10 +69,17 @@ Control Plane은 “어떤 source 정의와 metadata/verified revision이 현재
 Control Plane은 PostgreSQL pool, SQL, lock과 transaction을 소유한다. 현재 shared file이라는 이유로
 다른 쪽 계약을 함께 바꾸지 않는다.
 
-ADR 0020 exact A가 승인되더라도 v1/v2 snapshot document의 shape·validation·encoding은
-Metadata 소유다. Control Plane은 기존 JSONB transaction/immutable generation·pointer 생명주기로
-encoded document를 저장하고 rollback pointer를 적용할 뿐이며, v1 row를 update/delete하거나
-v1을 v2로 자동 변환하지 않는다. 이 v2 의미는 아직 현재 persisted contract가 아니다.
+[Proposed ADR 0024](../../decisions/0024-rls-policy-drift-attestation.md)의 `RLS-01-A`가 승인되더라도
+RLS v1/v2 snapshot document의 shape·validation·encoding은 Metadata 소유다. Control Plane은 기존
+JSONB transaction/immutable generation·pointer 생명주기로 encoded document를 저장하고 candidate
+failure, standalone RLS cutover의 current/rollback v2 재발행과 verified contract 전량 재실행을 조율할
+뿐이다. Control SQL
+schema를 추가하거나 v1 row를 update/delete/자동 변환하지 않는다. Protected verified tenant mapping은
+외부 change record의 unique `(source_id, query_id, old_metadata_revision)` key와 existing operator
+caller로 제공하고 누락/mismatch 시 중단한다. 이 v2 의미는 아직 current persisted contract가 아니다.
+ADR 0020 exact A의 encoding snapshot은 RLS semantics/shape를 fresh live v3 attestation으로 누적하며,
+combined production cutover에서는 route하지 않을 v2 row를 만들지 않고 current/rollback v3만
+재발행한다.
 
 `SourceAdminService._stage`는 candidate를 active runtime과 격리해 검증하려고 일시적인
 `SourceRegistry + MetadataService + RuntimeCatalogProvider`를 조립하고 registry application reference는

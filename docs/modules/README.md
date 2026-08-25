@@ -28,6 +28,21 @@ trust boundary가 다른 module로 넘어가면 필요한 계약·코드·테스
 | Runtime | 구현을 조립하고 configuration, lifecycle, health와 process 운영을 관리한다. | [runtime](runtime/README.md) |
 | Assurance | Metadata 품질과 verified query 결과를 offline/runtime acceptance로 검증한다. | [assurance](assurance/README.md) |
 
+## 승인 대기 중인 공통 계약
+
+[Proposed ADR 0024](../decisions/0024-rls-policy-drift-attestation.md)의 `RLS-01-A`는 Metadata가
+recursive RLS identity와 snapshot/revision v2를 제공하고 Guarded Query가 lock-first transaction에서
+소비하며 Control Plane, Delivery, Runtime과 Assurance가 cutover/error/acceptance를 담당하는 정확한
+제안이다. 아직 사용자에게 exact 범위가 승인되지 않았고 현재 module contract나 제품 구현이 아니다.
+일반적인 plan/진행 승인은 이 경계를 열지 않는다.
+
+[Proposed ADR 0020](../decisions/0020-lossless-interval-and-json-numeric-encoding.md)의 `ENC-01-A`는 Guarded
+Query result loader/encoder와 SQL/result policy, Source Catalog reader settings, Metadata
+source-semantics fingerprint 및 cumulative snapshot/revision v3를 하나의 계약으로 묶는다. Delivery의
+public row/byte와 Assurance/Control verified result hash, Runtime cutover가 직접 소비한다. RLS source의
+v3 attestation은 ADR 0024 shape/semantics를 current policy/live graph에서 fresh 계산한다. 이 계약도 exact
+사용자 승인 전에는 current module contract나 구현이 아니다.
+
 ## 허용 의존 방향
 
 아래 화살표는 왼쪽 module이 오른쪽 module의 공개 계약을 소비한다는 뜻이다.

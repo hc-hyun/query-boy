@@ -117,6 +117,22 @@ HTTP 오류는 `{error: {code, message, details?}}` envelope을 사용하고 MCP
 structured tool result로 표현한다. 예상하지 못한 오류는 고정된 internal error로 축약하며 5xx
 detail, raw PostgreSQL error, SQL literal, credential과 token을 반사하지 않는다.
 
+[Proposed ADR 0024](../../decisions/0024-rls-policy-drift-attestation.md)의 `RLS-01-A`는 새 wire field나
+error code를 만들지 않는다. Candidate RLS violation은 existing `SOURCE_VALIDATION_FAILED`, active
+metadata violation은 `METADATA_UNAVAILABLE`, same-query lock/live drift는 details 없는
+`QUERY_UNAVAILABLE`, trusted tenant 누락은 existing HTTP 400 `QUERY_REJECTED`의 bounded
+`reason_code=TENANT_CONTEXT_REQUIRED`로 매핑하고 policy/role/hidden relation/RLS attestation
+fingerprint를 public detail이나 새 helper log로 공개하지 않는 target이다. 기존 gateway trusted-tenant
+deny audit와 public SQL fingerprint audit/redaction 계약은 유지한다. Exact 승인 전에는 현재 error producer나
+HTTP/MCP rendering 계약을 바꾸지 않는다.
+
+[Proposed ADR 0020](../../decisions/0020-lossless-interval-and-json-numeric-encoding.md)의 `ENC-01-A`가
+승인되면 Delivery는 Guarded Query가 만든 lossless interval/time/JSON canonical row와 strict result-OID
+거부 결과를 그대로 HTTP/MCP에 전달하고 byte/truncation 계산 및 Assurance/Control verified result hash가
+같은 row 의미를 소비하게 한다. 새 loader/fingerprint를 Delivery에 복제하지 않는다. Duplicate JSON,
+unsupported OID와 non-1 array 등은 existing bounded error로 fail-closed하고 current/rollback v3 verified
+result를 전량 재발행한다. Exact 승인 전에는 현재 public row/hash/error 계약을 바꾸지 않는다.
+
 MCP argument validation은 `INVALID_REQUEST`와 다음 exact bounded detail을 structured result로
 반환한다.
 

@@ -134,7 +134,7 @@ disposable PostgreSQL 18 DB로 고정한다. Same-definition custom domain의 di
 dependency와 `typcollation` drift, base OID로 domain identity가 지워지는 것도 raw catalog/driver
 sentinel로 고정한다. Same-OID custom function body가 view definition/snapshot/revision 없이 public
 value/hash를 바꾸는 residual도 public companion case로 고정한다. ADR 0020 exact A가 승인되면 Assurance는 visible binding뿐 아니라
-recursive view dependency fingerprint, declared/custom domain pre-erasure rejection, result OID/cursor loader, v1/v2 codec,
+recursive view dependency fingerprint, declared/custom domain pre-erasure rejection, result OID/cursor loader, v1/v2/v3 codec,
 current/rollback full verified reissue와 rollback을 cross-module acceptance로 검증한다. 승인 전에는
 이 characterization을 새 production contract의 완료 evidence로 해석하지 않는다.
 
@@ -149,8 +149,15 @@ implicit text-search config drift, planner order에 민감한 float/JSONB aggreg
 
 [RLS policy drift finding](../../verification/2026-08-26-rls-policy-drift.md)은 다른 tenant 행을
 통과 golden으로 보존하지 않는다. `test_rls_source_requires_base_policy_drift_to_preserve_isolation`은
-approved ADR 0014의 no-cross-tenant invariant를 strict xfail로 나타내며 `RLS-01` exact 계약과
-`RLS-02` 구현 뒤 fail-closed passing regression으로 바꿔야 한다.
+approved ADR 0014의 no-cross-tenant invariant를 strict xfail로 나타낸다.
+[Proposed ADR 0024](../../decisions/0024-rls-policy-drift-attestation.md)의 `RLS-01-A`가 승인되면
+Assurance는 snapshot-before-lock old-catalog/new-policy race, lock-first DDL ordering, nested
+owner-rights/security-definer leak, role inheritance, FORCE RLS, custom function/operator, strict policy
+grammar/bound, cache/reload와 v1/v2 cutover/rollback을 cross-module로 검증한다. `RLS-02` 구현 전에는
+strict xfail을 passing regression으로 바꾸거나 현재 계약을 완료로 기록하지 않는다.
+Acceptance에는 dynamic leak fixture뿐 아니라 disposable managed RLS source의 existing-schema
+tenant별 operator identity, current/rollback verified reissue, two-replica convergence, standalone v2와
+combined direct-v3 rollback 및 migration forward/rollback artifact checksum도 포함한다.
 
 ### Metadata quality evaluation contract
 

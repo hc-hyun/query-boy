@@ -150,9 +150,19 @@ probe에서 policy `USING (true)`와 RLS disable 뒤에도 fresh snapshot/revisi
 [열린 RLS security finding](../../verification/2026-08-26-rls-policy-drift.md)이다. Recursive policy
 identity, query-time race-free check, codec/revision/error는 `RLS-01` exact 승인 전 구현하지 않는다.
 
+[Proposed ADR 0024](../../decisions/0024-rls-policy-drift-attestation.md)의 `RLS-01-A`가 승인되면
+Metadata는 bounded pre-discovery 뒤 root view를 첫 relation action으로 lock하고 strict recursive
+view/table/policy grammar를 검증해 relation별 `rls_attestation_v1`, snapshot/revision v2와 query-time
+공용 provider를 소유한다. `_RETURN`/`pg_depend` bound-object admission도 Metadata 소유이며 Guarded
+Query private resolved-object SQL을 import하지 않고 public `validate_sql`/`SQL_POLICY_REVISION`만
+소비한다. Pre-discovery/authoritative checkout은 existing metadata statement budget에서 derive한 fixed
+outer phase deadline과 bounded cancel/rollback/discard cleanup을 각각 적용한다. 현재 snapshot/revision
+재료나 lifecycle을 이미 바꾼 설명이 아니다.
+
 ADR 0020의 exact A 제안이 승인되면 Metadata가 bounded source-semantics catalog probe,
 canonical fingerprint, declared domain column/direct custom type pre-erasure admission, strict snapshot codec
-v1/v2와 metadata revision v1/v2를 소유한다. Source
+v1/v2/v3와 metadata revision v1/v2/v3를 소유한다. V2는 ADR 0024의 RLS attestation이고 encoding
+source-semantics는 cumulative v3로 배정한다. Source
 Catalog은 reader setting/admission을, Guarded Query는 Metadata가 공개한 동일 fingerprint helper와
 published fingerprint를 소비한다. Metadata revision은 먼저 동결된 Guarded Query-owned immutable
 result-policy v2/SQL-policy v3 descriptor를 소비하므로 descriptor provider baseline 전에 구현하지

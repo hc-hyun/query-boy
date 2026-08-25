@@ -6,6 +6,10 @@ Date: 2026-08-25
 
 Last expanded: 2026-08-26 (`DBEDGE-05` extreme scalar, reader setting, operator and aggregate characterization)
 
+Coordination: [Proposed ADR 0024](0024-rls-policy-drift-attestation.md)의 RLS attestation이 snapshot v2를
+먼저 사용하므로 이 ADR의 encoding/source-semantics snapshot은 cumulative v3다. 두 ADR 모두 아직
+승인 대기 제안이며 이 번호 조정 자체가 어느 계약의 승인이 아니다.
+
 ## Context
 
 `DBEDGE-02`~`DBEDGE-05`의 PostgreSQL 18/psycopg raw-driver read-only probe와 public
@@ -115,10 +119,11 @@ Implicit full-text-search config와 planner input order도 loader 밖에서 같�
 5. Finite interval은 PostgreSQL 18 `iso_8601` text, exact 24시 time/timetz는 distinct canonical string,
    JSON fraction/exponent는 Decimal string으로 전달한다. Duplicate JSON, temporal infinity,
    non-1 array lower bound와 non-allowlisted result OID는 details 없이 fail-closed한다.
-6. Snapshot v1 JSONB document value/shape와 immutable row, metadata revision v1 canonical bytes를
-   historical compatibility로 남기고 새 snapshot v2에는 version과 fingerprint를 필수로 저장한다.
-   Result policy v2와 SQL policy v3을 새 revision에 넣으며 기존 row를 수정·삭제하지 않는다.
-   Old/new serving fleet는 섞지 않는다.
+6. Snapshot v1 JSONB document와 proposed RLS snapshot v2 value/shape, immutable row와 version별 metadata
+   revision canonical bytes를 historical compatibility로 남기고 새 cumulative snapshot v3에는
+   source-semantics fingerprint를 필수로 저장한다. RLS source의 v3 relation은 v2 RLS attestation도
+   필수로 보존한다. Result policy v2와 SQL policy v3을 새 revision에 넣으며 기존 row를 수정·삭제하지
+   않는다. V1/v2/v3 serving fleet는 섞지 않는다.
 
 장점은 확인된 silent loss를 제거하고 covered scalar가 role/database default와 무관한 exact hash를
 갖는다는 것이다.
@@ -129,7 +134,7 @@ JSON, unsupported OID, non-UTF8 source와 unexplained semantic/collation drift�
 #### Exact reader order and admission
 
 Catalog/Query pool 모두 psycopg/libpq connection startup keyword `client_encoding="UTF8"`을 사용한다.
-Transaction 안의 정확한 순서는 다음과 같다.
+Non-RLS transaction 안의 정확한 순서는 다음과 같다.
 
 ```text
 connect(client_encoding=UTF8)
@@ -144,6 +149,13 @@ BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY
 5. Metadata-owned source-semantics probe
 6. Catalog 또는 resolved-object/EXPLAIN/user SQL
 ```
+
+RLS source는 [ADR 0024의 proposed lock-first contract](0024-rls-policy-drift-attestation.md)를 먼저
+적용한다. Metadata authoritative transaction과 Query transaction 모두 `BEGIN` 직후 candidate/referenced
+root view `ACCESS SHARE NOWAIT` lock이 첫 relation action이고, 위 1~5 settings/probe가 그 뒤에 같은
+순서로 오며 RLS live attestation 다음 source-semantics probe를 수행한다. Pre-discovery는 별도 commit된
+bounded transaction이다. Lock 전에 tracing `SELECT`, setting, reader probe, catalog helper 또는 other
+relation access를 넣지 않는다.
 
 `client_encoding`만 connection lifetime이고 나머지는 transaction-local이다. Verifier는
 `180000 <= server_version_num < 190000`, `server_encoding=UTF8`, `client_encoding=UTF8`과 위 setting
@@ -517,25 +529,37 @@ current function/operator/type/node set을 유지하고 version을 3, key를 exa
 `"result_encoding_policy": RESULT_ENCODING_POLICY_MATERIAL`로 바꾼다. Expected golden은
 `sha256:42b7b1da79339b115a950bc77c12b4178891be321b34701e072b5473e7b9b754`다.
 
-#### Snapshot v1/v2, Metadata revision and Python Protocol
+#### Snapshot v1/v2/v3, Metadata revision and Python Protocol
 
-Public Python snapshot은 다음 additive contract다.
+Snapshot version namespace는 다음 누적 계약을 사용한다.
+
+- V1: 현재 exact `{"relations":[...]}` legacy document. Non-RLS current release가 serve한다.
+- V2: [proposed ADR 0024](0024-rls-policy-drift-attestation.md)의 RLS-only relation attestation document.
+  RLS release는 v2만 serve하고 RLS v1은 history-only다.
+- V3: 이 ADR의 source-semantics fingerprint를 추가한 encoding release document. RLS relation이면 v2
+  attestation의 field shape와 RLS semantics를 누적하되 stored v2 bytes/fingerprint를 복사하지 않고
+  current SQL policy와 live graph에서 fresh attestation을 계산한다. Non-RLS relation이면 attestation이
+  없어야 한다.
+
+Public Python snapshot의 cumulative target은 다음과 같다. `CatalogRelation.rls_policy_attestation`과
+`RlsPolicyAttestation`/`RlsQueryAttestation`의 exact shape는 ADR 0024가 소유한다.
 
 ```python
 @dataclass(frozen=True)
 class CatalogSnapshot:
     relations: tuple[CatalogRelation, ...] = ()
-    snapshot_contract_version: Literal[1, 2] = 1
+    snapshot_contract_version: Literal[1, 2, 3] = 1
     source_semantics_fingerprint: str | None = None
 ```
 
-V1은 fingerprint `None`, v2는 exact `sha256:` lowercase 64 hex가 필수다. Fresh `PostgresCatalog.load()`는
-항상 v2다. Persisted v1은 현재 `{"relations":[...]}` 그대로이고 v2는 다음 strict object다.
+V1/V2는 `source_semantics_fingerprint=None`, v3는 exact `sha256:` lowercase 64 hex가 필수다. 이 ADR
+구현 뒤 fresh `PostgresCatalog.load()`는 RLS/non-RLS 모두 v3다. V1은 현재 shape 그대로, v2는 ADR
+0024의 strict shape 그대로 보존하고 v3는 다음 cumulative strict object다.
 
 ```json
 {
-  "snapshot_contract_version": 2,
-  "source_semantics_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "snapshot_contract_version": 3,
+  "source_semantics_fingerprint": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "relations": [
     {
       "schema_name": "analytics",
@@ -552,31 +576,43 @@ V1은 fingerprint `None`, v2는 exact `sha256:` lowercase 64 hex가 필수다. F
           "nullable": false,
           "comment": null
         }
-      ]
+      ],
+      "rls_policy_attestation": {
+        "version": 1,
+        "root_schema": "analytics",
+        "root_relation": "records",
+        "view_sql_policy_revision": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
     }
   ]
 }
 ```
 
-Version/fingerprint 둘 다 없는 문서만 v1이다. Fingerprint만 있거나 v2 fingerprint 누락, unsupported
-version/extra key는 invalid다. V1/v2 둘 다 현재 codec처럼 relation 1개 이상과 relation별 column
-1개 이상을 요구한다. Decoder는 history/rollback을 위해 둘 다 읽지만 v1을 v2로 자동 변환하거나
-기존 JSONB row를 update하지 않는다. New policy의 public Metadata/Query path는 active v1을 serve하지 않고
-즉시 fresh v2 load/publish로 직행한다. Unpinned이면 v2를 activate/cache하고, pinned v1이면
-v2 history row append는 허용하지만 active pointer/cache는 바꾸지 않고 details 없는
-`METADATA_UNAVAILABLE`로 닫는다. 이 pinned-v1 path를 `_PinnedActiveRevision` stale fallback으로
-재열지 않는다. Ordinary `MetadataService.rollback`/`MetadataStore.activate`는 v1 target을 거부하고
-route-drained coordinated Control source rollback만 captured v1 pointer를 복구한다.
+위 example은 RLS v3다. Non-RLS v3는 relation의 `rls_policy_attestation` key 자체가 없다. RLS v3는
+모든 relation에 exact attestation이 필요하다. Version field 없이 source-semantics fingerprint가 있거나
+v1/v2에 그 fingerprint가 있는 경우, v3 fingerprint 누락, unsupported version/extra key와 RLS mode의
+mixed attested/unattested relation은 invalid다. 세 version 모두 relation 1개 이상과 relation별 column
+1개 이상을 요구한다.
 
-`create_metadata_revision()`은 snapshot version으로 dispatch한다. V1은 frozen
-`CANONICAL_TIME_POLICY_MATERIAL_V1` bytes, legacy v1 material builder/canonicalizer를 별도로 사용하고
-v2 field가 v1 path에 절대 유입되지 않는다. V2는 current source/budget/semantic/relation material과 canonicalizer를
-유지하면서 top-level에 `snapshot_contract_version=2`, historical `canonical_time_policy` v1,
-`result_encoding_policy` v2와 `source_semantics_fingerprint`를 포함한다.
+Decoder는 history/rollback inventory를 위해 v1/v2/v3를 읽지만 current encoding-policy serving은
+active v3만 허용한다. Safe RLS v2도 encoding/source-semantics material이 없으므로 ENC release에서는
+`METADATA_UNAVAILABLE`다. V1/V2를 v3로 자동 변환하거나 기존 JSONB row를 update하지 않는다. Fresh
+live catalog probe로 v3 row/revision을 append한다. Unpinned이면 v3를 activate/cache하고, pinned pre-v3이면
+v3 history append만 허용한 채 pointer/cache를 바꾸지 않고 no-stale로 닫는다. Ordinary activate/rollback은
+pre-v3 target을 new-policy path에서 serve하지 않는다.
 
-Guarded Query의 required Python contract는 keyword-only fingerprint다. 기존 direct caller/adapter/fake가
-함께 바뀌어야 하므로 rolling-compatible additive change가 아니라 coordinated breaking Python
-contract change다.
+`create_metadata_revision()`은 snapshot version으로 세 갈래 dispatch한다. V1 legacy builder/bytes,
+ADR 0024가 승인될 경우의 RLS v2 builder/bytes와 golden을 각각 동결한다. V3는 current
+source/budget/semantic/relation material, top-level `snapshot_contract_version=3`, historical
+`canonical_time_policy` v1, `result_encoding_policy` v2, `source_semantics_fingerprint`와 RLS relation의
+fresh current-policy attestation을 포함한다. Historical v2 decoder는 당시
+`view_sql_policy_revision`/fingerprint/bytes를 보존하고 current policy equality를 serving/builder에서만
+요구한다. V1/V2 field가 다른 version path에 유입되지 않고 stored v2에서 v3 revision을 계산하지 않는다.
+
+Guarded Query의 cumulative required Python contract는 RLS bundle과 source-semantics fingerprint를
+분리한다. 둘을 하나로 합치거나 한 verifier 결과로 다른 verifier를 생략하지 않는다. Existing direct
+caller/adapter/fake가 함께 바뀌어야 하므로 coordinated breaking Python contract change다.
 
 ```python
 execute(
@@ -585,16 +621,19 @@ execute(
     metadata_revision,
     validated,
     *,
+    rls_attestation: RlsQueryAttestation | None,
     source_semantics_fingerprint: str,
     query_id: str | None = None,
     tenant_id: str | None = None,
 )
 ```
 
-QueryService가 v2 snapshot에서 전달한다. Live mismatch/probe DB 오류는 details 없는
-`QUERY_UNAVAILABLE`; probe deadline은 기존 `QUERY_TIMEOUT`; queue/pool limit은 기존
-`QUERY_OVERLOADED`; refresh 뒤 old metadata/SQL-policy token은 executor 전
-`METADATA_REVISION_MISMATCH`다. Fingerprint/material은 HTTP/MCP field로 추가하지 않는다.
+QueryService가 v3 snapshot에서 둘을 전달한다. RLS source는 bundle이 필수고 non-RLS는 `None`이다.
+Executor는 ADR 0024의 `BEGIN` 직후 relation lock을 먼저 수행한 뒤 first settings statement와 common
+reader probe, live RLS comparison, live source-semantics comparison, resolved-object/`EXPLAIN`/user SQL
+순서를 지킨다. Live mismatch/probe DB 오류는 details 없는 `QUERY_UNAVAILABLE`; probe deadline은 기존
+`QUERY_TIMEOUT`; queue/pool limit은 기존 `QUERY_OVERLOADED`; refresh 뒤 old metadata/SQL-policy token은
+executor 전 `METADATA_REVISION_MISMATCH`다. 두 fingerprint/material은 HTTP/MCP field로 추가하지 않는다.
 
 #### Exact failure and stale mapping
 
@@ -602,8 +641,8 @@ QueryService가 v2 snapshot에서 전달한다. Live mismatch/probe DB 오류는
 |---|---|---|
 | Catalog transaction의 PostgreSQL major, server/client encoding, reader setting, fingerprint shape/bound/cardinality, unresolved dependency 또는 collation stored/actual version 불일치 | details 없는 `METADATA_UNAVAILABLE` | Deterministic policy violation이므로 stale fallback과 partial publish를 허용하지 않는다. |
 | 같은 조건의 Control candidate validation | `SOURCE_VALIDATION_FAILED` | Candidate generation, snapshot, active pointer를 변경하지 않는다. |
-| 기존 v2 metadata를 보유한 catalog refresh의 transient connection/DB failure | 기존 bounded-stale 규칙 안에서만 v2 metadata를 복구할 수 있다. | Query는 매 transaction live fingerprint probe를 별도로 통과해야 하며 새 publish는 없다. |
-| New-policy path의 active v1 snapshot, invalid v2 codec/revision 또는 missing fingerprint | details 없는 `METADATA_UNAVAILABLE` | Ordinary v2 publish/serving path에서 v1을 자동 변환·serve·activate하지 않는다. Route를 닫고 v2 public path를 unavailable로 둔 explicit rollback만 captured v1 pointer를 복구·pin한 뒤 R1을 시작할 수 있다. |
+| 기존 v3 metadata를 보유한 catalog refresh의 transient connection/DB failure | 기존 bounded-stale 규칙 안에서만 v3 metadata를 복구할 수 있다. | Query는 매 transaction live source-semantics와 RLS-if-present probe를 별도로 통과해야 하며 새 publish는 없다. |
+| New-policy path의 active pre-v3(v1/v2) snapshot, invalid v3 codec/revision 또는 missing source/RLS-required attestation | details 없는 `METADATA_UNAVAILABLE` | Ordinary v3 publish/serving path에서 pre-v3를 자동 변환·serve·activate하지 않는다. Explicit binary rollback은 route를 닫고 source별 captured release/version으로만 수행하며 v1 binary의 RLS source는 deactivate/unroute한다. |
 | Query transaction의 live fingerprint mismatch, malformed/internal probe DB 오류 | details 없는 `QUERY_UNAVAILABLE` | Resolved-object/`EXPLAIN`/user SQL 전 rollback하고 active pointer를 변경하지 않는다. |
 | Fingerprint probe가 기존 statement/transaction deadline 초과 | 기존 `QUERY_TIMEOUT` | Partial row/hash 없이 rollback한다. |
 | Unsupported/malformed result OID, duplicate JSON, number bound, non-1 array, temporal infinity 또는 loader/encoder 오류 | details 없는 `QUERY_UNAVAILABLE` | Fetch한 partial row/hash를 버리고 rollback하며 usage outcome은 `failed`다. |
@@ -613,9 +652,9 @@ Deterministic source-semantics violation은 Metadata-owned private
 `_SourceSemanticsPolicyError(ReaderSessionPolicyError)`로 raise한다. 다른 module은 subclass를
 import하지 않고 public `ReaderSessionPolicyError` marker의 `isinstance`만 소비하며 psycopg,
 timeout, connection error를 이 type으로 wrap하지 않는다. Metadata catch order는
-`MetadataUnavailableError` → pinned-v2 handling →
+`MetadataUnavailableError` → pinned-v3 handling →
 `(ReaderSessionPolicyError, _CatalogValidationError, StoredMetadataInvalidError)` no-stale → generic
-transient bounded-stale다. V2 codec/revision/fingerprint invariant을 깨뜨린 stored value를 cached v2로
+transient bounded-stale다. V3 codec/revision/fingerprint invariant을 깨뜨린 stored value를 cached v3로
 재열지 않는다. Query helper policy error는 non-timeout generic path의 details 없는
 `QUERY_UNAVAILABLE`, timeout/driver cancel은 기존 `QUERY_TIMEOUT`이다. Raw catalog material,
 collation/timezone 이름, SQL, credential과 database error는 response·audit·ordinary log에 넣지 않는다.
@@ -698,36 +737,42 @@ Python value 변환 전에 거부한다.
 
 Repository의 TIME R2 구현은 완료됐지만 `TIME-03` production 전환은 아직 실행되지 않았다. A를
 선택하면 `TIME-03`을 따로 먼저 실행하지 않는다. `ENC-02`에서 final encoding baseline을 구현·검증한
-뒤 R1 protected environment에서 TIME R2와 final ENC baseline을 하나의 coordinated `TIME-03`
+뒤 protected environment의 captured pre-ENC baseline에서 TIME R2와 final ENC baseline을 하나의 coordinated `TIME-03`
 cutover로 적용하고 current/rollback-preserved contract를 한 번만 재실행·재발행한다.
 
-1. Source/admin/verified mutation을 freeze하고 protected inventory, Control backup, R1 artifact/key,
-   active 및 rollback-preserved generation/revision/L2를 고정한다.
+1. Source/admin/verified mutation을 freeze하고 protected inventory, Control backup, pre-ENC artifact/key,
+   source별 active 및 rollback-preserved v1/v2 generation/revision/L2를 고정한다. RLS-01을 같은
+   change record에서 처음 적용하면 RLS v1→v3 direct 전환을 허용하되 v3에 ADR 0024 attestation을 넣는다.
 2. Current/rollback verified question·SQL·relations·expected 전체를 read-only export해 change record에 고정한다.
 3. Old fleet admission/route를 닫고 active query, query/catalog/staging source connection과 poller를 0까지
    drain한 뒤 old process를 중지한다.
-4. Route 밖 v2 fleet를 시작한다. V1 history는 decode할 수 있지만 active v1인 동안 public metadata/query와
-   source readiness는 unavailable이어야 한다.
-5. 각 current/rollback baseline에 immutable v2 counterpart generation/snapshot/revision을 append하고,
+4. RLS source가 아직 ADR 0024 exact policy를 만족하지 않으면 DB owner가 dedicated maintenance
+   connection으로 captured-checksum forward migration을 transactionally 적용하고 post-policy
+   inventory/checksum을 남긴 뒤 connection을 닫는다. Apply/postcondition 실패는 rollback하고 source를
+   unroute 상태로 둔다. 이 단계가 끝나기 전 new poller/catalog/staging/query connection을 시작하지 않는다.
+5. Route 밖 v3 fleet를 시작한다. V1/v2 history는 decode할 수 있지만 active pre-v3인 동안 public
+   metadata/query와 source readiness는 unavailable이어야 한다.
+6. 각 current/rollback baseline에 immutable v3 counterpart generation/snapshot/revision을 append하고,
    해당 verified contract 전체를 새 QueryService로 실행·비교해 새 revision의 verified row와 L2를 남긴다.
-   마지막에는 intended current v2 counterpart만 active로 둔다.
-6. Server/client encoding, timezone-abbreviation fingerprint, database/column collation version과 ambiguous
+   마지막에는 intended current v3 counterpart만 active로 둔다.
+7. Server/client encoding, timezone-abbreviation fingerprint, database/column collation version과 ambiguous
    date/time, timezone abbreviation, ordinary backslash string, `expression = NULL`, textual NULL array
    literal, non-1 lower-bound array, bytea text cast, implicit/custom text-search dependency, hidden view
    dependency, IANA/POSIX named zone, order-sensitive float/JSON object aggregate 및 unsupported/custom result
    OID를 전량 inventory한다. Interval/time/JSON changed value/hash와 domain rejection,
    bit/varbit 보존을
    exact 승인한다. 설명되지 않은 column/row/hash/rejection 또는 inventory 누락에는 중단한다.
-7. Repository fixture 11개, managed inventory 전체, stale token 409, replica convergence/drift, L2와
+8. Repository fixture 11개, managed inventory 전체, stale token 409, replica convergence/drift, L2와
    protected readiness를 확인한 뒤 route한다.
 
-Rollback은 v2 route/mutation을 닫고 connection을 drain한 상태에서 Control Plane의 승인된 rollback로
-captured v1 source generation과 metadata pointer를 복구·pin한다. V2 public path는 v1을 serve하지 않은 채
-중지하고 R1 fleet의 replica/L2/readiness 확인 뒤 route한다. V2 snapshot/generation/verified row는 삭제하지
-않는다. SQL_ASCII source는 자동 변환하지 않으며 UTF8 database migration/re-onboarding 없이는 cutover에서
-제외한다.
+Functional rollback은 v3 route/mutation을 닫고 connection을 drain한 상태에서 미리 재발행·검증한 v3
+rollback generation으로 수행한다. Binary rollback은 captured pre-ENC release와 source별 v1/v2 pointer를
+복구·pin한다. RLS v2를 이해하는 captured release와 verified v2가 있으면 RLS를 route할 수 있지만 v1
+binary/pointer뿐이면 RLS source를 deactivate/unroute하고 non-RLS만 제공한다. V1/v2/v3 snapshot,
+generation과 verified row는 삭제하지 않는다. SQL_ASCII source는 자동 변환하지 않으며 UTF8 database
+migration/re-onboarding 없이는 cutover에서 제외한다.
 
-Mixed old/new serving fleet는 같은 SQL의 row/hash가 달라 허용하지 않는다.
+Mixed v1/v2/v3 serving fleet는 같은 SQL의 row/hash와 security attestation이 달라 허용하지 않는다.
 
 ## Provider And Consumer Impact
 
@@ -736,13 +781,14 @@ Mixed old/new serving fleet는 같은 SQL의 row/hash가 달라 허용하지 않
   Guarded Query pool loader/result encoding·query-time fingerprint verifier 순으로 symbol baseline을 직렬화한다.
 - Direct consumers: Delivery HTTP/MCP row, Assurance result hash/verified CLI, Control Plane immutable
   verified publish와 Runtime coordinated cutover.
-- Public Python: `CatalogSnapshot`의 v2 version/fingerprint field는 source-compatible default를 두지만
-  new-policy serving은 v2를 강제한다. `QueryExecutor.execute()`의 required keyword-only fingerprint는
+- Public Python: `CatalogSnapshot`의 cumulative v3 version/source fingerprint field는 source-compatible
+  default를 두지만 new-policy serving은 v3를 강제한다. RLS source는 ADR 0024 relation/bundle도
+  보존한다. `QueryExecutor.execute()`의 required keyword-only dual attestation은
   coordinated breaking change이므로 direct fake/adapter/consumer를 하나의 baseline에서 함께 갱신한다.
-- Persistence: Control relational schema migration은 없고 persisted snapshot v2에는
-  `snapshot_contract_version=2`와 `source_semantics_fingerprint`가 필수다. V1 JSONB document
-  value/shape와 immutable row는 update/delete 없이 보존하고, v1 revision canonical input/golden만
-  byte-for-byte로 고정한다. 새 snapshot/generation/verified row만 append한다.
+- Persistence: Control relational schema migration은 없고 persisted snapshot v3에는
+  `snapshot_contract_version=3`, `source_semantics_fingerprint`와 RLS-if-present relation attestation이
+  필수다. V1/V2 JSONB document value/shape와 immutable row는 update/delete 없이 보존하고 version별
+  revision canonical input/golden을 동결한다. 새 v3 snapshot/generation/verified row만 append한다.
 - Security/privacy: SQL, question, credential 또는 token을 새로 저장하지 않는다.
 - SQL behavior: non-UTF8 source, timezone abbreviation/collation drift와 `DateStyle=ISO,YMD`의 ambiguous
   date/time literal, backslash string literal, `expression = NULL`, NULL array literal은 기존 default와
@@ -756,8 +802,10 @@ Mixed old/new serving fleet는 같은 SQL의 row/hash가 달라 허용하지 않
   새 canonical string으로 성공한다. Declared/custom domain은 OID identity erasure 전 새로 거부하고
   `bit|varbit`는 기존 string shape를 보존한다. Current/rollback verified SQL뿐 아니라 managed curated relation의 encoding, hidden collation
   dependency와 advertised result type inventory도 cutover stop condition이다.
-- Compatibility: New fleet는 v1 history를 decode하지만 serve하지 않고 old fleet는 v2 strict document를
-  decode하지 못하므로 mixed serving을 금지한다. Non-UTF8/non-PostgreSQL-18 source는 admission 실패다.
+- Compatibility: V3 fleet는 v1/v2 history를 decode하지만 serve하지 않는다. V1 decoder는 v2/v3를,
+  RLS-v2 decoder는 v3를 거부하며 validate-before-invalidate reload가 older cache를 계속 serve할 수
+  있으므로 pointer 전환 전에 old process/connection을 완전히 중지한다. Non-UTF8/non-PostgreSQL-18
+  source는 admission 실패다.
 - Residual limitation: IANA/POSIX named timezone rule drift와 provider가 같은 version으로 보고하는
   distro/libc/ICU/locale-data drift는 자동 fingerprint하지 않으며 image/build/package identity
   change 때 managed inventory와 full verified reissue로 통제한다. Same-name user
@@ -829,8 +877,10 @@ Mixed old/new serving fleet는 같은 SQL의 row/hash가 달라 허용하지 않
   발견 시 stop.
 - UTC/서울/뉴욕 role default, commit/rollback/timeout/cancel 뒤 reader-format과 timezone pool reset.
 - Old metadata/SQL policy token의 executor-before rejection.
-- V1/v2 strict codec, v1 JSONB value/shape·revision byte golden, v2 required fingerprint/invariant, active v1 serving rejection,
-  result-policy 1,920-byte/hash 및 SQL-policy v3 hash, shared material identity와 recursive immutability.
+- V1/v2/v3 strict codec matrix, v1 JSONB value/shape·revision byte golden, ADR 0024 RLS v2
+  value/shape·revision golden, v3 required source fingerprint와 RLS-if-present attestation invariant,
+  release별 active version acceptance/rejection, result-policy 1,920-byte/hash 및 SQL-policy v3 hash,
+  shared material identity와 recursive immutability.
 - Lock된 psycopg 3.3.x 뿐 아니라 `pyproject.toml`의 oldest supported 3.2.x로 cursor-local
   loader, named cursor/OID-before-fetch acceptance를 별도 실행한다. 3.2에서 보존할 수 없으면
   지원 하한을 조용히 올리지 않고 dependency contract 변경을 다시 승인받는다.
@@ -859,9 +909,11 @@ domain pre-erasure rejection, `bytea_output=hex`,
 `default_text_search_config=pg_catalog.english`, result
 cursor/scalar/collection/OID 규칙, 1,920-byte result policy v2
 `sha256:60a62b61c6b1bb429987186730c9d24a6b0868c0cb0406ccad97a5698a900446`, SQL policy v3
-`sha256:42b7b1da79339b115a950bc77c12b4178891be321b34701e072b5473e7b9b754`, snapshot/revision v1/v2와
-QueryExecutor keyword-only fingerprint, exact public error mapping, PostgreSQL-18/UTF8-only admission,
-current/rollback full verified reissue, mixed-fleet 금지와 immutable coordinated cutover/rollback 전 범위로
+`sha256:42b7b1da79339b115a950bc77c12b4178891be321b34701e072b5473e7b9b754`, snapshot/revision v1/v2/v3와
+RLS v2 field shape/semantics를 cumulative v3의 current policy/live graph에서 fresh 재계산하는 규칙,
+QueryExecutor keyword-only RLS bundle +
+source-semantics fingerprint, exact public error mapping, PostgreSQL-18/UTF8-only admission,
+current/rollback full v3 verified reissue, mixed v1/v2/v3 fleet 금지와 immutable coordinated cutover/rollback 전 범위로
 승인한다. Curated/nested view explicit COLLATE와 active non-C/POSIX versionless collation을
 거부한다. IANA/POSIX named timezone rule drift와 provider가 같은 version으로 보고하는
 distro/libc/ICU/locale-data drift는 자동 fingerprint하지 않고 PostgreSQL/tzdata/image/build/package
@@ -871,5 +923,8 @@ freeze·cutover stop 후 별도 fingerprint/admission 계약 승인을 요구하
 Built-in text-search config/dictionary artifact와 unordered float/duplicate-key JSON object aggregate의
 planner-order 의미도 automatic attestation/rewrite 밖이며 managed verified inventory에서 stable unique
 aggregate order/key를 증명하지 못하면 cutover stop한다. General public SQL rejection은 이 승인에
-포함하지 않는 residual limitation도 수용한다.
+포함하지 않는 residual limitation도 수용한다. V3→verified rollback-v3 functional rollback은 RLS를
+계속 route할 수 있다. Pre-v3/binary rollback target 중에는 separately captured/verified RLS v2만 RLS를
+route하고 v1 binary/pointer rollback에서는 RLS source를 deactivate/unroute하는 availability 영향도
+수용한다.
 ```

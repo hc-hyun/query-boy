@@ -59,9 +59,40 @@ cross-tenant 결과를 확인한 전용 `_RlsIsolationViolationError`만 XFAIL�
 정확한 provider, fingerprint/admission 위치와 public error는 아직 승인되지 않았으므로 임의의
 `METADATA_UNAVAILABLE` 또는 `QUERY_UNAVAILABLE` 계약을 테스트에 선결정하지 않았다.
 
+## Read-Only Lock And Dependency Follow-Up
+
+후속 PostgreSQL 18.6 disposable probe는 제품 파일을 바꾸지 않고
+[proposed ADR 0024](../decisions/0024-rls-policy-drift-attestation.md)의 exact 선택지를 작성하기 위한
+근거만 수집했다.
+
+- Repeatable-read transaction에서 `set_config`/reader probe로 snapshot을 먼저 만든 뒤 concurrent
+  `ALTER POLICY ... USING(true)`가 commit할 때까지 view lock을 기다리면, 같은 transaction의
+  `pg_policy` 조회에는 옛 tenant predicate가 보이지만 실제 view query에는 새 permissive policy가
+  적용되어 두 tenant 행이 반환됐다.
+- `BEGIN` 직후 다른 `SELECT`보다 먼저 published view를 `ACCESS SHARE`로 lock하면, concurrent DDL이
+  먼저 commit한 경우 새 policy가 catalog에 보이고 query가 먼저 lock한 경우 policy/RLS/view DDL은
+  transaction 종료까지 진행하지 못했다.
+- Root view 하나의 lock은 nested view와 private table까지 재귀적으로 잡았다. `ALTER POLICY`, RLS
+  disable과 nested view replacement는 충돌했지만 `CREATE OR REPLACE FUNCTION`과 role membership
+  `GRANT`는 성공했다.
+- Outer와 nested view가 모두 security invoker인 경우 tenant row만 보였지만 nested owner-rights
+  view와 security-definer custom function을 통하면 다른 tenant 행이 보였다.
+- Reader 자체가 `NOINHERIT`여도 PostgreSQL 18의 membership edge가 `INHERIT TRUE`이면 group-target
+  policy가 적용됐다. Table owner membership도 같은 우회가 생겼고 `FORCE ROW LEVEL SECURITY`가
+  owner 우회를 막았다.
+- Policy/role drop-recreate 뒤 OID는 바뀌어도 deparsed expression은 같았고, custom function body는
+  같은 OID/expression/raw-node hash 아래 결과를 바꿀 수 있었다. Durable identity에 OID를 직접 넣거나
+  expression hash만 비교해서는 충분하지 않다.
+- 모든 probe 종료 뒤 이 follow-up이 만든 disposable database와 role residue는 각각 `0`, `0`이었다.
+
+따라서 단순 fingerprint 추가가 아니라 strict graph/policy admission, lock-first order와 custom/role
+잔여 경계를 하나의 계약으로 결정해야 한다. ADR 0024는 제안 상태이고 정확한 사용자 승인 전에는
+현재 snapshot, query order와 strict xfail을 바꾸지 않는다.
+
 ## Required Decision Before Implementation
 
-`RLS-01`은 다음을 하나의 exact proposal로 확정해야 한다.
+`RLS-01`의 exact proposal은 [proposed ADR 0024](../decisions/0024-rls-policy-drift-attestation.md)의
+`RLS-01-A`로 작성했다. 다음 범위는 아직 사용자에게 정확히 승인되지 않았다.
 
 1. Published security-invoker view에서 private/nested dependency를 어디까지 재귀적으로 추적할지
 2. Base relation의 `relrowsecurity`, `relforcerowsecurity`, owner와 reader-applicable policy의 command,

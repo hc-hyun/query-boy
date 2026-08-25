@@ -142,6 +142,12 @@ RLS_POLICY_DRIFT_AUDIT = (
     / "verification"
     / "2026-08-26-rls-policy-drift.md"
 )
+RLS_POLICY_ATTESTATION_ADR = (
+    ROOT_DIRECTORY
+    / "docs"
+    / "decisions"
+    / "0024-rls-policy-drift-attestation.md"
+)
 CANONICAL_TIME_AUDIT = (
     ROOT_DIRECTORY
     / "docs"
@@ -953,6 +959,7 @@ def test_source_onboarding_skill_docs_record_plan_only_adoption_and_evidence() -
 def test_source_database_corner_docs_record_canonical_time_resolution() -> None:
     audit = SOURCE_DATABASE_CORNERS_AUDIT.read_text(encoding="utf-8")
     rls_audit = RLS_POLICY_DRIFT_AUDIT.read_text(encoding="utf-8")
+    rls_adr = RLS_POLICY_ATTESTATION_ADR.read_text(encoding="utf-8")
     onboarding = (ROOT_DIRECTORY / "docs" / "source-onboarding.md").read_text(
         encoding="utf-8"
     )
@@ -979,6 +986,31 @@ def test_source_database_corner_docs_record_canonical_time_resolution() -> None:
     assert RLS_POLICY_DRIFT_AUDIT.name in assurance
     assert "Status: Open — contract decision and fail-closed implementation required" in rls_audit
     assert "strict=True" in rls_audit
+    assert RLS_POLICY_ATTESTATION_ADR.name in rls_audit
+    assert "Status: Proposed — exact user approval required before implementation" in rls_adr
+    assert "Decision ID: `RLS-01-A`" in rls_adr
+    assert "이 ADR은 exact 제안일 뿐 승인된 계약이나 구현이 아니다" in rls_adr
+    assert "ACCESS SHARE MODE NOWAIT" in rls_adr
+    assert "attest_rls_roots" in rls_adr
+    assert "view_sql_policy_revision" in rls_adr
+    assert "snapshot_contract_version\": 2" in rls_adr
+    assert "old MVCC snapshot" in rls_adr
+    assert "current_user=session_user=configured-reader" in rls_adr
+    assert "rulename='_RETURN'" in rls_adr
+    assert "oid < 16384" in rls_adr
+    assert "reason_code=TENANT_CONTEXT_REQUIRED" in rls_adr
+    assert "Historical decoder" in rls_adr
+    assert "production v2 current/rollback row" in rls_adr
+    assert "operator_subject" in rls_adr
+    assert "metadata_phase_timeout_ms = min(30_000, 8 *" in rls_adr
+    assert RLS_POLICY_ATTESTATION_ADR.name in DEVELOPMENT_TODO.read_text(
+        encoding="utf-8"
+    )
+    for module_name in MODULE_NAMES:
+        module_contract = (
+            ROOT_DIRECTORY / "docs" / "modules" / module_name / "README.md"
+        ).read_text(encoding="utf-8")
+        assert RLS_POLICY_ATTESTATION_ADR.name in module_contract
     for operator_document in (onboarding, extension_checklist):
         assert RLS_POLICY_DRIFT_AUDIT.name in operator_document
         assert "`RLS-01`~`RLS-03`" in operator_document
@@ -1023,6 +1055,17 @@ def test_source_database_corner_docs_record_canonical_time_resolution() -> None:
     assert "Exact failure and stale mapping" in lossless_adr
     assert "Result OID scalar allowlist는 exact 24개" in lossless_adr
     assert "snapshot_contract_version" in lossless_adr
+    assert "Snapshot v1/v2/v3" in lossless_adr
+    assert RLS_POLICY_ATTESTATION_ADR.name in lossless_adr
+    assert "snapshot_contract_version\": 3" in lossless_adr
+    assert "stored v2 bytes/fingerprint를 복사하지 않고" in lossless_adr
+    assert "첫 relation action" in lossless_adr
+    assert LOSSLESS_SCALAR_ADR.name in module_index
+    delivery_contract = (
+        ROOT_DIRECTORY / "docs" / "modules" / "delivery" / "README.md"
+    ).read_text(encoding="utf-8")
+    assert LOSSLESS_SCALAR_ADR.name in delivery_contract
+    assert "verified result hash" in delivery_contract
     assert "view_dependency_column_collations" in lossless_adr
     assert "view_dependency_definitions" in lossless_adr
     assert "direct pg_type edge" in lossless_adr

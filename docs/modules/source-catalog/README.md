@@ -181,8 +181,16 @@ contract가 아니다.
 별도 [RLS policy drift security finding](../../verification/2026-08-26-rls-policy-drift.md)은 공통
 session probe가 정상이어도 hidden base table policy를 `USING (true)`로 바꾸거나 RLS를 disable하면
 같은 snapshot/revision 아래 cross-tenant row가 성공함을 재현했다. 이는 accepted contract가 아니라
-열린 보안 결함이다. `RLS-01` exact dependency/policy admission 계약 승인 전 임의의 manifest field나
-reader check를 추가하지 않으며, production RLS source가 안전하다고 주장하지 않는다.
+열린 보안 결함이다. [Proposed ADR 0024](../../decisions/0024-rls-policy-drift-attestation.md)의
+`RLS-01-A`는 Metadata의 strict structural admission을 통과한 relation별 fingerprint만 v2 snapshot으로
+발행하고 `BEGIN` 직후 relation lock 뒤에도 `TimeZone=UTC`를 첫 settings statement로 유지하는
+implementation-ready target이다. Source manifest hash field는 추가하지 않고 current manifest/
+`SourceProfile` 계약을 보존한다. Common reader probe는
+`current_user=session_user=configured reader`도 fail-closed한다. Exact 승인 전에는 이 순서나 reader
+check를 구현하지 않는다. 새 timeout knob 없이
+`min(30_000, 8 * metadata_statement_timeout_ms)`인 Metadata phase outer deadline을 derive한다. Exact
+승인 전에는 이를 current budget 의미로 적용하지 않으며,
+production RLS source가 안전하다고 주장하지 않는다.
 
 ## 소비 계약
 
