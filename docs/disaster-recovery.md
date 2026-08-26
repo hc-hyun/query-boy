@@ -7,6 +7,18 @@ repository configuration의 stop/cutover/rollback은 [operations](operations.md)
 `LAUNCH-01-A` 절차를 따른다. 이 문서는 구현이 보존된 managed mode를 별도로 활성화할 때만
 적용하며, local recovery fixture가 protected environment의 backup/TLS/route 증거를 대신하지 않는다.
 
+쉽게 구분하면 다음과 같습니다.
+
+| 복구 대상 | 읽을 문서 |
+|---|---|
+| 현재 static launch의 application image·설정·route | [Operations](operations.md#static-non-rls-first-launch) |
+| Source 업무 데이터 | 각 source DB owner의 backup 정책 |
+| 별도로 활성화한 managed Control DB | 이 문서 |
+
+`RPO`는 허용할 수 있는 최대 데이터 손실 시점, `RTO`는 목표 복구 시간입니다. 아래 숫자는 운영
+목표이지 local test가 실제 production에서 달성했음을 증명하는 측정 결과가 아닙니다. 더 자세한
+용어는 [용어 사전](glossary.md)을 참고하세요.
+
 ## Scope And Targets
 
 Control plane의 migration ledger, source profile generations, encrypted credentials, metadata

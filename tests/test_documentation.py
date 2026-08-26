@@ -11,6 +11,7 @@ from tests.helpers import ROOT_DIRECTORY
 ROADMAP = ROOT_DIRECTORY / "docs" / "implementation-roadmap.md"
 ARCHITECTURE = ROOT_DIRECTORY / "docs" / "architecture.md"
 DEVELOPMENT_TODO = ROOT_DIRECTORY / "docs" / "development-todo.md"
+FUTURE_WORK = ROOT_DIRECTORY / "docs" / "future-work.md"
 MODULE_INDEX = ROOT_DIRECTORY / "docs" / "modules" / "README.md"
 VERIFICATION_DIRECTORY = ROOT_DIRECTORY / "docs" / "verification"
 VERIFICATION_INDEX = VERIFICATION_DIRECTORY / "README.md"
@@ -60,8 +61,8 @@ EXPECTED_BASELINE_ID_COUNTS = {
     "DEP": 8,
     "MCPX": 8,
 }
-EXPECTED_OPEN_TODO_IDS = (
-    "LAUNCH-02",
+EXPECTED_ACTIVE_TODO_IDS = ("LAUNCH-02",)
+EXPECTED_PARKED_IDS = (
     "RLS-01",
     "RLS-02",
     "RLS-03",
@@ -143,20 +144,41 @@ def test_active_todo_is_small_open_work_only() -> None:
     matches = re.findall(r"^- \[([ x])\] `([A-Z]+)-(\d{2})`", todo, re.MULTILINE)
     ids = tuple(f"{prefix}-{number}" for _checked, prefix, number in matches)
 
-    assert ids == EXPECTED_OPEN_TODO_IDS
+    assert ids == EXPECTED_ACTIVE_TODO_IDS
     assert len(ids) == len(set(ids))
     assert all(checked == " " for checked, _prefix, _number in matches)
     assert "- [x]" not in todo
     assert "LAUNCH-01-A" in todo
     assert "Repository implementation과 local acceptance는 protected environment 전환 권한이 아니다" in todo
     for heading in (
-        "## Current First-Launch Baseline",
         "## Protected Environment Execution",
-        "## Parked: RLS Serving",
-        "## Parked: Broader Result Types",
-        "## Explicit Non-Goals",
+        "## 시작 전에 필요한 승인",
+        "## 완료 조건",
+        "## 즉시 중단할 조건",
+        "## 현재 일정에 없는 일",
     ):
         assert heading in todo
+
+    future = FUTURE_WORK.read_text(encoding="utf-8")
+    parked_ids = tuple(
+        match.group(1)
+        for match in re.finditer(
+            r"^- `([A-Z]+-\d{2})`:",
+            future,
+            re.MULTILINE,
+        )
+    )
+    assert parked_ids == EXPECTED_PARKED_IDS
+    assert "- [ ]" not in future
+    assert "현재 구현 일정이나 변경 승인이 아님" in future
+    for heading in (
+        "## RLS source 제공",
+        "## 결과 type 확대",
+        "## Managed canonical-time cutover",
+        "## DB-native 비용과 사용량 경보",
+        "## Workflow trace",
+    ):
+        assert heading in future
 
 
 def test_adr_0025_is_the_narrow_current_launch_authority() -> None:

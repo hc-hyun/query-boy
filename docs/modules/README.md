@@ -16,17 +16,39 @@ AI agent는 repository 전체를 기본적으로 읽을 필요가 없다. 작업
 가리키는 현재 코드와 테스트, 소비하는 interface 및 관련 ADR만 읽는다. 변경하는 완전한 실행 흐름과
 trust boundary가 다른 module로 넘어가면 필요한 interface·정책·코드·테스트까지 읽기 범위를 확장한다.
 
+## 3분 시작법
+
+1. 아래 표에서 primary module 하나를 고릅니다.
+2. 그 모듈 README의 `집중해서 읽을 범위`에서 필요한 code·test만 읽습니다.
+3. 다른 모듈의 private 구현 대신 `제공 인터페이스`를 사용합니다. 의미 변경이 필요하면 구현을
+   멈추고 [승인 절차](#승인-대상-변경-절차)를 따릅니다.
+
+일반적인 작업의 시작점은 다음과 같습니다.
+
+| 바꾸려는 것 | Primary module |
+|---|---|
+| Source manifest, reader, budget, semantic 설정 | Source Catalog |
+| DB 구조 수집, context 선택, metadata revision | Metadata |
+| SQL 허용 범위, 실행 제한, 결과 encoding, cancel | Guarded Query |
+| HTTP/MCP 요청·응답, 인증·인가 | Delivery |
+| Process 설정, 조립, readiness, 시작·종료 | Runtime |
+| 품질 평가, verified result, offline 검증 | Assurance |
+| Managed source 관리와 Control DB | Control Plane — 현재 launch에서는 비활성 |
+
+`Protocol`, `DTO`, `projection`, `composition root` 같은 말은
+[용어 사전](../glossary.md)에 쉽게 설명돼 있습니다.
+
 ## 모듈 목록
 
-| Module | 한 문장 책임 | Module boundary 문서 |
-|---|---|---|
-| Source Catalog | Source 정의, budget, semantic 설정과 runtime source projection을 관리한다. | [source-catalog](source-catalog/README.md) |
-| Metadata | PostgreSQL catalog를 검증된 revision과 질문별 context로 만든다. | [metadata](metadata/README.md) |
-| Guarded Query | SQL을 검증하고 read-only resource limit 안에서 실행·취소·rollback한다. | [guarded-query](guarded-query/README.md) |
-| Control Plane | Control DB와 source/metadata/verified lifecycle 상태 전이를 원자적으로 관리한다. | [control-plane](control-plane/README.md) |
-| Delivery | Caller를 인증·인가하고 동일한 application service를 HTTP와 MCP로 제공한다. | [delivery](delivery/README.md) |
-| Runtime | 구현을 조립하고 configuration, lifecycle, health와 process 운영을 관리한다. | [runtime](runtime/README.md) |
-| Assurance | Metadata 품질과 verified query 결과를 offline/runtime acceptance로 검증한다. | [assurance](assurance/README.md) |
+| Module | 한 문장 책임 | 개요 | 작업별 읽기 |
+|---|---|---|---|
+| Source Catalog | Source 정의, budget, semantic 설정과 runtime source projection을 관리한다. | [source-catalog](source-catalog/README.md) | [필요한 code·test](source-catalog/README.md#집중해서-읽을-범위) |
+| Metadata | PostgreSQL catalog를 검증된 revision과 질문별 context로 만든다. | [metadata](metadata/README.md) | [필요한 code·test](metadata/README.md#집중해서-읽을-범위) |
+| Guarded Query | SQL을 검증하고 read-only resource limit 안에서 실행·취소·rollback한다. | [guarded-query](guarded-query/README.md) | [필요한 code·test](guarded-query/README.md#집중해서-읽을-범위) |
+| Control Plane | Control DB와 source/metadata/verified lifecycle 상태 전이를 원자적으로 관리한다. | [control-plane](control-plane/README.md) | [필요한 code·test](control-plane/README.md#집중해서-읽을-범위) |
+| Delivery | Caller를 인증·인가하고 동일한 application service를 HTTP와 MCP로 제공한다. | [delivery](delivery/README.md) | [필요한 code·test](delivery/README.md#집중해서-읽을-범위) |
+| Runtime | 구현을 조립하고 configuration, lifecycle, health와 process 운영을 관리한다. | [runtime](runtime/README.md) | [필요한 code·test](runtime/README.md#집중해서-읽을-범위) |
+| Assurance | Metadata 품질과 verified query 결과를 offline/runtime acceptance로 검증한다. | [assurance](assurance/README.md) | [필요한 code·test](assurance/README.md#집중해서-읽을-범위) |
 
 ## 현재 공통 기준선
 
@@ -109,6 +131,13 @@ interface package를 만드는 결정은 실제 중복/필요와 사용자 승�
 configuration section별 owner가 다른 경우에는 별도 row로 나눈다. Consumer나 verification
 owner는 주의점에 기록하며 primary owner와 같은 뜻으로 해석하지 않는다.
 
+일반 작업에서는 먼저 해당 module README의 짧은 코드 지도를 사용하세요. 아래 전체 표는 shared
+file이나 owner가 애매한 artifact를 확인할 때만 펼쳐 봅니다.
+
+<details>
+<summary>전체 file·configuration·test ownership map 펼치기</summary>
+
+
 | 현재 파일 또는 영역 | 논리적 owner | 전환상 주의점 |
 |---|---|---|
 | `models.py` source/budget/semantic/provenance/observation-definition types | Source Catalog | Published graph의 sequence는 tuple, nested mapping은 alias를 복사한 read-only mapping이다. Optional observability target은 metadata revision이나 public relation allowlist가 아니다. Catalog/metadata types도 같은 파일에 있으므로 type 변경은 Metadata interface도 확인한다. Delivery admin validation은 `SourceEnvironment`를 소비한다. |
@@ -176,8 +205,9 @@ owner는 주의점에 기록하며 primary owner와 같은 뜻으로 해석하�
 | `.gitleaksignore`, `.trivyignore.yaml` | Assurance | Secret/vulnerability scan의 bounded exception이다. 변경 시 근거·scope를 검토하고 vulnerability exception의 expiry를 유지한다. |
 | `.github/dependabot.yml` | Runtime | Dependency update automation이다. Assurance gate와 lockfile single-writer 절차를 따른다. |
 | `.gitignore` | Coordinating agent | Repository hygiene artifact다. Secret/runtime file 포함 여부를 바꾸면 Runtime과 Assurance 경계를 확인한다. |
-| Root `README.md`, `docs/architecture.md`, `docs/mvp.md` | Coordinating agent | 전체 system navigation과 current/target 범위를 여러 module에 handoff한다. 각 사실의 module owner가 검토하고 coordinating agent가 single-writer로 편집한다. |
-| `docs/development-todo.md` | Coordinating agent | Repository 전체 priority, approval/start gate와 single-writer handoff를 소유한다. TODO 추가는 interface 또는 경계 변경 승인이 아니며 병렬 agent가 직접 priority를 재배열하지 않는다. |
+| Root `README.md`, `docs/README.md`, `docs/glossary.md`, `docs/architecture.md`, `docs/mvp.md`, `docs/decisions/README.md` | Coordinating agent | 전체 system navigation, 공통 용어와 current/target/record 구분을 여러 module에 handoff한다. 각 사실의 module owner가 검토하고 coordinating agent가 single-writer로 편집한다. |
+| `docs/development-todo.md`, `docs/future-work.md` | Coordinating agent | Repository 전체 active priority와 parked start gate를 분리해 소유한다. TODO나 future ID 추가는 interface 또는 경계 변경 승인이 아니며 병렬 agent가 직접 priority를 재배열하지 않는다. |
+| `docs/source-onboarding.md`, `docs/managed-source-onboarding.md`, `docs/source-extension-checklist.md` | Source Catalog | 현재 static inventory 경로와 별도 승인 뒤의 managed onboarding 절차를 분리한다. Managed 절차를 current launch로 확대하지 않는다. |
 | `docs/implementation-roadmap.md` | Coordinating agent | 완료 ID와 evidence를 보존하는 immutable completion ledger다. Primary module 결과와 Assurance evidence를 확인한 뒤 한 writer가 갱신한다. |
 | `docs/module-boundary-decision-guide.md` | Coordinating agent | 승인·완료된 D0-A~D5-A를 보존하는 frozen decision record다. Current 개발 시작점은 이 index와 ADR 0018이다. |
 | `docs/verification/`의 cross-module evidence | Assurance | 실행 시점의 provider/consumer evidence를 보존한다. 새 evidence는 coordinating writer가 작성하고 과거 evidence를 현재 보장처럼 소급 수정하지 않는다. |
@@ -188,7 +218,8 @@ owner는 주의점에 기록하며 primary owner와 같은 뜻으로 해석하�
 `pyproject.toml`, `uv.lock`이다. Test 영역에서는 `tests/helpers.py`, `tests/conftest.py`,
 `tests/control_database.py`, `tests/test_documentation.py`와 위 표의 cross-module focused/acceptance
 test가 shared transition artifact다. 문서 영역에서는 root `README.md`, `AGENTS.md`, 이 index,
-`docs/architecture.md`, `docs/mvp.md`, `docs/development-todo.md`,
+`docs/README.md`, `docs/glossary.md`, `docs/architecture.md`, `docs/mvp.md`,
+`docs/development-todo.md`, `docs/future-work.md`, `docs/decisions/README.md`,
 `docs/implementation-roadmap.md`, `docs/module-boundary-decision-guide.md`, cross-module accepted ADR과
 `docs/verification/` evidence가 공통 handoff artifact다.
 
@@ -197,6 +228,8 @@ test가 shared transition artifact다. 문서 영역에서는 root `README.md`, 
 provider와 직접 consumer module을 owner로 판단한다. 하나의 focused test file이 여러 module의
 symbol을 함께 검증하면 test function이 다르다는 이유로 병렬 편집하지 않고 coordinating agent가
 primary writer와 변경 순서를 지정한다.
+
+</details>
 
 ## 새 데이터베이스 추가 시 영향
 
@@ -315,7 +348,8 @@ module 구현을 병렬로 진행한다.
 상위 문서와 module 문서가 충돌하거나 문서와 runtime 사실이 다르면 임의로 하나를 선택하지
 않고 작업을 멈춰 차이와 필요한 결정을 사용자에게 보고한다.
 
-전체 system architecture와 현재/목표 상태 구분은 [architecture](../architecture.md), 완료된
-baseline과 active work는 [implementation roadmap](../implementation-roadmap.md) 및
-[development TODO](../development-todo.md)를 따른다. 이 module governance의 승인된 결정은
+전체 system architecture와 현재/목표 상태 구분은 [architecture](../architecture.md), 현재 작업은
+[development TODO](../development-todo.md), 과거 완료 ID는
+[implementation ledger](../implementation-roadmap.md)를 따른다. 전체 문서 지도는
+[docs 안내](../README.md)에 있습니다. 이 module governance의 승인된 결정은
 [ADR 0018](../decisions/0018-module-ownership-and-contract-governance.md)에 기록한다.

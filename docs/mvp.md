@@ -1,27 +1,38 @@
-# Query Man MVP
+# 첫 오픈 예제 데이터와 검증 질문
 
-Status: ADR 0025 static two-source launch dataset
+Status: 현재 ADR 0025 static two-source launch dataset
 
-## Objective
+이 문서는 Query Man이 제공하는 두 예제 source의 업무 의미를 설명합니다. API 형식이나 SQL 안전
+정책보다 “어떤 데이터가 있고 한 행이 무엇을 뜻하는가”에 집중합니다.
 
-서로 다른 업무 의미와 schema를 가진 두 PostgreSQL source를 하나의 공통 gateway API와 실행 규칙으로
-조회할 수 있는지 검증한다.
+현재 범위는 [ADR 0025](decisions/0025-static-non-rls-first-launch.md)의 단일 replica,
+PostgreSQL 18/UTF-8, non-RLS launch profile입니다.
 
-현재 제공 범위는 [ADR 0025](decisions/0025-static-non-rls-first-launch.md)의 단일 replica,
-PostgreSQL 18/server·client UTF-8, non-RLS launch profile이다. 이 문서의 두 source와 9개 golden
-question만 active launch inventory이며 Control Plane 확장과 추가 fixture는 과거 acceptance 또는
-후속 capability다.
+## 먼저 알아둘 말
 
-| Source ID | Database | Purpose |
+| 용어 | 이 문서에서의 뜻 |
+|---|---|
+| View | Query Man reader에게 공개한 `ai` schema의 읽기 전용 조회 창구 |
+| Grain | 한 행이 나타내는 단위. 예: 문제 한 건, 댓글 한 건, 기기 한 대 |
+| Fanout | 다른 grain을 잘못 join해 같은 사실이 여러 번 복제되는 문제 |
+| Seed | 다시 실행해도 같은 결과를 만드는 예제 데이터 |
+| Golden question | 제품 변경 뒤에도 같은 의미와 결과를 유지해야 하는 대표 질문 |
+
+더 많은 용어는 [공통 용어 사전](glossary.md)을 참고하세요.
+
+## 두 source 한눈에 보기
+
+| Source ID | Database | 무엇을 담는가 |
 |---|---|---|
-| `development-issues` | `development_issues` | 개발 및 검증 과정에서 발견한 문제, 원인, 대책, 댓글 조회 |
-| `market-voc` | `market_voc` | 시장 VOC, 제품 모델, 시리얼, HW/SW version과 처리 이력 조회 |
+| `development-issues` | `development_issues` | 개발·검증 과정의 문제, 원인, 대책과 댓글 |
+| `market-voc` | `market_voc` | 시장 VOC, 제품·시리얼·HW/SW version과 처리 이력 |
 
-`query_man` database는 이후 source registry, encrypted credential, metadata revision과
-verified query를 저장하는 control plane으로 확장되었다. Query 한 번은 정확히 한
-source만 대상으로 하며 source 사이의 SQL join은 지원 범위에 포함하지 않는다.
+Query 한 번은 source 하나만 조회합니다. 두 database를 한 SQL로 join하지 않습니다.
 
-## Development Issues Source
+`query_man`이라는 별도 database는 managed Control Plane 구현에 사용됩니다. 코드는 보존돼 있지만
+현재 static first launch의 source authority는 repository 설정이며 Control DB가 아닙니다.
+
+## 개발 문제 데이터
 
 ```mermaid
 erDiagram
@@ -33,19 +44,25 @@ erDiagram
     ISSUES ||--|{ ISSUE_COMMENTS : has
 ```
 
-Source schema는 `development`이고 AI reader에는 다음 `ai` view만 공개한다.
+원본 schema는 `development`이고 Query Man reader에는 다음 view만 공개합니다.
 
-| View | Grain | Role |
+| View | 한 행의 의미 | 주로 답하는 질문 |
 |---|---|---|
-| `ai.issue_overview` | 개발 문제 1건 | 날짜, 사용자 ID, 제목, 문제 상세, 원인, 대책, 모델, 시리얼, 관측 HW/SW, 댓글 수 |
-| `ai.issue_comments` | 댓글 1건 | 문제별 댓글 본문, 작성자, 댓글 시각 |
-| `ai.test_unit_overview` | 시험기 1대 | 문제 없는 시험기를 포함한 시험기 분모와 문제 건수 |
+| `ai.issue_overview` | 개발 문제 한 건 | 기간·모델·심각도별 문제, 원인과 대책 |
+| `ai.issue_comments` | 댓글 한 건 | 댓글 내용, 작성자와 시각 |
+| `ai.test_unit_overview` | 시험기 한 대 | 문제가 없는 시험기를 포함한 전체 시험기 수 |
 
-Seed는 사용자 18명, 제품 모델 6개, 시험기 160대, 개발 문제 600건, 댓글
-1,500건이다. 모든 개발 문제에는 1~4개의 댓글이 있고, 분석 전 상태에서는 원인과
-대책이 null이다.
+Seed 규모:
 
-## Market VOC Source
+- 사용자 18명
+- 제품 모델 6개
+- 시험기 160대
+- 개발 문제 600건
+- 댓글 1,500건
+
+모든 문제에는 댓글이 1~4개 있습니다. 아직 분석하지 않은 문제의 원인과 대책은 `NULL`입니다.
+
+## 시장 VOC 데이터
 
 ```mermaid
 erDiagram
@@ -57,131 +74,52 @@ erDiagram
     CASES ||--|{ CASE_COMMENTS : has
 ```
 
-Source schema는 `voc`이고 AI reader에는 다음 `ai` view만 공개한다.
+원본 schema는 `voc`이고 Query Man reader에는 다음 view만 공개합니다.
 
-| View | Grain | Role |
+| View | 한 행의 의미 | 주로 답하는 질문 |
 |---|---|---|
-| `ai.voc_overview` | VOC 1건 | 시장 접수 정보, 증상, 원인, 대응, 모델, 시리얼, 관측 HW/SW, 댓글 수 |
-| `ai.voc_comments` | 댓글 1건 | 내부/고객 공개 댓글, 작성자, 댓글 시각 |
-| `ai.device_overview` | 판매 기기 1대 | VOC가 없는 기기를 포함한 기기 분모와 VOC 건수 |
+| `ai.voc_overview` | VOC 한 건 | 기간·제품·지역·상태별 VOC와 원인·대응 |
+| `ai.voc_comments` | 댓글 한 건 | 내부·고객 공개 댓글과 작성자 |
+| `ai.device_overview` | 판매 기기 한 대 | VOC가 없는 기기를 포함한 전체 기기 수 |
 
-Seed는 사용자 24명, 제품 모델 8개, 판매 기기 400대, VOC 1,200건, 댓글
-3,000건이다. 다음 관계를 의도적으로 포함한다.
+Seed 규모:
+
+- 사용자 24명
+- 제품 모델 8개
+- 판매 기기 400대
+- VOC 1,200건
+- 댓글 3,000건
+
+검증할 수 있도록 다음 패턴을 의도적으로 넣었습니다.
 
 - VOC가 없는 기기 40대
 - 힌지 VOC는 `NURI` 제품군에만 존재
-- `BORA-LITE-1`의 특정 제조 lot에 배터리/과열 사례 집중
+- `BORA-LITE-1`의 특정 제조 lot에 배터리·과열 사례 집중
 - 최근 접수 건일수록 미해결 상태 비율이 높음
-- reporter, assignee, comment author가 같은 사용자 table을 서로 다른 역할로 참조
+- 같은 사용자 table을 reporter, assignee, comment author 역할로 각각 참조
 
-## Why Multiple Query Surfaces
+## View를 여러 개로 나눈 이유
 
-문제와 댓글을 하나의 평면 view로 합치면 댓글 수만큼 문제 행이 복제된다. 문제 건수,
-기기 수와 댓글 수를 함께 집계할 때 fanout 오류가 발생한다.
-
-따라서 relation마다 grain을 고정한다.
+문제와 댓글을 평평한 view 하나로 합치면 문제 한 건이 댓글 수만큼 반복됩니다. 그 상태에서 문제
+수를 세면 실제보다 많아지는 fanout 오류가 생깁니다.
 
 ```text
-issue_overview       = one row per issue
-issue_comments       = one row per issue comment
-test_unit_overview   = one row per test unit
+issue_overview       = 문제 한 건
+issue_comments       = 댓글 한 건
+test_unit_overview   = 시험기 한 대
 
-voc_overview         = one row per VOC case
-voc_comments         = one row per VOC comment
-device_overview      = one row per sold device
+voc_overview         = VOC 한 건
+voc_comments         = 댓글 한 건
+device_overview      = 판매 기기 한 대
 ```
 
-View와 column의 `COMMENT ON` metadata에는 grain, 시간 의미, nullable 의미와 안전한
-join key를 기록한다. `get_context`는 이 metadata를 그대로 전체 반환하지 않고 질문과
-관련된 view만 선택해야 한다.
+예를 들어 “전체 기기 수와 VOC 수”는 `device_overview`에서 답하고, 댓글 본문이 필요할 때만
+`voc_comments`를 사용합니다. 서로 다른 grain을 결합해야 하면 각각 먼저 집계한 뒤 join합니다.
 
-## MCP External API Baseline
+이 의미는 DB comment와 semantic overlay에 기록됩니다. `get_context`는 질문과 관련된 view와
+column만 골라 제공합니다.
 
-```text
-list_sources()
-  -> source_id, description
-
-get_context(source_id, question)
-  -> source metadata, question, metadata_revision, sql_policy_revision,
-     snapshot_status, quality_level,
-     sql_capabilities{functions, cast_types, unqualified_cast_types},
-     answerability, relations[{columns, measures, grain, keys, indexes}], joins,
-     business_terms, composition_hints, ambiguities, truncated
-
-query(source_id, sql, metadata_revision, sql_policy_revision)
-  -> success: status, query_id, metadata_revision, sql_policy_revision,
-              fingerprint, columns, rows,
-              row_count, result_bytes, truncated, queue_ms, elapsed_ms, plan_summary
-  -> query failure: error.code, error.message,
-                    error.details?{reason_code, rejected_construct?, action?, retryable?}
-  -> invalid arguments: error.code=INVALID_REQUEST, error.message,
-                        error.details{action, retryable, issues[{path, reason_code, message}],
-                                      truncated}
-```
-
-MVP의 source registry는 다음 두 항목을 정적으로 등록하는 것으로 시작한다.
-
-```yaml
-- source_id: development-issues
-  database: development_issues
-  role: development_issues_reader
-  allowed_schema: ai
-  budget_profile: interactive
-
-- source_id: market-voc
-  database: market_voc
-  role: market_voc_reader
-  allowed_schema: ai
-  budget_profile: interactive
-```
-
-Client는 DSN이나 role을 선택하지 않고 opaque `source_id`만 전달한다.
-
-HTTP와 MCP 구현은 위 external API baseline을 공통 application service로 제공한다. HTTP의
-`list_sources`, `get_context`, `query`는 각각 `GET /sources`, `POST /meta`,
-`POST /query`에 대응한다. `/meta` 요청 예시는 다음과 같다.
-
-```json
-{
-  "source_id": "market-voc",
-  "question": "VOC가 한 번도 없는 기기는 몇 대인가?",
-  "max_objects": 2
-}
-```
-
-응답은 `metadata_revision`, `sql_policy_revision`, `answerability`, 선택된 relation과 전체 column, grain,
-기본 시간 column, measure, value hint, source별 business predicate, 승인된 join과
-composition/fanout 경고를 포함한다. PostgreSQL view의 nullability는 catalog에서
-정확히 전파되지 않으므로 추측하지 않고 `"unknown"`으로 반환한다.
-
-`answerability`는 SQL 정답을 보증하지 않고 `best_effort`, `low_confidence`,
-`needs_clarification`, `unsupported` 중 하나를 반환한다. 예를 들어 시장 VOC의 미해결은
-`status NOT IN ('RESOLVED', 'CLOSED')`, 개발 문제의 미해결은
-`status <> 'RESOLVED'`라는 서로 다른 predicate로 전달한다.
-
-## Reader Safety Baseline
-
-각 source는 별도 login role을 사용한다.
-
-- 자기 source database에만 `CONNECT`
-- 원천 schema 권한 없음
-- `ai` view에만 `SELECT`
-- `default_transaction_read_only=on`
-- `statement_timeout=5s`, `lock_timeout=250ms`, `transaction_timeout=8s`
-- `work_mem=8MB`, `temp_file_limit=64MB`
-- parallel gather 비활성화, JIT 비활성화
-- 현재 two-replica acceptance capacity를 포함한 reader connection limit 7
-
-Pool은 `client_encoding=UTF8`을 요청하고 checkout 직후 SQL 없이 PostgreSQL 18,
-server/client UTF-8과 driver `utf-8` codec을 확인한다. User result는 final OID
-`20, 21, 23, 25, 1082, 1184, 1700`만 허용하며 RLS source와 그 밖의 final type은 serving하지
-않는다. 두 replica는 soak fixture일 뿐 현재 topology는 단일 replica다.
-
-이 기본값은 gateway의 AST 검증, `BEGIN READ ONLY`, 동시성 제한과 결과 byte 제한을
-대체하지 않는다. Connection 값은 replica 수가 바뀌면
-`replicas × (query pool 2 + metadata pool 1) + staging 1`로 다시 계산한다.
-
-## Golden Questions
+## 아홉 가지 Golden Questions
 
 Development issues:
 
@@ -198,32 +136,42 @@ Market VOC:
 4. 제조 lot별 전체 VOC 중 배터리 및 과열 VOC 비율을 비교해줘.
 5. 지역과 월별 미해결 VOC 추이를 보여줘.
 
-기기 수와 VOC 수를 함께 묻는 질문은 `device_overview`, 댓글 상세 질문은
-`voc_comments`를 선택해야 한다. 여러 grain을 직접 join해야 할 경우 각각 선집계한
-후 join해야 한다.
+각 질문의 SQL, relation과 예상 결과는
+[`config/verified-queries.yaml`](../config/verified-queries.yaml)에 있습니다. 이것은 사용자가 실행할 수
+있는 SQL 허용 목록이 아니라 변경 뒤 결과가 달라지지 않았는지 확인하는 회귀 시험입니다.
 
-## Apply And Validate
+## 직접 확인하기
+
+처음 실행하는 절차는 [프로젝트 README](../README.md#5분-로컬-실행)를 따릅니다. Database와
+application이 준비된 뒤 아홉 질문의 exact revision·column·row·hash를 확인하려면 실행합니다.
+
+```bash
+uv run query-man-verify
+```
+
+Fixture 자체의 row 수, 의미 분포, view metadata와 reader 권한까지 다시 적용·검사하려면 다음을
+사용합니다.
 
 ```bash
 docker compose up -d --wait postgres
 ./scripts/apply-db.sh
-docker compose up -d --build --wait query-man
-./scripts/verify-container.sh
 ```
 
-`apply-db.sh`는 두 bootstrap source와 `support_tickets`, `commerce_edges` onboarding
-acceptance source의 database·reader role을 만들고 schema, seed, validation을 순서대로
-적용한다. 여러 번 실행해도 row 수가 증가하지 않는다. Validation은 exact row count,
-시간 순서, 의미 분포, view metadata와 reader 권한을 검사한다.
+`apply-db.sh`는 현재 두 bootstrap source 외에 managed onboarding integration 검사용 fixture도
+준비합니다. 그 추가 fixture가 현재 serving inventory라는 뜻은 아닙니다.
+
+## 안전 정책은 어디서 보나
+
+이 문서는 데이터 설명만 담당합니다.
+
+- 현재 source, PostgreSQL·RLS·결과 type 제한: [ADR 0025](decisions/0025-static-non-rls-first-launch.md)
+- SQL 검사와 실행: [Guarded Query module](modules/guarded-query/README.md)
+- HTTP/MCP 외부 API: [Delivery module](modules/delivery/README.md)
+- Verified result 검사: [Verified query 안내](verified-queries.md)
 
 ## MVP Exit Criteria
 
-- [x] 서로 다른 PostgreSQL source database 두 개
-- [x] source별 독립 reader credential과 최소 권한
-- [x] 결정적이고 재실행 가능한 한국어 seed
-- [x] grain별 curated view와 database comment metadata
-- [x] invariant validation과 reader smoke test
-- [x] source registry 구현
-- [x] question-scoped metadata retrieval
-- [x] SQL AST validation과 guarded query execution ([roadmap M1](implementation-roadmap.md#recommended-milestones))
-- [x] MCP server와 공통 Text-to-SQL Skill ([roadmap M2](implementation-roadmap.md#recommended-milestones))
+두 source, 최소 권한 reader, 결정적 seed, grain별 curated view, metadata retrieval, guarded query,
+HTTP/MCP와 아홉 verified question의 repository 구현은 완료됐습니다. 완료 ID와 당시 증거는
+[implementation ledger](implementation-roadmap.md)와
+[verification index](verification/README.md)에 보존합니다. 실제 환경 전환 완료를 뜻하지는 않습니다.

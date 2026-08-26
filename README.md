@@ -9,6 +9,9 @@ Query Man 자체에 자연어를 SQL로 바꾸는 AI 모델이 들어 있는 것
 > 현재 상태: 첫 오픈용 코드와 저장소 검증은 완료됐습니다. 실제 운영 환경의 암호화 통신(TLS), 비밀값,
 > 백업, 배포와 트래픽 전환은 아직 남아 있습니다.
 
+찾는 내용이 정해져 있다면 [목적별 문서 안내](docs/README.md#하고-싶은-일로-찾기)에서 바로
+출발하세요. 모든 문서를 순서대로 읽을 필요는 없습니다.
+
 ## 먼저 알아둘 용어
 
 전부 외울 필요는 없습니다. 뒤에서 낯선 단어가 나오면 이 표에서 뜻만 확인하면 됩니다.
@@ -26,6 +29,9 @@ Query Man 자체에 자연어를 SQL로 바꾸는 AI 모델이 들어 있는 것
 | Replica | 실행 중인 Query Man 서버 인스턴스 하나입니다. 첫 오픈 계획과 검증 범위는 하나입니다. |
 | Bootstrap mode | 저장소에 미리 등록된 source 목록을 시작할 때 읽는 정적 방식입니다. |
 | Fixture | 로컬·CI 테스트를 위해 만든 DB와 데이터입니다. 실제 운영 DB와 구분합니다. |
+
+이 밖의 `grain`, `revision`, `managed mode`, `OID` 같은 말은
+[전체 용어 사전](docs/glossary.md)에서 쉽게 풀어 설명합니다.
 
 ## 어떻게 동작하나요?
 
@@ -311,25 +317,30 @@ uv run pytest -m 'mcp_server and not soak' -s
 
 ## 새 데이터베이스를 추가하려면
 
-현재 첫 오픈은 두 source만 승인했습니다. 새 DB에는 PostgreSQL 18/UTF-8, RLS를 사용하지 않는 검토된
-view와 읽기 전용 계정이 필요합니다. 업무 의미·사용량 제한·결과 타입을 검토하고 품질 질문과 승인
-SQL을 통과한 뒤, 변경 승인을 받아 다시 배포합니다.
+현재 첫 오픈은 두 source만 승인했습니다. 먼저 [source onboarding 안내](docs/source-onboarding.md)에서
+추가하려는 DB가 현재 static 경로에 맞는지 확인합니다. 새 DB에는 PostgreSQL 18/UTF-8, RLS를 사용하지
+않는 검토된 view와 읽기 전용 계정이 필요합니다. 업무 의미·사용량 제한·결과 타입을 검토하고 품질
+질문과 승인 SQL을 통과한 뒤, 변경 승인을 받아 다시 배포합니다. 현재 기본 절차는
+[source extension checklist](docs/source-extension-checklist.md)를 따릅니다.
 
 현재 module interface 안에서 처리할 수 있다면 source별 Python 분기를 추가하지 않습니다. 실행 중
-동적 추가가 실제 요구가 되면 보존된 managed mode의 운영 활성화를 별도 결정해야 합니다. 자세한
-절차는 [source onboarding](docs/source-onboarding.md)을 참고하세요.
+동적 추가가 실제 요구가 되면 보존된 managed mode의 운영 활성화를 별도 결정해야 합니다.
 
 ## 문서 읽는 순서
 
+전체 문서를 한 번에 읽지 마세요. [문서 안내](docs/README.md)가 목적에 맞는 다음 문서를 골라줍니다.
+
 | 알고 싶은 내용 | 문서 |
 |---|---|
+| 낯선 용어와 문서 찾기 | [문서 안내](docs/README.md), [용어 사전](docs/glossary.md) |
 | 현재 제공 데이터와 예제 | [MVP 데이터 안내](docs/mvp.md) |
 | 전체 구조와 module 작업 범위 | [Architecture](docs/architecture.md), [Module index](docs/modules/README.md) |
 | 첫 오픈 결정과 정확한 제한 | [ADR 0025](docs/decisions/0025-static-non-rls-first-launch.md) |
 | 운영 배포·복구·관측 절차 | [Operations](docs/operations.md), [Disaster recovery](docs/disaster-recovery.md) |
 | 남은 일과 완료 이력 | [Active TODO](docs/development-todo.md), [Implementation roadmap](docs/implementation-roadmap.md) |
 | 실행 시점별 검증 기록 | [Verification evidence](docs/verification/README.md) |
-| 동적 source 관리의 고급 문서 | [Source management plane](docs/source-management-plane.md), [Source onboarding](docs/source-onboarding.md) |
+| 일정에 없는 후속 연구 | [Future work](docs/future-work.md), [ADR index](docs/decisions/README.md) |
+| 동적 source 관리의 고급 문서 | [Source management plane](docs/source-management-plane.md), [Managed onboarding](docs/managed-source-onboarding.md) |
 
 과거 verification 문서는 그 문서에 적힌 commit·환경·범위만 증명합니다. 현재 상태는 이 README,
 accepted ADR, active TODO와 최신 runnable test를 함께 확인하세요.

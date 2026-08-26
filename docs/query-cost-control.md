@@ -1,4 +1,18 @@
-# Query Cost And Resource Control
+# Query 제한과 자원 사용 확인
+
+Status: 현재 query 안전 제한과 운영 조사 reference
+
+이 문서의 핵심은 돈을 계산하는 것이 아니라 query 한 건이 DB 자원을 과도하게 쓰지 못하게 막는
+것입니다. 현재 Query Man은 provider 요금이나 query별 통화 비용을 계산하지 않습니다.
+
+처음 읽는다면 다음 순서만 보면 됩니다.
+
+1. [강제하는 제한](#enforced-layers)에서 무엇을 막는지 확인합니다.
+2. [측정값](#what-is-measured)에서 응답·log로 무엇을 볼 수 있는지 확인합니다.
+3. 문제가 생기면 [조사 순서](#live-investigation)와 [개선 순서](#remediation-order)를 따릅니다.
+4. `pg_stat_statements` 절은 DBA가 별도 권한으로 조사할 때만 읽습니다.
+
+`budget profile`, `OID`, `fingerprint`가 낯설면 [용어 사전](glossary.md)을 먼저 참고하세요.
 
 ## Scope
 
@@ -43,20 +57,23 @@ user/organization별 tier, host cgroup CPU/memory quota와 일·월 통화 budge
 
 두 replica의 독립 concurrency·connection 경계와 session resource 누수는
 [multi-replica soak audit](verification/2026-08-23-mcp-multi-replica-soak.md)에서 검증한다.
-이 결과는 distributed global quota를 뜻하지 않는다. DB-native 비용 귀속의 구현 순서와
-종료 조건은 [active development TODO](development-todo.md)의 `COST-*`에서 관리한다. Source
-규모·증가량의 측정 방법과 gateway usage lower-bound 수집은 `CTRL-07`에서 구현됐고, 최종 운영 projection은
-[source management plane](source-management-plane.md)의 한 management surface에서 제공한다.
+이는 soak 시험 구성의 acceptance 증거이며, 현재 static first launch는 단일 replica입니다. 또한
+managed `/usage` reporter와 endpoint를 현재 Runtime에 조립하지 않습니다. 이 결과는 distributed
+global quota를 뜻하지 않습니다. DB-native 비용 귀속과 사용량 경보는 현재 일정에 없는 parked
+research이며, 후보 범위는 [future work](future-work.md)의 `COST-*`에만 보존합니다. Source 규모·증가량의
+측정 방법과 gateway usage lower-bound 수집은 `CTRL-07`에서 구현됐지만 비활성인 managed capability이고,
+최종 운영 projection은 [source management plane](source-management-plane.md)의 한 management surface에서
+제공합니다.
 `CTRL-08`은 resource를 `not_configured|pending|available|stale|unavailable`로 구분하고 current
 generation의 마지막 시도와 bounded reason을 제공한다. Gateway는 global reporter pipeline의
 accepted `last_report_at`과 같은 상태를 제공하며 source traffic completeness로 해석하지 않는다.
 Missing/failed 값과 빈 hour는 0으로 표시하지 않는다. 이 public projection은 구현됐고
 DB-native/provider monetary collector는 여전히 범위 밖이라 monetary cost는
 `not_configured/PROVIDER_NOT_CONFIGURED`만 표시한다. DB-native reader-role aggregate 선택지는
-[proposed ADR 0021](decisions/0021-database-native-cost-attribution.md)의 read-only prework일 뿐 현재
-`/usage` external API나 수집 동작을 바꾸지 않는다. Usage spike/alert도 별도
-[proposed ADR 0023](decisions/0023-database-native-usage-spike-alert.md)의 read-only addendum이며 base
-evidence와 exact approval 전에는 threshold, event, polling route나 notification 동작이 없다.
+[parked ADR 0021](decisions/0021-database-native-cost-attribution.md)에 남긴 조사 결과일 뿐 현재
+`/usage` external API나 수집 동작을 바꾸지 않는다. Usage spike/alert도
+[parked ADR 0023](decisions/0023-database-native-usage-spike-alert.md)에 남긴 조사 결과이며, 별도 요구와
+정확한 승인 전에는 threshold, event, polling route나 notification 동작이 없다.
 
 ## What Is Measured
 
@@ -136,8 +153,11 @@ User/organization별 chargeback은 현재 제공하지 않는다.
    request UUID별 entry 폭증은 막지만, `DECLARE`와 `FETCH` 통계가 원래 SELECT와 분리되거나
    여러 fingerprint 사이에서 합쳐질 수 있다. 따라서 reader/source aggregate 보조 신호로만
    사용한다. Extension과 monitoring role은 source owner가 별도로 관리하며 raw/queryid 통계는 Query Man
-   API에 공개하지 않는다. 향후 proposed ADR 0021이 정확히 승인될 때만 bounded operator aggregate가
-   별도 예외가 된다.
+   API에 공개하지 않는다. [Parked ADR 0021](decisions/0021-database-native-cost-attribution.md)의
+   수집 경로가 별도 요구와 정확한 승인을 받을 때만 bounded operator aggregate를 다시 검토한다.
+
+<details>
+<summary>DBA용 pg_stat_statements 상세 조사 펼치기</summary>
 
 ### Optional PostgreSQL Aggregate
 
@@ -164,8 +184,8 @@ Application reader에는 `pg_read_all_stats`, `pg_monitor` 또는 `pg_signal_bac
 않는다. 아래 direct-view monitoring identity는 DBA가 수동 조사에만 쓰는 현재 외부 운영 선택지이며
 Query Man이 관리하는 collector credential이나 지원하는 application 수집 경로가 아니다. Source owner가 `CONNECT`,
 `pg_read_all_stats`와 extension view의 좁은 조회 권한을 별도로 review해야 하고, 이 identity는 다른
-session 통계를 볼 수 있는 민감한 운영 계정이다. Proposed ADR 0021-A의 network-facing collector는
-이 broad role/direct view를 받지 않고 source-owner sanitized function만 실행한다.
+session 통계를 볼 수 있는 민감한 운영 계정이다. Parked ADR 0021-A에서 조사한 network-facing
+collector 후보는 이 broad role/direct view를 받지 않고 source-owner sanitized function만 실행한다.
 
 ```sql
 SELECT stats.queryid, stats.calls,
@@ -187,6 +207,8 @@ entry eviction이 발생할 수 있다. Global `stats_reset`/`dealloc`과 row별
 관찰해야 하며 query text는
 literal을 포함할 수 있으므로 dashboard 기본 필드로 저장하지 않는다. PostgreSQL query ID는
 major version이나 object OID 변화에 걸친 stable application identifier가 아니다.
+
+</details>
 
 ## Remediation Order
 

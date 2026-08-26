@@ -17,17 +17,23 @@ authority-model changes outside this plan-only Skill's authority, not as fields 
 
 ## Read The Current Policies And Procedures
 
-Read [source onboarding](../../docs/source-onboarding.md) for every onboarding plan and
-[plan format](references/plan-format.md) before writing the result.
+For every onboarding plan, read these current static-launch authorities first:
+
+- [static first-launch decision](../../docs/decisions/0025-static-non-rls-first-launch.md);
+- [source onboarding routing guide](../../docs/source-onboarding.md);
+- [source extension checklist](../../docs/source-extension-checklist.md); and
+- [plan format](references/plan-format.md).
 
 Read only the additional material needed by the request:
 
-- [source extension checklist](../../docs/source-extension-checklist.md) for DB-owner work, RLS, joins,
-  wide relations, quoted identifiers, observability, or production-network checks.
 - [query cost and resource control](../../docs/query-cost-control.md) and the current
   [`budget-profiles.yaml`](../../config/budget-profiles.yaml) when selecting an existing resource tier.
 - [shared source access and tier decision](../../docs/decisions/0017-shared-source-access-and-resource-tier.md)
   when the request mentions users, organizations, grants, quota, or tier overrides.
+- [managed source onboarding](../../docs/managed-source-onboarding.md) and the
+  [source management plane](../../docs/source-management-plane.md) only when managed-mode activation has
+  already been separately and explicitly approved. A general onboarding, implementation, or immediate-publish
+  request is not that approval.
 
 For the current static launch, `config/sources` is the reviewed authority for exactly
 `development-issues` and `market-voc`; `config/onboarding` remains an acceptance fixture. This plan-only
@@ -82,7 +88,7 @@ accepted as non-instructional business metadata.
 
 Any `tenant_isolation=rls` source or RLS-dependent view remains stopped on both paths. Inventory or managed-mode
 approval is not RLS-serving approval; that requires the separate RLS attestation, migration and cutover
-decision tracked by the current TODO.
+decision tracked by [future work](../../docs/future-work.md#rls-source-제공).
 
 Never include credential values, complete DSNs, provider secret paths, arbitrary SQL text, raw database errors,
 or a statement that an unperformed check passed. Non-secret host/database/user identifiers may remain as

@@ -135,91 +135,20 @@ Host/database/user는 mutation 검토에 필요한 admin에게만 제한적으�
 bearer, master key, provider secret path, raw database error, ad-hoc question과 SQL은 response와
 audit에서 제외한다.
 
-아래 replica observation API와 상태 의미, 내부 data-size/gateway usage 수집과 operator-only availability/usage
-projection은 구현됐다. DB-native/provider monetary cost는 이후 `COST-*` 목표다.
+Replica observation, bounded resource/gateway collection과 operator-only usage projection은 구현됐다.
+정확한 writer interface, persisted row, freshness/status/reason, ordering, retention과 privacy rule은
+[managed observability reference](modules/control-plane/observability.md)에 한곳으로 모았다.
 
-### Implemented Replica State (`CTRL-06`)
+| Capability | 운영자가 보는 핵심 | 현재 API |
+|---|---|---|
+| Replica (`CTRL-06`) | Ever-registered stable slot별 desired/applied drift와 DB-clock freshness | `GET /admin/sources/{source_id}/replicas` |
+| Resource (`CTRL-07A` + `CTRL-08`) | DB-owner-defined bounded record/storage current·previous, latest attempt와 last success | `GET /admin/sources/{source_id}/usage`의 `resource` |
+| Gateway (`CTRL-07A` + `CTRL-08`) | Source/profile/revision/hour 단위로 성공적으로 보고된 31일 lower-bound와 global reporter 상태 | 같은 endpoint의 `gateway` |
+| Monetary cost | Provider connector가 없어 `not_configured` | 같은 endpoint의 `monetary_cost` |
 
-- Managed-only `QUERY_MAN_REPLICA_ID`: 1~80자 lowercase stable slug. Bootstrap은 값이 있어도
-  무시하고 검증하지 않는다.
-- Target set은 ever-registered stable slot이다. 자동 expiry/delete/retirement와 shutdown
-  deregistration은 없으므로 scale-down slot은 stale로 남고 never-started planned target은 외부
-  deployment inventory가 관리한다.
-- Runtime은 한 번 registration해 받은 incarnation으로만 report하고 fencing/report 실패 뒤
-  재등록하지 않는다. 실제 cadence는 `max(source reload interval, 5_000ms)`, freshness는 Control DB
-  clock의 `observed_at + 3 * cadence`다.
-- Replica ID별 applied enabled/generation/state version/metadata revision, source health, observed/fresh
-  time, stale age와 fixed-order desired/applied drift를 latest-only로 저장한다.
-- Failure reason은 `CONTROL_SCAN_FAILED`, `RUNTIME_VALIDATION_REJECTED`, `RUNTIME_APPLY_FAILED`,
-  `METADATA_PROBE_FAILED`만 report하고 public projection은 `NOT_OBSERVED`, `HEARTBEAT_EXPIRED`를
-  추가할 수 있다. Raw error, manifest, connection, credential, question/SQL은 저장하지 않는다.
-- `GET /admin/sources/{source_id}/replicas?limit&after_replica_id`만 추가한다. Status는
-  `pending|available|stale|unavailable`; disabled desired는 metadata/source-health drift를 계산하지
-  않는다. 기존 list/detail/health/metrics/MCP는 그대로다.
-- Observation failure는 data plane, readiness, mutation receipt와 shutdown lifecycle을 바꾸지 않는다.
-
-### Implemented Data Size And Growth (`CTRL-07A`)
-
-관측값은 configuration revision과 분리하고 다음 bounded shape를 사용한다.
-
-```text
-source_id, scope, metric, value, unit, method,
-definition_revision, metadata_revision?, observed_at, fresh_until
-```
-
-Manifest v2의 optional `observability`가 DB owner의 representative grain/physical relation과 이를
-포함한 최대 16개 storage relation을 지정한다. V1은 ordinary table/materialized view의
-`postgres_catalog_estimate`와 `postgres_relation_size`만 사용한다. `representative_records`,
-`table_bytes`, `index_bytes`, `total_storage_bytes`를 source-level current/previous로 저장하고 relation
-이름은 public dimension으로 내보내지 않는다. 일반 view에 무제한 `COUNT(*)` 또는
-`EXPLAIN ANALYZE`를 실행하지 않는다.
-
-Resource는 UTC daily bucket, 24시간 cadence와 Control DB clock 72시간 freshness를 사용한다. 같은
-metric/method/definition만 previous로 이동하며 정의가 바뀌면 comparison을 초기화한다. Definition은
-metric, method, grain/relation 목록과 DB migration reference의 canonical SHA-256이다. 이 resource-observation collection policy는
-Source apply 직후와 이후 24시간마다 best-effort로 실행된다. `CTRL-08`은 current generation의 latest
-attempt와 last success를 `source_resource_observation_attempts`의 source당 한 row에 추가해 failure를
-missing/zero와 구분한다.
-
-### Implemented Usage Availability (`CTRL-07A` + `CTRL-08`) And Deferred Cost
-
-초기 집계 key는 bounded한
-`source_id + budget_profile + metadata_revision + definition_revision + time bucket`이다.
-Budget 정의가 metadata revision 재료이므로 별도 tier revision entity를 만들지 않는다.
-
-- Gateway query/success/reject/timeout/overload/cancel/failure, queue/elapsed, rows/result bytes와 truncation
-
-PostgreSQL execution/block/temp/WAL aggregate, provider amount/currency와 allocation method는 현재
-수집하지 않는다. Database/table/index storage는 위 resource observation에만 포함되고 gateway
-usage dimension과 섞지 않는다.
-
-Caller/tenant는 security audit에 남을 수 있지만 비용, quota와 metric label dimension으로 쓰지
-않는다. Provider billing이 없으면 자원 사용과 추세만 표시한다. Availability는
-`not_configured|pending|available|stale|unavailable`을 구분하고 last attempt, freshness와 bounded
-reason을 함께 제공한다. Missing/failed 값은 0으로 표시하지 않는다.
-
-승인된 gateway V1은 trusted active profile/revision을 terminal event 시점에 붙인 UTC hourly delta를
-별도 60초 reporter가 트래픽이 없어도 전송한다. Replica incarnation/sequence/payload hash로 retry를
-deduplicate한다. 31일은 DB clock 기준 logical visibility/input window여서 window 밖 input과 향후
-조회 결과를 제외하지만 age-only physical deletion은 하지 않는다. Source당 최신 1,000행은 physical
-cap이다. 값은 성공적으로 보고된 lower bound다. Public status와 admin response는 `CTRL-08`에서
-구현됐고 기존 `/admin/metrics`, replica heartbeat와 MCP는 바뀌지 않는다.
-
-Operator는 query parameter 없는 `GET /admin/sources/{source_id}/usage`에서 한 DB snapshot의 resource,
-gateway와 monetary-cost 상태를 조회한다. Resource는 current generation의 latest attempt와 fresh
-last-success를 분리하므로 최신 refresh가 실패해도 아직 fresh한 성공값은 `available`로 유지하고
-실패 이유를 `last_attempt`에 표시한다. Mandatory storage 세 값이 없거나 attempt/sample이 일치하지
-않으면 `unavailable/OBSERVATION_INCOMPLETE`로 fail-closed한다. Missing representative, metric 또는
-gateway hour는 0으로 합성하지 않는다.
-
-Gateway status는 source traffic completeness가 아닌 global reporter pipeline health다. Heartbeat가
-fresh한 모든 live replica의 current-incarnation cursor가 fresh해야 `available`이며 하나라도
-absent/expired이면 startup grace 없이 `unavailable/REPORTER_UNAVAILABLE`이다. Live replica 없이
-accepted cursor가 있으면 `stale`, 둘 다 없으면 `pending`이다. `last_report_at`은 accepted report
-시각이며 실패 시도를 뜻하지 않는다. Inclusive 31일 window의 최대 1,000 row를 고정 정렬로 한 번에
-반환하고 pagination을 만들지 않는다. Monetary cost는 provider가 없으므로
-`not_configured/PROVIDER_NOT_CONFIGURED` 상태만 공개하고 amount/currency/provenance field는 만들지
-않는다.
+Observation은 source authority, query result와 readiness가 아니다. Missing/failed 값을 0으로 만들지
+않고 relation, credential, caller/tenant, question/SQL와 raw error를 공개하지 않는다. DB-native/provider
+monetary cost는 이후 `COST-*` track이다.
 
 ## Access Boundary
 
@@ -262,6 +191,10 @@ bounded outcome을 기록한다. 같은 key와 같은 hash는 기존 결과를 �
 fail-closed한다. 별도 request/approval table이나 approver endpoint는 만들지 않는다.
 
 ### Mutation Request And Receipt Wire Format And Semantics
+
+아래는 operator-facing HTTP 요약이다. Transaction, immutable receipt, replay와 timeout의 persisted
+불변조건은 [persistence and recovery reference](modules/control-plane/persistence-and-recovery.md#mutation-receipt와-timeout-reconciliation)에
+모아 둔다.
 
 여섯 mutation은 다음 header를 모두 요구한다.
 
@@ -314,31 +247,15 @@ threat model/ADR 뒤에 설계한다.
 
 ## Storage Shape
 
-기존 immutable revision/pointer table을 재사용하고 필요한 책임만 추가한다.
+Control DB는 immutable generation/snapshot/verified artifact와 active pointer를 재사용하고, numbered
+migration으로 terminal mutation receipt와 bounded observation table만 additive하게 추가했다. Runtime
+mode는 deployment configuration이므로 mode/origin/bootstrap-import marker table이 없다. High-frequency raw
+event도 저장하지 않는다.
 
-Owner, environment와 DB migration reference는 strict manifest v2의 `provenance` block에 포함해
-`source_profile_revisions.manifest`에 generation과 함께 저장한다. Provenance를 위한 별도 catalog
-table, 중복 column이나 `CTRL-04` schema migration은 만들지 않았다. `CTRL-05`의 두 번째 Control
-schema migration은 이 provenance와 별개인 mutation receipt table만 추가한다. Provenance 값만
-변경한 publish도 새 generation을 만들고 rollback은 당시 값을 그대로 복원한다. Query metadata
-revision은 query execution semantics에 영향을 주는 필드만 hash하므로 provenance 변경으로 달라지지 않는다.
-
-Runtime mode는 deployment configuration이고 existing source/metadata pointer와 verified-query record set이
-managed authority를 모두 표현한다. 따라서 mode, origin 또는 bootstrap import marker를 위한 table과
-`CTRL-02` schema migration은 추가하지 않는다.
-
-- **Implemented:** migration ledger의 version, immutable filename/checksum, applied time과 migration identity
-- **Implemented:** minimal catalog의 owner, environment와 DB migration provenance
-- **Implemented:** mutation event/receipt의 idempotency, actor, reason, request hash와 outcome
-- **Implemented (`CTRL-06`):** migration 3과 replica별 latest desired/applied state, DB-clock
-  freshness, Runtime report 및 bounded Delivery projection
-- **Implemented (`CTRL-07`):** migration 4, source observation의 record/storage method, definition
-  revision/current/previous와 gateway usage의 bounded source/profile/revision hourly rollup
-- **Implemented (`CTRL-08`):** migration 5 latest resource attempt/last-success, five-state resource와
-  global reporter availability, 31일 logical cutoff와 bounded operator admin projection
-
-Observation storage는 high-frequency raw event를 Control DB에 적재하지 않는다. Resource는
-latest current/previous, gateway는 hourly rollup과 source당 1,000행 cap만 저장한다.
+Exact table responsibility, source-scoped lock/CAS, transaction/pin/receipt, credential ciphertext와
+recovery 의미는 [persistence and recovery reference](modules/control-plane/persistence-and-recovery.md)에,
+replica/resource/gateway table과 retention은
+[managed observability reference](modules/control-plane/observability.md)에 있다.
 
 ## Rollout Checklist
 
@@ -395,7 +312,8 @@ logical retention, zero-bootstrap와 두 replica 복구 결과는
 
 - 운영자는 Git checkout 없이 모든 managed source의 owner, active state, history와 resource tier를
   조회한다.
-- Production source addition은 repository file이나 application deploy를 만들지 않는다.
+- Managed mode를 별도로 활성화한 production environment의 source addition은 repository file이나
+  application deploy를 만들지 않는다. ADR 0025 static launch의 새 source에는 적용하지 않는다.
 - 서로 다른 두 query identity가 같은 active source 목록을 보고 caller override 없이 같은
   source-resolved budget 정의를 적용받는다. Public query API에 profile field를 새로 노출할
   필요는 없다.

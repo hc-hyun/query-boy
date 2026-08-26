@@ -4,312 +4,270 @@ Status: Logical boundary; physical package split pending
 
 ## 목적
 
-Metadata는 reader가 실제로 볼 수 있는 PostgreSQL physical catalog와 versioned semantic overlay를
-검증된 immutable metadata revision으로 만들고, 사용자 질문에 필요한 bounded context를 제공한다.
+### 30초 요약
 
-Metadata는 SQL 실행기가 아니다. 질문에 어떤 relation, column, grain, join과 business rule을
-사용해야 하는지 설명하고 Guarded Query가 확인할 published revision을 제공한다.
+Metadata는 PostgreSQL reader가 실제로 볼 수 있는 table/view 구조를 읽어 **검증된 metadata
+snapshot**으로 고정하고, 질문에 필요한 relation·column·join·business rule만 골라 설명한다.
+쉽게 말하면 database의 안전한 지도를 만들고 질문마다 필요한 부분만 펼쳐 주는 module이다.
+
+| 질문 | 답 |
+|---|---|
+| 무엇을 입력으로 받는가? | Source Catalog가 검증한 source/profile과 reader-visible PostgreSQL catalog |
+| 무엇을 제공하는가? | Immutable `PreparedMetadata`, exact `metadata_revision`, 질문별 context |
+| SQL도 실행하는가? | 아니요. Guarded Query가 published snapshot과 revision을 확인한 뒤 SQL을 검증·실행한다. |
+| 현재 first launch에 참여하는가? | 예. ADR 0025의 두 static source를 읽지만 Control DB `MetadataStore`는 조립하지 않는다. |
+
+현재 launch authority는
+[ADR 0025](../../decisions/0025-static-non-rls-first-launch.md)다. RLS serving과 broader result encoding
+연구는 current Metadata interface가 아니다.
 
 ## 소유 책임
 
-- Reader privilege 안에서의 `pg_catalog` relation/column/key/index/comment introspection
-- Catalog snapshot shape와 validation, persisted serialization format 및 compatibility 확인
-- Source definition과 physical snapshot으로부터 `metadata_revision` 계산
-- Metadata refresh coalescing, cache TTL, stale window, retry와 source epoch
-- Persisted immutable revision publish/active/pin을 소비하는 MetadataStore port
-- L0/L1/L2 publish quality gate
-- Revision-scoped relevance index와 question-scoped relation/column disclosure
-- Grain, measure, join, business term, ambiguity와 answerability response projection
-- Metadata response byte limit과 untrusted comment sanitization
-- DB-owner-declared physical relation의 bounded catalog estimate/size observation
+- Reader privilege 안에서 PostgreSQL relation/column/key/index/comment를 introspection
+- Catalog snapshot type, validation, immutability와 persisted snapshot codec compatibility
+- Source definition과 physical snapshot으로 exact `metadata_revision` 계산
+- Metadata cache, coalesced refresh, stale upper bound, retry와 source epoch
+- L0/L1/L2 publish quality 판정
+- Revision-scoped retrieval index와 question-scoped relation/column disclosure
+- Grain, measure, join, business term, ambiguity와 answerability context assembly
+- Metadata response byte limit과 untrusted database comment sanitization
+- DB owner가 선언한 physical relation의 bounded record/storage observation provider
 
 ## 소유하지 않는 책임
 
 - Source manifest/budget schema, reader connection policy와 runtime registry mutation
-- SQL AST/function/operator/result-OID validation과 query execution
-- Control DB schema, transaction, advisory lock와 source generation transition
-- HTTP/MCP input schema, authentication과 public error serialization
-- Verified result의 live SQL 실행과 canonical result hash ownership
-- Source DB의 view, reader role와 grant migration
+- SQL AST/function/operator/final-result OID validation과 query execution
+- Control DB schema, transaction, advisory lock, generation과 persisted implementation
+- Caller authentication/authorization와 HTTP/MCP request/response/error rendering
+- Verified result의 live SQL 실행과 canonical result hash
+- Source DB의 view, reader role/grant와 business migration
 - RLS source admission과 serving 재개 결정
 
 ## 현재 코드 위치
 
-- [`catalog.py`](../../../src/query_man/catalog.py): PostgreSQL physical introspection adapter
-- [`metadata.py`](../../../src/query_man/metadata.py): lifecycle, cache, validation과 context projection
-- [`relevance.py`](../../../src/query_man/relevance.py): revision-scoped retrieval index
-- [`revision.py`](../../../src/query_man/revision.py): metadata revision digest
-- [`quality_level.py`](../../../src/query_man/quality_level.py): runtime publish quality gate
-- [`errors.py`](../../../src/query_man/errors.py): metadata unavailable/revision mismatch domain error;
-  public rendering은 Delivery 소유
-- [`models.py`](../../../src/query_man/models.py): catalog snapshot/prepared metadata type,
-  `CatalogProvider`와 Runtime 전용 `RuntimeCatalogProvider`
-- [`metadata_store.py`](../../../src/query_man/metadata_store.py): MetadataStore port와 snapshot codec;
-  같은 파일의 PostgreSQL transaction implementation은 Control Plane 소유
-- Focused tests: [`test_catalog.py`](../../../tests/test_catalog.py),
-  [`test_metadata.py`](../../../tests/test_metadata.py),
-  [`test_relevance.py`](../../../tests/test_relevance.py),
-  [`test_revision.py`](../../../tests/test_revision.py),
-  [`test_quality_level.py`](../../../tests/test_quality_level.py),
-  [`test_metadata_store.py`](../../../tests/test_metadata_store.py),
-  [`test_reader_policy.py`](../../../tests/test_reader_policy.py),
-  [`test_source_database_corners.py`](../../../tests/test_source_database_corners.py)
+| 위치 | Metadata가 소유하는 범위 | 주의점 |
+|---|---|---|
+| [`catalog.py`](../../../src/query_man/catalog.py) | PostgreSQL catalog adapter와 bounded resource observation | Reader-policy/transaction 순서를 보존 |
+| [`metadata.py`](../../../src/query_man/metadata.py) | `MetadataService`, cache/refresh/quality/context lifecycle | Main application use case |
+| [`relevance.py`](../../../src/query_man/relevance.py) | Revision-scoped retrieval index와 deterministic ranking | Disclosure policy를 임의로 바꾸지 않음 |
+| [`revision.py`](../../../src/query_man/revision.py) | Canonical metadata revision digest | Guarded Query policy material을 소비하는 shared identity |
+| [`quality_level.py`](../../../src/query_man/quality_level.py) | L0/L1/L2 publish gate | Assurance verified membership을 소비 |
+| [`models.py`](../../../src/query_man/models.py) | Catalog DTO, `PreparedMetadata`, provider Protocol | Source Catalog type도 있는 shared transition file |
+| [`metadata_store.py`](../../../src/query_man/metadata_store.py) | `MetadataStore` port와 snapshot codec | PostgreSQL implementation/transaction은 Control Plane 소유 |
+| [`errors.py`](../../../src/query_man/errors.py) | Metadata availability/revision domain-error 의미 | Public envelope은 Delivery 소유인 shared transition file |
+| [`test_catalog.py`](../../../tests/test_catalog.py), [`test_metadata.py`](../../../tests/test_metadata.py), [`test_relevance.py`](../../../tests/test_relevance.py), [`test_revision.py`](../../../tests/test_revision.py) | Catalog, service, retrieval과 revision focused tests | Provider 의미를 고정 |
+| [`test_quality_level.py`](../../../tests/test_quality_level.py), [`test_metadata_store.py`](../../../tests/test_metadata_store.py), [`test_source_database_corners.py`](../../../tests/test_source_database_corners.py) | Quality, codec/persistence와 PostgreSQL edge acceptance | Store test는 shared transition test |
 
-`MetadataService`와 Control Plane candidate staging은 `load/close`만 제공하는 작은
-`CatalogProvider`를 소비한다. Runtime은 이를 확장한 `RuntimeCatalogProvider`를 요구하고 concrete
-`PostgresCatalog`는 두 Protocol을 구조적으로 구현한다. Assurance offline workflow는
-`assurance_cli.py`에서만 concrete catalog와 `MetadataService`를 조립한다.
-
-Control DB persisted snapshot과 process 안의 published Python graph는 서로 다른 경계에서 모두
-immutable하다. Catalog/metadata public sequence는 tuple이고 dataclass는 frozen이다. Private builder나
-decoder 입력은 provider/cache boundary 전에 새 graph로 freeze하며 alias를 남기지 않는다.
+현재 code는 `src/query_man`의 평면 구조다. `models.py`, `metadata_store.py`, `errors.py`와 관련
+cross-module test는 coordinating agent가 single-writer로 다룬다. Physical package 이동은 동작 변경과
+섞지 않는 별도 mechanical refactoring이다.
 
 ## 제공 인터페이스와 소유 경계
 
-이 절에서 `module interface`는 다른 logical module에 공개한 Python type, Protocol, use case와 domain
-error semantics만 뜻한다. External wire, persisted format, revision identity와 lifecycle invariant는
-각 subsection에 별도 범주로 기록한다.
+아래 Python code block은 current signature다. Result field 목록은 이해를 돕는 개념 요약이며 exact
+key/type/order는 linked code와 runnable test가 고정한다. External wire, persisted codec, revision
+identity와 refresh invariant는 Python interface와 별도 경계다.
 
 ### Published metadata interface
 
-Guarded Query, Control Plane과 Assurance가 소비하는 공식 Python module interface는
-`CatalogSnapshot`, `PreparedMetadata`와 다음 application use case다.
+Guarded Query, Control Plane, Runtime과 Assurance가 소비하는 핵심 DTO와 service signature는 다음과 같다.
 
 ```text
-await get_published(source_id) -> PreparedMetadata(snapshot, exact metadata_revision)
+CatalogSnapshot(relations: tuple[CatalogRelation, ...])
+PreparedMetadata(
+  snapshot: CatalogSnapshot,
+  revision: str,
+  freshness_age_ms: int | None = None
+)
+
+async get_published(source_id: str) -> PreparedMetadata
+async get_context(
+  source_id: str, question: str, max_objects: int = 2
+) -> dict[str, object]
+invalidate(source_id: str | None = None) -> None
+async rollback(source_id: str, revision: str) -> PreparedMetadata
+async resume_automatic_publish(source_id: str) -> None
+async close() -> None
 ```
 
-- Source가 없으면 Source Catalog의 `SourceNotFoundError`, current compatible value를 제공할 수 없으면
-  Metadata의 `MetadataUnavailableError` 의미를 따른다.
-- Snapshot은 current source definition과 compatible해야 한다.
-- Snapshot과 `PreparedMetadata`의 도달 가능한 public graph는 재귀적으로 immutable하며 provider는
-  mutable builder나 decoder 입력의 alias를 반환하지 않는다.
-- Revision mismatch, schema drift, deterministic reader-policy mismatch와 stale upper bound 초과는
-  fail-closed한다.
-- Published snapshot relation은 Guarded Query relation allowlist의 최대 범위다.
-- Row estimate는 fresh best-effort hint이며 persisted revision과 correctness 재료가 아니다.
+- Published DTO graph는 frozen/tuple이며 provider와 decoder는 mutable input alias를 남기지 않는다.
+- `get_published`는 current source와 compatible하고 quality gate를 통과한 exact revision만 준다.
+- `invalidate`는 source epoch, cache/index와 replica-local applied-revision signal을 함께 갱신한다.
+- `rollback`/`resume_automatic_publish`는 store가 조립된 managed lifecycle에서만 동작한다.
+- Source가 없으면 `SourceNotFoundError`, compatible current value가 없으면 `MetadataUnavailableError`다.
+  Stale caller revision의 `MetadataRevisionMismatchError` 의미도 Metadata가 소유한다.
 
-### Metadata context application interface and external format
+Exact nested DTO field는 [`models.py`](../../../src/query_man/models.py)와
+[`test_catalog.py`](../../../tests/test_catalog.py)가 고정한다. Published relation은 Guarded Query
+allowlist의 최대 범위이며 `estimated_rows`는 revision/correctness 재료가 아닌 best-effort hint다.
 
-Delivery는 다음 transport-independent application use case와 result를 소비한다.
+### Metadata context application result
+
+`get_context`의 exact return type은 `dict[str, object]`이고 conceptual top-level shape는 다음과 같다.
 
 ```text
-await get_context(source_id, question, max_objects=2) ->
-  source_id, source_name, source_description, question
-  metadata_revision, sql_policy_revision, snapshot_status, quality_level
-  sql_capabilities, answerability, relations, joins, business_terms
-  composition_hints, ambiguities, truncated
+source_id, source_name, source_description, question
+metadata_revision, sql_policy_revision
+snapshot_status, quality_level, sql_capabilities, answerability
+relations, joins, business_terms, composition_hints, ambiguities, truncated
 ```
 
 `snapshot_status`는 `fresh|stale`, `quality_level`은 `L0|L1|L2`다. `sql_capabilities`는
-`functions`, `cast_types`, `unqualified_cast_types`를 가진다. `answerability`는 `status`,
-`reason_codes`, `messages`, `missing_concepts`, `options`를 가진다.
+`functions|cast_types|unqualified_cast_types`, `answerability`는
+`status|reason_codes|messages|missing_concepts|options`를 가진다. Field/order는 application result이고
+Delivery의 HTTP/MCP JSON과 compact UTF-8 accounting은 external wire다. Question-scoped column omission은
+SQL deny rule이 아니며 전체 published snapshot이 relation ceiling이다.
 
-Relation/column, approved join, business term, composition hint와 ambiguity의 기존 field와 ordering은
-application result 의미다. Delivery가 이를 HTTP/MCP에 투영할 때 compact UTF-8 JSON byte accounting과
-array/object shape를 보존하는 것은 external wire format이다. Question context에서 일부 column이
-생략돼도 SQL deny rule은 아니며, query allowlist는 published snapshot과 Guarded Query policy가 정한다.
-
-### Metadata revision format and compatibility
-
-`metadata_revision`은 다음 current source/catalog material의 canonical JSON SHA-256
-(`sha256:` prefix)이다.
-
-- `source_id`, allowed schema/relation kind와 non-default tenant-isolation value
-- Guarded Query가 소유한 immutable canonical-time policy material version 1
-- 전체 execution budget과 semantic overlay
-- Relation schema/name/kind/comment/definition hash/security-invoker
-- Ordered primary/foreign key와 index definition
-- Column name/ordinal/type/nullability/comment
-
-Connection/credential, source provenance, control generation/state version, `minimum_quality_level`,
-`estimated_rows`, freshness/cache state는 revision에서 제외한다. List/tuple과 dict/immutable mapping은
-각각 같은 canonical array/object로 정규화한다. 이 재료, ordering, digest와 persisted snapshot codec은
-policy/compatibility identity 및 persisted/versioned format이다.
-
-[ADR 0025](../../decisions/0025-static-non-rls-first-launch.md)는 PostgreSQL 18/UTF-8 connection
-admission과 SQL policy v3를 추가했지만 metadata revision algorithm, canonical-time material과 현재
-두 source revision을 바꾸지 않는다. Server/client encoding이나 RLS base-policy identity를 metadata
-revision에 새로 넣지 않았다. RLS는 launch admission에서 전부 차단되므로 이 미포함 상태를 RLS
-serving compatibility로 해석하지 않는다.
-
-Broader source-semantics fingerprint와 RLS attestation 연구는
-[ADR 0020](../../decisions/0020-lossless-interval-and-json-numeric-encoding.md)과
-[ADR 0024](../../decisions/0024-rls-policy-drift-attestation.md)에 기록된 parked research다. 미래
-proposal의 snapshot/revision version이나 helper는 현재 interface가 아니며 이 문서에 복제하지 않는다.
-
-### Metadata refresh and publish lifecycle
-
-Catalog load와 resource observation의 reader lease는 다음 순서를 지킨다.
-
-1. Pool이 `client_encoding=UTF8` startup parameter를 요청한다.
-2. Checkout 직후 Source Catalog의 no-SQL `require_reader_connection_policy()`를 호출한다.
-3. PostgreSQL 18, server/client `UTF8`, psycopg `utf-8` codec이 확인된 뒤에만 read-only `BEGIN`,
-   UTC/budget session setting, session-policy verifier와 catalog SQL을 실행한다.
-
-Deterministic connection mismatch는 `ReaderSessionPolicyError`로 분류하고 connection을 close/discard한다.
-이 시점에는 transaction이나 application SQL이 없으므로 rollback하지 않는다. Active Metadata refresh는
-details 없는 `METADATA_UNAVAILABLE`로 끝나며 warm stale snapshot으로 fallback하지 않는다. Resource
-observation은 성공값을 만들지 않고 Runtime의 `RESOURCE_READ_FAILED` 경계로 전달된다. Connection-info
-접근 자체의 transport/driver failure는 marker로 바꾸지 않고 기존 transient 분류를 유지한다.
-
-그 뒤 lifecycle은 다음과 같다.
-
-- Fresh candidate를 validate하고 source definition과 함께 revision을 계산한다.
-- Store가 있으면 append-only persisted snapshot을 publish하고 committed active value만 cache한다.
-- Rollback pin, resume와 persisted activation freshness provenance를 보존한다.
-- Source generation 교체 시 epoch와 current profile을 함께 확인해 지연 refresh를 거부한다.
-- Ordinary transient catalog failure는 bounded stale window 안에서만 마지막 정상 revision을 제공한다.
-- Reader-policy mismatch, catalog structure/budget rejection, schema/overlay validation failure는 stale
-  fallback 없이 fail-closed한다.
-- Rollback으로 다른 revision이 pin된 경우에만 bounded cached revision을 별도 stale path로 제공한다.
-- Fresh cache hit는 live connection policy나 privilege probe를 다시 수행한 것으로 해석하지 않는다.
-
-Static first launch는 reviewed `development-issues`, `market-voc` bootstrap composition이고
-MetadataStore/Control DB를 조립하지 않는다. 구현된 managed composition과 MetadataStore lifecycle은
-보존하지만 dynamic onboarding과 hot reload는 첫 launch 밖이다. 어떤 production composition에서도
-RLS source는 Source Catalog/Runtime admission에서 Metadata에 도달하기 전에 차단된다. Metadata에 남은
-RLS validation branch는 방어·history compatibility 코드이지 지원되는 serving path가 아니다.
-
-PostgreSQL은 scalar domain의 RowDescription을 base OID로 평탄화한다. 따라서 Runtime bootstrap과
-Assurance offline CLI가 조립하는 `PostgresCatalog(reject_domain_columns=True)`는 eligible column의
-transient `pg_type.typtype`을 읽고 domain이면 snapshot publication 전에
-`_CatalogValidationError`→details 없는 `METADATA_UNAVAILABLE`로 끝낸다. Managed Runtime/staging의
-기본 Catalog는 이 static-launch guard를 활성화하지 않아 preserved lifecycle 의미를 바꾸지 않는다.
-`type_kind`는 successful `CatalogSnapshot`, metadata revision과 persisted codec에 포함되지 않는다.
-
-### Resource observation provider (`CTRL-07A`, implemented)
-
-Runtime-only capability는 Source Catalog가 검증한 optional observability definition의 exact physical
-relation만 조회한다. 대상 전체를 열거하지 않고 system schema와 unsupported relkind를 거부하며 한
-representative relation과 최대 16개 distinct storage relation으로 제한한다. Existing catalog의
-max-one reader pool, read-only transaction과 metadata timeout을 재사용한다.
-
-Provider는 `pg_class.reltuples`가 non-negative일 때 rounded representative rows와 configured
-relations의 table/index/total bytes만 반환한다. Relation 이름, OID, catalog row와 SQL은 Control payload에
-넣지 않는다. Observation은 `CatalogSnapshot`, metadata cache/persistence와 revision에 들어가지 않는다.
-
-### Runtime observation signal (`CTRL-06`)
-
-Metadata는 public context나 persisted snapshot shape를 바꾸지 않고 Runtime operations interface에
-replica-local cache 상태만 알린다.
-
-- Fresh publish, persisted restore 또는 pinned active value를 cache에 적용한 뒤 exact revision을 기록한다.
-- Source cache invalidate와 disabled source apply는 applied revision을 제거한다.
-- Probe/cache failure는 `METADATA_PROBE_FAILED`와 unavailable health를 기록하되 credential, question,
-  SQL이나 raw exception을 observation에 넣지 않는다.
-- Control Plane candidate staging의 health-update suppression 동안에는 이 signal도 억제한다.
-- 이 signal은 best-effort observation이며 persisted authority, readiness나 query correctness가 아니다.
+Question-scoped disclosure의 exact column priority, truncation과 hard byte limit은
+[ADR 0009](../../decisions/0009-question-scoped-column-disclosure.md), retrieval index/ranking은
+[ADR 0010](../../decisions/0010-revision-scoped-retrieval-index.md)을 따른다.
 
 ### CatalogProvider interfaces
 
-Metadata가 제공하는 공식 Python Protocol은 다음 exact method set이다.
+Metadata가 제공하는 정확한 Python Protocol은 다음 exact method set이다.
 
 ```text
 CatalogProvider:
-  async load(source) -> CatalogSnapshot
+  async load(source: SourceProfile) -> CatalogSnapshot
   async close() -> None
 
 RuntimeCatalogProvider extends CatalogProvider:
   async invalidate(source_id: str) -> None
-  async observe_resources(source) -> ResourceObservation
+  async observe_resources(source: SourceProfile) -> ResourceObservation
+
+ResourceObservation:
+  representative_records: int | None
+  table_bytes: int
+  index_bytes: int
+  total_storage_bytes: int
 ```
 
-`MetadataService`는 작은 `CatalogProvider`만 요구한다. Runtime production composition은 generation
-교체와 resource observation 때문에 extended Protocol을 요구한다. `load` 결과는 recursively immutable
-`CatalogSnapshot`이어야 한다. 이는 concrete adapter의 private API를 다른 module에 공개하지 않는다.
+Service와 Control staging은 작은 Provider만, Production Runtime은 generation invalidation/resource
+observation 때문에 extended Provider를 요구하고 required callable을 ready 전에 검사한다. Resource read는
+검증된 representative relation 하나와 최대 16개 storage relation, existing read-only pool/timeout으로
+제한한다. Relation/OID/SQL을 Control payload에 넣지 않고 snapshot/revision에도 포함하지 않는다. Exact
+observation meaning은 [Control Plane reference](../control-plane/observability.md)를 따른다.
 
 ### MetadataStore port
 
-Metadata가 제공하고 Control Plane implementation이 구현하는 공식 Python port는 다음과 같다.
+`MetadataStore`는 **Metadata가 소유하고 `MetadataService`가 소비하는 port**다.
 
 ```text
-get_active(source)
-get_revision(source, revision)
-publish(source, candidate) -> committed active value
-activate(source, revision) -> pinned active value
-unpin(source)
-close()
+async get_active(source: SourceProfile) -> PreparedMetadata | None
+async get_revision(source: SourceProfile, revision: str) -> PreparedMetadata
+async publish(source: SourceProfile, value: PreparedMetadata) -> PreparedMetadata
+async activate(source: SourceProfile, revision: str) -> PreparedMetadata
+async unpin(source: SourceProfile) -> None
+async close() -> None
 ```
 
-`publish`는 active revision이 pin돼 있으면 candidate 대신 기존 active value를 반환할 수 있다.
-`activate`는 revision을 pin하고 `unpin`은 다음 refresh를 허용하지만 persisted activation freshness를
-초기화하지 않는다. Snapshot codec은 immutable Python tuple을 기존 Control DB JSON array로 encode하고
-legacy array/object document를 새 immutable graph로 decode한다. ADR 0025에는 schema/data migration,
-historical row update나 delete가 없다.
+Runtime이 managed composition에서 Control Plane의 `PostgresMetadataStore`를 이 port에 주입한다.
+Metadata는 Control Plane module/table/SQL/lock를 import하지 않는다. 즉 `Metadata -> Control Plane`
+dependency가 아니라 Control Plane이 Metadata-owned port를 구현하는 dependency inversion이다.
+
+`publish`는 pin된 active value를 반환할 수 있고 `activate`는 pin, `unpin`은 다음 refresh를 허용하되
+activation freshness를 초기화하지 않는다. Codec은 immutable Python graph와 기존/legacy Control DB JSON
+array/object를 호환한다. Exact persisted meaning은 [ADR 0007](../../decisions/0007-immutable-metadata-publishing.md)과
+[Control Plane reference](../control-plane/persistence-and-recovery.md)를 따른다.
+
+### Metadata revision identity
+
+`metadata_revision`은 `sha256:` prefix를 가진 canonical-JSON SHA-256이다.
+
+| 포함 | 제외 |
+|---|---|
+| Source ID, allowed schema/relation kind, non-default tenant isolation | Connection, credential와 provenance |
+| Guarded Query canonical-time policy material | Control generation/state version와 minimum quality level |
+| Full execution budget와 semantic overlay | Row estimate, cache/freshness와 operational observation |
+| Relation/column/key/index와 definition/security identity | Runtime health와 usage |
+
+List/tuple과 dict/read-only mapping은 같은 canonical array/object다. Exact material/order/golden은
+[`revision.py`](../../../src/query_man/revision.py), [`test_revision.py`](../../../tests/test_revision.py)와
+[`test_metadata_store.py`](../../../tests/test_metadata_store.py)가 고정한다. ADR 0025의 PG18/UTF-8 및 SQL
+policy v3 전환은 algorithm/canonical-time/two-source revision을 바꾸지 않았다. RLS identity 미포함은
+serving 호환성이 아니라 RLS 전면 차단을 전제로 한다.
+
+### Refresh, stale와 publish lifecycle
+
+Reader lease 순서는 `checkout -> no-SQL PG18/server-client UTF-8 verifier -> read-only BEGIN ->
+UTC/budget session verifier -> catalog SQL`이다.
+
+| 상황 | 결과 |
+|---|---|
+| Fresh compatible candidate | Validate, quality/revision 계산, store가 있으면 append-only publish, committed active value만 cache |
+| Ordinary transient catalog failure | Persisted activation provenance 기준 bounded stale window 안에서만 마지막 정상 revision 제공 |
+| Reader connection/session mismatch | Connection close/discard, stale fallback 없이 `METADATA_UNAVAILABLE` |
+| Structure/budget/schema/overlay/revision failure | Stale fallback 없이 fail-closed |
+| Source epoch 교체 또는 rollback pin | Delayed refresh 거부; pin된 compatible revision 외 pointer 변경 금지 |
+
+Cache hit는 live policy/privilege probe가 아니고 restart는 persisted freshness를 초기화하지 않는다.
+Applied-revision health signal은 best-effort이며 authority/readiness/correctness가 아니다. Static launch는
+two-source bootstrap으로 Store를 조립하지 않고 RLS는 Metadata 전에 차단한다. Static/offline Catalog는
+base-OID로 평탄화되는 exposed scalar domain column도 publish 전에 거부한다. Exact lifecycle은
+[ADR 0007](../../decisions/0007-immutable-metadata-publishing.md)과 ADR 0025를 따른다.
 
 ## 소비 인터페이스와 전제
 
-Metadata가 소비하는 공식 module interface는 다음으로 제한한다.
+| Provider | Metadata가 소비하는 공개 interface | 의무와 금지선 |
+|---|---|---|
+| [Source Catalog](../source-catalog/README.md) | `SourceReader`, `READER_CLIENT_ENCODING`, connection/session verifier와 immutable `SourceProfile` | Checkout/pre-BEGIN 순서를 지키고 writer capability를 요구하지 않는다. |
+| [Guarded Query](../guarded-query/README.md) | SQL policy revision/capability descriptor와 immutable canonical-time material | Metadata revision input으로만 소비하며 query executor private API에 의존하지 않는다. |
+| [Runtime](../runtime/README.md) | Operations/health reporting sink | Replica-local cache 상태만 secret-free하게 알린다. |
+| Metadata-owned port | `MetadataStore` | Runtime이 implementation을 주입한다. Metadata는 Control Plane implementation에 의존하지 않는다. |
 
-- [Source Catalog](../source-catalog/README.md)의 `SourceReader`, `READER_CLIENT_ENCODING`,
-  `require_reader_connection_policy()`, `ReaderSessionPolicyError`와 reader-session verifier
-- [Guarded Query](../guarded-query/README.md)의 SQL policy revision/capability descriptor와 immutable
-  canonical-time material
-- [Control Plane](../control-plane/README.md)이 구현하는 `MetadataStore` port
-- [Runtime](../runtime/README.md)의 operations reporting interface
-
-Composition 전제는 interface와 구분한다. Static launch는 bootstrap filesystem의 exact two-source
-definition과 Assurance verified-revision membership만 사용한다. Managed mode는 empty registry에서
-Control Plane projection과 persisted MetadataStore를 사용하며 bootstrap과 합치거나 fallback하지 않는다.
-Managed mode 자체는 보존되지만 ADR 0025 static first launch에서는 활성화하지 않는다.
-
-현재 `metadata.py`가 Guarded Query constant를 직접 import하지만 의미상 소비 대상은 immutable policy
-descriptor다. `MetadataService`의 registry dependency는 `SourceReader`이며 mutation capability나 Control
-DB implementation을 소비하지 않는다.
+Composition 전제는 Python dependency와 구분한다. Static mode는 filesystem two-source/verified membership을,
+managed mode는 empty registry에서 Control DB projection/store를 사용한다. 두 authority를 merge하거나
+fallback하지 않는다. Delivery/Guarded Query/Control Plane은 위 application interface의 consumer이지
+Metadata가 그 module의 private implementation을 소비한다는 뜻이 아니다.
 
 ## 불변조건
 
-- ADR 0025 launch path에서는 RLS source를 Metadata serving 대상으로 취급하지 않는다.
-- Catalog connection은 checkout→no-SQL PG18/UTF-8 verifier→`BEGIN`→session verifier→catalog SQL 순서다.
-- Deterministic connection/session policy와 catalog validation 실패는 stale metadata로 우회하지 않는다.
-- Reader가 실제로 조회할 수 없는 schema/relation을 metadata에 발행하지 않는다.
-- DB comment와 semantic text를 명령으로 실행하거나 join 규칙으로 해석하지 않는다.
-- Allowed schema/kind, budget, overlay와 revision material drift를 fail-closed한다.
-- Persisted snapshot payload와 revision이 다르면 저장값을 사용하지 않는다.
-- Published source/metadata graph에 mutable collection 또는 decoder/builder input alias를 남기지 않는다.
-- Process restart가 persisted activation freshness를 초기화하지 않는다.
-- Cache나 process health state를 Control DB authority로 사용하지 않는다.
-- Metadata response와 retrieval은 source별 relation/column/byte 상한을 지킨다.
-- Reader compatibility 추가는 metadata revision, persisted schema와 canonical result hash를 바꾸지 않는다.
+- ADR 0025 launch에서는 RLS source를 Metadata serving 대상으로 취급하지 않는다.
+- Catalog connection은 checkout→no-SQL verifier→`BEGIN`→session verifier→catalog SQL 순서다.
+- Deterministic reader/session/catalog validation failure를 stale metadata로 우회하지 않는다.
+- Reader가 실제로 조회할 수 없는 schema/relation/key/index를 publish하지 않는다.
+- Database comment와 semantic text를 명령이나 자동-approved join으로 해석하지 않는다.
+- Source/profile, snapshot, revision/quality와 persisted payload drift를 fail-closed한다.
+- Published graph에 mutable collection이나 decoder/builder input alias를 남기지 않는다.
+- Process restart나 cache hit를 새 persisted freshness/connection verification으로 해석하지 않는다.
+- Context relation/column/byte limit를 지키되 question-scoped omission을 SQL deny rule로 확대하지 않는다.
+- Resource observation을 metadata snapshot/revision, correctness나 public relation allowlist에 넣지 않는다.
+- Reader compatibility 추가가 metadata revision, persisted schema나 verified result hash를 암묵적으로
+  바꾸지 않게 한다.
 
 ## 모듈 내부 변경
 
-다음은 module interface와 별도 승인 대상 의미를 보존할 때 독립적으로 변경할 수 있다.
+다음은 official interface와 external/persisted/policy/lifecycle 의미를 보존할 때 독립적으로 바꿀 수 있다.
 
-- Cache lookup, refresh coalescing과 internal data structure 개선
-- 같은 quality result를 만드는 validation/helper 정리
-- Revision 재료와 canonical order를 바꾸지 않는 digest implementation 정리
-- 동일한 relation ranking, threshold, selection reason과 deterministic ordering을 만드는 relevance 개선
-- Public field와 byte accounting을 보존하는 response assembly 정리
-- PostgreSQL query 결과를 같은 snapshot으로 변환하는 catalog query 성능 개선
-- Connection verifier call order, mismatch discard/no-stale outcome과 external error 의미를 보존하는
-  private cleanup/helper 정리
+- Cache lookup, refresh coalescing과 private data structure 개선
+- 같은 validation/quality 결과를 만드는 helper 정리
+- Revision material/canonical ordering을 바꾸지 않는 digest implementation 정리
+- 동일 ranking/threshold/selection reason/ordering을 만드는 retrieval 성능 개선
+- Public field/ordering/byte accounting을 보존하는 context assembly 정리
+- 같은 snapshot을 만드는 catalog query 성능 개선
+- Verifier order, mismatch discard/no-stale와 safe error를 보존하는 cleanup 정리
 
 ## 사용자 승인이 필요한 경계 변경
 
-승인 요청은 다음 중 실제 변경 범주를 구분해 제시한다. 목록 전체를 하나의 module interface 변경으로
-부르지 않는다.
+다음 중 하나라도 의미가 달라지면 구현을 멈추고 정확한 범주, provider/consumer, compatibility,
+migration/rollback, 안전 영향과 검증 계획을 제시한다.
 
-- **Module interface:** Published metadata/context use case, `CatalogProvider`,
-  `RuntimeCatalogProvider`, `MetadataStore`, public DTO 또는 domain error semantics
-- **External API/wire:** Context field, answerability status, truncation, ordering, JSON shape나 byte accounting
-- **Persisted/versioned format:** Catalog snapshot document, decoder compatibility, Control DB metadata row 의미
-- **Policy/compatibility identity:** `metadata_revision` 재료/order/digest, SQL policy coupling, L0/L1/L2
-  publish 조건, stale bound와 verified-revision 의미
-- **Safety/lifecycle invariant:** Checkout/pre-BEGIN verification, mismatch discard/no-stale, catalog object/comment
-  trust, drift fail-closed, pin/resume와 source epoch ordering
-- **Ownership/composition boundary:** MetadataStore implementation ownership, concrete catalog 조립 위치,
-  bootstrap/managed authority participation 또는 RLS serving 재개
+| 변경 범주 | Metadata에서 멈춰야 하는 예 |
+|---|---|
+| Module interface | `MetadataService`, catalog DTO, `CatalogProvider`, `RuntimeCatalogProvider`, `MetadataStore`와 domain error shape/call semantics |
+| External API/wire | Context field/status/order/truncation, JSON array/object와 byte accounting |
+| Persisted/versioned format | Snapshot document/codec, legacy decode와 active/pinned metadata row 의미 |
+| Policy/compatibility identity | Revision material/order/digest, SQL-policy coupling, L0/L1/L2, disclosure/ranking와 stale upper bound |
+| Safety/lifecycle invariant | Reader preflight, no-stale failure, catalog/comment trust, publish/pin/resume/source-epoch ordering |
+| Ownership/composition boundary | Store implementation ownership, concrete catalog/staging 조립, bootstrap/managed authority와 RLS serving |
 
-승인 요청에는 Source Catalog, Guarded Query, Control Plane, Delivery와 Assurance 영향, rolling replica와
-persisted history compatibility, migration/rollback 및 관련 verification을 포함한다. Protected database나
-deployment에 실제 변경을 수행하는 것은 repository 변경 승인과 별도의 operational execution 승인이
+Source Catalog, Guarded Query, Control Plane, Delivery, Runtime, Assurance와 persisted history/rolling replica
+영향을 함께 제시한다. Protected database/deployment action은 repository 의미 승인과 별도 실행 승인이
 필요하다.
 
 ## 검증
 
-최소 focused gate:
+기본 Metadata gate:
 
 ```text
 uv run pytest tests/test_reader_policy.py tests/test_registry.py tests/test_catalog.py \
@@ -317,31 +275,27 @@ uv run pytest tests/test_reader_policy.py tests/test_registry.py tests/test_cata
   tests/test_metadata_store.py tests/test_quality_level.py
 ```
 
-Persisted store와 source PostgreSQL 경계는 별도로 실행한다.
+| 변경 영역 | 추가 검증 |
+|---|---|
+| Store/codec/Control DB | `uv run pytest -m integration tests/test_metadata_store.py` |
+| PostgreSQL catalog/reader/domain/resource | `uv run pytest -m integration tests/test_source_database_corners.py` |
+| Context external projection | Delivery HTTP/MCP tests |
+| Revision/quality/verified membership | Guarded Query와 Assurance consumer/golden tests |
 
-```text
-uv run pytest -m integration tests/test_metadata_store.py
-uv run pytest -m integration tests/test_source_database_corners.py
-```
-
-Catalog reader, source epoch/CAS 또는 PostgreSQL privilege를 바꾸면 repository 전체 integration gate를,
-live retrieval acceptance가 필요하면 configured database에서 `uv run query-man-evaluate`도 실행한다.
-완료 전 root `AGENTS.md`의 전체 gate를 실행한다.
+DB privilege, source epoch/CAS 또는 reader trust boundary를 바꾸면 전체 integration gate를 실행한다.
+완료 전 root `AGENTS.md`의 `ruff`, `mypy`, full pytest도 실행한다.
 
 ## 집중해서 읽을 범위
 
-Metadata 작업은 기본적으로 다음만 읽는다.
+먼저 이 문서와 [module index](../README.md)를 읽고 작업 종류에 맞는 한 행만 확장한다.
 
-1. 이 문서와 [module index](../README.md)
-2. 변경 대상 metadata code와 focused tests
-3. Source Catalog의 `SourceReader`/reader-policy interface와 MetadataStore port
-4. [ADR 0025](../../decisions/0025-static-non-rls-first-launch.md) 및 변경과 직접 관련된
-   [ADR 0007](../../decisions/0007-immutable-metadata-publishing.md),
-   [ADR 0008](../../decisions/0008-physical-key-and-index-disclosure.md),
-   [ADR 0009](../../decisions/0009-question-scoped-column-disclosure.md),
-   [ADR 0010](../../decisions/0010-revision-scoped-retrieval-index.md),
-   [ADR 0011](../../decisions/0011-metadata-quality-level-publish-gate.md)
-5. Context/published interface나 revision identity를 직접 소비하는 module
+| 작업 | 추가로 읽을 code, decision과 test |
+|---|---|
+| Catalog/introspection/key/index | `catalog.py`, catalog DTO, `test_catalog.py`, [ADR 0008](../../decisions/0008-physical-key-and-index-disclosure.md) |
+| Context/disclosure/retrieval | `metadata.py`, `relevance.py`, related tests, [ADR 0009](../../decisions/0009-question-scoped-column-disclosure.md), [ADR 0010](../../decisions/0010-revision-scoped-retrieval-index.md) |
+| Revision/store/rollback/stale | `revision.py`, `metadata_store.py`, related tests, [ADR 0007](../../decisions/0007-immutable-metadata-publishing.md) |
+| Quality/verified membership | `quality_level.py`, `test_quality_level.py`, [ADR 0011](../../decisions/0011-metadata-quality-level-publish-gate.md), Assurance interface |
+| Reader/resource/launch policy | `reader_policy.py`, `catalog.py`, source DB corner tests, [ADR 0025](../../decisions/0025-static-non-rls-first-launch.md) |
 
-MCP SDK 구현, source admin HTTP route와 query pool internals는 위 interface나 별도 승인 대상 경계를
-변경하지 않는 한 읽을 필요가 없다.
+MCP SDK internals, source admin HTTP parsing, Control DB table/SQL와 query cursor internals는 위 interface나
+승인 대상 의미를 바꾸지 않는 한 읽을 필요가 없다.

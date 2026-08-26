@@ -1,31 +1,31 @@
-# Query Man Implementation Roadmap
+# Query Man 구현 완료 이력
 
-Status: ADR 0025 `LAUNCH-01-A` repository acceptance complete; protected execution is `LAUNCH-02`
+Status: 기록 — `LAUNCH-01-A` repository acceptance 완료, 실제 환경 실행은 `LAUNCH-02`
 
-이 문서는 Query Man의 과거 baseline과 post-baseline 완료 이력을 보존한다. 현재 serving 결정은
-[ADR 0025](decisions/0025-static-non-rls-first-launch.md)의 더 좁은 static non-RLS profile이며,
-과거 managed/RLS/넓은 result acceptance를 현재 launch 보장으로 읽지 않는다.
-세부 설계 원칙은 [architecture.md](architecture.md), 현재 검증용 데이터와 baseline은
-[mvp.md](mvp.md), source 등록 규칙은 [source-onboarding.md](source-onboarding.md)를
-따른다. 전체 항목의 구현·검증 연결은
-[completion audit](verification/2026-08-23-completion-audit.md)에 production baseline으로,
-[refactoring assurance](verification/2026-08-23-refactoring-assurance.md)에 그 시점의 refactoring baseline과
-의도적인 운영 경계로, [container runtime audit](verification/2026-08-23-container-runtime.md)에
-Docker HTTP/MCP 실행 증거로,
-[MCP server assurance](verification/2026-08-23-mcp-server-assurance.md)에 실제 server의
-대량·병렬·코너케이스·사용성 검증으로 기록한다. 완료 baseline 이후의 우선순위와 열린
-checklist는 [active development TODO](development-todo.md)에서 별도로 관리한다.
-각 verification 문서는 자신의 scope와 실행 시점에 대한 증거이며 후속 변경까지 자동으로
-포괄하는 단일 최종 audit로 해석하지 않는다.
-완료 이력의 caller별 source-scope 문구는 당시 acceptance를 보존하며, 현재 version 2 shared-access
-authorization policy는 [shared access audit](verification/2026-08-23-shared-access.md)이 우선한다.
+> 지금 남은 일을 찾는 문서가 아닙니다. 현재 작업은 [Active TODO](development-todo.md), 현재
+> 지원 범위는 [Architecture](architecture.md)와
+> [ADR 0025](decisions/0025-static-non-rls-first-launch.md)에서 확인하세요.
 
-## Final Outcome
+이 문서는 완료 ID와 당시 구현·검증 결과를 소급 변경하지 않고 보존하는 원장입니다. 과거의
+managed, RLS, multi-replica 또는 넓은 result acceptance는 그 시점의 capability 검증이며 현재 static
+first launch에서 활성이라는 뜻이 아닙니다.
 
-여러 PostgreSQL 데이터베이스를 하나의 Text-to-SQL gateway와 하나의 MCP endpoint로
-안전하게 제공한다. 신규 source는 애플리케이션 코드 변경이나 서비스 배포 없이
-등록할 수 있어야 하며, 질문 이해부터 SQL 실행까지 동일한 runtime 안전 정책과
-회귀 검증을 적용해야 한다.
+이 문서를 읽어야 하는 경우는 세 가지입니다.
+
+- 완료 ID가 어떤 변경과 evidence에 대응하는지 찾을 때
+- 과거 milestone의 구현 순서와 의존을 확인할 때
+- 새 완료 결과를 기존 ID 재사용 없이 ledger에 추가할 때
+
+각 verification 문서는 적힌 commit·환경·범위만 증명합니다. 후속 변경 전체를 자동으로 포괄하지
+않습니다. Caller별 source-scope 표현처럼 후속 결정이 대체한 과거 문구도 실행 당시 사실로
+보존하며, 현재 정책은 linked accepted ADR과 최신 evidence를 따릅니다.
+
+## 과거 전체 제품 목표
+
+이 roadmap을 만들 당시 장기 목표는 여러 PostgreSQL database를 하나의 Text-to-SQL gateway와 MCP
+endpoint로 안전하게 제공하고, managed mode에서는 source를 deploy 없이 등록하는 것이었습니다.
+이 목표에 대한 repository capability는 아래 ledger 범위에서 구현·검증됐지만, 현재 first launch는
+ADR 0025의 static two-source profile로 더 좁습니다.
 
 최종 완료 조건은 다음과 같다.
 
@@ -37,13 +37,17 @@ authorization policy는 [shared access audit](verification/2026-08-23-shared-acc
 - Source별 golden question과 verified SQL을 자동 회귀 검증한다.
 - 운영자가 query의 허용·거부·취소 원인을 credential 노출 없이 추적할 수 있다.
 
-## Checklist Rules
+## 기록 보존 규칙
 
 - `[x]`는 구현, 자동 테스트, 관련 문서가 모두 반영된 경우에만 표시한다.
 - 각 항목 ID는 이슈, PR과 커밋에서 유지한다. 범위가 바뀌어도 ID를 재사용하지 않는다.
 - 새 작업은 가능한 한 하나의 검증 가능한 결과만 포함하도록 쪼갠다.
 - 설계 결정이 필요한 항목은 decision record를 먼저 작성하고 구현한다.
 - 아래 순서는 권장 구현 순서다. 선행 항목이 있는 작업은 해당 ID를 명시한다.
+
+<details>
+<summary>완료된 baseline 131개 항목 펼치기</summary>
+
 
 ## 0. Implemented Baseline
 
@@ -310,12 +314,18 @@ client와 실제 PostgreSQL fixture를 사용해야 한다. 실행 결과와 남
 - [x] `MCPX-08` Current MCP POST disconnect를 query cancel/rollback으로 전파하고 같은 client
   재사용을 실제 socket에서 검증하며 이전 handshake/version을 fail-closed한다.
 
+</details>
+
 ## 14. Post-Baseline Completion Ledger And Active Development
 
 완료된 131개 baseline checkbox의 설명과 ID는 당시 acceptance를 보존한다. 이후 기능 보강은
-기존 설명을 소급 확장하지 않고 아래 ledger의 새 ID로 기록한다. 아직 끝나지 않은 항목은
-[active development TODO](development-todo.md)에만 두며, 완료 시 같은 변경에서 이 ledger로
-옮긴다.
+기존 설명을 소급 확장하지 않고 아래 ledger의 새 ID로 기록한다. 승인돼 현재 일정에 들어온 미완료
+항목만 [active development TODO](development-todo.md)에 두고, 일정 밖 후보는
+[future work](future-work.md)에 checkbox 없이 보존한다. Active 항목을 완료하면 같은 변경에서 이
+ledger로 옮긴다.
+
+<details>
+<summary>Baseline 이후 완료 ledger 펼치기</summary>
 
 | ID | 완료 결과 | 실행 증거 |
 |---|---|---|
@@ -366,7 +376,9 @@ evidence가 해당 완료 작업의 상세 경계와 실행 증거를 보존한�
 자신의 실행 시점과 scope만 증명하며, post-baseline code 변경 전체를 하나의 과거 audit가
 포괄한다고 해석하지 않는다.
 
-## Recommended Milestones
+</details>
+
+## 과거 Milestone 대응표
 
 | Milestone | Scope | Exit |
 |---|---|---|

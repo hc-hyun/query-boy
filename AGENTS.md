@@ -7,6 +7,21 @@
 
 Reference: [Ponytail](https://github.com/DietrichGebert/ponytail)
 
+## 60초 작업 시작
+
+아래는 탐색 순서 요약이다. 충돌할 때는 이 파일의 상세 규칙이 우선한다.
+
+1. [문서 안내](docs/README.md)와 [용어 사전](docs/glossary.md)에서 현재/기록/비활성 문서를 구분한다.
+2. [module index](docs/modules/README.md)에서 primary module 하나를 고른다.
+3. 그 module README의 `30초 요약`과 `집중해서 읽을 범위`를 따라 관련 code·test만 읽는다.
+4. 변경 지점부터 직접 consumer, transaction·cleanup, 실패 경로와 runnable test까지 확인한다.
+5. 다른 module이 쓰는 interface나 external/persisted/policy/lifecycle/procedure 의미를 바꿔야 하면
+   구현을 멈추고 영향과 승인 범위를 사용자에게 제시한다.
+
+현재 launch authority는 [ADR 0025](docs/decisions/0025-static-non-rls-first-launch.md)이고 실제 active
+작업은 [development TODO](docs/development-todo.md)에서 확인한다. 과거 roadmap이나 verification의
+`Complete`를 현재 serving 범위로 자동 해석하지 않는다.
+
 ## Module-Scoped Development
 
 Query Man은 하나의 deployable process를 유지하는 modular monolith다. 논리 module의 owner,

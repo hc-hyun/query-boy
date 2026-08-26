@@ -1,5 +1,23 @@
 # Operations Guide
 
+Status: 현재 first-launch runbook + 구현됐지만 비활성인 managed 운영 reference
+
+이 문서는 목적에 맞는 절만 읽습니다. 처음부터 끝까지 순서대로 실행하는 하나의 runbook이
+아닙니다. 낯선 말은 [용어 사전](glossary.md)을 참고하세요.
+
+| 상황 | 읽을 절 | 현재 launch에서 사용 |
+|---|---|---|
+| 실제 첫 오픈 준비·전환 | [Static Non-RLS First Launch](#static-non-rls-first-launch) | 예 |
+| 현재 log, core health·metric, query alert 조사 | [Logging](#logging-policy), [Health](#health-and-metrics), [Alert](#alert-policy) | 예 |
+| 로컬 Compose와 MCP 확인 | [Local Container Operations](#local-container-operations) | 예 |
+| 안전한 process 종료 | [Graceful Shutdown](#graceful-shutdown) | 예 |
+| Replica/usage 관측과 generation 전환 alert | [Health](#health-and-metrics), [Alert](#alert-policy) | 아니요 — managed 활성화 후에만 |
+| Control DB migration·복구 gate | [Control DB Migration](#control-db-migration-and-environment-isolation) | 아니요 — managed 활성화 후에만 |
+| Bootstrap에서 managed authority로 전환 | [Source Authority Cutover](#source-authority-startup-and-cutover) | 아니요 — 별도 승인 후에만 |
+
+현재 해야 할 작업은 [Active TODO](development-todo.md)의 `LAUNCH-02` 하나입니다. Managed 절은
+코드와 절차를 보존하기 위한 상세 reference이며, 설정만 켜서 current launch에 합치는 방법이 아닙니다.
+
 ## Static Non-RLS First Launch
 
 [ADR 0025](decisions/0025-static-non-rls-first-launch.md)의 static launch는 일반 production이나
@@ -123,6 +141,13 @@ Executor는 PostgreSQL transaction-local `application_name=query-man:<query_id>`
 
 ## Control DB Migration And Environment Isolation
 
+> Managed mode 전용입니다. ADR 0025 static first launch는 Control DB를 source authority로 사용하지
+> 않습니다. 실제 적용에는 managed 운영 활성화와 대상 환경 실행 승인이 별도로 필요합니다.
+
+<details>
+<summary>Managed Control DB migration·recovery 상세 절차 펼치기</summary>
+
+
 Control DB는 production, development와 integration test가 서로 다른 physical database/DSN을
 사용한다. Production 관리자는 대상 identity를 확인한 뒤 target database/schema/control object
 owner 권한과 `query_man_control_writer`를 create·alter하고 남은 membership을 회수할 cluster role
@@ -240,7 +265,15 @@ source business DB 복구를 대신하지 않는다. Release change record에는
 [disaster recovery runbook](disaster-recovery.md)의 실제 RPO/RTO와 환경별 Restore 3~7단계 결과를
 별도로 남긴다.
 
+</details>
+
 ## Source Authority Startup And Cutover
+
+> 구현된 managed capability의 전환 절차입니다. 현재 first launch에서는 실행하지 않습니다.
+
+<details>
+<summary>Bootstrap → managed 전환과 mutation reconciliation 펼치기</summary>
+
 
 Runtime은 process 전체의 source authority를 한 mode로 고정한다.
 
@@ -346,18 +379,26 @@ Success receipt와 source/verified-query state 변경은 한 transaction이다. 
 표시한다. 해당 replica는 poller가 같은 desired state를 적용할 때까지 degraded일 수 있으며
 replica별 convergence는 전용 admin replica endpoint에서 직접 확인한다.
 
+</details>
+
 ## Health And Metrics
 
 Public endpoint는 inventory를 노출하지 않는다.
 
-| Endpoint | Audience | External behavior |
-|---|---|---|
-| `GET /health` | Public/load balancer | Process liveness만 `ok` |
-| `GET /ready` | Public/load balancer | 아래 aggregate status만 반환; source ID 없음 |
-| `GET /admin/health` | Query Man admin | source별 `initializing`, `healthy`, `stale`, `unavailable` |
-| `GET /admin/metrics` | Query Man admin | source/component health와 bounded counter/total snapshot |
-| `GET /admin/sources/{source_id}/replicas` | Query Man admin | ever-registered replica별 desired/applied drift와 freshness |
-| `GET /admin/sources/{source_id}/usage` | Query Man admin | resource attempt/last-success와 31일 gateway lower-bound projection |
+| Endpoint | Audience | External behavior | 현재 static launch |
+|---|---|---|---|
+| `GET /health` | Public/load balancer | Process liveness만 `ok` | 사용 |
+| `GET /ready` | Public/load balancer | 아래 aggregate status만 반환; source ID 없음 | 사용 |
+| `GET /admin/health` | Query Man admin | source별 `initializing`, `healthy`, `stale`, `unavailable` | 사용 |
+| `GET /admin/metrics` | Query Man admin | source/component health와 bounded counter/total snapshot | 사용 |
+| `GET /admin/sources/{source_id}/replicas` | Query Man admin | ever-registered replica별 desired/applied drift와 freshness | 비활성 — managed 전용 |
+| `GET /admin/sources/{source_id}/usage` | Query Man admin | resource attempt/last-success와 31일 gateway lower-bound projection | 비활성 — managed 전용 |
+
+현재 `LAUNCH-02`에서는 앞의 네 endpoint만 사용합니다. 아래 replica/usage 설명은 managed mode를
+별도로 활성화한 환경을 위한 reference입니다.
+
+<details>
+<summary>Managed 전용 replica/usage endpoint 상세 펼치기</summary>
 
 Replica endpoint는 `limit` 1~100과 exclusive `after_replica_id` cursor를 받는다. 알려진 source는
 replica가 `pending`, `stale` 또는 `unavailable`이어도 200이며 다음을 확인한다.
@@ -391,6 +432,8 @@ rollup, missing metric과 failed observation을 0으로 해석하지 않는다. 
 연결되지 않아 `PROVIDER_NOT_CONFIGURED`만 표시하고 amount/currency를 제공하지 않는다. 이 endpoint의
 credential/connection, observability relation/grain, replica/cursor identity, caller/tenant,
 question/SQL/fingerprint/query ID 또는 raw 오류 노출은 incident로 취급한다.
+
+</details>
 
 Startup은 authority mode에서 등록된 source별 published-metadata 제공 경로를 각 metadata
 statement timeout 안에서 병렬 확인한다. Managed mode는 이 probe 전에 Control lifecycle scan을
@@ -476,15 +519,12 @@ MCP POST는 정확한 `application/json` media type 하나와 `mcp-protocol-vers
 version과 중복 Content-Type/Authorization/protocol header는 거부한다. 이전 initialize
 handshake를 위한 compatibility path는 운영하지 않는다.
 
-Codex CLI 0.149.0 client project는 `.codex/config.toml`의
-`features.mcp_2026_07_28 = true`로 이 protocol을 명시적으로 활성화한다. Client project에서
-`codex features list`를 실행해 값이 `true`인지 확인하고, token은 값 자체를 출력하지 않은 채
-현재 shell 환경에 존재하는지만 확인한다. `.env` 파일만 생성해서는 Codex process에 자동
-전달되지 않는다. Client `.env`에는 MCP token만 두며 database credential을 복사하지 않는다.
-`shell_environment_policy.filters.QUERY_MAN_CODEX_MCP_TOKEN = "exclude"`를 설정해 Codex가
-실행하는 shell command에는 token이 상속되지 않게 한다. Codex upgrade 뒤에는 실제 startup과
-`/mcp` tool inventory를 다시 확인하며, flag가 기본값이 되거나 제거되면 project override도
-삭제한다.
+MCP client는 Query Man이 지원하는 current protocol version으로 실제 initialize와 tool inventory를
+검증해야 합니다. Client별 feature flag와 설정 이름은 version에 따라 바뀔 수 있으므로 이 runbook에
+특정 CLI version을 고정하지 않습니다. `.env`를 만들었다고 이미 실행 중인 client process에 값이
+자동 전달되는 것은 아닙니다. MCP token만 필요한 process environment에 주입하고 database
+credential을 client project로 복사하지 않습니다. Client가 실행하는 임의 shell command에는 token이
+상속되지 않게 하며, client upgrade 뒤에는 `/mcp` startup과 tool inventory를 다시 확인합니다.
 
 지원 protocol의 JSON response 경로에서는 Query Man이 ASGI disconnect를 직접 감시해 실행 중
 query를 취소·rollback한다. Database statement/transaction timeout은 최종 실행 상한이다.
@@ -506,20 +546,21 @@ restart/OOM, FD와 RSS growth를 검사한다. 주간·수동 workflow에서 실
 
 ## Alert Policy
 
-| Signal | Warning | Critical / action |
-|---|---|---|
-| Metadata refresh failure | source별 5분에 3회 또는 `stale` 전이 | `unavailable` 즉시 on-call |
-| Replica convergence | expected slot의 non-empty drift 또는 `pending` 3 cadence | `stale`/`unavailable` 또는 missing expected slot이면 deployment/Control 연결 확인 |
-| Validation reject | 새 generation 1회 | 동일 source 3회 연속이면 publish 중지·마지막 정상 generation 확인 |
-| Query reject | 10분 baseline의 3배 또는 20/min | 공격/잘못된 client 배포 확인; response/audit reason별 조사 |
-| Queue pressure | 평균 queue가 timeout의 50% | 80% 또는 `query_pool_exhausted` 5회/5분이면 admission/budget 점검 |
-| Timeout | source별 5분에 3회 | `Δquery_timeout / Δquery_execution_started`가 5분간 5% 초과 시 expensive fingerprint와 DB activity 확인 |
-| Truncation | `Δquery_truncated / Δquery_execution_succeeded`가 10분간 10% | 25%면 질문/aggregation/limit policy 검토; limit 즉시 상향 금지 |
-| Forced shutdown cancel | 1회 | grace, 장기 query와 배포 drain 순서 조사 |
+| Signal | 적용 범위 | Warning | Critical / action |
+|---|---|---|---|
+| Metadata refresh failure | 현재 static launch | source별 5분에 3회 또는 `stale` 전이 | `unavailable` 즉시 on-call |
+| Replica convergence | managed 전용 — 현재 비활성 | expected slot의 non-empty drift 또는 `pending` 3 cadence | `stale`/`unavailable` 또는 missing expected slot이면 deployment/Control 연결 확인 |
+| Validation reject | managed generation 전환 전용 — 현재 비활성 | 새 generation 1회 | 동일 source 3회 연속이면 publish 중지·마지막 정상 generation 확인 |
+| Query reject | 현재 static launch | 10분 baseline의 3배 또는 20/min | 공격/잘못된 client 배포 확인; response/audit reason별 조사 |
+| Queue pressure | 현재 static launch | 평균 queue가 timeout의 50% | 80% 또는 `query_pool_exhausted` 5회/5분이면 admission/budget 점검 |
+| Timeout | 현재 static launch | source별 5분에 3회 | `Δquery_timeout / Δquery_execution_started`가 5분간 5% 초과 시 expensive fingerprint와 DB activity 확인 |
+| Truncation | 현재 static launch | `Δquery_truncated / Δquery_execution_succeeded`가 10분간 10% | 25%면 질문/aggregation/limit policy 검토; limit 즉시 상향 금지 |
+| Forced shutdown cancel | 현재 static launch | 1회 | grace, 장기 query와 배포 drain 순서 조사 |
 
 외부 collector를 구성하면 현재 endpoint에서 execution/reject/timeout/truncation rate,
 queue/elapsed 평균과 source/component status를 source별로, shutdown outcome을 replica별로
-계산할 수 있다. Replica observation의 exact stale age는 전용 source replica endpoint에만 있다.
+계산할 수 있다. Managed mode의 replica observation exact stale age는 현재 비활성인 전용 source
+replica endpoint에만 있다.
 Admin metrics는 active pool gauge, row/byte distribution과 percentile을 제공하지 않으므로 그
 panel이 필요하면 먼저 계측을 추가한다. Public dashboard에는 source label을 노출하지 않는다.
 

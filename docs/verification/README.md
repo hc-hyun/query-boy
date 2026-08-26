@@ -1,5 +1,7 @@
 # Verification Evidence Index
 
+Status: 기록 색인 — 실행 지침이나 현재 전체 완료 판정이 아님
+
 이 파일은 탐색용 색인이며 현재 구현의 단일 완료 증거가 아니다. 각 evidence 문서는 기록 당시
 실행한 범위와 사실을 보존하는 immutable record다. 과거 기록을 현재 상태에 맞춰 수정·삭제하거나
 상태를 재분류하지 않는다. 정정이 필요하면 원문을 유지하고 날짜, 대상 원문과 provenance를 명시한 새
@@ -9,6 +11,26 @@
 기록으로 대체되어도 이전 실행 사실은 삭제하지 않는다. `Open` finding과 strict xfail은 PASS나 위험 수용이
 아니다. 현재 지원 상태는 [architecture](../architecture.md), 활성 작업은 [development TODO](../development-todo.md),
 완료 ledger는 [implementation roadmap](../implementation-roadmap.md)에서 확인한다.
+
+원문에 `Status:` 줄이 없으면 아래 표에 `미기재`라고 표시합니다. 이는 실패나 미완료라는 뜻이
+아니라, 당시 문서가 별도 status field를 쓰지 않았다는 뜻입니다.
+
+## 빠르게 찾기
+
+| 찾는 내용 | 먼저 볼 기록 | 현재 해석 |
+|---|---|---|
+| 현재 static first launch | [2026-08-26 static launch](2026-08-26-static-first-launch.md) | Repository acceptance 완료, protected `LAUNCH-02` 남음 |
+| 현재 시간·revision 정책 | [2026-08-25 canonical time](2026-08-25-canonical-time-stability.md) | Repository 반영 완료, 환경별 cutover는 별도 |
+| Container와 MCP 경계 | [container runtime](2026-08-23-container-runtime.md), [MCP server](2026-08-23-mcp-server-assurance.md) | 당시 실행 증거이며 최신 CI로 다시 확인 필요 |
+| Managed Control Plane | [managed startup](2026-08-23-managed-source-startup.md), [control recovery](2026-08-25-control-recovery-acceptance.md) | Capability는 보존하지만 현재 launch에서는 비활성 |
+| 현재 열린 보안 finding | [RLS policy drift](2026-08-26-rls-policy-drift.md) | Finding은 유효하지만 RLS serving 자체는 parked; 현재는 전면 차단 |
+| 일정에 없는 연구 | [lower-track prework](2026-08-26-lower-track-contract-prework.md) | 구현·우선순위·변경 승인 아님 |
+
+아래 전체 표는 파일 누락을 막기 위한 날짜순 원장입니다. `Complete`라는 단어만 보지 말고 마지막
+`기록 범위` 열에서 무엇을 증명하고 무엇을 증명하지 않는지 확인하세요.
+
+<details>
+<summary>전체 immutable evidence 원장 펼치기</summary>
 
 | File | 문서 제목 | 문서 자체 상태 | 기록 범위 |
 |---|---|---|---|
@@ -45,3 +67,5 @@
 | [2026-08-26-lower-track-contract-prework.md](2026-08-26-lower-track-contract-prework.md) | Lower-Track Boundary Prework Verification | 미기재 | COST/TRACE 제안의 disposable read-only prework; 구현, 우선순위 시작 또는 사용자 승인이 아님 |
 | [2026-08-26-rls-policy-drift.md](2026-08-26-rls-policy-drift.md) | RLS Policy Drift Security Finding — 2026-08-26 | `Open — boundary decision and fail-closed implementation required` | Hidden base-policy 완화 또는 RLS disable 뒤 cross-tenant row가 성공하는 열린 보안 결함과 strict xfail |
 | [2026-08-26-static-first-launch.md](2026-08-26-static-first-launch.md) | Static Non-RLS First-Launch Acceptance — 2026-08-26 | `Repository acceptance complete; protected environment execution pending LAUNCH-02` | ADR 0025 `LAUNCH-01-A` 구현 commit의 two-source, RLS quarantine, reader/OID policy, container와 CI acceptance |
+
+</details>

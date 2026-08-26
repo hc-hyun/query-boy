@@ -74,8 +74,10 @@ interface와 forwarding layer를 미리 만들 위험이 있다. 필요한 것�
 
 - Agent는 담당 module을 중심으로 읽고 작업하면서도 직접 consumer와 안전 경계를 놓치지 않는다.
 - 병렬 작업은 합의된 change-set baseline을 기준으로 분리되고 의미 변경 race를 피한다.
-- 새 PostgreSQL source를 기존 manifest/budget/reader/query interface와 policy 안에서 추가하는 일은
-  data onboarding이며 module interface나 external API 변경 또는 배포를 요구하지 않는다.
+- Managed mode를 별도로 활성화한 환경에서 새 PostgreSQL source를 기존
+  manifest/budget/reader/query interface와 policy 안에 추가하는 일은 data onboarding이며 module
+  interface나 external API 변경 또는 배포를 요구하지 않는다. ADR 0025 static launch의 새 source는
+  별도 inventory review와 재배포가 필요하다.
 - Module 문서와 transition map을 code 변경과 함께 유지해야 하는 문서 비용이 생긴다.
 - `app.py`, `models.py`, `metadata_store.py` 같은 shared file은 물리 분리 전까지 coordination이
   필요하다.

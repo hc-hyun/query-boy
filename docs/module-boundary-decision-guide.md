@@ -10,6 +10,12 @@ Last reviewed: 2026-08-26
 Approved: 2026-08-24 — `D0-A`, `D1-A`, `D2-A`, `D3-A`, `D4-A`, `D5-A`와
 [모든 권장 선택에 공통으로 유지할 불변조건](#모든-권장-선택에-공통으로-유지할-불변조건)
 
+정정 메모(2026-08-26 문서 감사): 아래 완료 서술의 `CTRL-06A`는 현재 완료 ID `CTRL-06`의
+오기입니다. D4 절의 lifecycle 목록은 D4 결정·구현 시점 snapshot이며, 이후 승인된 `CTRL-07A`에서
+`RuntimeCatalogProvider.observe_resources`가 추가됐습니다. 아래 과거 승인 회신 예시와 우선순위
+서술은 다시 실행할 현재 지침이 아니며, 새 작업은 [Active TODO](development-todo.md)와
+[module index](modules/README.md)를 따릅니다. Frozen 원문은 이 정정 메모 아래에 보존합니다.
+
 ## 이 문서의 목적
 
 Query Man은 하나의 process로 배포되지만, 개발할 때는 일곱 개 논리 module이 각자 공개한
