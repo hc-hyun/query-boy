@@ -48,28 +48,10 @@ docker compose down
 [docs/development-todo.md](docs/development-todo.md)를 참고합니다. Module 단위로 작업할 때는
 [module boundaries](docs/modules/README.md)에서 owner, interface·별도 경계와 집중해서 읽을 범위를 먼저 확인합니다.
 승인된 module boundary 강화 선택지와 아직 완료되지 않은 구현 상태는
-[module boundary decision guide](docs/module-contract-decision-guide.md)와 active TODO에서 추적합니다.
-기존 production baseline 증거는
-[completion audit](docs/verification/2026-08-23-completion-audit.md), 그 이후 refactoring baseline과 당시 운영 경계는
-[refactoring assurance](docs/verification/2026-08-23-refactoring-assurance.md), 컨테이너 실행 증거는
-[container runtime audit](docs/verification/2026-08-23-container-runtime.md), 두 replica soak 증거는
-[multi-replica soak audit](docs/verification/2026-08-23-mcp-multi-replica-soak.md), managed authority
-전환 증거는
-[managed source startup audit](docs/verification/2026-08-23-managed-source-startup.md), shared query/admin
-경계는 [shared access audit](docs/verification/2026-08-23-shared-access.md), 현재 source catalog와 mutation
-receipt 증거는 각각
-[source management catalog audit](docs/verification/2026-08-23-source-management-catalog.md)과
-[source mutation receipt audit](docs/verification/2026-08-23-source-mutation-receipts.md), replica convergence
-증거는 [runtime replica observation audit](docs/verification/2026-08-25-runtime-replica-observations.md),
-내부 resource/gateway usage 수집 증거는
-[resource and gateway observation audit](docs/verification/2026-08-25-resource-and-gateway-observations.md),
-operator usage projection 증거는
-[usage projection audit](docs/verification/2026-08-25-usage-projection.md), 격리 Control archive와
-key/zero-bootstrap/two-replica 복구 증거는
-[control recovery acceptance](docs/verification/2026-08-25-control-recovery-acceptance.md)을 참고합니다.
-각 audit는
-적힌 scope의 실행 시점 증거이며, 나중 audit을 모두 포괄하는 단일 “현재 최종” 증거로
-해석하지 않습니다.
+[module boundary decision guide](docs/module-boundary-decision-guide.md)와 active TODO에서 추적합니다.
+과거 실행 증거는 [verification evidence index](docs/verification/README.md)에서 전체 목록을
+확인합니다. 각 기록은 적힌 scope의 실행 시점만 증명하며 현재 전체 상태를 자동으로 증명하지
+않습니다.
 
 ## Metadata And Query API
 

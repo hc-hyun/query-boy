@@ -12,6 +12,42 @@ from tests.helpers import ROOT_DIRECTORY
 
 ROADMAP = ROOT_DIRECTORY / "docs" / "implementation-roadmap.md"
 ARCHITECTURE = ROOT_DIRECTORY / "docs" / "architecture.md"
+VERIFICATION_DIRECTORY = ROOT_DIRECTORY / "docs" / "verification"
+VERIFICATION_INDEX = VERIFICATION_DIRECTORY / "README.md"
+EXPECTED_VERIFICATION_EVIDENCE_NAMES = (
+    "2026-08-22-safe-query.md",
+    "2026-08-23-column-disclosure.md",
+    "2026-08-23-completion-audit.md",
+    "2026-08-23-container-runtime.md",
+    "2026-08-23-control-schema-migrations.md",
+    "2026-08-23-managed-source-startup.md",
+    "2026-08-23-mcp-multi-replica-soak.md",
+    "2026-08-23-mcp-server-assurance.md",
+    "2026-08-23-mcp.md",
+    "2026-08-23-metadata-publishing.md",
+    "2026-08-23-metadata-quality.md",
+    "2026-08-23-no-deploy-onboarding.md",
+    "2026-08-23-operations.md",
+    "2026-08-23-physical-catalog.md",
+    "2026-08-23-quality-levels.md",
+    "2026-08-23-refactoring-assurance.md",
+    "2026-08-23-release-acceptance.md",
+    "2026-08-23-shared-access.md",
+    "2026-08-23-source-control-store.md",
+    "2026-08-23-source-extension.md",
+    "2026-08-23-source-management-catalog.md",
+    "2026-08-23-source-mutation-receipts.md",
+    "2026-08-23-tenant-isolation.md",
+    "2026-08-25-canonical-time-stability.md",
+    "2026-08-25-control-recovery-acceptance.md",
+    "2026-08-25-resource-and-gateway-observations.md",
+    "2026-08-25-runtime-replica-observations.md",
+    "2026-08-25-source-database-corners.md",
+    "2026-08-25-source-onboarding-skill.md",
+    "2026-08-25-usage-projection.md",
+    "2026-08-26-lower-track-contract-prework.md",
+    "2026-08-26-rls-policy-drift.md",
+)
 BASELINE_AUDIT = (
     ROOT_DIRECTORY / "docs" / "verification" / "2026-08-23-completion-audit.md"
 )
@@ -43,7 +79,7 @@ SHARED_ACCESS_ADR = (
 )
 MODULE_INDEX = ROOT_DIRECTORY / "docs" / "modules" / "README.md"
 MODULE_BOUNDARY_DECISION_GUIDE = (
-    ROOT_DIRECTORY / "docs" / "module-contract-decision-guide.md"
+    ROOT_DIRECTORY / "docs" / "module-boundary-decision-guide.md"
 )
 MODULE_GOVERNANCE_ADR = (
     ROOT_DIRECTORY
@@ -305,7 +341,7 @@ CRITICAL_SHARED_WRITER_REFERENCES = (
     "tests/test_assurance_cli.py",
     "docs/development-todo.md",
     "docs/implementation-roadmap.md",
-    "docs/module-contract-decision-guide.md",
+    "docs/module-boundary-decision-guide.md",
 )
 LOCKED_BASELINE_DESCRIPTIONS = {
     "SQL-04": (
@@ -459,7 +495,7 @@ def test_production_status_and_completion_audits_cover_every_roadmap_group() -> 
     assert CONTROL_RECOVERY_AUDIT.name in roadmap
     assert CONTROL_RECOVERY_AUDIT.name in architecture
     assert CONTROL_RECOVERY_AUDIT.name in source_management_plan
-    assert CONTROL_RECOVERY_AUDIT.name in readme
+    assert VERIFICATION_INDEX.relative_to(ROOT_DIRECTORY).as_posix() in readme
     for prefix, count in EXPECTED_ID_COUNTS.items():
         audit = {
             "DEP": container_audit,
@@ -1617,29 +1653,36 @@ def test_module_interface_terms_are_narrow_and_other_boundaries_stay_protected()
         ROOT_DIRECTORY / "AGENTS.md",
         ROOT_DIRECTORY / "README.md",
         ARCHITECTURE,
+        ROOT_DIRECTORY / "docs" / "mvp.md",
         ROOT_DIRECTORY / "docs" / "operations.md",
         ROOT_DIRECTORY / "docs" / "disaster-recovery.md",
+        ROOT_DIRECTORY / "docs" / "query-cost-control.md",
+        ROOT_DIRECTORY / "docs" / "source-extension-checklist.md",
+        ROOT_DIRECTORY / "docs" / "source-management-plane.md",
+        ROOT_DIRECTORY / "docs" / "source-onboarding.md",
+        ROOT_DIRECTORY / "docs" / "source-onboarding-skill-plan.md",
+        ROOT_DIRECTORY / "docs" / "verified-queries.md",
         DEVELOPMENT_TODO,
         ROADMAP,
         MODULE_BOUNDARY_DECISION_GUIDE,
         MODULE_INDEX,
-        MODULE_GOVERNANCE_ADR,
-        ROOT_DIRECTORY / "docs" / "decisions" / "0002-guarded-query-contract.md",
-        CENTRAL_SOURCE_ADR,
-        LOSSLESS_SCALAR_ADR,
-        DATABASE_NATIVE_COST_ADR,
-        WORKFLOW_TRACE_ADR,
-        DATABASE_NATIVE_ALERT_ADR,
-        RLS_POLICY_ATTESTATION_ADR,
+        *sorted((ROOT_DIRECTORY / "docs" / "decisions").glob("*.md")),
         CONTROL_RECOVERY_AUDIT,
         SOURCE_DATABASE_CORNERS_AUDIT,
         USAGE_PROJECTION_AUDIT,
         LOWER_TRACK_BOUNDARY_PREWORK,
         RLS_POLICY_DRIFT_AUDIT,
+        VERIFICATION_INDEX,
+        ROOT_DIRECTORY / "skills" / "query-man-source-onboarding" / "SKILL.md",
+        ROOT_DIRECTORY
+        / "skills"
+        / "query-man-source-onboarding"
+        / "references"
+        / "plan-format.md",
+        ROOT_DIRECTORY / "skills" / "query-man-text-to-sql" / "SKILL.md",
         *(MODULE_INDEX.parent / module_name / "README.md" for module_name in MODULE_NAMES),
     )
     allowed_historical_names_and_identifiers = (
-        "module-contract-decision-guide.md",
         "0018-module-ownership-and-contract-governance.md",
         "0002-guarded-query-contract.md",
         "2026-08-26-lower-track-contract-prework.md",
@@ -1648,6 +1691,7 @@ def test_module_interface_terms_are_narrow_and_other_boundaries_stay_protected()
         "control.verified_query_contracts",
         "query_man_cost_contract_probe",
         "query_man_monitor_contract_probe",
+        "verified_query_contracts",
     )
     for path in terminology_documents:
         document = path.read_text(encoding="utf-8")
@@ -1751,6 +1795,42 @@ def _markdown_heading_anchors(path: Path) -> set[str]:
         occurrences[base] = occurrence + 1
         anchors.add(base if occurrence == 0 else f"{base}-{occurrence}")
     return anchors
+
+
+def test_verification_index_lists_every_immutable_record_once() -> None:
+    index = VERIFICATION_INDEX.read_text(encoding="utf-8")
+    evidence_names = {
+        path.name
+        for path in VERIFICATION_DIRECTORY.glob("*.md")
+        if path != VERIFICATION_INDEX
+    }
+    rows = re.findall(
+        r"^\| \[([^\]]+\.md)\]\(([^)]+\.md)\) \| ([^|]+) \| ([^|]+) \|",
+        index,
+        re.MULTILINE,
+    )
+    indexed_names = [target for _label, target, _title, _status in rows]
+
+    assert evidence_names == set(EXPECTED_VERIFICATION_EVIDENCE_NAMES)
+    assert set(indexed_names) == evidence_names
+    assert len(indexed_names) == len(evidence_names)
+    assert all(indexed_names.count(name) == 1 for name in evidence_names)
+    assert "탐색용 색인이며 현재 구현의 단일 완료 증거가 아니다" in index
+    assert "immutable record" in index
+    assert "`Open` finding과 strict xfail은 PASS나 위험 수용이" in index
+
+    for label, name, indexed_title, indexed_status in rows:
+        assert label == name
+        evidence = (VERIFICATION_DIRECTORY / name).read_text(encoding="utf-8")
+        title_match = re.search(r"^# (.+)$", evidence, re.MULTILINE)
+        assert title_match is not None
+        assert indexed_title.strip() == title_match.group(1).strip()
+
+        status_match = re.search(r"^Status: (.+)$", evidence, re.MULTILINE)
+        expected_status = "미기재" if status_match is None else status_match.group(1).strip()
+        assert indexed_status.replace("`", "").strip() == expected_status.replace(
+            "`", ""
+        ).strip()
 
 
 def test_local_markdown_links_resolve() -> None:

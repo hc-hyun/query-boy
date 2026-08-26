@@ -12,9 +12,10 @@ handoff with `mutation_count: 0`.
 
 Route ordinary data questions to the `query-man-text-to-sql` workflow instead of producing an onboarding
 plan. Treat user-specific source access, a new budget profile, automated publish, credential handling, and
-production YAML write-back as unsupported contract work, not as fields to improvise.
+production YAML write-back as access-policy, versioned-configuration, workflow, secret-boundary, or
+authority-model changes outside this plan-only Skill's authority, not as fields to improvise.
 
-## Read The Current Contracts
+## Read The Current Policies And Procedures
 
 Read [source onboarding](../../docs/source-onboarding.md) for every onboarding plan and
 [plan format](references/plan-format.md) before writing the result.

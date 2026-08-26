@@ -12,7 +12,7 @@ source나 metadata revision을 변경해서도 안 된다.
 
 ## Decision
 
-관리자 source 계약은 manifest document와 reader secret을 별도 필드로 받는다. Manifest는
+관리자 source input format은 manifest document와 reader secret을 별도 필드로 받는다. Manifest는
 filesystem과 같은 strict schema, source-scoped credential 이름, budget, overlay 검증을
 재사용한다. 현재 schema version은 2이며 `provenance.owner`, `provenance.environment`,
 `provenance.database_migration_ref`를 관리자가 모두 명시한다. 개발 중 schema cutover이므로 이전
@@ -59,7 +59,7 @@ database TEMP와 공개 schema CREATE 금지를 검사한다. Fixture validation
 교차 DB 권한도 별도로 검사한다.
 
 Disabled source의 credential rotation은 거부한다. Rollback은 current source identity,
-credential, metadata와 verified contract를 재검증한 뒤 이전 generation을 활성화하고 metadata
+credential, metadata와 verified-query record를 재검증한 뒤 이전 generation을 활성화하고 metadata
 automatic publish를 pin한다. 원인 점검 뒤 operator가 resume endpoint를 호출하기 전에는 새
 source generation publish도 허용하지 않는다.
 
@@ -72,9 +72,9 @@ source generation publish도 허용하지 않는다.
   backup만으로 복구할 수 없고, 현재 single-key 형식에서는 online master-key rotation도
   지원하지 않는다. Versioned key ID, dual-key read와 immutable history re-encryption migration을
   구현하기 전에는 key를 변경하지 않는다.
-- Runtime poller와 관리자 HTTP endpoint는 이 저장 계약을 사용한다. 각 runtime은 새
+- Runtime poller와 관리자 HTTP endpoint는 이 persisted generation model과 lifecycle rules를 사용한다. 각 runtime은 새
   generation을 검증한 뒤 source별 catalog/query pool과 metadata cache를 교체한다.
-- 다른 endpoint로 전환하려면 별도 source ID와 새 verified contract를 사용해야 한다.
+- 다른 endpoint로 전환하려면 별도 source ID와 새 verified-query record를 사용해야 한다.
 - Owner/환경/DB migration provenance와 secret-free generation read API는 같은 immutable manifest를
   재사용한다. Actor/reason/receipt audit와 replica 상태는 ADR 0016의 `CTRL-05`/`CTRL-06`으로
   구현됐으며 내부 규모/사용량 observation은 `CTRL-07A`, public availability/usage projection은

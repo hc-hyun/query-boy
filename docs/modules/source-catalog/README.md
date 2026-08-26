@@ -56,7 +56,7 @@ type 이동은 동작 변경과 섞지 않는 별도 mechanical refactoring으�
 제공한다. Concrete `SourceRegistry`는 두 Protocol을 구조적으로 구현하고 기존 다섯 method와
 `load`를 그대로 제공한다. 이는 wrapper나 runtime sandbox가 아니라 일반 consumer의 annotation을
 좁혀 accidental mutation을 mypy와 review에서 찾는 개발 경계다. 승인 범위와 compatibility는
-[결정 가이드 D2](../../module-contract-decision-guide.md#d2-source-조회와-수정-capability)와
+[결정 가이드 D2](../../module-boundary-decision-guide.md#d2-source-조회와-수정-capability)와
 [ADR 0018](../../decisions/0018-module-ownership-and-contract-governance.md)에 기록한다.
 
 ## 제공 인터페이스와 소유 경계

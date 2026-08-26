@@ -28,7 +28,7 @@ Query Man에는 이미 source가 중앙의 `budget_profile` 하나를 선택하�
   capability로 충분하며 viewer/operator/approver 역할 계층은 만들지 않는다.
 - Stable `caller_id`와 `tenant_id`는 audit와 기존 RLS source의 trusted session context를 위해
   유지한다. 다만 source visibility, resource tier, quota 또는 비용 집계의 선택 key로 사용하지
-  않는다. Source-native RLS는 이 결정과 별개의 row-isolation 계약이다.
+  않는다. Source-native RLS는 이 결정과 별개의 row-isolation boundary다.
 - 사용자/조직별 source ACL, tier override, quota, fairness와 chargeback은 요구가 생긴 뒤 별도
   ADR로 설계한다. 지금은 이를 위한 assignment table, nullable scope column 또는 확장용 API를
   미리 만들지 않는다.

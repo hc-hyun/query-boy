@@ -32,20 +32,20 @@ Codex가 이 절차를 반복 가능하게 안내할 때는 repository의
 [`query-man-source-onboarding`](../skills/query-man-source-onboarding/SKILL.md) Skill을 사용한다.
 [source onboarding Skill plan](source-onboarding-skill-plan.md)과
 [acceptance evidence](verification/2026-08-25-source-onboarding-skill.md)가 책임·권한·검증 gate를
-기록한다. Skill은 plan-only이며 이 문서와 server-side validation이 계속 기준 계약이다.
+기록한다. Skill은 plan-only이며 이 문서의 절차와 server-side validation이 계속 현재 기준이다.
 
 ## Source Authority And Artifacts
 
 Production hot-added source의 canonical manifest generation, active/deactivated state, metadata
-snapshot과 verified contract는 Control DB가 authority다. Publish가 `config/sources` YAML, Git
+snapshot과 verified-query record는 Control DB가 authority다. Publish가 `config/sources` YAML, Git
 commit이나 PR을 만들지 않으며 Control DB와 repository를 양방향 동기화하지 않는다. 한곳에서
-ownership, state, history, size와 cost를 조회하는 목표 계약은
+ownership, state, history, size와 cost를 조회하는 management 목표와 범위는
 [source management plane](source-management-plane.md)을 따른다.
 
 | Artifact | Authority and location |
 |---|---|
 | Canonical source generation and active state | Control DB |
-| Metadata snapshot and hot-added verified contract | Control DB |
+| Metadata snapshot and hot-added verified-query records | Control DB |
 | Encrypted reader credential | Control DB; plaintext/master key 제외 |
 | Plaintext credential and master key | External secret system/runtime secret |
 | Curated view, reader role and grants | Source DB and DB-owner migration system |
@@ -71,7 +71,7 @@ verified file을 열지 않으며 Control DB lifecycle이 없는 file source를 
 | `bootstrap` (default) | Control DSN/key 금지; anonymous/query-only token 또는 v2 policy | Local/CI repository fixture |
 | `managed` | Control DSN/key, stable replica ID와 v2 access policy 필수; API token/anonymous 금지 | Production Control DB authority와 hot-add |
 
-Managed mode에는 source별 file fallback이나 verified-contract merge가 없다. Budget profile과 access
+Managed mode에는 source별 file fallback이나 filesystem verified-query dataset과 Control DB record의 merge가 없다. Budget profile과 access
 policy는 계속 deployment configuration에서 읽는다. Source/verified directory는 없어도 되지만
 budget file과 runtime secret은 있어야 한다.
 
@@ -90,8 +90,8 @@ budget file과 runtime secret은 있어야 한다.
    `POST /admin/sources/{source_id}/verified-queries`로 실행·저장한다. Revision이나 result invariant가
    다르면 자동 보정하지 않고 이관을 중단한다.
 5. Semantic/budget 내용은 유지하고 `minimum_quality_level: L2`로 publish한다. Quality minimum은
-   revision hash 재료가 아니므로 같은 revision contract를 사용할 수 있다.
-6. 필요한 source와 contract, intended active/deactivated state를 Control DB에서 확인하고 serving
+   revision hash 재료가 아니므로 같은 revision의 verified-query baseline을 사용할 수 있다.
+6. 필요한 source와 verified-query coverage, intended active/deactivated state를 Control DB에서 확인하고 serving
    replica를 `QUERY_MAN_SOURCE_MODE=managed`와 slot별 `QUERY_MAN_REPLICA_ID`로 재시작한다. File을
    제거하거나 같은 ID의 seed를 남겨도 inventory, rollback과 deactivate 결과가 바뀌지 않는지
    확인한다.
@@ -178,7 +178,7 @@ capability superset이다.
 | Receipt lookup | `GET /admin/mutations/{idempotency_key}` | Timeout 뒤 terminal success/rejection을 authoritative하게 조회 |
 | Stage + publish | `PUT /admin/sources/{source_id}` | Body의 `manifest`, `credential`을 분리하고 path ID 일치 검증 |
 | Credential rotation | `POST /admin/sources/{source_id}/credential` | Enabled/unpinned source에서 새 credential staging 후 generation 교체 |
-| Verified contract | `POST /admin/sources/{source_id}/verified-queries` | 현재 revision에서 guarded SQL 결과와 expected invariant 일치 |
+| Verified-query record publish | `POST /admin/sources/{source_id}/verified-queries` | 현재 revision에서 guarded SQL 결과와 expected invariant 일치 |
 | Rollback | `POST /admin/sources/{source_id}/rollback/{generation}` | 대상 profile, secret, metadata와 quality를 먼저 재검증 |
 | Resume metadata publish | `POST /admin/sources/{source_id}/metadata/resume` | Rollback 점검 완료 후 metadata pin만 명시적으로 해제 |
 | Deactivate | `DELETE /admin/sources/{source_id}` | Active pointer만 disable하고 immutable history 유지 |
@@ -187,7 +187,7 @@ Public `/sources`는 모든 인증 query caller가 공유하는 active source �
 아니다. Admin read API는 raw manifest 대신 명시적으로 허용한 필드만 반환하며 credential,
 secret locator, semantic 자유형 text, verified question/SQL과 metadata snapshot을 포함하지 않는다.
 Generation history는 immutable manifest 생성 순서이고 mutation history는 publish, credential
-rotation, verified contract, rollback, metadata resume와 deactivate의 append-only chronology다.
+rotation, verified-query publish, rollback, metadata resume와 deactivate의 append-only chronology다.
 Request hash는 keyed HMAC이라 payload를 복원할 수 없고 response/audit에는 credential, manifest,
 question과 SQL이 없다.
 
@@ -239,7 +239,7 @@ Registry와 metadata refresh는 다음 조건을 만족하지 않으면 source�
 
 Manifest의 `minimum_quality_level`은 publish 가능한 최소 수준을 선언한다. `L0`는 물리
 catalog 기반 best-effort, `L1`은 모든 공개 relation의 설명·grain과 시간 역할이 완성된
-상태, `L2`는 현재 metadata revision과 일치하는 verified query 계약까지 통과한 상태다.
+상태, `L2`는 현재 metadata revision과 일치하는 verified-query record 검증까지 통과한 상태다.
 요구 수준에 미달한 refresh나 rollback은 거부되며 기존 active revision은 유지된다.
 
 Manifest v2의 provenance에는 운영 팀 slug, source DB environment와 외부 DB migration/change
@@ -259,7 +259,7 @@ Bootstrap manifest의 선택적 `host_env`와 `port_env`는 host/Compose처럼 d
 publish는 publisher 환경에서 실제 host와 port를 한 번 resolve해 저장하므로 다른 replica가
 자신의 환경 변수로 published endpoint를 바꾸지 않는다. 같은 `source_id`의 host, port,
 database, user, TLS 설정과 environment는 이후 generation에서도 고정한다. 다른 endpoint나
-environment는 새 source ID로 등록하고 현재 데이터에 대한 verified contract를 다시 검토한다.
+environment는 새 source ID로 등록하고 현재 데이터에 대한 verified-query baseline을 다시 검토한다.
 Credential 값만 바꾸는 rotation은 metadata revision을 바꾸지 않는다.
 
 Reader staging은 login/non-superuser, 생성·복제·상속·RLS 우회 금지, 유한한 양수 connection
@@ -345,19 +345,20 @@ Observation 실패는 registry, query, readiness나 mutation receipt를 바꾸�
 3. 실제 사용자 질문과 deterministic SQL을 준비한다. SQL의 expected relation, ordered
    columns, row count와 canonical result hash를 별도 review한다. Aware datetime은 UTC `+00:00`,
    naive datetime/date/time/timetz는 저장된 ISO 표현을 사용한다.
-4. 현재 L1 revision을 포함한 contract를 verified-query admin endpoint에 제출한다. Gateway
-   budget, AST/object policy, 결과 invariant 중 하나라도 실패하면 contract는 저장되지 않는다.
+4. 현재 L1 revision을 포함한 verified-query input을 verified-query admin endpoint에 제출한다. Gateway
+   budget, AST/object policy, 결과 invariant 중 하나라도 실패하면 record는 저장되지 않는다.
 5. Semantic overlay는 그대로 두고 `minimum_quality_level`만 L2로 바꿔 다시 publish한다.
    Quality minimum은 revision hash 재료가 아니므로 2단계와 같은 revision이 L2 gate를 통과한다.
    반면 source profile의 execution budget과 revision-scoped policy 변경은 revision 재료이므로
    새 revision에서 verified query를 다시 실행·승인해야 한다.
    Canonical-time/SQL policy처럼 모든 metadata revision이 바뀌는 전환은 current와 rollback-preserved
-   contract 전체를 새 revision에서 재실행하며 이전 immutable row를 삭제하지 않는다.
+   verified-query baseline 전체를 새 revision에서 재실행·재발행하며 이전 immutable row를 삭제하지 않는다.
 6. `/meta`와 MCP `get_context`의 `quality_level=L2`, 실제 query 결과, `/sources` visibility를
    확인한다. Replica endpoint에서 다른 replica도 report cadence 뒤 같은 generation/state/metadata
    revision으로 `available`, `drift=[]`인지 확인한다.
 7. 문제가 있으면 마지막 정상 source generation으로 rollback한다. Rollback 대상의 encrypted
-   credential, manifest, metadata와 현재 verified contract가 먼저 재검증되므로 실패한 복구가
+   Rollback 대상의 encrypted credential, manifest, metadata와 그 대상 metadata revision에 대응하는
+   verified-query record가 먼저 재검증되므로 실패한 복구가
    active pointer를 바꾸지 않는다. 원인 점검과 현재 source 재검증을 마친 뒤에만
    `POST /admin/sources/{source_id}/metadata/resume`으로 automatic metadata publish를 재개한다.
 
@@ -396,7 +397,7 @@ relation/column의 `sql_name`을 사용해야 한다.
   이 보류 대상이 아니다.
 - [Proposed ADR 0024](decisions/0024-rls-policy-drift-attestation.md)의 `RLS-01-A` target은 RLS Catalog/
   Query connection startup client UTF8과 PostgreSQL-18/server/client UTF8 admission도 요구한다. 이는
-  아직 승인·구현된 onboarding contract가 아니므로 현재는 위 all-RLS publish/route hold만 유지한다.
+  아직 승인·구현된 RLS onboarding/admission 정책이 아니므로 현재는 위 all-RLS publish/route hold만 유지한다.
   A가 exact 승인되면 read-only inventory가 non-UTF8 RLS database를 stop condition으로 보고하고,
   별도 권한과 승인을 받은 operator만 unroute/deactivate 또는 source별 DB-owner data migration/
   re-onboarding plan과 rollback을 실행한다. Plan-only onboarding Skill은 mutation하지 않는다.

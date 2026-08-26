@@ -4,7 +4,7 @@ Status: Completed baseline; production architecture verified separately
 
 ## Objective
 
-서로 다른 업무 의미와 schema를 가진 두 PostgreSQL source를 하나의 gateway 계약으로
+서로 다른 업무 의미와 schema를 가진 두 PostgreSQL source를 하나의 공통 gateway API와 실행 규칙으로
 조회할 수 있는지 검증한다.
 
 | Source ID | Database | Purpose |
@@ -90,7 +90,7 @@ View와 column의 `COMMENT ON` metadata에는 grain, 시간 의미, nullable 의
 join key를 기록한다. `get_context`는 이 metadata를 그대로 전체 반환하지 않고 질문과
 관련된 view만 선택해야 한다.
 
-## MCP Contract Baseline
+## MCP External API Baseline
 
 ```text
 list_sources()
@@ -132,7 +132,7 @@ MVP의 source registry는 다음 두 항목을 정적으로 등록하는 것으�
 
 Client는 DSN이나 role을 선택하지 않고 opaque `source_id`만 전달한다.
 
-HTTP와 MCP 구현은 위 계약을 공통 application service로 제공한다. HTTP의
+HTTP와 MCP 구현은 위 external API baseline을 공통 application service로 제공한다. HTTP의
 `list_sources`, `get_context`, `query`는 각각 `GET /sources`, `POST /meta`,
 `POST /query`에 대응한다. `/meta` 요청 예시는 다음과 같다.
 

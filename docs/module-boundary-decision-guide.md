@@ -2,7 +2,7 @@
 
 Status: Accepted choices — implementation complete
 
-Last reviewed: 2026-08-25
+Last reviewed: 2026-08-26
 
 Approved: 2026-08-24 — `D0-A`, `D1-A`, `D2-A`, `D3-A`, `D4-A`, `D5-A`와
 [모든 권장 선택에 공통으로 유지할 불변조건](#모든-권장-선택에-공통으로-유지할-불변조건)

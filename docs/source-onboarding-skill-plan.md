@@ -6,7 +6,7 @@ Last updated: 2026-08-25
 
 ## Goal
 
-Codex가 신규 PostgreSQL source 추가 요청을 받으면 repository의 현재 계약을 읽고, 필요한
+Codex가 신규 PostgreSQL source 추가 요청을 받으면 repository의 현재 onboarding 절차, budget policy와 access policy를 읽고, 필요한
 사람 입력과 검증 증거를 정리해 Query Man 관리자에게 실행 가능한 handoff를 만든다.
 
 V1은 **plan-only**다. Skill은 DB, repository, Control DB와 admin API를 변경하지 않고
@@ -32,7 +32,7 @@ Production mutation 자동화가 실제로 필요해지면 별도 threat model�
 
 | Artifact | Authority |
 |---|---|
-| Production source generation/state/metadata/verified contract | Control DB |
+| Production source generation/state/metadata/verified-query records | Control DB |
 | Curated view, reader role and grants | Source DB and DB-owner migration system |
 | Budget profile catalog | Query Man repository/release |
 | Reader credential | DB owner/runtime secret boundary |
@@ -96,7 +96,7 @@ Skill이 받을 수 있는 비밀이 아닌 입력:
 Password, token, DSN 전체, encryption key와 provider secret path가 입력되면 echo하거나 plan에
 포함하지 않고 즉시 secret 전달 경계를 안내한다.
 
-## Output Contract
+## Output Format And Requirements
 
 Skill은 다음 section을 가진 bounded Markdown 또는 구조화된 plan을 만든다.
 
@@ -120,7 +120,7 @@ Output에는 실제 credential, arbitrary SQL text, unredacted DB error와 실�
 
 ```text
 classify request
--> read repository onboarding/budget/access contracts
+-> read repository onboarding procedures and budget/access policies
 -> normalize non-secret facts
 -> identify missing human decisions
 -> check existing budget_profile fit
@@ -191,7 +191,7 @@ Forward evaluation은 새 context에서 실행해 Skill 문구를 그대로 외�
 - Repository, source DB, Control DB와 admin API mutation이 0건이다.
 - Credential/token/DSN 전체, SQL text와 내부 DB error가 output/log/fixture에 없다.
 - Query token은 non-admin으로 남고 Skill은 publish 성공을 주장하지 않는다.
-- Existing onboarding/runtime contract를 복제하지 않고 필요한 문서를 reference로 읽는다.
+- Existing onboarding procedure/runtime rules를 복제하지 않고 필요한 문서를 reference로 읽는다.
 
 위 항목은 2026-08-25 [acceptance evidence](verification/2026-08-25-source-onboarding-skill.md)에서
 재현했다. `query-man-source-onboarding`을 기본 onboarding planning workflow로 채택하되 V1의

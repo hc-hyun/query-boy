@@ -99,12 +99,12 @@ gateway와 PostgreSQL hard limit이 거부한다.
   revision을 명시한다.
 - 기존 argument validation의 `structured_content is None`이나 SDK가 만든 validation
   문자열을 파싱하던 client는 structured `INVALID_REQUEST.details`로 전환해야 한다.
-  이전 문자열 계약을 동시에 제공하는 compatibility shim은 두지 않는다.
+  이전 문자열 error format을 동시에 제공하는 compatibility shim은 두지 않는다.
 - SDK 2.0의 modern JSON response 경로는 ASGI disconnect를 감시하지 않으므로 Query Man의
   `query` tool이 request disconnect와 gateway 실행을 경쟁시켜 PostgreSQL cancel/rollback을
   전파한다.
 - Strict argument/output validation은 MCP SDK 2.0의 private tool metadata에 일부 의존한다.
-  `uv.lock`의 MCP/Pydantic version을 바꿀 때는 in-memory contract test와 실제 MCP server
+  `uv.lock`의 MCP/Pydantic version을 바꿀 때는 in-memory API compatibility test와 실제 MCP server
   gate를 함께 실행해야 한다.
 - 이전 handshake와 protocol version은 지원 대상이 아니므로 legacy cancellation이나
   stateful compatibility session도 제공하지 않는다. 지원 version의 POST disconnect와

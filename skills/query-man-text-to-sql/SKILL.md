@@ -1,6 +1,6 @@
 ---
 name: query-man-text-to-sql
-description: Answer data questions through the Query Man MCP tools while preserving its source, metadata-revision, grain, join, and business-semantics contracts. Use when a task requires generating and executing PostgreSQL SQL through Query Man; do not use for direct database connections or database administration.
+description: Answer data questions through the Query Man MCP tools while preserving its source selection, metadata revision, grain, join, and returned business semantics. Use when a task requires generating and executing PostgreSQL SQL through Query Man; do not use for direct database connections or database administration.
 ---
 
 # Query Man Text-to-SQL
@@ -29,7 +29,7 @@ the `query` tool returned it in this workflow.
    Use only names in `sql_capabilities.functions` and target types in
    `sql_capabilities.cast_types`. A cast type may be unqualified only when it also appears in
    `sql_capabilities.unqualified_cast_types`; otherwise write it as `pg_catalog.<type>`.
-5. Preserve the semantic contract:
+5. Preserve the returned semantics:
    - Group at the declared grain and apply returned business predicates and metric calculations.
    - Use only returned join edges and their column pairs. Follow fanout guidance.
    - When a composition hint says `aggregate_each_then_combine`, aggregate every grain separately

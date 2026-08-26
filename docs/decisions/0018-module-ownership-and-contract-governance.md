@@ -57,7 +57,7 @@ interface와 forwarding layer를 미리 만들 위험이 있다. 필요한 것�
 
 ### 2026-08-24 Approved Boundary-Hardening Follow-up
 
-사용자는 [module boundary decision guide](../module-contract-decision-guide.md)의 `D0-A`, `D1-A`,
+사용자는 [module boundary decision guide](../module-boundary-decision-guide.md)의 `D0-A`, `D1-A`,
 `D2-A`, `D3-A`, `D4-A`, `D5-A`와 “모든 권장 선택에 공통으로 유지할 불변조건”을 승인했다.
 구현은 `D0 -> D1 -> D2 -> D4 -> D3 -> D5` 순서로 직렬화하고 각 승인 change-set baseline이
 확정된 뒤에만 서로 다른 독립 구현을 병렬화한다. `D0-A`/`RTSAFE-01`, `D1-A`/`MOD-04`,

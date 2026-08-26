@@ -37,7 +37,7 @@ Row estimate, storage, growth와 usage는 metadata revision 재료가 아니며
    revision과 같은 snapshot을 정상 재검증하면 pin을 유지하고 activation time만 갱신한다.
 4. Commit된 active snapshot을 application cache에 넣는다.
 
-Rollback은 이미 존재하고 현재 source contract와 호환되는 revision만 active로 바꾸며
+Rollback은 이미 존재하고 현재 source definition으로 동일한 revision identity가 계산되는 revision만 active로 바꾸며
 source를 pin한다. Pin 상태에서도 refresh된 snapshot은 immutable history에 저장하지만
 active pointer는 유지한다. 운영자가 automatic publish를 resume하면 pin을 해제하고 다음
 refresh에서 새 revision을 활성화한다. Resume 자체는 freshness clock을 초기화하지 않고

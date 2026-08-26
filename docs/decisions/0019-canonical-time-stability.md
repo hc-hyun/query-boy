@@ -28,7 +28,7 @@ reader session을 UTC로 고정하더라도 이 business calendar 의미는 UTC 
 - 월별 시장 VOC verified SQL은 SELECT와 GROUP BY 모두
   `date_trunc('month', received_at, 'Asia/Seoul')`을 사용한다.
 - View definition hash가 바뀌므로 development와 market metadata revision을 새로 발행하고,
-  해당 두 source의 bootstrap verified contract 9개를 모두 새 revision으로 재실행한다.
+  해당 두 source의 bootstrap verified-query dataset에 있는 9개 entry를 모두 새 revision으로 재실행한다.
 - Managed source에서는 실제 적용한 R1 database migration artifact를 source provenance의
   `database_migration_ref`로 함께 갱신한다. Repository fixture는 기존 ref가 가리키는 migration
   file 자체가 R1로 versioned되므로 별도 manifest field를 추가하지 않는다.
@@ -76,17 +76,18 @@ coordinated cutover다.
 1. Source/admin/verified mutation을 동결한다.
 2. Old fleet의 신규 유입을 막고 active query와 source connection이 0이 될 때까지 drain한다.
 3. Route에서 제외한 R2 fleet를 시작한다.
-4. 각 source를 L1로 두고 current 및 rollback-preserved verified contract 전체를 새 revision으로
-   재실행·재발행한 뒤 L2로 승격한다. Repository fixture 11개도 전부 재실행한다.
+4. 각 source를 L1로 두고 current 및 rollback-preserved verified-query inventory 전체를 새 revision에서
+   재실행해 새 immutable records로 발행한 뒤 L2로 승격한다. Repository fixture 11개도 전부 재실행한다.
 5. Replica의 source generation, metadata revision과 ready 상태가 수렴한 뒤 traffic을 연결한다.
 
 R1의 SQL policy revision은
 `sha256:83729139d7ccedbe8e299b0c4a8bdefb97d42ca870d5fc3b9c227578c65855d9`다.
-Rollback은 R2 fleet를 drain한 뒤 R1 release와 보존된 R1/pre-R2 generation, snapshot, contract를
-CAS/rollback으로 다시 활성화하고 L2/ready를 확인한 뒤 old fleet에 route한다. R2 snapshot,
+Rollback은 R2 fleet를 drain한 뒤 R1 release와 보존된 R1/pre-R2 generation 및 snapshot을
+CAS/rollback으로 다시 활성화하고 해당 revision에 보존된 verified-query records로 L2/ready를 확인한 뒤
+old fleet에 route한다. R2 snapshot,
 generation과 verified row는 삭제하지 않는다.
 
-Managed contract의 question/SQL/expected 전체를 열거하는 public read API는 현재 없다. 따라서
+Managed verified-query records의 question/SQL/expected 전체를 열거하는 public read API는 현재 없다. 따라서
 production cutover 전에는 승인된 operator가 Control DB migration identity로 immutable
 `verified_query_contracts`를 제한된 read-only export하여 current와 rollback-preserved inventory를
 외부 change record에 고정해야 한다. Inventory 완전성을 증명할 수 없으면 cutover를 중단한다.
@@ -108,17 +109,17 @@ production cutover 전에는 승인된 operator가 Control DB migration identity
 - 한국 업무 날짜와 월 경계는 reader UTC 정책과 분리되어 보존된다.
 - R2는 wire field나 table migration 없이도 digest와 immutable row가 전환되므로 rolling mixed-fleet
   배포 대신 짧은 coordinated downtime이 필요하다.
-- Verified hash가 실제로 달라지는 contract뿐 아니라 current와 rollback-preserved contract 전체를
-  새 revision에서 재실행하여 stale evidence를 재사용하지 않는다.
+- Verified hash가 실제로 달라지는 query뿐 아니라 current와 rollback-preserved inventory 전체를
+  새 revision에서 재실행해 새 records로 발행하여 stale evidence를 재사용하지 않는다.
 
 ## Implementation Evidence
 
-R1은 별도 commit에서 한국 업무 달력을 SQL에 명시하고 bootstrap 9개 contract의 기존 result hash를
+R1은 별도 commit에서 한국 업무 달력을 SQL에 명시하고 bootstrap dataset 9개 entry의 기존 result hash를
 보존했다. R2는 SQL policy version 2와 모든 source의 새 metadata revision을 발행하고 repository
 fixture 11개를 모두 재실행했다. UTC/서울/뉴욕 role default, DST, pool reset, old/new immutable
 Control row 공존과 local two-replica coordinated cutover 결과는
 [canonical time verification](../verification/2026-08-25-canonical-time-stability.md)에 기록한다.
 
-이 evidence는 production의 protected contract inventory, 실제 R1 `database_migration_ref`, backup,
+이 evidence는 production의 protected verified-query inventory, 실제 R1 `database_migration_ref`, backup,
 route와 old-fleet drain을 증명하지 않는다. 운영자는 [operations runbook](../operations.md#canonical-time-coordinated-cutover)의
 stop condition을 환경별 change record로 충족한 뒤에만 production cutover를 수행한다.

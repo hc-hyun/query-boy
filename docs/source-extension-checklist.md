@@ -75,7 +75,7 @@ object policy, plan/시간/concurrency/result 상한, 중복 결과 column 거�
 fail-closed한다.
 
 Canonical result에서 `numeric`은 scale을 보존한 문자열, `bytea`는 `base64:` 문자열이다.
-Fixture expected row와 hash도 HTTP framework의 임의 coercion이 아니라 이 계약을 사용한다.
+Fixture expected row와 hash도 HTTP framework의 임의 coercion이 아니라 이 canonical result encoding 규칙을 사용한다.
 
 질문에서 SQL을 생성하는 과정, `unsupported`/`needs_clarification`에서 멈추는 판단과 반환된
 context의 의미를 SQL이 올바르게 반영했는지는 client/Skill 책임이다. Production 회귀에서는

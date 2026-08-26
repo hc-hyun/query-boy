@@ -69,7 +69,7 @@ Control DB의 persisted snapshot/revision history와 process 안의 published Py
 `PreparedMetadata`의 모든 public sequence는 tuple이고 dataclass는 frozen이다. Catalog row 조립과
 persistence decode는 private mutable builder를 사용할 수 있지만 cache/provider boundary 전에
 새 immutable graph로 freeze하고 입력 collection alias를 남기지 않는다. 이 보장은
-[결정 가이드의 D3-A](../../module-contract-decision-guide.md#d3-공유-data의-deep-immutability)와
+[결정 가이드의 D3-A](../../module-boundary-decision-guide.md#d3-공유-data의-deep-immutability)와
 `MOD-07`의 구현 결과다.
 
 ## 제공 인터페이스와 소유 경계

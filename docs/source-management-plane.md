@@ -65,8 +65,8 @@ API나 table을 현재 기능처럼 안내하지 않는다.
 | Artifact | Authority | Repository role |
 |---|---|---|
 | Production source definition, generation and lifecycle | Control DB | YAML write-back 없음 |
-| Metadata snapshot and hot-added verified contract | Control DB | Bootstrap/fixture contract만 유지 |
-| Owner, environment and DB migration provenance | Control DB immutable manifest generation | Repository YAML은 fixture contract만 versioned |
+| Metadata snapshot and hot-added verified-query records | Control DB | Bootstrap/fixture dataset만 유지 |
+| Owner, environment and DB migration provenance | Control DB immutable manifest generation | Repository YAML은 fixture manifest만 versioned |
 | Curated view, reader role and grants | Source DB and DB-owner migration system | Migration reference만 기록 |
 | Encrypted reader credential | Control DB generation | Plaintext 출력·Git 저장 금지 |
 | Plaintext credential and master key | Runtime/external secret system | 값·provider path 저장 금지 |
@@ -79,7 +79,7 @@ API나 table을 현재 기능처럼 안내하지 않는다.
 | Unified sanitized projection | Admin management API | 실제 authority를 대체하지 않음 |
 
 Production managed mode는 source별 repository file을 요구하지 않는다. Managed runtime은 모든
-source와 verified contract를 Control DB에서만 읽으므로 lifecycle row가 없는 file source도
+source와 verified-query records를 Control DB에서만 읽으므로 lifecycle row가 없는 file source도
 absent다. Deactivate와 rollback을 포함한 Control DB state가 restart 뒤 그대로 복원되고 file은
 source를 다시 활성화하거나 L2 gate를 충족하지 못한다.
 
@@ -87,14 +87,14 @@ source를 다시 활성화하거나 L2 gate를 충족하지 못한다.
 
 | `QUERY_MAN_SOURCE_MODE` | Source/verified authority | Control settings |
 |---|---|---|
-| `bootstrap` (default) | `config/sources` and filesystem verified contract | Control DSN/key 모두 금지 |
-| `managed` | Control DB lifecycle, metadata and verified contract only | Control DSN/key와 stable replica ID 모두 필수 |
+| `bootstrap` (default) | `config/sources` and filesystem verified-query dataset | Control DSN/key 모두 금지 |
+| `managed` | Control DB lifecycle, metadata and verified-query records only | Control DSN/key와 stable replica ID 모두 필수 |
 
 Mode는 process 전체에 적용하며 runtime 중 바뀌지 않는다. `auto`, per-source hybrid와 Control DB
 장애 시 file fallback은 없다. Budget profile catalog와 access policy는 두 mode에서 모두 deployment
 configuration으로 읽는다. Managed mode는 version 2 policy file의 non-admin query identity와
 explicit operator admin identity를 모두 요구하고 API-token/anonymous caller를 거부한다. Source
-directory와 filesystem verified contract가 없어도 시작할 수 있다.
+directory와 filesystem verified-query dataset이 없어도 시작할 수 있다.
 
 기존 bootstrap source는 다음 명시적 cutover로 한 번만 이관한다.
 
@@ -102,9 +102,10 @@ directory와 filesystem verified contract가 없어도 시작할 수 있다.
    시작한다. Empty inventory 또는 cold Control scan 실패의 `/ready`는 `unavailable`이다.
 2. 기존 admin API로 source를 L0/L1 staged publish하고 반환된 generation과 metadata revision을
    확인한다.
-3. Reviewed filesystem contract를 같은 revision의 verified-query admin endpoint로 실행·저장한다.
+3. Reviewed filesystem verified-query dataset을 같은 revision의 verified-query admin endpoint로 실행하고
+   immutable records로 저장한다.
 4. `minimum_quality_level: L2` generation을 publish하고 metadata/query invariant를 확인한다.
-5. 필요한 source/contract coverage와 inactive state를 확인한 뒤 각 deployment slot에 고유한 stable
+5. 필요한 source/verified-query coverage와 inactive state를 확인한 뒤 각 deployment slot에 고유한 stable
    replica ID를 배정하고 serving replica를 managed mode로 재시작한다. Replica endpoint에서 시작한
    모든 slot의 convergence를 확인한다. 이후 repository seed는 제거하거나 남겨도 runtime authority가
    아니다.
@@ -128,7 +129,7 @@ Host/database/user는 mutation 검토에 필요한 admin에게만 제한적으�
 bearer, master key, provider secret path, raw database error, ad-hoc question과 SQL은 response와
 audit에서 제외한다.
 
-아래 replica contract, 내부 data-size/gateway usage 수집과 operator-only availability/usage
+아래 replica observation API와 상태 의미, 내부 data-size/gateway usage 수집과 operator-only availability/usage
 projection은 구현됐다. DB-native/provider monetary cost는 이후 `COST-*` 목표다.
 
 ### Implemented Replica State (`CTRL-06`)
@@ -169,7 +170,7 @@ Manifest v2의 optional `observability`가 DB owner의 representative grain/phys
 
 Resource는 UTC daily bucket, 24시간 cadence와 Control DB clock 72시간 freshness를 사용한다. 같은
 metric/method/definition만 previous로 이동하며 정의가 바뀌면 comparison을 초기화한다. Definition은
-metric, method, grain/relation 목록과 DB migration reference의 canonical SHA-256이다. 이 수집 계약은
+metric, method, grain/relation 목록과 DB migration reference의 canonical SHA-256이다. 이 resource-observation collection policy는
 Source apply 직후와 이후 24시간마다 best-effort로 실행된다. `CTRL-08`은 current generation의 latest
 attempt와 last success를 `source_resource_observation_attempts`의 source당 한 row에 추가해 failure를
 missing/zero와 구분한다.
@@ -236,7 +237,7 @@ Control Plane이 user/organization별 RLS policy를 관리한다는 뜻은 아�
 ## Current Management Operations
 
 아래 operation은 모두 구현됐다. 기존 direct mutation endpoint를 유지하면서 공통
-idempotency/audit 계약을 적용한 현재 관리 표면이다.
+idempotency 및 audit semantics를 적용한 현재 관리 표면이다.
 
 | Operation | Status and purpose |
 |---|---|
@@ -253,11 +254,11 @@ idempotency/audit 계약을 적용한 현재 관리 표면이다.
 bounded outcome을 기록한다. 같은 key와 같은 hash는 기존 결과를 반환하고 다른 hash는
 fail-closed한다. 별도 request/approval table이나 approver endpoint는 만들지 않는다.
 
-### Mutation Request And Receipt Contract
+### Mutation Request And Receipt Wire Format And Semantics
 
 여섯 mutation은 다음 header를 모두 요구한다.
 
-| Header | Contract |
+| Header | Requirement and meaning |
 |---|---|
 | `Idempotency-Key` | Client가 생성한 canonical lowercase UUID. 재시도에서도 그대로 유지 |
 | `X-Query-Man-Reason` | 1~128자의 ticket/change reference. 자유형 설명이나 secret 금지 |
@@ -313,9 +314,9 @@ Owner, environment와 DB migration reference는 strict manifest v2의 `provenanc
 table, 중복 column이나 `CTRL-04` schema migration은 만들지 않았다. `CTRL-05`의 두 번째 Control
 schema migration은 이 provenance와 별개인 mutation receipt table만 추가한다. Provenance 값만
 변경한 publish도 새 generation을 만들고 rollback은 당시 값을 그대로 복원한다. Query metadata
-revision은 query contract에 영향을 주는 필드만 hash하므로 provenance 변경으로 달라지지 않는다.
+revision은 query execution semantics에 영향을 주는 필드만 hash하므로 provenance 변경으로 달라지지 않는다.
 
-Runtime mode는 deployment configuration이고 existing source/metadata pointer와 verified contract가
+Runtime mode는 deployment configuration이고 existing source/metadata pointer와 verified-query record set이
 managed authority를 모두 표현한다. 따라서 mode, origin 또는 bootstrap import marker를 위한 table과
 `CTRL-02` schema migration은 추가하지 않는다.
 
@@ -340,7 +341,7 @@ latest current/previous, gateway는 hourly rollup과 source당 1,000행 cap만 �
 
 1. **Complete:** versioned migration과 disposable test-store isolation
 2. **Complete:** mutually exclusive source mode, Control DB precedence, zero-bootstrap과
-   verified-contract admin import cutover
+   verified-query admin publish cutover
 3. **Complete:** shared query access와 explicit admin/query credential separation
 4. **Complete:** immutable provenance, minimal catalog와 admin list/detail/history
 5. **Complete:** existing mutations의 idempotency, receipt와 durable audit
@@ -405,14 +406,14 @@ logical retention, zero-bootstrap와 두 replica 복구 결과는
   별도 key와 LOGIN, logical retention, receipt replay, source/verified file 없는 두 managed replica 및
   guarded query가 함께 복구된다.
 - Canonical-time repository acceptance는 같은 instant를 UTC/서울/뉴욕 reader default와 DST에서
-  같은 UTC `+00:00` value/hash로 만들고, 같은 query ID의 old/new revision contract가 rollback 뒤에도
+  같은 UTC `+00:00` value/hash로 만들고, 같은 query ID의 old/new revision verified-query records가 rollback 뒤에도
   공존함을 검증한다. 이는 production fleet drain이나 inventory 증거를 대신하지 않는다.
 
 이 fixture는 물리적으로 다른 production host/network, 실제 backup age와 storage access,
 secret-manager/TLS/IAM, source business DB 또는 production RPO/RTO를 증명하지 않는다. 해당 항목은
 [disaster recovery runbook](disaster-recovery.md)의 deployment change record가 별도로 관리한다.
 
-현재 계약에 적용하는 불변조건:
+현재 management baseline에 적용하는 불변조건:
 
 - Secret, ad-hoc question/SQL과 내부 DB error가 management response, audit와 metric에 없다.
 

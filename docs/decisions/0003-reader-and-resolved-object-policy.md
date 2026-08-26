@@ -47,7 +47,7 @@ overload가 선택될 가능성을 독립적으로 차단하지 못한다. Curat
 [function security](https://www.postgresql.org/docs/18/perm-functions.html),
 [function/operator type resolution](https://www.postgresql.org/docs/18/typeconv.html),
 [`pg_proc`](https://www.postgresql.org/docs/18/catalog-pg-proc.html)와
-[`pg_operator`](https://www.postgresql.org/docs/18/catalog-pg-operator.html) 계약을
+[`pg_operator`](https://www.postgresql.org/docs/18/catalog-pg-operator.html) catalog 정의를
 기준으로 한다.
 
 ## Consequences

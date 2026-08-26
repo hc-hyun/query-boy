@@ -196,7 +196,7 @@ source/resource-tier 단위에서 관측한다. 이는 auxiliary statement와 �
 Startup cleanup `RTSAFE-01`, hidden dependency `MOD-04`, read/write capability `MOD-05`,
 lifecycle Protocol `MOD-06`, deep immutability `MOD-07`과 offline composition `MOD-08`은 모두
 완료되어 roadmap ledger로 이동했다. 2026-08-24 사용자는
-[module boundary decision guide](module-contract-decision-guide.md)의 `D0-A`~`D5-A`와 공통
+[module boundary decision guide](module-boundary-decision-guide.md)의 `D0-A`~`D5-A`와 공통
 불변조건을 명시적으로 승인했다. 이 baseline을 넘어서는 의미 변경은 다시 승인받는다.
 
 ## Explicit Non-Goals

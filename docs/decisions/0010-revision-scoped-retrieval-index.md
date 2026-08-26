@@ -20,7 +20,7 @@ weight로 점수화한다.
 Exact `use_for`, relation alias와 column alias phrase boost는 deterministic business term을
 위해 유지하지만 token score에 더해지는 보조 신호로 사용한다. Index는 metadata revision이
 바뀌거나 source cache가 invalidate되면 폐기한다. 결과 선택 threshold와 default relation
-fallback contract는 유지한다.
+fallback behavior는 유지한다.
 
 ## Consequences
 

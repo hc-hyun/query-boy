@@ -10,7 +10,7 @@ Query Man이 직접 통제하는 대상은 query가 소비할 수 있는 databas
 ## Enforced Layers
 
 `config/budget-profiles.yaml`의 budget schema `version: 2` profile을 모든 source에 같은 순서로
-적용한다. 이는 source manifest schema `version: 2`와 별도 계약이다. `budget_profile`은
+적용한다. 이는 source manifest schema version과 별도로 versioned되는 schema다. `budget_profile`은
 유일한 resource tier이며 관리자가 source마다 기존 profile 하나를 선택한다. 같은 source의
 모든 query 사용자는 같은 profile 정의를 쓴다. 별도 `cost_tier`나 caller/user/organization
 override는 없다. 현재 `interactive` 값은
@@ -54,7 +54,7 @@ Missing/failed 값과 빈 hour는 0으로 표시하지 않는다. 이 public pro
 DB-native/provider monetary collector는 여전히 범위 밖이라 monetary cost는
 `not_configured/PROVIDER_NOT_CONFIGURED`만 표시한다. DB-native reader-role aggregate 선택지는
 [proposed ADR 0021](decisions/0021-database-native-cost-attribution.md)의 read-only prework일 뿐 현재
-`/usage` 계약이나 수집 동작을 바꾸지 않는다. Usage spike/alert도 별도
+`/usage` external API나 수집 동작을 바꾸지 않는다. Usage spike/alert도 별도
 [proposed ADR 0023](decisions/0023-database-native-usage-spike-alert.md)의 read-only addendum이며 base
 evidence와 exact approval 전에는 threshold, event, polling route나 notification 동작이 없다.
 
@@ -162,7 +162,7 @@ FROM public.pg_stat_statements_info;
 
 Application reader에는 `pg_read_all_stats`, `pg_monitor` 또는 `pg_signal_backend`를 부여하지
 않는다. 아래 direct-view monitoring identity는 DBA가 수동 조사에만 쓰는 현재 외부 운영 선택지이며
-Query Man collector credential이나 application contract가 아니다. Source owner가 `CONNECT`,
+Query Man이 관리하는 collector credential이나 지원하는 application 수집 경로가 아니다. Source owner가 `CONNECT`,
 `pg_read_all_stats`와 extension view의 좁은 조회 권한을 별도로 review해야 하고, 이 identity는 다른
 session 통계를 볼 수 있는 민감한 운영 계정이다. Proposed ADR 0021-A의 network-facing collector는
 이 broad role/direct view를 받지 않고 source-owner sanitized function만 실행한다.
@@ -204,7 +204,7 @@ major version이나 object OID 변화에 걸친 stable application identifier가
    `QUERY_OVERLOADED`, 5초 statement 상한을 넘긴 실행이 `QUERY_TIMEOUT`, 다른 source와
    후속 정상 query가 계속 성공하는지 확인한다.
 5. 그래도 profile 변경이 필요하면 concurrency를 포함한 최악 자원량과 reader connection
-   capacity를 review한다. Profile 변경은 metadata revision 재발행과 L2 verified contract
+   capacity를 review한다. Profile 변경은 metadata revision 재발행과 L2 verified-query baseline
    재검증을 요구한다.
 
 Source별 특별 숫자를 Python 분기나 manifest 임의 override로 넣지 않는다. 공통 workload가

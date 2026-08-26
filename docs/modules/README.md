@@ -199,7 +199,7 @@ owner는 주의점에 기록하며 primary owner와 같은 뜻으로 해석하�
 | Root `README.md`, `docs/architecture.md`, `docs/mvp.md` | Coordinating agent | 전체 system navigation과 current/target 범위를 여러 module에 handoff한다. 각 사실의 module owner가 검토하고 coordinating agent가 single-writer로 편집한다. |
 | `docs/development-todo.md` | Coordinating agent | Repository 전체 priority, approval/start gate와 single-writer handoff를 소유한다. TODO 추가는 interface 또는 경계 변경 승인이 아니며 병렬 agent가 직접 priority를 재배열하지 않는다. |
 | `docs/implementation-roadmap.md` | Coordinating agent | 완료 ID와 evidence를 보존하는 immutable completion ledger다. Primary module 결과와 Assurance evidence를 확인한 뒤 한 writer가 갱신한다. |
-| `docs/module-contract-decision-guide.md` | Coordinating agent | 승인된 D0-A~D5-A의 exact 범위, 구현 순서와 ID별 완료/미완료 current/target 차이를 전달하는 공통 handoff 문서다. 한 writer만 갱신한다. |
+| `docs/module-boundary-decision-guide.md` | Coordinating agent | 승인된 D0-A~D5-A의 exact 범위, 구현 순서와 ID별 완료/미완료 current/target 차이를 전달하는 공통 handoff 문서다. 한 writer만 갱신한다. |
 | `docs/verification/`의 cross-module evidence | Assurance | 실행 시점의 provider/consumer evidence를 보존한다. 새 evidence는 coordinating writer가 작성하고 과거 evidence를 현재 보장처럼 소급 수정하지 않는다. |
 | Root `AGENTS.md`, 이 module index와 cross-module accepted ADR | Coordinating agent | Repository governance와 공통 interface/boundary authority다. 영향 module owner review 뒤 coordinating agent만 편집한다. |
 
@@ -209,7 +209,7 @@ owner는 주의점에 기록하며 primary owner와 같은 뜻으로 해석하�
 `tests/control_database.py`, `tests/test_documentation.py`와 위 표의 cross-module focused/acceptance
 test가 shared transition artifact다. 문서 영역에서는 root `README.md`, `AGENTS.md`, 이 index,
 `docs/architecture.md`, `docs/mvp.md`, `docs/development-todo.md`,
-`docs/implementation-roadmap.md`, `docs/module-contract-decision-guide.md`, cross-module accepted ADR과
+`docs/implementation-roadmap.md`, `docs/module-boundary-decision-guide.md`, cross-module accepted ADR과
 `docs/verification/` evidence가 공통 handoff artifact다.
 
 이 목록은 coordinating agent가 single-writer로 직렬화한다. 나머지는 primary owner가 쓰고
@@ -300,7 +300,7 @@ ownership/composition boundary와 protected operational procedure의 의미 변�
 
 현재 조사된 startup cleanup, hidden dependency, read/write capability, deep immutability,
 lifecycle Protocol과 offline composition 선택지는
-[module boundary decision guide](../module-contract-decision-guide.md)에 설명한다. 사용자는
+[module boundary decision guide](../module-boundary-decision-guide.md)에 설명한다. 사용자는
 2026-08-24 `D0-A`~`D5-A`와 공통 불변조건을 승인했다. `D0-A`/`RTSAFE-01`,
 `D1-A`/`MOD-04`, `D2-A`/`MOD-05`, `D4-A`/`MOD-06`, `D3-A`/`MOD-07`과
 `D5-A`/`MOD-08`은 모두 구현 완료됐다. `CTRL-07A` observation과 2026-08-25 승인된 `CTRL-08`

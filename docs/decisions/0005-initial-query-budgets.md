@@ -75,6 +75,6 @@ plan admission으로 거부되고, admission을 test에서 해제한 query는 st
   source quota가 필요할 때 distributed limiter 없이는 replica 수를 늘리지 않는다.
 - Plan threshold는 timeout, connection, row/byte hard limit을 대체하지 않는다.
 - Budget 전체는 metadata revision 재료다. 더 엄격하거나 느슨한 실행 정책으로 바꾸면
-  기존 L2 verified contract를 새 revision에서 다시 실행해 승인해야 한다.
+  기존 L2 verified-query baseline을 새 revision에서 다시 실행해 승인해야 한다.
 - 통화 단위 비용과 운영 조사 절차는
   [query cost runbook](../query-cost-control.md)을 따른다.

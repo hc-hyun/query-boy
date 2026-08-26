@@ -17,7 +17,7 @@ State plainly that no execution was performed. Do not call the source ready when
 
 ## 2. Known Facts
 
-List only non-secret facts provided by the requester or read from the current repository contract. Distinguish
+List only non-secret facts provided by the requester or read from current repository policy and configuration. Distinguish
 requester statements from repository evidence. Record secret-bearing input only as `excluded_secret_input`;
 never reproduce its value, full DSN, or a reversible derivative.
 
