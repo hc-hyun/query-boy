@@ -1,6 +1,6 @@
 # Assurance Module
 
-Status: Logical boundary; physical package split pending; `LAUNCH-01-A` repository acceptance in progress;
+Status: Logical boundary; physical package split pending; `LAUNCH-01-A` repository acceptance complete;
 protected execution separately gated
 
 ## 목적
@@ -11,7 +11,7 @@ column, row count 및 result hash를 확인하고, offline CLI와 repository acc
 
 Assurance는 runtime 요청 처리나 protected environment 배포를 대신하지 않는다. 현재 launch
 authority는 [ADR 0025](../../decisions/0025-static-non-rls-first-launch.md)의 static non-RLS
-two-source profile이며, 아래 항목은 완료 주장 대신 이 baseline이 통과해야 할 acceptance를 기록한다.
+two-source profile이며, 아래 항목과 immutable evidence는 이 baseline이 통과한 acceptance를 기록한다.
 
 ## 소유 책임
 
@@ -150,6 +150,8 @@ hash에 넣지 않으며 v3 digest `sha256:2e94db36095f11f2e9cc4e804666598f79a2e
 
 ### Evidence and historical acceptance
 
+[`static first-launch acceptance`](../../verification/2026-08-26-static-first-launch.md)가
+`LAUNCH-01-A` 구현 commit의 local·CI 결과를 기록한다.
 [`docs/verification`](../../verification/README.md)의 각 문서는 당시 commit, fixture와 command 범위만
 증명하는 immutable evidence다. 과거 record를 현재 의미에 맞춰 수정·삭제하지 않고 정정은 새
 provenance record로 append한다. `Complete`도 이후 commit이나 다른 환경을 자동으로 증명하지 않는다.

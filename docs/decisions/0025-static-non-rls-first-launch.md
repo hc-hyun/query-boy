@@ -1,6 +1,6 @@
 # ADR 0025: Static Non-RLS First Launch
 
-Status: Accepted — repository implementation in progress; protected execution separately gated
+Status: Accepted — repository acceptance complete; protected execution separately gated
 
 Date: 2026-08-26
 
@@ -194,6 +194,10 @@ Repository completion에는 다음 증거가 모두 필요하다.
 - SQL policy v3 digest/stale token, unchanged metadata revision/result hash와 9/9 verified execution
 - Exact ready Compose health, pinned image references와 revision label
 - `ruff`, `mypy`, full pytest, integration and container acceptance
+
+이 기준의 repository 실행 결과는
+[static first-launch acceptance](../verification/2026-08-26-static-first-launch.md)에 기록한다.
+해당 기록은 구현 commit과 local/CI acceptance만 증명하며 protected environment 실행을 대신하지 않는다.
 
 ## Consequences
 

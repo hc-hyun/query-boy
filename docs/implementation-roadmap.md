@@ -1,6 +1,6 @@
 # Query Man Implementation Roadmap
 
-Status: ADR 0025 `LAUNCH-01-A` repository implementation in progress; protected execution is `LAUNCH-02`
+Status: ADR 0025 `LAUNCH-01-A` repository acceptance complete; protected execution is `LAUNCH-02`
 
 이 문서는 Query Man의 과거 baseline과 post-baseline 완료 이력을 보존한다. 현재 serving 결정은
 [ADR 0025](decisions/0025-static-non-rls-first-launch.md)의 더 좁은 static non-RLS profile이며,
@@ -359,6 +359,7 @@ client와 실제 PostgreSQL fixture를 사용해야 한다. 실행 결과와 남
 | `DBEDGE-05` | 추가 disposable PostgreSQL 18 DB들에서 custom operator의 transitive function rebinding, interval infinity/zero collision, temporal·JSON digit driver boundary, varbit positive shape, `bytea::text`/implicit text-search role-default drift와 planner-order-sensitive float/JSONB aggregate를 public QueryService exact hash로 고정했다. 현재 제품 의미는 바꾸지 않았다. 별도로 발견한 RLS base-policy 누출은 완료 결과로 세지 않고 open strict xfail과 security finding으로 분리했다. | [source database corner acceptance](verification/2026-08-25-source-database-corners.md), [RLS policy drift finding](verification/2026-08-26-rls-policy-drift.md), [proposed ADR 0020](decisions/0020-lossless-interval-and-json-numeric-encoding.md), [`test_source_database_corners.py`](../tests/test_source_database_corners.py) |
 | `TIME-01` | Reader session UTC, aware datetime UTC `+00:00`, business calendar `Asia/Seoul`, SQL-policy/metadata revision 재료, full verified reissue, coordinated cutover와 immutable rollback 보존을 하나의 정확한 policy/change set으로 확정하고 사용자 승인을 받았다. R1에서 업무 날짜 SQL을 명시하고 dev/market 9개 verified case의 기존 결과를 보존했다. | [ADR 0019](decisions/0019-canonical-time-stability.md), [canonical time verification](verification/2026-08-25-canonical-time-stability.md) |
 | `TIME-02` | Catalog와 Query가 transaction 시작 직후 UTC를 local 설정·검사하고 aware datetime만 UTC `+00:00`으로 정규화한다. Canonical-time material을 metadata와 SQL-policy revision에 넣어 이전 token을 실행 전에 거부하면서 naive datetime/date/time/timetz 의미는 보존했다. | [ADR 0019](decisions/0019-canonical-time-stability.md), [canonical time verification](verification/2026-08-25-canonical-time-stability.md), [`test_catalog.py`](../tests/test_catalog.py), [`test_query.py`](../tests/test_query.py), [`test_result_encoding.py`](../tests/test_result_encoding.py) |
+| `LAUNCH-01-A` | 두 reviewed static source와 단일 replica의 non-RLS launch profile을 구현했다. PostgreSQL 18/UTF-8, 모든 RLS 경로 격리, exact seven-OID 결과, SQL policy v3, 고정 image와 revision label을 local·CI에서 검증하면서 managed 기능과 기존 revision/hash/history를 보존했다. | [ADR 0025](decisions/0025-static-non-rls-first-launch.md), [static first-launch acceptance](verification/2026-08-26-static-first-launch.md) |
 
 Ledger의 완료 결과 column은 찾기 쉬운 요약일 뿐 acceptance를 축소하지 않는다. 각 ID에 연결된
 evidence가 해당 완료 작업의 상세 경계와 실행 증거를 보존한다. Audit가 연결된 row에서 각 audit는
@@ -387,11 +388,11 @@ evidence가 해당 완료 작업의 상세 경계와 실행 증거를 보존한�
 | M14.5 Lossless Scalar, Reader And Result Types | `ENC-*` | Calendar interval, exact 24시 time, nested/duplicate JSON, UTF8 source/client, timezone abbreviation·collation semantics, array lower bound와 record/composite/known-loader OID identity 손실을 닫고 SQL 의미·decode를 PostgreSQL 18의 role/source default와 무관하게 고정한다. |
 | M15 Cost Attribution | `COST-*` | DB-native 사용량을 source/resource-tier time bucket으로 bounded 집계하고 운영 threshold를 고정한다. |
 | M16 Workflow Trace | `TRACE-*` | 여러 tool call과 retry를 bounded trace ID로 안전하게 연결한다. |
-| M17 Static Non-RLS First Launch | `LAUNCH-01`, `LAUNCH-02` | 두 reviewed source의 repository profile을 검증하고 protected environment 전환을 별도 승인·실행한다. |
+| M17 Static Non-RLS First Launch | `LAUNCH-01-A`, `LAUNCH-02` | 두 reviewed source의 repository profile을 검증하고 protected environment 전환을 별도 승인·실행한다. |
 
-M1부터 M13, `TIME-01`~`TIME-02`와 별도 assurance `DBEDGE-01`~`DBEDGE-05`는 당시 범위에서
-완료됐다. 현재 M17의 `LAUNCH-01-A`가 authority이고 protected action `LAUNCH-02`만 active launch
-작업이다. `RLS-*`, `ENC-*`, `TIME-03`, `COST-*`, `TRACE-*`는 실제 요구와 정확한 새 변경 승인이
+M1부터 M13, `TIME-01`~`TIME-02`, `LAUNCH-01-A`와 별도 assurance `DBEDGE-01`~`DBEDGE-05`는
+각 범위에서 완료됐다. 현재 M17의 `LAUNCH-01-A`가 authority이고 protected action `LAUNCH-02`만
+active launch 작업이다. `RLS-*`, `ENC-*`, `TIME-03`, `COST-*`, `TRACE-*`는 실제 요구와 정확한 새 변경 승인이
 생길 때까지 parked다. ADR 0020~0024와
 [lower-track prework](verification/2026-08-26-lower-track-contract-prework.md)는 연구 이력이지
 priority/start gate나 change-set 승인이 아니다. 새로운 기능은 기존 완료 ID나 설명을 소급 변경하지

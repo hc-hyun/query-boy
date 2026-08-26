@@ -1,6 +1,6 @@
 # Active Development TODO
 
-Status: Active — first-launch repository work is tracked by ADR 0025; future tracks are parked
+Status: Active — `LAUNCH-02` is the only active launch item; future tracks are parked
 
 이 문서는 **아직 끝나지 않은 일만** 기록한다. 완료 이력과 실행 증거는
 [implementation roadmap](implementation-roadmap.md#14-post-baseline-completion-ledger-and-active-development)에
@@ -34,6 +34,8 @@ authority다.
 - Managed mode, broader result type, RLS serving, HA, cost attribution와 workflow trace는 first launch
   serving 범위 밖
 
+`LAUNCH-01-A` repository implementation과 local acceptance는
+[완료됐다](verification/2026-08-26-static-first-launch.md).
 Repository implementation과 local acceptance는 protected environment 전환 권한이 아니다.
 
 ## Protected Environment Execution
