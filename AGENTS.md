@@ -5,6 +5,11 @@ source는 [활성 개발 지침](docs/development-guidelines.md)이다. Primary 
 해당하는 절만 구현 전에 읽는다. 목표는 코드 골프가 아니라 요구사항을 안전하게 만족하는 가장
 작고 단순한 변경이다.
 
+구조를 나누는 목적은 사람과 agent가 필요한 범위만 빠르게 이해하고, official interface를 보존한
+내부 변경의 영향이 다른 module로 번지지 않게 하는 것이다. Folder, package, repository 또는 service
+수를 늘리는 것 자체는 목표가 아니다. 구조 변경 전에는
+[설계 목적과 분리 판단](docs/development-guidelines.md#설계-목적과-분리-판단)을 적용한다.
+
 ## 60초 작업 시작
 
 1. [문서 안내](docs/README.md)와 [용어 사전](docs/glossary.md)에서 현재/기록/비활성 문서를 구분한다.

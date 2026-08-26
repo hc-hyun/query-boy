@@ -15,6 +15,7 @@ Reference: [Ponytail](https://github.com/DietrichGebert/ponytail)
 | 변경 종류 | 읽을 절 |
 |---|---|
 | Module 하나의 구현 또는 shared file | [Module-Scoped Development](#module-scoped-development) |
+| Folder·package·repository·service 경계 | [설계 목적과 분리 판단](#설계-목적과-분리-판단), [Module-Scoped Development](#module-scoped-development) |
 | Interface·wire·format·policy·lifecycle·procedure | [Module Interface와 승인 대상 변경](#module-interface와-승인-대상-변경) |
 | 새 코드·abstraction·dependency | [Decision Ladder](#decision-ladder), [Implementation Rules](#implementation-rules), [Dependencies](#dependencies) |
 | 테스트 선택과 완료 gate | [Tests](#tests) |
@@ -22,6 +23,30 @@ Reference: [Ponytail](https://github.com/DietrichGebert/ponytail)
 
 하나의 변경이 여러 범주에 걸치면 해당 절을 함께 읽는다. Root router와 primary module README가 이미
 충분히 답한 내용을 찾으려고 이 문서의 다른 절까지 확장하지 않는다.
+
+## 설계 목적과 분리 판단
+
+Query Man의 module boundary는 독립 배포 단위를 늘리기 위한 것이 아니라, 사람과 agent가 한 작업에
+필요한 코드만 빠르게 찾고 이해하도록 만드는 **독립적인 이해·변경 단위**다. Official interface의
+의미를 보존한 module 내부 변경은 다른 module의 구현 변경으로 번지지 않아야 한다.
+
+이 기준은 modular monolith, information hiding, package-by-feature, high cohesion/low coupling,
+Common Closure Principle과 YAGNI/KISS의 실용적인 조합이다. 완전한 DDD나 Clean Architecture의 계층을
+기계적으로 도입하라는 뜻이 아니다.
+
+- 같은 업무상 이유로 바뀌고 같은 transaction, lock, cleanup 또는 실패 경로를 이루는 코드는 함께
+  둔다. 큰 file이라는 사실만으로 나누지 않는다.
+- 서로 다른 이유와 주기로 바뀌고, consumer와 runnable test가 구분되며, 한쪽 작업에 다른 쪽 구현을
+  읽을 필요가 없을 때 module 또는 private file 분리를 검토한다.
+- 분리는 기존 책임을 드러내고 실제 읽기·변경 범위를 줄여야 한다. 이름만 전달하는 facade, wrapper,
+  `common`/`utils` 계층이나 재노출용 `__init__.py`를 만들면 분리하지 않는다.
+- 현재 요구나 반복해서 확인된 탐색·변경 문제가 먼저다. 막연한 미래 기능, line count, 대칭적인 folder
+  모양 또는 사용되지 않는 확장 가능성만으로 새 경계를 만들지 않는다.
+- 별도 repository, distribution 또는 service는 독립 배포, version, 접근 권한, owner나 운영 lifecycle이
+  실제로 필요할 때만 검토한다. AI context를 줄인다는 이유만으로 network와 release 경계를 추가하지
+  않는다.
+- 새 경계보다 삭제, 기존 module 재사용 또는 가까운 위치의 평범한 코드로 충분하면 거기서 멈춘다.
+  경계 변경이 interface나 별도 승인 대상 의미에 닿으면 아래 승인 절차를 먼저 따른다.
 
 ## Module-Scoped Development
 
