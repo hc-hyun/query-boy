@@ -11,6 +11,10 @@ Date: 2026-08-26
 evidence가 생긴 뒤에만 승인·구현할 수 있다. 이 문서를 승인해도 `ENC`, `TIME-03`, `COST-01-A` 또는
 작업 우선순위가 자동 승인·완료되지 않는다. 현재 code/schema/config/wire를 바꾸지 않는다.
 
+이 제안은 하나의 module interface가 아니다. Evaluator/store capability는 module interface, four-table
+design은 persisted format, threshold/retention/status는 policy, operator route는 external API,
+evaluation/cooldown은 lifecycle rule이다. 승인안은 이 범주별 영향을 함께 명시한다.
+
 ## Context
 
 Base COST 제안은 target reader role의 `pg_stat_statements` lower-bound hourly aggregate를 만든다. 이것은
@@ -96,7 +100,7 @@ operator 전달을 정확히 정해야 한다.
    first/last sample 위치, 최대 gap 또는 reset 없는 관측을 보장하지 않는다. Same-identity
    reset/deallocation/discard는 새 alert epoch를 만들지 않고 subsequent count heuristic만 다시 채운다.
    Continuous/reset-bounded coverage가 필요하면 COST-01에 별도 quality epoch/evidence를 승인해야 하며 이
-   A의 4-table 계약으로 가장하지 않는다.
+   A의 4-table persisted design으로 가장하지 않는다.
 5. A source advisory lock, current policy-state row lock and persisted `last_evaluated_bucket` serialize evaluation.
    Configure 또는 rollback이 새 policy activation을 만들면 current state를
    `pending/waiting/BASELINE_REQUIRED`, recovery 0, last-evaluated/evaluated/observed/baseline 전부 null로
@@ -628,8 +632,9 @@ Base COST rollup/status만 제공하고 threshold, alert state/event와 route를
 
 ## Approval Boundary
 
-이 제안은 승인된 계약이 아니다. Base evidence 뒤 A를 선택할 경우 아래 전체를 정확히 승인해야 한다.
-B는 delivery contract를 다시 제시해야 하고 C는 completion defer다.
+이 문서는 정확한 제안일 뿐 현재 승인 baseline이나 구현이 아니다. 승인하려면 해당되는 모든 변경
+범주와 영향을 정확히 지정해야 한다. Base evidence 뒤 A를 선택할 경우 아래 전체를
+정확히 승인해야 한다. B는 delivery API를 다시 제시해야 하고 C는 completion defer다.
 
 ```text
 COST-04-A를 source/profile/metadata/definition/base observation identity+start와 alert policy

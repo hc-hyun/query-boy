@@ -9,7 +9,11 @@ Date: 2026-08-26
 이 문서는 `TRACE-01` 선택지를 미리 검토한 초안이다. 현재 TODO상 `ENC`, `TIME-03`과 `COST`가
 우선이므로 사용자가 P4 결정과 `TRACE-02`~`TRACE-04` 구현·검증 전체를 명시적으로 reprioritize하거나
 앞 priority를 완료하기 전에는 `TRACE-01`을 공식 시작하지 않고 header, audit field, metric과 module
-contract를 바꾸지 않는다. `TRACE-01` 결정만 먼저 승인하는 경우 구현은 기존 priority gate 뒤에 남는다.
+interface/API/policy를 바꾸지 않는다. `TRACE-01` 결정만 먼저 승인하는 경우 구현은 기존 priority gate 뒤에 남는다.
+
+이 제안은 하나의 module interface가 아니다. Runtime trace scope는 module interface, Delivery
+`traceparent` header 의미는 external API, audit/redaction/counter는 observability policy다. 각 범주는
+같은 승인안에서 조율하되 실제 분류와 owner를 따로 기록한다.
 
 ## Context
 
@@ -76,7 +80,7 @@ context는 새 trace로 restart할 수 있고, public ingress의 header 길이/c
 5. Runtime이 frozen+slots `TraceContext(trace_id, disposition)`, exact four-literal `TraceDisposition`,
    nested/finally-safe `trace_scope(context)`와
    `current_trace_context() -> TraceContext | None`, `current_trace_id() -> str | None` process-local provider
-   contract를 소유하고 construction 때 trace ID/disposition을 검사한다. Scope는 exact object를 yield하고
+   interface를 소유하고 construction 때 trace ID/disposition을 검사한다. Scope는 exact object를 yield하고
    밖에서는 `None`이며 exception/cancel 포함 종료 뒤 `ContextVar` token으로 nested prior value를 복원한다.
    Delivery는 인증과 route scope 확인 뒤 context를 만들고 exact immutable object identity를 ASGI `scope["state"]`의
    `trace_context`에도 보존한 뒤 Runtime `ContextVar` scope를 set하며 `finally`에서 token을 reset한다.
@@ -148,7 +152,7 @@ Invalid/duplicate header를 새 public `INVALID_TRACE_CONTEXT` 400으로 거부�
 
 ## Provider And Consumer Impact
 
-- Provider contracts: Runtime process-local trace scope/counter/log allowlist, Delivery auth-after exact-route
+- Provider boundaries: Runtime process-local trace scope/counter/log allowlist, Delivery auth-after exact-route
   header parser와 immutable ASGI request-state bridge
 - Direct consumers: Delivery/MCP lifecycle·private MCP-call scope/Gateway audit와 Guarded Query audit propagation
 - Unchanged: HTTP/MCP business schema/status, query result/hash, Source/Metadata/Control DB, authz,
@@ -156,7 +160,7 @@ Invalid/duplicate header를 새 public `INVALID_TRACE_CONTEXT` 400으로 거부�
 - Security/privacy: policy-admitted client도 trace ID를 forge/reuse할 수 있다고 가정하며 raw header와
   sensitive input을 저장하지 않는다.
 
-Coordinating agent가 Runtime scope와 Delivery wire semantics를 하나의 cross-module contract로 먼저
+Coordinating agent가 Runtime module interface와 Delivery external wire semantics를 각각 먼저
 동결한다. 구현 순서는 Runtime provider → Delivery parser/set-reset → MCP/Guarded Query consumer다.
 Provider가 확정된 뒤 서로 다른 consumer 검증만 병렬화한다.
 
@@ -188,7 +192,8 @@ Provider가 확정된 뒤 서로 다른 consumer 검증만 병렬화한다.
 
 ## Approval Boundary
 
-이 제안은 승인된 계약이 아니다. 앞 priority가 모두 끝난 뒤에는 아래 첫 문장을 생략할 수 있다.
+이 문서는 정확한 제안일 뿐 현재 승인 baseline이나 구현이 아니다. 승인하려면 해당되는 모든 변경
+범주와 영향을 정확히 지정해야 한다. 앞 priority가 모두 끝난 뒤에는 아래 첫 문장을 생략할 수 있다.
 현재 exact implementation-ready 승인은 A만 아래에 제시한다. B/C를 선택하면 route, audit/counter,
 rollout/rollback과 B의 public error envelope를 다시 exact restatement해 승인받아야 하며 ID 선택만으로
 구현하지 않는다.

@@ -46,9 +46,9 @@ docker compose down
 [docs/mvp.md](docs/mvp.md), 완료된 구현 이력은
 [docs/implementation-roadmap.md](docs/implementation-roadmap.md), 현재 우선순위 TODO는
 [docs/development-todo.md](docs/development-todo.md)를 참고합니다. Module 단위로 작업할 때는
-[module boundaries](docs/modules/README.md)에서 owner, 계약과 집중해서 읽을 범위를 먼저 확인합니다.
-승인된 module 계약 강화 선택지와 아직 완료되지 않은 구현 상태는
-[module contract decision guide](docs/module-contract-decision-guide.md)와 active TODO에서 추적합니다.
+[module boundaries](docs/modules/README.md)에서 owner, interface·별도 경계와 집중해서 읽을 범위를 먼저 확인합니다.
+승인된 module boundary 강화 선택지와 아직 완료되지 않은 구현 상태는
+[module boundary decision guide](docs/module-contract-decision-guide.md)와 active TODO에서 추적합니다.
 기존 production baseline 증거는
 [completion audit](docs/verification/2026-08-23-completion-audit.md), 그 이후 refactoring baseline과 당시 운영 경계는
 [refactoring assurance](docs/verification/2026-08-23-refactoring-assurance.md), 컨테이너 실행 증거는
@@ -133,7 +133,7 @@ Admin capability가 있는 caller는 audit log에 기록된 실행 중 `query_id
 
 Client는 DSN, host, database 또는 role을 전달할 수 없습니다. Runtime은
 `QUERY_MAN_SOURCE_MODE=bootstrap|managed`로 source authority를 시작할 때 한 번만 선택합니다.
-기본값 `bootstrap`은 local/CI에서 [`config/sources`](config/sources)와 filesystem verified contract를
+기본값 `bootstrap`은 local/CI에서 [`config/sources`](config/sources)와 filesystem verified-query data를
 읽고 Control DB 설정을 거부합니다. `managed`는 `QUERY_MAN_CONTROL_DSN`,
 `QUERY_MAN_SOURCE_ENCRYPTION_KEY`와 stable `QUERY_MAN_REPLICA_ID`를 모두 요구하며
 source/verified file을 열거나 합치지 않습니다.
@@ -208,7 +208,7 @@ pytest marker로 표현합니다. `uv run pytest`는 기본적으로 단위 테�
 로컬 PostgreSQL을 사용하는 통합 테스트는 `uv run pytest -m integration`으로 별도 실행합니다. 신규 source 등록 절차는
 [docs/source-onboarding.md](docs/source-onboarding.md)를 참고합니다.
 초기 budget의 service load 검증은 `uv run pytest -m 'load and not mcp_server' -s`로,
-실행 중인 Compose MCP의 전체 contract·병렬·비용 경계는
+실행 중인 Compose MCP의 external API·병렬·비용 경계는
 `uv run pytest -m 'mcp_server and not soak' -s`로 실행합니다. MCP server test는 안전을 위해
 credential이 없는 loopback `http://` URL만 허용하고 `.env` token을 출력하지 않습니다.
 두 replica의 1,000-session resource soak는 일반 개발/PR 경로와 분리해 실행합니다.
@@ -222,7 +222,7 @@ uv run pytest -m soak -s
 현재 fixture connection budget은 두 replica까지만 보장합니다. 종료할 때는
 `docker compose --profile soak down`을 사용합니다.
 전체 golden question의 revision, relation, SQL과 결과 invariant는
-[`docs/verified-queries.md`](docs/verified-queries.md)의 계약에 따라
+[`docs/verified-queries.md`](docs/verified-queries.md)의 revision·relation·SQL·result baseline에 따라
 `uv run query-man-verify`로 검증합니다.
 
 Production managed runtime을 준비하려면 database owner/관리자용 표준 libpq 환경에서
@@ -232,7 +232,7 @@ database·role·seed를 만드는 local/CI bootstrap이며 production migration�
 `QUERY_MAN_SOURCE_MODE=managed`, 전용 LOGIN의 TLS DSN, source encryption key, version 2
 access-policy file과 replica마다 고유한 stable `QUERY_MAN_REPLICA_ID`를 함께 사용합니다. Bootstrap
 source를 이관할 때는 traffic 밖의 managed instance에서 기존 admin API로
-L0/L1 source, Control DB verified contract, L2 source 순서로 publish한 뒤 serving replica를
+L0/L1 source, Control DB verified-query data, L2 source 순서로 publish한 뒤 serving replica를
 managed mode로 시작합니다. Startup import, 별도 marker와 filesystem write-back은 없습니다.
 자세한 설치·이관·복구 순서는
 [source onboarding](docs/source-onboarding.md)과
@@ -250,7 +250,7 @@ accuracy, unsupported/clarification recall과 context byte 상한 중 하나라�
 종료합니다.
 
 각 source manifest의 `minimum_quality_level`은 L0/L1/L2 publish gate입니다. 현재 두 MVP
-source는 L2이며, metadata revision과 일치하는 verified contract가 없으면 `/meta`, MCP와
+source는 L2이며, metadata revision과 일치하는 verified-query baseline이 없으면 `/meta`, MCP와
 query 경로가 새 revision을 활성화하지 않습니다.
 
 `QUERY_MAN_SOURCE_MODE=managed`에서 Control DSN, encryption key, stable replica ID와 version 2

@@ -3,7 +3,7 @@
 Status: Baseline complete; RLS-enabled production serving blocked pending `RLS-*`
 
 이 문서는 Query Man의 최종 목적을 구현한 production baseline과 완료 이력을 보존한다.
-세부 설계 원칙은 [architecture.md](architecture.md), 현재 검증용 데이터와 계약은
+세부 설계 원칙은 [architecture.md](architecture.md), 현재 검증용 데이터와 baseline은
 [mvp.md](mvp.md), source 등록 규칙은 [source-onboarding.md](source-onboarding.md)를
 따른다. 전체 항목의 구현·검증 연결은
 [completion audit](verification/2026-08-23-completion-audit.md)에 production baseline으로,
@@ -16,7 +16,7 @@ checklist는 [active development TODO](development-todo.md)에서 별도로 관�
 각 verification 문서는 자신의 scope와 실행 시점에 대한 증거이며 후속 변경까지 자동으로
 포괄하는 단일 최종 audit로 해석하지 않는다.
 완료 이력의 caller별 source-scope 문구는 당시 acceptance를 보존하며, 현재 version 2 shared-access
-계약은 [shared access audit](verification/2026-08-23-shared-access.md)이 우선한다.
+authorization policy는 [shared access audit](verification/2026-08-23-shared-access.md)이 우선한다.
 
 ## Final Outcome
 
@@ -51,20 +51,20 @@ checklist는 [active development TODO](development-todo.md)에서 별도로 관�
 - [x] `BASE-04` YAML source registry와 budget profile을 검증하고 credential 값을 manifest와 응답에서 분리한다.
 - [x] `BASE-05` Reader 권한으로 relation, column, type, comment와 view definition hash를 수집한다.
 - [x] `BASE-06` Semantic overlay의 grain, alias, measure, business predicate, join과 composition을 검증한다.
-- [x] `BASE-07` 질문 범위형 `GET /sources`, `POST /meta` 계약과 relation relevance 선택을 제공한다.
+- [x] `BASE-07` 질문 범위형 `GET /sources`, `POST /meta` API와 relation relevance 선택을 제공한다.
 - [x] `BASE-08` Metadata revision, TTL cache, 제한된 stale fallback과 schema drift fail-closed를 제공한다.
 - [x] `BASE-09` 외부 bind 시 bearer token을 강제하고 public error에서 내부 연결 정보를 숨긴다.
 - [x] `BASE-10` Ruff, mypy, 단위 테스트와 실제 PostgreSQL 통합 테스트 기반을 제공한다.
 
-## 1. Contract And Safety Decisions
+## 1. Interface And Safety Decisions
 
-안전 경계를 먼저 고정해야 SQL parser나 실행기를 교체해도 외부 계약과 정책이 흔들리지
+안전 경계를 먼저 고정해야 SQL parser나 실행기를 교체해도 external API와 정책이 흔들리지
 않는다.
 
 - [x] `DEC-01` 지원할 PostgreSQL SQL 문법 범위와 AST parser 선정 기준을 decision record로 확정한다.
 - [x] `DEC-02` 허용·거부할 relation kind, operator, function, system object 정책을 명세한다.
 - [x] `DEC-03` Canonical SQL과 query fingerprint 규칙을 명세하고 literal 처리 원칙을 확정한다.
-- [x] `DEC-04` `query` 요청·응답, reason code, truncation, plan summary와 error 계약을 확정한다.
+- [x] `DEC-04` `query` 요청·응답, reason code, truncation, plan summary와 external error mapping을 확정한다.
 - [x] `DEC-05` Metadata revision 불일치 시 거부와 context 재조회 흐름을 확정한다.
 - [x] `DEC-06` 초기 budget hard limit과 source별 override 허용 범위를 부하 테스트 근거로 확정한다.
 - [x] `DEC-07` Reader role, RLS, SECURITY DEFINER/INVOKER view와 함수 allowlist 정책을 확정한다.
@@ -96,7 +96,7 @@ Dependencies: `SQL-01`~`SQL-05`, `SQL-07`~`SQL-10`은 `DEC-01`~`DEC-03`을 따�
 Dependencies: `SQL-01`~`SQL-09`, `DEC-06`
 
 - [x] `EXEC-01` HTTP application service에
-  `query(source_id, sql, metadata_revision, sql_policy_revision)` 계약을 구현한다.
+  `query(source_id, sql, metadata_revision, sql_policy_revision)` service interface를 구현한다.
 - [x] `EXEC-02` Caller의 source 접근 권한을 확인한 뒤 source별 concurrency slot을 획득한다.
 - [x] `EXEC-03` `BEGIN READ ONLY` transaction과 transaction-local statement, lock, idle timeout을 강제한다.
 - [x] `EXEC-04` Source profile의 reader identity, database와 read-only session 상태를 실행 직전에 검증한다.
@@ -106,7 +106,7 @@ Dependencies: `SQL-01`~`SQL-09`, `DEC-06`
 - [x] `EXEC-08` Optional `EXPLAIN` admission을 구현하되 planner cost만으로 안전을 보장하지 않도록 한다.
 - [x] `EXEC-09` `query_id`, fingerprint, elapsed time, row/byte 수, truncation과 plan summary를 반환한다.
 - [x] `EXEC-10` 수정 가능한 고정 SQLSTATE만 bounded `QUERY_INVALID`로 분리하고 나머지 DB 오류,
-  timeout, cancel과 serialization failure를 비공개 또는 전용 오류 계약으로 매핑한다.
+  timeout, cancel과 serialization failure를 비공개 또는 전용 external error로 매핑한다.
 - [x] `EXEC-11` 동시성, timeout, invalid query, large result, disconnect, cancel과 rollback 통합
   테스트를 추가한다.
 - [x] `EXEC-12` Reader가 base schema, write statement와 비승인 함수를 실행할 수 없는지 end-to-end로 검증한다.
@@ -114,7 +114,7 @@ Dependencies: `SQL-01`~`SQL-09`, `DEC-06`
 
 ## 4. Metadata Quality And Revision Publishing
 
-Physical catalog, immutable publish와 품질 gate를 하나의 revision 계약으로 제공한다.
+Physical catalog, immutable publish와 품질 gate를 하나의 revision identity/lifecycle로 제공한다.
 
 - [x] `META-01` Primary key, foreign key와 index metadata를 `pg_catalog`에서 권한 범위 내 수집한다.
 - [x] `META-02` 수집 metadata와 전역 SQL capability가 revision/API 응답에 포함될 범위를 정하고
@@ -148,7 +148,7 @@ Dependencies: `EXEC-01`~`EXEC-10`, `META-05`~`META-08`, `DEC-08`
 
 Dependencies: `META-05`, `META-06`
 
-- [x] `ONB-01` Source manifest와 secret을 검증된 control plane 입력으로 등록하는 관리자 계약을 구현한다.
+- [x] `ONB-01` Source manifest와 secret을 검증된 control plane 입력으로 등록하는 administrator interface를 구현한다.
 - [x] `ONB-02` 신규 source 연결, 권한, catalog, overlay와 budget을 격리된 staging 단계에서 검증한다.
 - [x] `ONB-03` 검증 성공한 source profile과 metadata revision을 원자적으로 publish한다.
 - [x] `ONB-04` Runtime이 재시작 없이 source 추가·변경·비활성화를 반영한다.
@@ -221,7 +221,7 @@ Dependencies: `ONB-*`, `AUTH-*`, `MCP-*`, `REL-*`
 
 Dependencies: completed production baseline and extension assurance
 
-완료 표시에는 재현 테스트, 최소 수정, 관련 운영 계약 정비와 전체 회귀 검증이 모두
+완료 표시에는 재현 테스트, 최소 수정, 관련 운영 절차 정비와 전체 회귀 검증이 모두
 필요하다. 과거 verification 문서는 당시 실행 증거로 보존하고, 이번 보강의 새 증거는
 [refactoring assurance audit](verification/2026-08-23-refactoring-assurance.md)에 기록한다.
 
@@ -245,10 +245,10 @@ Dependencies: completed production baseline and extension assurance
   health에 누락되지 않게 한다.
 - [x] `REF-10` Process restart가 stored metadata의 stale age를 초기화하지 않도록 publish
   provenance에 기반한 상한을 적용한다.
-- [x] `REF-11` L2 verified contract가 현재 metadata뿐 아니라 source 실행 budget/policy와도
+- [x] `REF-11` L2 verified-query baseline이 현재 metadata뿐 아니라 source 실행 budget/policy와도
   호환되는지 publish 시점에 재검증한다.
 - [x] `REF-12` PostgreSQL `numeric`, binary와 시간 값을 손실·인코딩 오류 없이 전달하는 JSON
-  scalar 계약을 고정하고 byte accounting과 API serialization을 일치시킨다.
+  scalar encoding rules를 고정하고 byte accounting과 API serialization을 일치시킨다.
 - [x] `REF-13` 실제 server SIGTERM 순서에서 readiness 전환과 application drain grace가
   실행되는지 검증하고 process manager timeout을 일관되게 설정한다.
 - [x] `REF-14` Metric·audit·dashboard·restore 문구를 실제 수집 가능한 신호와 검증 범위에
@@ -293,7 +293,7 @@ client와 실제 PostgreSQL fixture를 사용해야 한다. 실행 결과와 남
   unit/integration selection 및 CI container job과 분리한다.
 - [x] `MCPX-02` Versioned quality case 전체를 MCP `get_context`로 실행해 relation,
   answerability와 context byte gate를 자동 확장형으로 검증한다.
-- [x] `MCPX-03` Verified query contract 전체를 MCP context→query로 실행해 revision, relation,
+- [x] `MCPX-03` Verified-query suite 전체를 MCP context→query로 실행해 revision, relation,
   typed result hash, truncation과 unique query ID를 검증한다.
 - [x] `MCPX-04` Host/Origin, 인증, 단일 exact media type, body limit, malformed JSON과 strict
   tool argument 및 단일 current protocol version의 bounded 비노출 거부를 실제 transport에서
@@ -335,27 +335,27 @@ client와 실제 PostgreSQL fixture를 사용해야 한다. 실행 결과와 남
 | `CTRL-09` | PostgreSQL 18.4의 격리 Control DB를 18.6 fresh DB로 복원하고 13-table fingerprint, 원래 key의 모든 generation decrypt, logical retention, zero-bootstrap, receipt replay와 두 managed replica의 query/convergence를 하나의 격리 recovery fixture acceptance로 재현했다. | [control recovery acceptance](verification/2026-08-25-control-recovery-acceptance.md) |
 | `SQLX-01` | 기존 SQL validation baseline 뒤 window·ordered-set·문자열·JSON 함수 정책과 corpus를 보강했다. | Commit `de2b364`; [ADR 0001](decisions/0001-postgresql-ast-validation.md), [`test_sql_validation.py`](../tests/test_sql_validation.py) |
 | `QCORR-01` | 수정 가능한 query/argument 오류에 bounded reason별 correction action을 추가하고 한 번의 retry workflow를 고정했다. | Commit `de2b364`; [ADR 0002](decisions/0002-guarded-query-contract.md), [ADR 0006](decisions/0006-mcp-transport-and-workflow.md), [`test_query.py`](../tests/test_query.py), [`test_mcp.py`](../tests/test_mcp.py) |
-| `MOD-01` | 논리 module owner, 허용 dependency, 계약 승인과 module-scoped agent 절차를 문서·테스트로 고정했다. | Commit `de2b364`; [ADR 0018](decisions/0018-module-ownership-and-contract-governance.md), [module index](modules/README.md), [`test_documentation.py`](../tests/test_documentation.py) |
+| `MOD-01` | 논리 module owner, 허용 dependency, interface/boundary 승인과 module-scoped agent 절차를 문서·테스트로 고정했다. | Commit `de2b364`; [ADR 0018](decisions/0018-module-ownership-and-contract-governance.md), [module index](modules/README.md), [`test_documentation.py`](../tests/test_documentation.py) |
 | `MOD-02` | Active-only TODO, module별 작업 gate, non-Python artifact primary owner/single-writer와 immutable baseline description 검사를 추가했다. | [active TODO](development-todo.md), [module index](modules/README.md), [`test_documentation.py`](../tests/test_documentation.py) |
-| `MOD-03` | Startup cleanup과 다섯 contract debt의 용어, 객관식 선택지, 영향·불변조건·승인 형식을 이해 문서로 고정했다. | [module contract decision guide](module-contract-decision-guide.md), [`test_documentation.py`](../tests/test_documentation.py) |
-| `RTSAFE-01` | MCP child lifespan 진입 실패 시 child exit를 호출하지 않고 parent 최상위 resource를 고정 순서로 정확히 한 번씩 정리 시도하며 최초 startup error를 보존한다. | [Runtime contract](modules/runtime/README.md#startup-contract), [Delivery child lifespan contract](modules/delivery/README.md#child-lifespan-ownership-contract), [`test_runtime_startup_cleanup.py`](../tests/test_runtime_startup_cleanup.py) |
-| `MOD-04` | Delivery의 Control persistence/Assurance DTO hidden import를 제거하고 Control Plane public sequence/verified-publish input에서 Assurance DTO로 exact mapping하며 HTTP, storage, verified identity/hash 의미를 보존했다. | [Control Plane contract](modules/control-plane/README.md#source-administration-contract), [Delivery contract](modules/delivery/README.md#소비-계약), [`test_documentation.py`](../tests/test_documentation.py), [`test_http.py`](../tests/test_http.py), [`test_source_admin.py`](../tests/test_source_admin.py), [`test_control_startup.py`](../tests/test_control_startup.py) |
-| `MOD-05` | Source Catalog의 read-only `SourceReader`와 이를 확장하는 `SourceProjectionWriter`를 분리해 ordinary consumer와 Control reloader의 type capability를 좁히고 registry/load/runtime output을 보존했다. | [Source Catalog contract](modules/source-catalog/README.md#source-read-contract), [module index](modules/README.md#현재-코드-전환-맵), [`test_registry.py`](../tests/test_registry.py), [`test_http.py`](../tests/test_http.py), [`test_source_admin.py`](../tests/test_source_admin.py) |
-| `MOD-06` | 작은 Query/Catalog application Protocol을 유지하면서 Runtime 전용 lifecycle composite를 추가하고, 모든 required callable을 composition에서 검증해 누락 adapter를 ready 전에 거부하며 기존 drain/invalidation 순서를 보존했다. | [Guarded Query lifecycle contract](modules/guarded-query/README.md#executor-lifecycle-contract), [Metadata catalog capability](modules/metadata/README.md#catalog-provider-capability-contract), [Runtime composition](modules/runtime/README.md#composition-contract), [`test_query.py`](../tests/test_query.py), [`test_catalog.py`](../tests/test_catalog.py), [`test_managed_mode.py`](../tests/test_managed_mode.py), [`test_http.py`](../tests/test_http.py), [`test_runtime_startup_cleanup.py`](../tests/test_runtime_startup_cleanup.py) |
-| `MOD-07` | `SourceProfile`/semantic과 published catalog/prepared metadata graph를 tuple·alias-copy read-only mapping·frozen dataclass로 재귀적으로 immutable하게 만들고 provider/decoder boundary에서 freeze했다. Persisted/wire JSON array/object, metadata revision golden, snapshot codec와 result-hash 계약은 유지해 DB migration 없이 rolling compatibility를 보존했다. | [Source immutability contract](modules/source-catalog/README.md#published-source-immutability-contract), [Metadata published contract](modules/metadata/README.md#published-metadata-contract), [`test_registry.py`](../tests/test_registry.py), [`test_catalog.py`](../tests/test_catalog.py), [`test_revision.py`](../tests/test_revision.py), [`test_metadata_store.py`](../tests/test_metadata_store.py), [`test_metadata.py`](../tests/test_metadata.py) |
-| `MOD-08` | Assurance quality/verified core에서 concrete adapter 조립을 제거하고 두 bootstrap-only offline command를 전용 `assurance_cli.py` composition root로 격리했다. Command/`--root`/JSON/exit, Guarded Query safety·RLS fail-closed path와 cleanup 순서는 유지하고 production Runtime/Control staging wiring은 바꾸지 않았다. | [Assurance offline CLI contract](modules/assurance/README.md#offline-cli-composition-contract), [`assurance_cli.py`](../src/query_man/assurance_cli.py), [`test_assurance_cli.py`](../tests/test_assurance_cli.py), [`test_verified.py`](../tests/test_verified.py), [`test_registry.py`](../tests/test_registry.py) |
+| `MOD-03` | Startup cleanup과 다섯 boundary debt의 용어, 객관식 선택지, 영향·불변조건·승인 형식을 이해 문서로 고정했다. | [module boundary decision guide](module-contract-decision-guide.md), [`test_documentation.py`](../tests/test_documentation.py) |
+| `RTSAFE-01` | MCP child lifespan 진입 실패 시 child exit를 호출하지 않고 parent 최상위 resource를 고정 순서로 정확히 한 번씩 정리 시도하며 최초 startup error를 보존한다. | [Runtime startup rules](modules/runtime/README.md#startup-sequence-and-failure-cleanup), [Delivery child lifespan rules](modules/delivery/README.md#child-lifespan-ownership-and-cleanup-rule), [`test_runtime_startup_cleanup.py`](../tests/test_runtime_startup_cleanup.py) |
+| `MOD-04` | Delivery의 Control persistence/Assurance DTO hidden import를 제거하고 Control Plane public sequence/verified-publish input에서 Assurance DTO로 exact mapping하며 HTTP, storage, verified identity/hash 의미를 보존했다. | [Control Plane administration interface](modules/control-plane/README.md#source-administration-application-interface), [Delivery consumed interfaces and prerequisites](modules/delivery/README.md#소비-인터페이스와-전제), [`test_documentation.py`](../tests/test_documentation.py), [`test_http.py`](../tests/test_http.py), [`test_source_admin.py`](../tests/test_source_admin.py), [`test_control_startup.py`](../tests/test_control_startup.py) |
+| `MOD-05` | Source Catalog의 read-only `SourceReader`와 이를 확장하는 `SourceProjectionWriter`를 분리해 ordinary consumer와 Control reloader의 type capability를 좁히고 registry/load/runtime output을 보존했다. | [SourceReader interface](modules/source-catalog/README.md#sourcereader-interface), [module index](modules/README.md#현재-코드-전환-맵), [`test_registry.py`](../tests/test_registry.py), [`test_http.py`](../tests/test_http.py), [`test_source_admin.py`](../tests/test_source_admin.py) |
+| `MOD-06` | 작은 Query/Catalog application Protocol을 유지하면서 Runtime 전용 lifecycle composite를 추가하고, 모든 required callable을 composition에서 검증해 누락 adapter를 ready 전에 거부하며 기존 drain/invalidation 순서를 보존했다. | [Guarded Query lifecycle interface](modules/guarded-query/README.md#runtimequeryexecutor-lifecycle-interface), [Metadata catalog interfaces](modules/metadata/README.md#catalogprovider-interfaces), [Runtime composition ownership](modules/runtime/README.md#production-composition-ownership), [`test_query.py`](../tests/test_query.py), [`test_catalog.py`](../tests/test_catalog.py), [`test_managed_mode.py`](../tests/test_managed_mode.py), [`test_http.py`](../tests/test_http.py), [`test_runtime_startup_cleanup.py`](../tests/test_runtime_startup_cleanup.py) |
+| `MOD-07` | `SourceProfile`/semantic과 published catalog/prepared metadata graph를 tuple·alias-copy read-only mapping·frozen dataclass로 재귀적으로 immutable하게 만들고 provider/decoder boundary에서 freeze했다. Persisted/wire JSON array/object, metadata revision golden, snapshot codec와 result-hash identity는 유지해 DB migration 없이 rolling compatibility를 보존했다. | [Source immutability guarantee](modules/source-catalog/README.md#published-source-interface-immutability-guarantee), [Metadata published interface](modules/metadata/README.md#published-metadata-interface), [`test_registry.py`](../tests/test_registry.py), [`test_catalog.py`](../tests/test_catalog.py), [`test_revision.py`](../tests/test_revision.py), [`test_metadata_store.py`](../tests/test_metadata_store.py), [`test_metadata.py`](../tests/test_metadata.py) |
+| `MOD-08` | Assurance quality/verified core에서 concrete adapter 조립을 제거하고 두 bootstrap-only offline command를 전용 `assurance_cli.py` composition root로 격리했다. Command/`--root`/JSON/exit, Guarded Query safety·RLS fail-closed path와 cleanup 순서는 유지하고 production Runtime/Control staging wiring은 바꾸지 않았다. | [Assurance offline CLI boundary](modules/assurance/README.md#offline-cli-surface-and-composition-boundary), [`assurance_cli.py`](../src/query_man/assurance_cli.py), [`test_assurance_cli.py`](../tests/test_assurance_cli.py), [`test_verified.py`](../tests/test_verified.py), [`test_registry.py`](../tests/test_registry.py) |
 | `SKILL-01` | Source onboarding planning의 positive trigger와 manual admin/query workflow negative boundary를 확정했다. | [Skill plan](source-onboarding-skill-plan.md), [Skill acceptance](verification/2026-08-25-source-onboarding-skill.md) |
 | `SKILL-02` | 비밀 아닌 입력, 8-section output, DB-owner/admin handoff, shared visibility와 secret/mutation threat 경계를 확정했다. | [Skill plan](source-onboarding-skill-plan.md), [Skill acceptance](verification/2026-08-25-source-onboarding-skill.md) |
 | `SKILL-03` | Plan-only repository Skill과 progressive-disclosure reference를 구현했다. | [`query-man-source-onboarding`](../skills/query-man-source-onboarding/SKILL.md), [`test_onboarding_skill.py`](../tests/test_onboarding_skill.py) |
 | `SKILL-04` | 정상·누락·negative-routing·DBA·prompt-injection·secret/immediate-publish 요청을 fresh-context forward evaluation으로 검증했다. | [Skill acceptance](verification/2026-08-25-source-onboarding-skill.md) |
 | `SKILL-05` | `support-tickets` owner/admin handoff를 재현하고 repository, source DB, Control authority/roles와 spy admin endpoint의 mutation 0을 검증했다. | [Skill acceptance](verification/2026-08-25-source-onboarding-skill.md) |
 | `SKILL-06` | Skill validator, 정적 회귀, 운영 문서와 기본 onboarding planning workflow 채택 기록을 완료했다. | [Skill acceptance](verification/2026-08-25-source-onboarding-skill.md), [source onboarding](source-onboarding.md) |
-| `DBEDGE-01` | 세 UUID별 disposable PostgreSQL source에서 wide/untrusted metadata, temporal/rich scalar, partition/materialized/empty result와 leak-free cleanup을 검증하고 기존 ADR을 위반한 wide-match overflow를 수정했다. TimeZone canonicalization gap은 계약 승인 전 미구현으로 분리했다. | [source database corner acceptance](verification/2026-08-25-source-database-corners.md), [`test_source_database_corners.py`](../tests/test_source_database_corners.py), [`test_metadata.py`](../tests/test_metadata.py) |
-| `DBEDGE-02` | 추가 disposable DB에서 live view-definition revision 전환, cold/warm relation·column·structure catalog 상한, multibyte row truncation과 unsupported infinity/range/nonempty-multirange의 비공개 실패·rollback·pool 복구를 고정했다. Month interval, fractional JSONB numeric, empty multirange의 hash collision과 reader-format default drift를 재현하고 계약 변경 전 구현을 중단했다. | [source database corner acceptance](verification/2026-08-25-source-database-corners.md), [proposed ADR 0020](decisions/0020-lossless-interval-and-json-numeric-encoding.md), [`test_source_database_corners.py`](../tests/test_source_database_corners.py) |
+| `DBEDGE-01` | 세 UUID별 disposable PostgreSQL source에서 wide/untrusted metadata, temporal/rich scalar, partition/materialized/empty result와 leak-free cleanup을 검증하고 기존 ADR을 위반한 wide-match overflow를 수정했다. TimeZone canonicalization gap은 policy/format 승인 전 미구현으로 분리했다. | [source database corner acceptance](verification/2026-08-25-source-database-corners.md), [`test_source_database_corners.py`](../tests/test_source_database_corners.py), [`test_metadata.py`](../tests/test_metadata.py) |
+| `DBEDGE-02` | 추가 disposable DB에서 live view-definition revision 전환, cold/warm relation·column·structure catalog 상한, multibyte row truncation과 unsupported infinity/range/nonempty-multirange의 비공개 실패·rollback·pool 복구를 고정했다. Month interval, fractional JSONB numeric, empty multirange의 hash collision과 reader-format default drift를 재현하고 policy/format 변경 전 구현을 중단했다. | [source database corner acceptance](verification/2026-08-25-source-database-corners.md), [proposed ADR 0020](decisions/0020-lossless-interval-and-json-numeric-encoding.md), [`test_source_database_corners.py`](../tests/test_source_database_corners.py) |
 | `DBEDGE-03` | 별도 disposable DB들에서 SQL semantic GUC drift, array lower-bound 소실, empty unsupported array 우회, anonymous record field/type 소실과 string-valued unknown OID의 accidental success를 재현했다. `bytea_output`은 current loader가 안정적으로 정규화함을 확인하고, 의미 수정은 확장한 proposed ADR 0020의 정확한 승인 전 중단했다. | [source database corner acceptance](verification/2026-08-25-source-database-corners.md), [proposed ADR 0020](decisions/0020-lossless-interval-and-json-numeric-encoding.md), [`test_source_database_corners.py`](../tests/test_source_database_corners.py) |
 | `DBEDGE-04` | 추가 disposable UTF8/SQL_ASCII DB들에서 duplicate-key JSON collision, text/bytea type confusion, time 24시 decode failure, timezone-abbreviation same-revision drift, direct/hidden-view/domain-type collation·same-OID custom-function drift와 `oid/name`·array/named-composite accidental success를 재현했다. Boolean-only view의 hidden base collation/function body가 같은 snapshot/revision에서 result/hash를 바꾸고 domain은 RowDescription에서 base OID로 identity가 사라져 recursive dependency fingerprint·pre-erasure rejection·managed artifact residual 필요를 고정했다. 현재 동작은 바꾸지 않고 proposed ADR 0020 A의 encoding/source-semantics 경계를 보완했다. | [source database corner acceptance](verification/2026-08-25-source-database-corners.md), [proposed ADR 0020](decisions/0020-lossless-interval-and-json-numeric-encoding.md), [`test_source_database_corners.py`](../tests/test_source_database_corners.py) |
 | `DBEDGE-05` | 추가 disposable PostgreSQL 18 DB들에서 custom operator의 transitive function rebinding, interval infinity/zero collision, temporal·JSON digit driver boundary, varbit positive shape, `bytea::text`/implicit text-search role-default drift와 planner-order-sensitive float/JSONB aggregate를 public QueryService exact hash로 고정했다. 현재 제품 의미는 바꾸지 않았다. 별도로 발견한 RLS base-policy 누출은 완료 결과로 세지 않고 open strict xfail과 security finding으로 분리했다. | [source database corner acceptance](verification/2026-08-25-source-database-corners.md), [RLS policy drift finding](verification/2026-08-26-rls-policy-drift.md), [proposed ADR 0020](decisions/0020-lossless-interval-and-json-numeric-encoding.md), [`test_source_database_corners.py`](../tests/test_source_database_corners.py) |
-| `TIME-01` | Reader session UTC, aware datetime UTC `+00:00`, business calendar `Asia/Seoul`, SQL-policy/metadata revision 재료, full verified reissue, coordinated cutover와 immutable rollback 보존을 하나의 정확한 계약으로 확정하고 사용자 승인을 받았다. R1에서 업무 날짜 SQL을 명시하고 dev/market 9개 계약의 기존 결과를 보존했다. | [ADR 0019](decisions/0019-canonical-time-stability.md), [canonical time verification](verification/2026-08-25-canonical-time-stability.md) |
+| `TIME-01` | Reader session UTC, aware datetime UTC `+00:00`, business calendar `Asia/Seoul`, SQL-policy/metadata revision 재료, full verified reissue, coordinated cutover와 immutable rollback 보존을 하나의 정확한 policy/change set으로 확정하고 사용자 승인을 받았다. R1에서 업무 날짜 SQL을 명시하고 dev/market 9개 verified case의 기존 결과를 보존했다. | [ADR 0019](decisions/0019-canonical-time-stability.md), [canonical time verification](verification/2026-08-25-canonical-time-stability.md) |
 | `TIME-02` | Catalog와 Query가 transaction 시작 직후 UTC를 local 설정·검사하고 aware datetime만 UTC `+00:00`으로 정규화한다. Canonical-time material을 metadata와 SQL-policy revision에 넣어 이전 token을 실행 전에 거부하면서 naive datetime/date/time/timetz 의미는 보존했다. | [ADR 0019](decisions/0019-canonical-time-stability.md), [canonical time verification](verification/2026-08-25-canonical-time-stability.md), [`test_catalog.py`](../tests/test_catalog.py), [`test_query.py`](../tests/test_query.py), [`test_result_encoding.py`](../tests/test_result_encoding.py) |
 
 Ledger의 완료 결과 column은 찾기 쉬운 요약일 뿐 acceptance를 축소하지 않는다. 각 ID에 연결된
@@ -376,7 +376,7 @@ evidence가 해당 완료 작업의 상세 경계와 실행 증거를 보존한�
 | M7 Extension Assurance | `EXT-*` | 네 번째 source와 production-authenticated multi-replica MCP 회귀를 통과한다. |
 | M8 Refactoring Assurance | `REF-*` | 상태 경쟁, 권한 drift, 종료·비용 경계를 재검증하고 문서와 실제 보장을 일치시킨다. |
 | M9 Container Runtime | `DEP-*` | Compose의 단일 HTTP/MCP image가 격리·인증·health·실제 query acceptance를 통과한다. |
-| M10 MCP Server Assurance | `MCPX-*` | 실제 Docker MCP에서 전체 contract, 병렬·포화·취소·비노출 경계를 통과한다. |
+| M10 MCP Server Assurance | `MCPX-*` | 실제 Docker MCP에서 전체 API/workflow, 병렬·포화·취소·비노출 경계를 통과한다. |
 | M11 Multi-Replica Soak | `SOAK-*` | 두 Docker replica의 exact result, 독립 포화·복구와 1,000-session resource gate를 통과한다. |
 | M12 Centralized Source Management | `CTRL-*` | Admin 한곳에서 source authority, 공통 resource tier, 상태·규모·비용 freshness를 관리한다. |
 | M13 Onboarding Planning Skill | `SKILL-*` | Credential·mutation 없이 반복 가능한 source plan과 admin handoff를 만든다. |
@@ -388,12 +388,12 @@ evidence가 해당 완료 작업의 상세 경계와 실행 증거를 보존한�
 
 M1부터 M13, `TIME-01`~`TIME-02`와 별도 assurance `DBEDGE-01`~`DBEDGE-05`는 완료됐다.
 재현된 authorization gap인 M13.5 `RLS-*`가 최우선 active다. M14.5의 `ENC-*` 결정·구현과 M14
-production 전환 `TIME-03`도 active이며 M15와 M16은 각각
-정확한 계약을 다시 승인받아야 한다. M15/M16의
+production 전환 `TIME-03`도 active이며 M15와 M16은 각각 해당되는 모든 변경 범주와 영향을
+정확히 승인받아야 한다. M15/M16의
 [proposed ADR 0021](decisions/0021-database-native-cost-attribution.md), 별도 COST-04
 [proposed ADR 0023](decisions/0023-database-native-usage-spike-alert.md)과
 [proposed ADR 0022](decisions/0022-w3c-workflow-trace-context.md)는
-[disposable contract prework](verification/2026-08-26-lower-track-contract-prework.md)까지 수행한
+[disposable boundary prework](verification/2026-08-26-lower-track-contract-prework.md)까지 수행한
 read-only prework이며 priority/start
-gate나 contract 승인이 아니다. 새로운 기능은 기존 완료 ID나 설명을 소급 변경하지 않고 별도
+gate나 change-set 승인이 아니다. 새로운 기능은 기존 완료 ID나 설명을 소급 변경하지 않고 별도
 roadmap 항목과 검증 가능한 exit condition을 추가한다.

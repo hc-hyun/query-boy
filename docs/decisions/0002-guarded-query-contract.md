@@ -1,4 +1,4 @@
-# ADR 0002: Guarded Query Contract
+# ADR 0002: Guarded Query External Behavior And Safety
 
 Status: Accepted
 
@@ -12,7 +12,7 @@ Metadata API는 질문에 맞는 relation과 현재 `metadata_revision`을 제�
 
 ## Decision
 
-HTTP에 다음 application contract를 추가한다.
+HTTP에 다음 application endpoint를 추가한다.
 
 ```text
 POST /query
@@ -58,7 +58,7 @@ queue_ms, elapsed_ms, plan_summary
 `result_bytes`는 `rows` 배열을 compact JSON으로 UTF-8 직렬화한 크기이며 배열 괄호와
 행 사이 쉼표를 포함한다. 상한을 넘길 행은 응답에 넣지 않고 `truncated`를 설정한다.
 
-JSON scalar 계약은 HTTP와 MCP에서 동일하다.
+JSON scalar external format은 HTTP와 MCP에서 동일하다.
 
 - PostgreSQL integer, boolean, text와 finite floating point는 JSON의 대응 scalar를 사용한다.
 - `numeric`은 precision과 scale을 잃지 않도록 decimal 문자열로 반환한다.
@@ -72,7 +72,7 @@ JSON scalar 계약은 HTTP와 MCP에서 동일하다.
   fail-closed한다.
 
 Byte accounting, verified result hash와 protocol serialization은 이 canonical value를 함께
-사용한다. 따라서 정확한 numeric 표현을 바꾸는 것은 결과 계약 변경이다.
+사용한다. 따라서 정확한 numeric 표현을 바꾸는 것은 external result format 변경이다.
 
 Planner cost는 PostgreSQL의 상대적인 추정치이지 시간이나 금액이 아니다. 따라서 plan
 admission은 명백히 비싼 query를 일찍 거부하는 보조 장치이며 statement/transaction
@@ -80,7 +80,7 @@ timeout, concurrency, result size와 cancel을 대체하지 않는다.
 
 응답의 `rows`는 column 이름을 key로 쓰므로 같은 이름을 두 번 반환할 수 없다. 중복
 alias를 허용하면 `columns`에는 두 이름이 남고 dictionary row에서는 앞선 값이 사라져
-HTTP와 MCP 계약이 모순되므로 fetch 전에 fail-closed한다.
+HTTP와 MCP response shape가 모순되므로 fetch 전에 fail-closed한다.
 
 초기 reason code는 다음과 같다.
 

@@ -38,7 +38,7 @@ metadata revision/context 생성은 [Metadata](../metadata/README.md)가 담당�
 - [`registry.py`](../../../src/query_man/registry.py): manifest/budget parser, validator와 runtime registry
 - [`models.py`](../../../src/query_man/models.py): budget, connection, semantic와 source profile types
 - [`reader_policy.py`](../../../src/query_man/reader_policy.py): Metadata와 Guarded Query가 공유하는
-  reader-session safety contract
+  reader-session verifier interface와 safety policy
 - [`config/sources`](../../../config/sources): local/CI bootstrap source definitions; managed authority가 아님
 - [`config/budget-profiles.yaml`](../../../config/budget-profiles.yaml): versioned resource tier definitions
 - `config/onboarding/<source>.yaml`과 `config/onboarding/<source>-l2.yaml`: Control Plane
@@ -59,9 +59,12 @@ type 이동은 동작 변경과 섞지 않는 별도 mechanical refactoring으�
 [결정 가이드 D2](../../module-contract-decision-guide.md#d2-source-조회와-수정-capability)와
 [ADR 0018](../../decisions/0018-module-ownership-and-contract-governance.md)에 기록한다.
 
-## 제공 계약
+## 제공 인터페이스와 소유 경계
 
-### Source definition contract
+이 절은 다른 module이 소비하는 official interface와 Source Catalog가 소유하지만 interface가 아닌
+manifest format, policy 및 safety invariant를 함께 나열한다. 각 제목은 실제 범주를 명시한다.
+
+### Source profile interface and semantics
 
 소비 module은 source profile의 다음 의미를 신뢰할 수 있다.
 
@@ -75,7 +78,7 @@ type 이동은 동작 변경과 섞지 않는 별도 mechanical refactoring으�
 - `minimum_quality_level`과 `tenant_isolation`은 publish/query gate의 입력이다.
 - `control_generation`과 `control_state_version`은 Control DB projection의 freshness/CAS identity다.
 
-### Resource observation definition contract (`CTRL-07A`, implemented)
+### Resource observation definition interface and manifest format (`CTRL-07A`, implemented)
 
 Manifest v2의 optional `observability`는 `representative_records.grain`, 하나의
 `physical_relation`과 그 relation을 포함하는 1~16개의 distinct `storage_relations`를 가진다. Relation은
@@ -92,7 +95,7 @@ arbitrary method를 받지 않는다.
 object다. Profile 자체를 wire response, persisted JSON, log 또는 metric에 serialize하지 않는다.
 다른 module은 필요한 field만 memory 안에서 소비한다.
 
-### Published source immutability contract
+### Published source interface immutability guarantee
 
 `SourceReader.get()`이 반환하는 `SourceProfile`과 도달 가능한 semantic graph는 재귀적으로
 immutable하다. Public sequence는 실제 tuple이고 `column_aliases`, `value_hints`와 join column
@@ -105,7 +108,7 @@ constructor와 YAML provider는 입력 collection을 복사해 published graph �
 않는다. YAML/JSON sequence와 object는 계속 array/list와 object/dict로 decode·serialize하며
 `SourceProfile` 자체는 여전히 wire나 persistence에 내보내지 않는다.
 
-### Shared source validation type contract
+### Shared source validation type interface
 
 Delivery의 admin path/query wire validation은 현재 Source Catalog가 정의한 다음 type을 소비한다.
 
@@ -113,10 +116,10 @@ Delivery의 admin path/query wire validation은 현재 Source Catalog가 정의�
 - `Identifier`: PostgreSQL identifier pattern과 최대 63자
 - `StableSlug`: lowercase alphanumeric hyphen slug pattern과 최대 80자
 
-이 type은 manifest validation과 admin wire acceptance가 공유하는 cross-module 계약이다. Pattern,
+이 type은 manifest validation과 admin wire acceptance가 공유하는 module interface다. Pattern,
 허용값 또는 길이를 바꾸면 Source Catalog와 Delivery 영향을 함께 검토한다.
 
-### Source read contract
+### `SourceReader` interface
 
 Delivery, Metadata, Guarded Query와 Assurance application code는 다음 `SourceReader`만 소비한다.
 
@@ -130,9 +133,9 @@ SourceReader:
 `list()`는 `source_id` 순으로 정렬하며 위 세 field 외 connection, credential, provenance와
 internal control state를 반환하지 않는다. 이 소비자들은 registry를 직접 변경하지 않는다.
 
-### Source projection write contract
+### `SourceProjectionWriter` interface
 
-Control Plane의 runtime projector/reloader는 read contract를 확장한 다음
+Control Plane의 runtime projector/reloader는 read interface를 확장한 다음
 `SourceProjectionWriter`를 소비한다.
 
 ```text
@@ -146,9 +149,9 @@ Bootstrap mode는 process 시작 시 filesystem manifest로 initial registry를 
 한 process에서 합치지 않는다. `state_version`은
 증가하지만 rollback은 과거 generation을 다시 활성화할 수 있으므로 generation 자체를 monotonic으로
 가정하지 않는다. 적용 순서와 pool/cache invalidation은
-[Control Plane](../control-plane/README.md)의 계약이다.
+[Control Plane](../control-plane/README.md)의 lifecycle rule이다.
 
-### Reader-session safety contract
+### Reader-session verifier interface and safety policy
 
 Metadata catalog와 Guarded Query executor는 같은 reader database/user, read-only isolation,
 role restriction, schema privilege, resource setting, search path, RLS와 tenant context 검사를
@@ -176,16 +179,17 @@ Exact A 제안에서 Source Catalog의 추가 역할은 Catalog/Query pool start
 `client_encoding=UTF8`, UTC-first transaction-local setting과 PostgreSQL-18/UTF8 reader admission으로
 한정된다. Catalog semantics SQL, fingerprint material/hash와 snapshot codec/revision은 Metadata
 소유이며 Source Catalog에 복제하지 않는다. 이 경계도 exact A 승인 전에는 현재
-contract가 아니다.
+module interface가 아니다.
 
 별도 [RLS policy drift security finding](../../verification/2026-08-26-rls-policy-drift.md)은 공통
 session probe가 정상이어도 hidden base table policy를 `USING (true)`로 바꾸거나 RLS를 disable하면
-같은 snapshot/revision 아래 cross-tenant row가 성공함을 재현했다. 이는 accepted contract가 아니라
+같은 snapshot/revision 아래 cross-tenant row가 성공함을 재현했다. 이는 승인된 tenant-isolation
+policy가 아니라
 열린 보안 결함이다. [Proposed ADR 0024](../../decisions/0024-rls-policy-drift-attestation.md)의
 `RLS-01-A`는 Metadata의 strict structural admission을 통과한 relation별 fingerprint만 v2 snapshot으로
 발행하고 `BEGIN` 직후 relation lock 뒤에도 `TimeZone=UTC`를 첫 settings statement로 유지하는
 implementation-ready target이다. Source manifest hash field는 추가하지 않고 current manifest/
-`SourceProfile` 계약을 보존한다. Common reader probe는
+`SourceProfile` interface를 보존한다. Common reader probe는
 `current_user=session_user=configured reader`도 fail-closed한다. Exact 승인 전에는 이 순서나 reader
 check를 구현하지 않는다. 새 timeout knob 없이
 `min(30_000, 8 * metadata_statement_timeout_ms)`인 Metadata phase outer deadline을 derive한다. Exact
@@ -223,10 +227,10 @@ password를 포함하므로 비교/보관만 하고 repr, exception, log, audit�
 lifecycle이 PostgreSQL-18/UTF8, graph와 snapshot v2를 non-RLS source에 적용한다는 뜻은 아니다.
 Password canary는 fence mismatch, drain failure와 tombstone retry에서도 어떤 rendered/structured
 surface에도 나타나지 않아야 한다.
-Control-owned invalidator와 runtime fence 의미는 소비 module 계약이며 Source Catalog가 pool/drain lifecycle을
+Control-owned invalidator와 runtime fence 의미는 소비 module의 lifecycle rule이며 Source Catalog가 pool/drain lifecycle을
 구현하지 않는다.
 
-## 소비 계약
+## 소비 인터페이스와 전제
 
 - Runtime configuration이 선택한 mutually exclusive `bootstrap|managed` authority, budget file과
   bootstrap mode의 source directory/environment
@@ -257,7 +261,7 @@ plan-only 공개 문서 소비를 production dependency로 확대하지 않는�
 
 ## 모듈 내부 변경
 
-다음은 제공 계약과 serialized shape를 보존할 때 module 내부에서 독립적으로 변경할 수 있다.
+다음은 제공 interface, serialized format과 policy 의미를 보존할 때 module 내부에서 독립적으로 변경할 수 있다.
 
 - Manifest validator의 오류 처리와 중복 제거
 - Registry lookup/list 구현과 copy-on-write 내부 표현
@@ -265,7 +269,11 @@ plan-only 공개 문서 소비를 production dependency로 확대하지 않는�
 - 기존 schema 안에서 source configuration fixture 추가
 - Public summary shape를 바꾸지 않는 정렬/조회 성능 개선
 
-## 사용자 승인이 필요한 계약 변경
+## 사용자 승인이 필요한 경계 변경
+
+아래 목록은 module interface뿐 아니라 manifest/persisted format, policy와 safety boundary도 포함한다.
+승인 요청에서 실제 변경 범주를 구분하며 이 목록 전체를 하나의 module interface로 보지 않는다.
+이 용어 정리는 기존 승인 범위를 줄이지 않는다.
 
 - Source manifest v2, provenance, budget profile 또는 access-related source field의 shape/version 변경
 - Delivery가 소비하는 `SourceEnvironment`, `Identifier`, `StableSlug`의 허용값, pattern 또는 길이 변경
@@ -309,7 +317,7 @@ Source Catalog 작업은 기본적으로 다음만 읽는다.
    [ADR 0014](../../decisions/0014-trusted-rls-tenant-context.md),
    [ADR 0016](../../decisions/0016-centralized-source-management-plane.md)과
    [ADR 0017](../../decisions/0017-shared-source-access-and-resource-tier.md) 중 변경과 직접 관련된 결정
-5. 변경이 닿는 제공/소비 계약 문서
+5. 변경이 닿는 제공/소비 interface와 별도 boundary 문서
 
-Physical metadata response, MCP SDK 내부와 query pool 구현은 계약이 바뀌지 않는 한 읽을 필요가
+Physical metadata response, MCP SDK 내부와 query pool 구현은 interface와 별도 boundary 의미가 바뀌지 않는 한 읽을 필요가
 없다.

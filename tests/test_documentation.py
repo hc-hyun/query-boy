@@ -42,8 +42,14 @@ SHARED_ACCESS_ADR = (
     / "0017-shared-source-access-and-resource-tier.md"
 )
 MODULE_INDEX = ROOT_DIRECTORY / "docs" / "modules" / "README.md"
-MODULE_CONTRACT_DECISION_GUIDE = (
+MODULE_BOUNDARY_DECISION_GUIDE = (
     ROOT_DIRECTORY / "docs" / "module-contract-decision-guide.md"
+)
+MODULE_GOVERNANCE_ADR = (
+    ROOT_DIRECTORY
+    / "docs"
+    / "decisions"
+    / "0018-module-ownership-and-contract-governance.md"
 )
 MODULE_NAMES = (
     "source-catalog",
@@ -59,11 +65,11 @@ REQUIRED_MODULE_HEADINGS = (
     "## 소유 책임",
     "## 소유하지 않는 책임",
     "## 현재 코드 위치",
-    "## 제공 계약",
-    "## 소비 계약",
+    "## 제공 인터페이스와 소유 경계",
+    "## 소비 인터페이스와 전제",
     "## 불변조건",
     "## 모듈 내부 변경",
-    "## 사용자 승인이 필요한 계약 변경",
+    "## 사용자 승인이 필요한 경계 변경",
     "## 검증",
     "## 집중해서 읽을 범위",
 )
@@ -182,7 +188,7 @@ DATABASE_NATIVE_ALERT_ADR = (
     / "decisions"
     / "0023-database-native-usage-spike-alert.md"
 )
-LOWER_TRACK_CONTRACT_PREWORK = (
+LOWER_TRACK_BOUNDARY_PREWORK = (
     ROOT_DIRECTORY
     / "docs"
     / "verification"
@@ -316,7 +322,7 @@ LOCKED_BASELINE_DESCRIPTIONS = {
     ),
     "EXEC-10": (
         "수정 가능한 고정 SQLSTATE만 bounded `QUERY_INVALID`로 분리하고 나머지 DB 오류, "
-        "timeout, cancel과 serialization failure를 비공개 또는 전용 오류 계약으로 매핑한다."
+        "timeout, cancel과 serialization failure를 비공개 또는 전용 external error로 매핑한다."
     ),
     "MCP-02": (
         "고정 schema의 `list_sources`, `get_context`, `query` tool, bounded argument description과 "
@@ -494,28 +500,28 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
     )
     cost_adr = DATABASE_NATIVE_COST_ADR.read_text(encoding="utf-8")
     alert_adr = DATABASE_NATIVE_ALERT_ADR.read_text(encoding="utf-8")
-    lower_track_prework = LOWER_TRACK_CONTRACT_PREWORK.read_text(encoding="utf-8")
+    lower_track_prework = LOWER_TRACK_BOUNDARY_PREWORK.read_text(encoding="utf-8")
     query_cost = QUERY_COST_CONTROL.read_text(encoding="utf-8")
     trace_adr = WORKFLOW_TRACE_ADR.read_text(encoding="utf-8")
-    assurance_contract = (
+    assurance_module_doc = (
         ROOT_DIRECTORY / "docs" / "modules" / "assurance" / "README.md"
     ).read_text(encoding="utf-8")
-    runtime_contract = (
+    runtime_module_doc = (
         ROOT_DIRECTORY / "docs" / "modules" / "runtime" / "README.md"
     ).read_text(encoding="utf-8")
-    delivery_contract = (
+    delivery_module_doc = (
         ROOT_DIRECTORY / "docs" / "modules" / "delivery" / "README.md"
     ).read_text(encoding="utf-8")
-    source_catalog_contract = (
+    source_catalog_module_doc = (
         ROOT_DIRECTORY / "docs" / "modules" / "source-catalog" / "README.md"
     ).read_text(encoding="utf-8")
-    metadata_contract = (
+    metadata_module_doc = (
         ROOT_DIRECTORY / "docs" / "modules" / "metadata" / "README.md"
     ).read_text(encoding="utf-8")
-    guarded_query_contract = (
+    guarded_query_module_doc = (
         ROOT_DIRECTORY / "docs" / "modules" / "guarded-query" / "README.md"
     ).read_text(encoding="utf-8")
-    control_plane_contract = (
+    control_plane_module_doc = (
         ROOT_DIRECTORY / "docs" / "modules" / "control-plane" / "README.md"
     ).read_text(encoding="utf-8")
     matches = re.findall(r"^- \[([ x])\] `([A-Z]+)-(\d{2})`", todo, re.MULTILINE)
@@ -529,7 +535,7 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
         "Primary module",
         "Direct consumers",
         "Affected providers/verifiers",
-        "Contract baseline",
+        "Current baseline",
         "Approval gate",
         "Single writer",
         "Start gate",
@@ -538,7 +544,7 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
         assert todo.count(f"| {field} |") == 5
 
     assert "Lower-track의 `read-only prework`" in todo
-    assert "**plan 승인은 contract 선택" in todo
+    assert "**plan 승인은 decision/change-set" in todo
     assert "승인이 아니다**" in todo
     assert "## P0.5 — Module Contract Hardening" not in todo
     assert "offline composition `MOD-08`은 모두" in todo
@@ -548,16 +554,16 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
     assert "C는 production completion을 block하는 defer" in todo
     assert "일반적인 진행/승인이나 ID만으로 구현하지 않는다" in todo
     assert "Source Catalog shared `reader_policy.py` → Metadata fingerprint" in todo
-    assert "Exact A 제안에서 Source Catalog의 추가 역할" in source_catalog_contract
-    assert "Metadata가 bounded source-semantics catalog probe" in metadata_contract
-    assert "현재 executor 계약이 아니다" in guarded_query_contract
-    assert "v1 row를 update/delete" in control_plane_contract
-    assert "V1/V2 serving" in runtime_contract
-    assert "recursive view dependency fingerprint" in assurance_contract
+    assert "Exact A 제안에서 Source Catalog의 추가 역할" in source_catalog_module_doc
+    assert "Metadata가 bounded source-semantics catalog probe" in metadata_module_doc
+    assert "현재 executor interface나 지원 동작이 아니다" in guarded_query_module_doc
+    assert "v1 row를 update/delete" in control_plane_module_doc
+    assert "V1/V2 serving" in runtime_module_doc
+    assert "recursive view dependency fingerprint" in assurance_module_doc
     assert "승인 전 loader/setting/encoder/source-semantics snapshot/revision/hash" in todo
     assert "Production inventory·권한·backup·route가 제공되어야" in todo
     assert "명시적으로 defer하기 전에는 `COST-01` 구현을 시작하지" in todo
-    assert "proposed ADR 0021의 정확한 monitoring 계약과 영향 범위를 별도 승인" in todo
+    assert "proposed ADR 0021에서 해당되는 모든 변경 범주와 영향 범위를 정확히 승인" in todo
     assert "| `TIME-03` |" not in roadmap
     assert "재현된 authorization gap인 M13.5 `RLS-*`가 최우선 active" in roadmap
     assert "M14.5의 `ENC-*` 결정·구현과 M14" in roadmap
@@ -567,7 +573,7 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
     assert "현재 선택지 초안은 lower-track read-only prework" in todo
     assert "`COST-01-A|B|C`" in todo
     assert "`COST-04`는 별도 [proposed ADR 0023]" in todo
-    assert "alert 90일은 아직 승인된 현재 계약이 아니다" in todo
+    assert "alert 90일은 아직 승인된 현재 policy가 아니다" in todo
     assert "`TRACE-01-A|B|C`" in todo
     assert (
         "Status: Proposed read-only prework — priority gate and user approval required"
@@ -600,13 +606,13 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
     assert "evaluated_at < cooldown_until" in alert_adr
     assert "Webhook/email/push" in alert_adr
     assert "COST-04-A를" in alert_adr
-    assert "disposable contract prework" in roadmap
+    assert "disposable boundary prework" in roadmap
     assert "Repository production code" in lower_track_prework
     assert "22 tables" in lower_track_prework
     assert "exact_target_only=true" in lower_track_prework
     assert "query-man-acl-probe-final-0021" in lower_track_prework
     assert "잔여 count는 모두 0" in lower_track_prework
-    assert "exact contract 승인이나 production implementation evidence가 아니다" in (
+    assert "해당되는 모든 변경 범주의 exact 승인이나 production implementation evidence가 아니다" in (
         lower_track_prework
     )
     assert "pg_monitor" in cost_adr
@@ -857,15 +863,15 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
     assert "The source monitoring state changed; retry with current state." in cost_adr
     assert "database_native" in cost_adr
     assert "`database_native` section 자체를 추가하지 않는다" in cost_adr
-    assert "이는 contract 선택이며 열린 ENC/TIME보다 구현을 먼저" in cost_adr
+    assert "이는 change-set 선택이며 열린 ENC/TIME보다 구현을 먼저" in cost_adr
     assert "B는 direction-only" in cost_adr
     assert "source_id + budget_profile + metadata_revision + definition_revision" in query_cost
     assert "DBA가 수동 조사에만 쓰는 현재 외부 운영 선택지" in query_cost
-    assert "Assurance는 sanitized source projection" in assurance_contract
-    assert "현재 Runtime operations에는 workflow trace context/scope/counter가 없다" in runtime_contract
-    assert "source DB-native statement collector도 없다" in runtime_contract
-    assert "current `/usage` top-level shape" in delivery_contract
-    assert "Control Plane의 공개 use case/projection만" in delivery_contract
+    assert "Assurance는 sanitized source projection" in assurance_module_doc
+    assert "현재 Runtime operations에는 workflow trace context/scope/counter가 없다" in runtime_module_doc
+    assert "source DB-native statement collector도 없다" in runtime_module_doc
+    assert "current `/usage` top-level shape" in delivery_module_doc
+    assert "Control Plane의 공개 use case/projection만" in delivery_module_doc
     assert (
         "Status: Proposed read-only prework — priority gate and user approval required"
         in trace_adr
@@ -901,14 +907,14 @@ def test_active_todo_contains_only_open_work_and_roadmap_preserves_completed_wor
     assert "all-zero가 아닌 string" in trace_adr
     assert "P4의 TRACE-01 결정과 승인된" in trace_adr
     assert "tracestate/baggage/response/outbound propagation" in trace_adr
-    assert "failed parallel MCP query" in delivery_contract
-    assert "current process-local trace만" in guarded_query_contract
-    assert "Delivery-private MCP call ID는 Guarded Query로 넘기지 않고" in guarded_query_contract
-    assert "target query의 original trace" in guarded_query_contract
-    assert "failed parallel MCP call→query mapping" in assurance_contract
-    assert "real Uvicorn/h11 wire OWS normalization parity" in assurance_contract
-    assert "unknown-source trace absence" in assurance_contract
-    assert "two-process/replica soak correlation" in assurance_contract
+    assert "failed parallel MCP query" in delivery_module_doc
+    assert "current process-local trace만" in guarded_query_module_doc
+    assert "Delivery-private MCP call ID는 Guarded Query로 넘기지 않고" in guarded_query_module_doc
+    assert "target query의 original trace" in guarded_query_module_doc
+    assert "failed parallel MCP call→query mapping" in assurance_module_doc
+    assert "real Uvicorn/h11 wire OWS normalization parity" in assurance_module_doc
+    assert "unknown-source trace absence" in assurance_module_doc
+    assert "two-process/replica soak correlation" in assurance_module_doc
     assert "`RTSAFE-*`, `MOD-*`" not in todo
 
     for item_id in EXPECTED_POST_BASELINE_COMPLETED_IDS:
@@ -939,19 +945,19 @@ def test_source_onboarding_skill_docs_record_plan_only_adoption_and_evidence() -
     plan = (ROOT_DIRECTORY / "docs" / "source-onboarding-skill-plan.md").read_text(
         encoding="utf-8"
     )
-    source_contract = (
+    source_module_doc = (
         ROOT_DIRECTORY / "docs" / "modules" / "source-catalog" / "README.md"
     ).read_text(encoding="utf-8")
-    assurance_contract = (
+    assurance_module_doc = (
         ROOT_DIRECTORY / "docs" / "modules" / "assurance" / "README.md"
     ).read_text(encoding="utf-8")
     audit = SOURCE_ONBOARDING_SKILL_AUDIT.read_text(encoding="utf-8")
 
-    for document in (readme, onboarding, plan, source_contract, audit):
+    for document in (readme, onboarding, plan, source_module_doc, audit):
         assert "query-man-source-onboarding" in document
     assert "Status: Complete; adopted plan-only workflow" in plan
     assert SOURCE_ONBOARDING_SKILL_AUDIT.name in onboarding
-    assert SOURCE_ONBOARDING_SKILL_AUDIT.name in assurance_contract
+    assert SOURCE_ONBOARDING_SKILL_AUDIT.name in assurance_module_doc
     assert "request log는 0건" in audit
     assert "mutation_count: 0" in audit
 
@@ -994,12 +1000,12 @@ def test_source_database_corner_docs_record_canonical_time_resolution() -> None:
     assert "raw-only driver/catalog probe" in audit
     assert SOURCE_DATABASE_CORNERS_AUDIT.name in assurance
     assert RLS_POLICY_DRIFT_AUDIT.name in assurance
-    assert "Status: Open — contract decision and fail-closed implementation required" in rls_audit
+    assert "Status: Open — boundary decision and fail-closed implementation required" in rls_audit
     assert "strict=True" in rls_audit
     assert RLS_POLICY_ATTESTATION_ADR.name in rls_audit
     assert "Status: Proposed — exact user approval required before implementation" in rls_adr
     assert "Decision ID: `RLS-01-A`" in rls_adr
-    assert "이 ADR은 exact 제안일 뿐 승인된 계약이나 구현이 아니다" in rls_adr
+    assert "이 문서는 정확한 제안일 뿐 현재 승인 baseline이나 구현이 아니다" in rls_adr
     assert "ACCESS SHARE MODE NOWAIT" in rls_adr
     assert "attest_rls_roots" in rls_adr
     assert "view_sql_policy_revision" in rls_adr
@@ -1088,10 +1094,10 @@ def test_source_database_corner_docs_record_canonical_time_resolution() -> None:
         "승인과\naccess/change record가 필요하다."
     ) in development_todo
     for module_name in MODULE_NAMES:
-        module_contract = (
+        module_doc = (
             ROOT_DIRECTORY / "docs" / "modules" / module_name / "README.md"
         ).read_text(encoding="utf-8")
-        assert RLS_POLICY_ATTESTATION_ADR.name in module_contract
+        assert RLS_POLICY_ATTESTATION_ADR.name in module_doc
     for operator_document in (onboarding, extension_checklist):
         assert RLS_POLICY_DRIFT_AUDIT.name in operator_document
         assert RLS_POLICY_ATTESTATION_ADR.name in operator_document
@@ -1153,7 +1159,7 @@ def test_source_database_corner_docs_record_canonical_time_resolution() -> None:
     assert "`source_semantics_fingerprint`" in lossless_adr
     assert "Decoded key가 같은 duplicate" in lossless_adr
     assert 'exact `"24:00:00"`' in lossless_adr
-    assert "이 ADR은 제안일 뿐 승인된 계약이 아니다" in lossless_adr
+    assert "이 문서는 정확한 제안일 뿐 현재 승인 baseline이나 구현이 아니다" in lossless_adr
     assert "Exact failure and stale mapping" in lossless_adr
     assert "Result OID scalar allowlist는 exact 24개" in lossless_adr
     assert "snapshot_contract_version" in lossless_adr
@@ -1165,11 +1171,11 @@ def test_source_database_corner_docs_record_canonical_time_resolution() -> None:
     assert "stored v2 bytes/fingerprint를 복사하지 않고" in lossless_adr
     assert "첫 relation action" in lossless_adr
     assert LOSSLESS_SCALAR_ADR.name in module_index
-    delivery_contract = (
+    delivery_module_doc = (
         ROOT_DIRECTORY / "docs" / "modules" / "delivery" / "README.md"
     ).read_text(encoding="utf-8")
-    assert LOSSLESS_SCALAR_ADR.name in delivery_contract
-    assert "verified result hash" in delivery_contract
+    assert LOSSLESS_SCALAR_ADR.name in delivery_module_doc
+    assert "verified result hash" in delivery_module_doc
     assert "view_dependency_column_collations" in lossless_adr
     assert "view_dependency_definitions" in lossless_adr
     assert "direct pg_type edge" in lossless_adr
@@ -1338,7 +1344,7 @@ def test_mutation_receipt_docs_preserve_terminal_and_secret_boundaries() -> None
     assert "question/SQL" in audit
 
 
-def test_runtime_replica_observation_docs_preserve_contract_boundaries() -> None:
+def test_runtime_replica_observation_docs_preserve_boundaries() -> None:
     readme = (ROOT_DIRECTORY / "README.md").read_text(encoding="utf-8")
     environment_example = (ROOT_DIRECTORY / ".env.example").read_text(encoding="utf-8")
     onboarding = (ROOT_DIRECTORY / "docs" / "source-onboarding.md").read_text(
@@ -1348,19 +1354,19 @@ def test_runtime_replica_observation_docs_preserve_contract_boundaries() -> None
         encoding="utf-8"
     )
     management = SOURCE_MANAGEMENT_PLAN.read_text(encoding="utf-8")
-    control_contract = (
+    control_module_doc = (
         ROOT_DIRECTORY / "docs" / "modules" / "control-plane" / "README.md"
     ).read_text(encoding="utf-8")
-    delivery_contract = (
+    delivery_module_doc = (
         ROOT_DIRECTORY / "docs" / "modules" / "delivery" / "README.md"
     ).read_text(encoding="utf-8")
     audit = RUNTIME_REPLICA_OBSERVATION_AUDIT.read_text(encoding="utf-8")
 
     for document in (readme, environment_example, onboarding, operations):
         assert "QUERY_MAN_REPLICA_ID" in document
-    for document in (management, delivery_contract, audit):
+    for document in (management, delivery_module_doc, audit):
         assert "GET /admin/sources/{source_id}/replicas" in document
-    assert "observed_at + 3 * heartbeat_interval_ms" in control_contract
+    assert "observed_at + 3 * heartbeat_interval_ms" in control_module_doc
     for reason in (
         "NOT_OBSERVED",
         "HEARTBEAT_EXPIRED",
@@ -1374,17 +1380,17 @@ def test_runtime_replica_observation_docs_preserve_contract_boundaries() -> None
     assert "data plane, readiness" in audit
 
 
-def test_resource_and_gateway_observation_docs_preserve_contract_boundaries() -> None:
+def test_resource_and_gateway_observation_docs_preserve_boundaries() -> None:
     decision = CENTRAL_SOURCE_ADR.read_text(encoding="utf-8")
-    runtime_contract = (
+    runtime_module_doc = (
         ROOT_DIRECTORY / "docs" / "modules" / "runtime" / "README.md"
     ).read_text(encoding="utf-8")
-    control_contract = (
+    control_module_doc = (
         ROOT_DIRECTORY / "docs" / "modules" / "control-plane" / "README.md"
     ).read_text(encoding="utf-8")
     audit = RESOURCE_AND_GATEWAY_OBSERVATION_AUDIT.read_text(encoding="utf-8")
 
-    for document in (decision, control_contract, audit):
+    for document in (decision, control_module_doc, audit):
         assert "logical visibility/input window" in document
         assert (
             "나이만으로" in document
@@ -1393,7 +1399,7 @@ def test_resource_and_gateway_observation_docs_preserve_contract_boundaries() ->
         )
         assert "1,000" in document
     assert "process당 최대 4" in audit
-    assert "process당 Control connection 최대" in runtime_contract
+    assert "process당 Control connection 최대" in runtime_module_doc
     for table_name in (
         "source_resource_observations",
         "gateway_usage_rollups",
@@ -1404,29 +1410,29 @@ def test_resource_and_gateway_observation_docs_preserve_contract_boundaries() ->
     assert "`CTRL-08`" in audit
 
 
-def test_usage_projection_docs_preserve_contract_boundaries() -> None:
+def test_usage_projection_docs_preserve_boundaries() -> None:
     decision = CENTRAL_SOURCE_ADR.read_text(encoding="utf-8")
     management = SOURCE_MANAGEMENT_PLAN.read_text(encoding="utf-8")
-    control_contract = (
+    control_module_doc = (
         ROOT_DIRECTORY / "docs" / "modules" / "control-plane" / "README.md"
     ).read_text(encoding="utf-8")
-    delivery_contract = (
+    delivery_module_doc = (
         ROOT_DIRECTORY / "docs" / "modules" / "delivery" / "README.md"
     ).read_text(encoding="utf-8")
     audit = USAGE_PROJECTION_AUDIT.read_text(encoding="utf-8")
 
-    for document in (decision, management, control_contract, audit):
+    for document in (decision, management, control_module_doc, audit):
         assert "source_resource_observation_attempts" in document
         assert "OBSERVATION_INCOMPLETE" in document
         assert "REPORTER_UNAVAILABLE" in document
         assert "logical visibility/input window" in document
         assert "1,000" in document
-    for document in (management, delivery_contract, audit):
+    for document in (management, delivery_module_doc, audit):
         assert "GET /admin/sources/{source_id}/usage" in document
         assert "PROVIDER_NOT_CONFIGURED" in document
-    assert "last_report_at" in control_contract
-    assert "amount" in delivery_contract
-    assert "currency" in delivery_contract
+    assert "last_report_at" in control_module_doc
+    assert "amount" in delivery_module_doc
+    assert "currency" in delivery_module_doc
     assert "age-only" in audit or "나이만" in audit
 
 
@@ -1458,7 +1464,7 @@ def test_runtime_has_no_fixture_source_specialization() -> None:
         assert not any(value in content for value in forbidden), path
 
 
-def test_delivery_admin_routes_only_import_public_control_contract() -> None:
+def test_delivery_admin_routes_only_import_public_control_interface() -> None:
     route_path = ROOT_DIRECTORY / "src" / "query_man" / "source_admin_routes.py"
     tree = ast.parse(route_path.read_text(encoding="utf-8"))
     imported_modules: set[str] = set()
@@ -1494,26 +1500,26 @@ def test_delivery_admin_routes_only_import_public_control_contract() -> None:
     } <= public_control_names
 
 
-def test_module_boundary_docs_cover_owners_contracts_and_current_python_files() -> None:
+def test_module_boundary_docs_cover_owners_interfaces_and_current_python_files() -> None:
     index = MODULE_INDEX.read_text(encoding="utf-8")
     agents = (ROOT_DIRECTORY / "AGENTS.md").read_text(encoding="utf-8")
     readme = (ROOT_DIRECTORY / "README.md").read_text(encoding="utf-8")
     architecture = ARCHITECTURE.read_text(encoding="utf-8")
 
-    assert "## 계약 변경 승인 절차" in index
+    assert "## 승인 대상 변경 절차" in index
     assert "## 새 데이터베이스 추가 시 영향" in index
     assert "docs/modules/README.md" in agents
-    assert "Module contract는 사용자의 명시적 승인 없이 변경하지 않는다." in agents
+    assert "Module interface의 의미 변경은 additive change를 포함해" in agents
     assert "수정 가능한 file allowlist" in agents
     assert "여러 agent가 같은 worktree를 공유하면" in agents
     assert "docs/modules/README.md" in readme
     assert "modules/README.md" in architecture
     assert "Source Catalog onboarding workflow (plan-only)" in index
-    source_catalog_contract = (
+    source_catalog_module_doc = (
         MODULE_INDEX.parent / "source-catalog" / "README.md"
     ).read_text(encoding="utf-8")
-    assert "Plan-only `query-man-source-onboarding` workflow" in source_catalog_contract
-    assert "production dependency로 확대하지 않는다" in source_catalog_contract
+    assert "Plan-only `query-man-source-onboarding` workflow" in source_catalog_module_doc
+    assert "production dependency로 확대하지 않는다" in source_catalog_module_doc
 
     for module_name in MODULE_NAMES:
         path = MODULE_INDEX.parent / module_name / "README.md"
@@ -1545,8 +1551,133 @@ def test_module_boundary_docs_cover_owners_contracts_and_current_python_files() 
     assert "병렬 agent가 직접 priority를 재배열하지 않는다" in index
 
 
-def test_module_contract_decision_guide_records_approval_and_implementation_status() -> None:
-    guide = MODULE_CONTRACT_DECISION_GUIDE.read_text(encoding="utf-8")
+def test_module_interface_terms_are_narrow_and_other_boundaries_stay_protected() -> None:
+    agents = (ROOT_DIRECTORY / "AGENTS.md").read_text(encoding="utf-8")
+    index = MODULE_INDEX.read_text(encoding="utf-8")
+    governance_adr = MODULE_GOVERNANCE_ADR.read_text(encoding="utf-8")
+    todo = DEVELOPMENT_TODO.read_text(encoding="utf-8")
+    guide = MODULE_BOUNDARY_DECISION_GUIDE.read_text(encoding="utf-8")
+    proposed_adrs = tuple(
+        path.read_text(encoding="utf-8")
+        for path in (
+            LOSSLESS_SCALAR_ADR,
+            DATABASE_NATIVE_COST_ADR,
+            WORKFLOW_TRACE_ADR,
+            DATABASE_NATIVE_ALERT_ADR,
+            RLS_POLICY_ATTESTATION_ADR,
+        )
+    )
+
+    canonical_documents = (agents, index, governance_adr, guide)
+    categories = (
+        "External API/wire format",
+        "Persisted/versioned format",
+        "Policy/compatibility identity",
+        "Safety/lifecycle invariant",
+        "Ownership/composition boundary",
+        "Protected operational procedure",
+        "Operational execution authorization",
+        "Evidence/change record",
+        "Shared transition artifact",
+    )
+    for document in canonical_documents:
+        normalized_document = " ".join(document.split())
+        assert "allowed dependency map" in normalized_document
+        assert "shape/signature" in normalized_document
+        assert "input/output/domain-error semantics" in normalized_document
+        assert "Policy, ordering, limit" in normalized_document
+        assert (
+            "interface 의미에 포함하지 않는다" in normalized_document
+            or "별도 범주로 분류한다" in normalized_document
+        )
+        for category in categories:
+            assert category in normalized_document
+    assert "다음은 module interface가 아닌 별도 범주다" in governance_adr
+
+    assert todo.count("| Current baseline |") == 5
+    assert "Contract baseline" not in todo
+
+    for module_name in MODULE_NAMES:
+        module_doc = (
+            MODULE_INDEX.parent / module_name / "README.md"
+        ).read_text(encoding="utf-8")
+        normalized_module_doc = " ".join(module_doc.split())
+        assert "## 제공 인터페이스와 소유 경계" in module_doc
+        assert "## 소비 인터페이스와 전제" in module_doc
+        assert "## 사용자 승인이 필요한 경계 변경" in module_doc
+        assert (
+            "목록 전체를 하나의 module interface로 취급하지 않는다"
+            in normalized_module_doc
+            or "이 목록 전체를 하나의 module interface로 보지 않는다"
+            in normalized_module_doc
+        )
+        assert "이 용어 정리는 기존 승인 범위를 줄이지 않는다" in module_doc
+
+    terminology_documents = (
+        ROOT_DIRECTORY / "AGENTS.md",
+        ROOT_DIRECTORY / "README.md",
+        ARCHITECTURE,
+        ROOT_DIRECTORY / "docs" / "operations.md",
+        ROOT_DIRECTORY / "docs" / "disaster-recovery.md",
+        DEVELOPMENT_TODO,
+        ROADMAP,
+        MODULE_BOUNDARY_DECISION_GUIDE,
+        MODULE_INDEX,
+        MODULE_GOVERNANCE_ADR,
+        ROOT_DIRECTORY / "docs" / "decisions" / "0002-guarded-query-contract.md",
+        CENTRAL_SOURCE_ADR,
+        LOSSLESS_SCALAR_ADR,
+        DATABASE_NATIVE_COST_ADR,
+        WORKFLOW_TRACE_ADR,
+        DATABASE_NATIVE_ALERT_ADR,
+        RLS_POLICY_ATTESTATION_ADR,
+        CONTROL_RECOVERY_AUDIT,
+        SOURCE_DATABASE_CORNERS_AUDIT,
+        USAGE_PROJECTION_AUDIT,
+        LOWER_TRACK_BOUNDARY_PREWORK,
+        RLS_POLICY_DRIFT_AUDIT,
+        *(MODULE_INDEX.parent / module_name / "README.md" for module_name in MODULE_NAMES),
+    )
+    allowed_historical_names_and_identifiers = (
+        "module-contract-decision-guide.md",
+        "0018-module-ownership-and-contract-governance.md",
+        "0002-guarded-query-contract.md",
+        "2026-08-26-lower-track-contract-prework.md",
+        "snapshot_contract_version",
+        "contract_violations",
+        "control.verified_query_contracts",
+        "query_man_cost_contract_probe",
+        "query_man_monitor_contract_probe",
+    )
+    for path in terminology_documents:
+        document = path.read_text(encoding="utf-8")
+        for allowed in allowed_historical_names_and_identifiers:
+            document = document.replace(allowed, "")
+        assert re.search(r"(?i)contract|계약", document) is None, path.relative_to(
+            ROOT_DIRECTORY
+        )
+
+    normalized_classification = (
+        "이 문서는 정확한 제안일 뿐 현재 승인 baseline이나 구현이 아니다. "
+        "승인하려면 해당되는 모든 변경 범주와 영향을 정확히 지정해야 한다."
+    )
+    for proposed_adr in proposed_adrs:
+        assert normalized_classification in " ".join(proposed_adr.split())
+
+    for document in (agents, guide):
+        assert (
+            "실제 evidence/change record는 별도 승인된 operational action을 수행한 뒤"
+            in " ".join(document.split())
+        )
+
+    lossless_adr, *_middle, rls_adr = proposed_adrs
+    assert "snapshot_contract_version" in lossless_adr
+    assert "snapshot_contract_version" in rls_adr
+    assert "`contract_violations`로 바꾸지 않는다" in rls_adr
+
+
+def test_module_boundary_decision_guide_records_approval_and_implementation_status() -> None:
+    guide = MODULE_BOUNDARY_DECISION_GUIDE.read_text(encoding="utf-8")
     metadata_module = (MODULE_INDEX.parent / "metadata" / "README.md").read_text(
         encoding="utf-8"
     )
@@ -1588,7 +1719,7 @@ def test_module_contract_decision_guide_records_approval_and_implementation_stat
     assert "D3 immutable snapshot 전환 (`MOD-07`) — 완료" in guide
     assert "D5 offline CLI composition 격리 (`MOD-08`) — 완료" in guide
     assert "### D5-A 구현 결과 (`MOD-08` 완료)" in guide
-    assert "7. 전체 dependency/contract audit — 완료 (2026-08-25)" in guide
+    assert "7. 전체 dependency/interface audit — 완료 (2026-08-25)" in guide
     assert "`TIME-01`과 `TIME-02`에서\n결정·구현" in guide
     assert "`TIME-03`은 열려 있다" in guide
     assert (
@@ -1606,7 +1737,7 @@ def test_module_contract_decision_guide_records_approval_and_implementation_stat
     assert "`MOD-07`" in roadmap
     assert "`MOD-08`" in roadmap
     for document in (readme, index, todo, roadmap):
-        assert MODULE_CONTRACT_DECISION_GUIDE.name in document
+        assert MODULE_BOUNDARY_DECISION_GUIDE.name in document
 
 
 def _markdown_heading_anchors(path: Path) -> set[str]:

@@ -4,7 +4,7 @@ Status: Complete
 
 ## Scope
 
-`CTRL-09`는 기존 Control Plane 계약을 바꾸지 않고 production recovery 절차의 Control 부분을
+`CTRL-09`는 기존 Control Plane interface, persisted format과 recovery procedure를 바꾸지 않고 production recovery 절차의 Control 부분을
 하나의 실행 가능한 격리 fixture 흐름으로 연결한다. 대상은 migration ledger 1개, core authority
 6개와 bounded operational projection 6개를 합친 현재 `control` schema의 13개 table이다. Source
 business database,
@@ -79,4 +79,4 @@ Source당 최신 1,000행 physical cap, immutable history/receipt, ever-register
 - Source와 target 모두 current migration set을 사용하므로 실제 N-1 schema archive의 upgrade
   compatibility를 증명하지 않는다.
 - Master-key online rotation, dual-key decrypt, re-encryption과 archive retention 정책을 추가하려면
-  별도 module contract/운영 정책 승인이 필요하다.
+  별도 interface/persisted-format/운영 정책 승인이 필요하다.

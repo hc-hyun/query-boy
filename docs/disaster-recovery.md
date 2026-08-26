@@ -3,7 +3,7 @@
 ## Scope And Targets
 
 Control plane의 migration ledger, source profile generations, encrypted credentials, metadata
-snapshots, verified contracts, immutable mutation receipts, runtime replica latest observation,
+snapshots, verified-query records, immutable mutation receipts, runtime replica latest observation,
 resource current/previous와 latest attempt/last-success, gateway usage rollup/cursor가 대상이다.
 Observation table은 source authority나 완전한 billing ledger가 아니라 bounded operational projection을
 복원한다. Source business database backup은 각 source owner의 별도 정책을 따른다. Repository
@@ -83,7 +83,7 @@ record/IaC로 복구한다.
    invariant를 실행한다. 각 source의 replica endpoint에서 복구한 모든 expected slot이 새
    incarnation으로 `available`, `drift=[]`인지 확인한 뒤 traffic을 전환한다. Generation은 control
    DB/change record에서 별도로 대조한다. 복구하지 않은 과거 slot은 새 report가 없으면 기존
-   `fresh_until` 이후 stale로 남는 것이 현재 계약이다.
+   `fresh_until` 이후 stale로 남는 것이 현재 lifecycle policy다.
 8. Source credential이 별도로 rotation되었다면 restore generation을 활성화하지 말고 새
    credential을 staging/publish한다.
 
@@ -106,7 +106,7 @@ replica-table ACL까지 증명한다. Trigger definition 전체, archive content
 
 ## Isolated Control Recovery Fixture Acceptance
 
-`CTRL-09`의 별도 integration acceptance는 위 schema drill의 공백을 production 계약 변경 없이
+`CTRL-09`의 별도 integration acceptance는 위 schema drill의 공백을 production interface/format 변경 없이
 격리된 다른 PostgreSQL service에서 재현한다. `.env`와 현재 source fixture가 준비되고
 migration/restore job이 다른 Control 작업과
 겹치지 않는 상태에서 실행한다.

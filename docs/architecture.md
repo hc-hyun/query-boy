@@ -44,7 +44,7 @@ Single MCP Server / HTTP API
 Query Gateway + Source Registry <--- validated hot reload --- Control Plane
   |-- Physical Catalog                                  |-- Source Catalog/Generations
   |-- Semantic Overlay                                  |-- Active State/History
-  |-- Resource Tier (budget_profile)                    |-- Metadata/Verified Contracts
+  |-- Resource Tier (budget_profile)                    |-- Metadata/Verified Queries
   |                                                     |-- Mutation Receipts/Audit
     `-- guarded connection                                |-- Replica Observations
                                                           `-- Measurements (target)
@@ -66,7 +66,7 @@ loopback으로 제한하고 container 내부 non-loopback bind에는 query-only 
 강제한다. Image, secret, readiness와 shutdown 경계는
 [ADR 0015](decisions/0015-containerized-local-runtime.md)를 따르며 실제 container acceptance는
 [container runtime audit](verification/2026-08-23-container-runtime.md)에 기록한다. 전체
-MCP contract와 병렬·포화·취소·비노출 경계의 실제 server 검증은
+MCP external API와 병렬·포화·취소·비노출 경계의 실제 server 검증은
 [MCP server assurance](verification/2026-08-23-mcp-server-assurance.md)에, 두 replica session
 내구성과 resource 경계는
 [multi-replica soak audit](verification/2026-08-23-mcp-multi-replica-soak.md)에 기록한다.
@@ -87,15 +87,15 @@ Resource/gateway observation의 실행 증거는
 배포 형태는 하나의 process지만 개발 소유권은 Source Catalog, Metadata, Guarded Query,
 Control Plane, Delivery, Runtime과 Assurance의 논리 module로 나눈다. 이 경계는 microservice
 분리를 뜻하지 않으며, AI agent가 repository 전체를 선행 학습하지 않고 담당 module의 역할,
-직접 소비 계약, 실행 흐름과 테스트에 집중해 병렬 작업하기 위한 modular monolith 경계다.
+직접 소비 interface, 실행 흐름과 테스트에 집중해 병렬 작업하기 위한 modular monolith 경계다.
 
 현재 `src/query_man`은 평면 구조이므로 owner는 package 경로가 아니라
 [module boundary index](modules/README.md)의 transition map으로 결정한다. 새 의존은 owner가 공개한
-계약으로만 연결한다. Runtime은 production implementation을, Assurance CLI는 offline 검증
+module interface로만 연결한다. Runtime은 production implementation을, Assurance CLI는 offline 검증
 implementation을 조립하며 Control Plane은 candidate source 검증을 위한 격리 staging만 조립한다.
-Module contract 변경은
+Module interface와 external/persisted/policy/lifecycle 의미 변경은
 [ADR 0018](decisions/0018-module-ownership-and-contract-governance.md)에 따라 구현 전에 사용자
-승인을 받는다. 물리 package 이동은 이 계약 baseline을 보존하는 별도 refactoring이다.
+승인을 받는다. 물리 package 이동은 이 interface와 별도 경계 baseline을 보존하는 별도 refactoring이다.
 
 ## Component Boundaries
 
@@ -103,7 +103,7 @@ Module contract 변경은
 
 `pg_catalog`에서 relation, column, type, primary key, foreign key, index와 comment를 공통
 형식으로 생성해 revision snapshot으로 발행한다. Planner 통계의 row estimate는 fresh catalog
-응답에만 포함될 수 있는 best-effort hint이며 revision 재료나 persisted snapshot contract가
+응답에만 포함될 수 있는 best-effort hint이며 revision 재료나 persisted snapshot format이
 아니다. Restart 복원 뒤 없을 수 있으므로 안전·정확성 판단에 사용하지 않는다.
 
 운영 규모 관측은 metadata revision과 별도 lifecycle을 사용한다. Row/storage/growth 값은 측정
@@ -142,17 +142,17 @@ Source profile에는 다음 운영 설정만 둔다.
 - plan admission을 포함한 중앙 `budget_profile` resource tier
 
 Runtime은 `QUERY_MAN_SOURCE_MODE=bootstrap|managed`로 process 전체 source authority를 시작할 때
-한 번 선택한다. 기본 bootstrap mode는 local/CI에서 `config/sources/*.yaml`과 filesystem verified
-contract를 읽고 Control DSN/key를 거부한다. Credential 값은 manifest에 저장하지 않고 환경 변수
+한 번 선택한다. 기본 bootstrap mode는 local/CI에서 `config/sources/*.yaml`과 filesystem
+verified-query data를 읽고 Control DSN/key를 거부한다. Credential 값은 manifest에 저장하지 않고 환경 변수
 이름만 참조한다.
 
 Production managed mode는 Control DSN/key와 stable replica ID를 모두 요구하고 empty
-registry/verified map에서 Control DB lifecycle과 contract만 load한다. Source/verified file을 열거나 합치지 않으므로 lifecycle row가
+registry/verified map에서 Control DB의 source/verified lifecycle state만 load한다. Source/verified file을 열거나 합치지 않으므로 lifecycle row가
 없는 file source는 absent이고 restart 뒤 rollback/deactivate가 유지된다. Budget profile과 access
 policy는 versioned deployment configuration에 남는다. Source publish가 repository YAML이나 commit을
 만들지 않으며 양방향 sync, startup import와 file fallback도 없다. 일회성 admin-API cutover와
 authority 규칙은 [ADR 0016](decisions/0016-centralized-source-management-plane.md)을 따른다.
-Control-plane source revision과 암호화된 credential 계약은
+Control-plane source revision과 암호화된 credential persisted/security format은
 [ADR 0012](decisions/0012-control-plane-source-revisions.md)를 따른다.
 
 초기 운영에서는 모든 인증된 query principal이 같은 active source 목록을 본다. Source
@@ -174,7 +174,7 @@ HTTP API로 제공한다. 실제 DB 객체, secret, raw metric과 provider bill�
 현재 management slice는 strict manifest v2의 owner/environment/DB migration reference를
 immutable generation에 저장하고 admin-only list/detail/generation-history API로 조회한다. 여섯
 mutation은 expected state, authenticated actor/change reference와 keyed canonical request hash를
-사용하며 source/contract 변경과 terminal receipt를 원자적으로 commit한다. 별도 operator-only
+사용하며 source/verified-query state 변경과 terminal receipt를 원자적으로 commit한다. 별도 operator-only
 receipt lookup과 source mutation history가 timeout reconciliation과 lifecycle chronology를 제공한다.
 API는 raw manifest, encrypted secret, question/SQL을 읽지 않는 explicit projection이며 published
 generation revision과 현재 active metadata revision을 구분한다. 별도 replica endpoint는 managed
@@ -208,7 +208,7 @@ authorize
 않는다. Timeout, concurrency, result size, temporary resource 제한과 query cancel을
 실제 안전 경계로 사용한다.
 
-## MCP Contract
+## MCP External API
 
 하나의 MCP endpoint에서 고정된 tool schema를 제공한다. 데이터베이스나 table마다
 tool을 생성하지 않는다.
@@ -238,7 +238,7 @@ Source가 사용자 session에 고정되는 환경에서는 `list_sources`를 �
 하나의 query는 하나의 source만 대상으로 하며 cross-database federation은 별도
 기능으로 취급한다.
 
-MCP를 붙이기 전 동일한 application contract를 HTTP로 먼저 검증한다.
+MCP를 붙이기 전 동일한 application service 동작을 HTTP로 먼저 검증한다.
 
 ```text
 GET  /sources
@@ -260,7 +260,7 @@ metadata snapshot을 다시 쓰지 않고 fail-closed한다.
 
 - L0: source 등록과 자동 catalog. 단순 질의를 best-effort로 지원한다.
 - L1: description, grain, 시간 column과 비표준 join을 보강한다.
-- L2: L1 조건과 현재 metadata revision의 verified query contract를 충족한다. Measure와
+- L2: L1 조건과 현재 metadata revision의 verified-query baseline을 충족한다. Measure와
   curated view는 source 의미에 필요할 때만 추가한다.
 
 권장 onboarding 흐름은 다음과 같다.
@@ -293,7 +293,7 @@ Schema drift로 overlay가 깨지면 신규 revision 발행을 중단하고 마�
 
 - PostgreSQL AST parser와 canonical query fingerprint는
   [ADR 0001](decisions/0001-postgresql-ast-validation.md)을 따른다.
-- Guarded query 순서, revision, truncation과 오류 계약은
+- Guarded query 순서, revision, truncation과 오류 의미는
   [ADR 0002](decisions/0002-guarded-query-contract.md)를 따른다.
 - Reader role, curated view와 PostgreSQL-resolved function/operator 정책은
   [ADR 0003](decisions/0003-reader-and-resolved-object-policy.md)를 따른다.
@@ -325,7 +325,7 @@ Schema drift로 overlay가 깨지면 신규 revision 발행을 중단하고 마�
   [ADR 0016](decisions/0016-centralized-source-management-plane.md)을 따른다.
 - Shared source access, admin 경계와 source별 공통 resource tier는
   [ADR 0017](decisions/0017-shared-source-access-and-resource-tier.md)을 따른다.
-- Module owner, 집중 읽기 범위와 inter-module contract 승인 절차는
+- Module owner, 집중 읽기 범위와 module interface/boundary 승인 절차는
   [ADR 0018](decisions/0018-module-ownership-and-contract-governance.md)을 따른다.
 
 ## Completion Tracking

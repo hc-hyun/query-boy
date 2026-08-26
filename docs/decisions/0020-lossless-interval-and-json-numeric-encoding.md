@@ -8,13 +8,19 @@ Last expanded: 2026-08-26 (`DBEDGE-05` characterization and RLS-v2 UTF8 boundary
 
 Coordination: [Proposed ADR 0024](0024-rls-policy-drift-attestation.md)의 RLS attestation이 snapshot v2를
 먼저 사용하므로 이 ADR의 encoding/source-semantics snapshot은 cumulative v3다. 두 ADR 모두 아직
-승인 대기 제안이며 이 번호 조정 자체가 어느 계약의 승인이 아니다. RLS v2가 admitted graph의 psycopg
+승인 대기 제안이며 이 번호 조정 자체가 어느 change set의 승인이 아니다. RLS v2가 admitted graph의 psycopg
 identity와 relation resolution을 고정하기 위해 PostgreSQL 18/UTF8 server 및 RLS Catalog/Query pool
 startup `client_encoding=UTF8`을 요구하는 것은 ADR 0024의 RLS-only admission이다. 이 ADR은 그
 invariant를 유지하면서 non-RLS source까지 같은 startup/admission을 확대하고 deterministic settings,
 public result loader/encoding과 source-semantics fingerprint를 cumulative v3에 추가한다. 따라서 RLS
 proposal 승인은 broader `ENC-01` 승인이 아니고, 반대로 ENC 구현이 RLS lock/policy attestation을
 대체하지도 않는다.
+
+이 제안은 하나의 module interface가 아니다. `QueryExecutor`/fingerprint provider shape는 module
+interface, public result/error는 external format, snapshot codec은 persisted format,
+reader-setting/fingerprint/revision/OID allowlist는 policy/compatibility identity, cutover는 operational
+procedure다. 사용자는 각 범주의 정확한 영향을 함께 확인하되 이를 하나의 포괄 범주로 해석하지
+않는다.
 
 ## Context
 
@@ -56,7 +62,7 @@ QueryService case에서 silent data-loss, SQL semantic setting과 collection ide
 psycopg가 이미 평탄화한 `timedelta`와 JSONB 내부 float에서는 원래 값을 복원할 수 없다. 실제로
 `interval '1 month'`와 `interval '30 days'`는 같은 `timedelta`/hash가 되지만 기준 날짜에 더한 결과가
 다를 수 있고, 서로 다른 큰 fractional JSON 숫자도 같은 binary float/hash로 합쳐진다. 이는
-[ADR 0002](0002-guarded-query-contract.md)의 stable scalar 계약과 roadmap `REF-12`의 무손실 의도를
+[ADR 0002](0002-guarded-query-contract.md)의 stable scalar encoding rules와 roadmap `REF-12`의 무손실 의도를
 일반 interval/JSONB numeric까지 충족했다고 주장하지 못하게 한다. `extra_float_digits` drift는 원래
 float8의 binary value까지 바꾸지는 않지만 같은 값의 public representation과 verified evidence를 흔든다.
 `DateStyle`은 output decode뿐 아니라 ambiguous date literal의 DB 입력 의미도 바꾸므로 단순 표시
@@ -71,7 +77,7 @@ Implicit full-text-search config와 planner input order도 loader 밖에서 같�
 공개하지 않는 `QUERY_UNAVAILABLE`로 실패하고 rollback/pool 재사용 뒤 정상 query가 복구된다. 이
 제안은 infinity/range에 새 public encoding을 추가하지 않는다.
 
-## Current Contract
+## Current Baseline
 
 - Query connection은 psycopg default interval/time/JSON loader를 사용한다. PostgreSQL `json`의 duplicate
   object key는 Python mapping 변환에서 last key만 남고 `time|timetz`의 valid `24:00`은 decode에
@@ -90,7 +96,7 @@ Implicit full-text-search config와 planner input order도 loader 밖에서 같�
   composite, money, XML, geometric, `oid/name`과 그 array 및 그 밖의 registered/unregistered OID가
   int/tuple/string/list 같은 지원 Python type으로 내려오면 현재 SQL type allowlist와 무관하게 성공할 수 있다.
 - Public SQL capability는 `bit`/`varbit` cast를 이미 광고한다. Psycopg는 이를 `0|1` text로 반환하므로
-  이 두 built-in type을 거부하면 advertised capability와 result contract가 충돌한다. Scalar domain은
+  이 두 built-in type을 거부하면 advertised capability와 result format이 충돌한다. Scalar domain은
   PostgreSQL RowDescription에서 allowed base OID로 내려오지만 enum과 array-of-domain은 user-defined
   OID로 남는 것도 PostgreSQL 18의 runnable disposable-DB probe에서 확인했다. Base OID만으로
   domain을 허용하면 declared type/constraint identity가 이미 사라지므로 안전한 증거가 아니다.
@@ -113,7 +119,7 @@ Implicit full-text-search config와 planner input order도 loader 밖에서 같�
    모든 encoding-compatible collation definition뿐 아니라 published column binding, view/materialized-view의 hidden
    dependency column·visited definition·direct collation binding을 포함한다.
    Guarded Query는 published fingerprint를
-   required Python contract로 받아 같은 query transaction에서 user planning 전에 재검사한다.
+   required Python interface로 받아 같은 query transaction에서 user planning 전에 재검사한다.
 3. Current/rollback-preserved verified SQL과 managed view dependency를 inventory한다. Ambiguous date/time,
    timezone abbreviation, backslash string, `expression = NULL`, textual NULL array, non-1 lower bound,
    collation-dependent expression, implicit default text-search config, bytea text cast, custom
@@ -135,7 +141,7 @@ Implicit full-text-search config와 planner input order도 loader 밖에서 같�
 갖는다는 것이다.
 비용은 interval, end-of-day time 및 fractional JSONB가 포함된 public row/hash가 바뀔 수 있고 duplicate
 JSON, unsupported OID, non-UTF8 source와 unexplained semantic/collation drift가 새로 거부된다는 것이다.
-모든 source revision과 current/rollback-preserved verified contract를 다시 발행해야 한다.
+모든 source revision과 current/rollback-preserved verified-query baseline을 다시 발행해야 한다.
 
 #### Exact reader order and admission
 
@@ -156,7 +162,7 @@ BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY
 6. Catalog 또는 resolved-object/EXPLAIN/user SQL
 ```
 
-RLS source는 [ADR 0024의 proposed lock-first contract](0024-rls-policy-drift-attestation.md)를 먼저
+RLS source는 [ADR 0024의 proposed lock-first lifecycle](0024-rls-policy-drift-attestation.md)을 먼저
 적용한다. Metadata authoritative transaction과 Query transaction 모두 `BEGIN` 직후 candidate/referenced
 root view `ACCESS SHARE NOWAIT` lock이 첫 relation action이고, 위 1~5 settings/probe가 그 뒤에 같은
 순서로 오며 RLS live attestation 다음 source-semantics probe를 수행한다. Pre-discovery는 별도 commit된
@@ -400,7 +406,7 @@ deadline과 `elapsed_ms`에 포함하지만 result row/byte/plan에는 포함하
 [pg_rewrite](https://www.postgresql.org/docs/18/catalog-pg-rewrite.html),
 [pg_depend](https://www.postgresql.org/docs/18/catalog-pg-depend.html)를 따른다.
 
-#### Exact result cursor, scalar and collection contract
+#### Exact result cursor, scalar and collection format
 
 Psycopg minimum `>=3.2`에서도 동작하도록 text-format named result cursor를 만든 직후 user SQL 실행 전에
 cursor-local loader를 등록한다. Resolved-object/EXPLAIN/plan admission 뒤 `cursor.execute(user_sql)`,
@@ -537,7 +543,7 @@ current function/operator/type/node set을 유지하고 version을 3, key를 exa
 
 #### Snapshot v1/v2/v3, Metadata revision and Python Protocol
 
-Snapshot version namespace는 다음 누적 계약을 사용한다.
+Snapshot version namespace는 다음 누적 format을 사용한다.
 
 - V1: 현재 exact `{"relations":[...]}` legacy document. Non-RLS current release가 serve한다.
 - V2: [proposed ADR 0024](0024-rls-policy-drift-attestation.md)의 RLS-only relation attestation document.
@@ -616,9 +622,9 @@ fresh current-policy attestation을 포함한다. Historical v2 decoder는 당�
 `view_sql_policy_revision`/fingerprint/bytes를 보존하고 current policy equality를 serving/builder에서만
 요구한다. V1/V2 field가 다른 version path에 유입되지 않고 stored v2에서 v3 revision을 계산하지 않는다.
 
-Guarded Query의 cumulative required Python contract는 RLS bundle과 source-semantics fingerprint를
+Guarded Query의 cumulative required Python interface는 RLS bundle과 source-semantics fingerprint를
 분리한다. 둘을 하나로 합치거나 한 verifier 결과로 다른 verifier를 생략하지 않는다. Existing direct
-caller/adapter/fake가 함께 바뀌어야 하므로 coordinated breaking Python contract change다.
+caller/adapter/fake가 함께 바뀌어야 하므로 coordinated breaking Python interface change다.
 
 ```python
 execute(
@@ -672,7 +678,7 @@ collation/timezone 이름, SQL, credential과 database error는 response·audit�
 zone rule은 자동 fingerprint하지 않는다. `pg_timezone_names`는 `CURRENT_TIMESTAMP`에 따라 offset이 바뀌어
 stable version fingerprint가 아니다. 따라서 PostgreSQL/tzdata/system-zoneinfo 변경은 managed semantic
 change로 freeze하고 current/rollback verified SQL의 named-zone inventory를 전량 재실행·재발행한다.
-자동 fail-closed가 필요하면 별도 timezone-rules attestation 또는 symbolic-zone SQL 제한 계약을 다시
+자동 fail-closed가 필요하면 별도 timezone-rules attestation 또는 symbolic-zone SQL policy를 다시
 승인받는다. A가 named-zone drift까지 자동 검출한다고 주장하지 않는다.
 
 #### Collation provider residual limitation
@@ -686,7 +692,7 @@ source/admin mutation freeze, route drain, full managed inventory/reissue를 다
 row는 active database/column/view semantic에 연결되지 않은 동안만 inventory에 존재할 수 있다.
 Pin status 자체를 SQL catalog로 attest한다고 주장하지 않고 PostgreSQL-18 build/static
 catalog identity를 같은 protected image/inventory에 고정한다.
-Provider artifact의 cryptographic runtime attestation을 원하면 별도 계약을 다시 승인받는다.
+Provider artifact의 cryptographic runtime attestation을 원하면 별도 policy를 다시 승인받는다.
 
 #### Function and operator dependency residual limitation
 
@@ -697,7 +703,7 @@ operator 또는 operator-family의 body/implementation과 그 transitive depende
 attest하지 않는다. 이 object는 protected managed artifact inventory에 freeze하고 발견·변경은
 cutover stop이다. 같은 fingerprint/revision을 유지한 ordinary full reissue로 변경을 수용하지
 않고 direct unpinned `pg_proc|pg_operator|pg_opfamily` admission rejection 또는 transitive semantic
-fingerprint 확장 계약을 다시 승인받는다. A가 이 drift를 자동 fail-closed한다고 주장하지
+fingerprint 확장 policy를 다시 승인받는다. A가 이 drift를 자동 fail-closed한다고 주장하지
 않는다.
 
 #### Text-search and order-sensitive aggregate residual limitation
@@ -706,14 +712,14 @@ fingerprint 확장 계약을 다시 승인받는다. A가 이 drift를 자동 fa
 달라지는 것을 막지만 해당 built-in config/dictionary의 catalog definition과 dictionary data를 v1
 fingerprint가 자동 attest하지 않는다. Protected PostgreSQL image/build/static-catalog inventory에
 freeze하고 custom/explicit regconfig dependency는 cutover stop으로 둔다. Automatic text-search artifact
-attestation이나 implicit overload rejection이 필요하면 fingerprint/SQL policy 계약을 다시 승인받는다.
+attestation이나 implicit overload rejection이 필요하면 fingerprint/SQL policy를 다시 승인받는다.
 
 Canonical loader는 PostgreSQL이 이미 계산한 aggregate input order를 복원할 수 없다. 따라서 A는
 unordered `sum(float4|float8)`와 duplicate-key `json[b]_object_agg`가 모든 plan에서 같은 값을 만든다고
 주장하지 않는다. Current/rollback verified inventory는 float aggregate의 stable unique aggregate
 `ORDER BY`와 JSON object key uniqueness/aggregate ordering을 증명하지 못하면 cutover를 중단한다.
 General public SQL에서 이 construct를 새로 거부하거나 schema-aware uniqueness/order를 강제하려면
-별도 SQL-policy 계약 승인이 필요하다. A의 무손실 보장은 admitted result value의 decode/encoding
+별도 SQL-policy 승인이 필요하다. A의 무손실 보장은 admitted result value의 decode/encoding
 경계이지 order-sensitive SQL 자체를 결정적으로 다시 쓰는 보장이 아니다.
 
 ### `ENC-01-B` — loss-prone types fail closed
@@ -744,7 +750,7 @@ Python value 변환 전에 거부한다.
 Repository의 TIME R2 구현은 완료됐지만 `TIME-03` production 전환은 아직 실행되지 않았다. A를
 선택하면 `TIME-03`을 따로 먼저 실행하지 않는다. `ENC-02`에서 final encoding baseline을 구현·검증한
 뒤 protected environment의 captured pre-ENC baseline에서 TIME R2와 final ENC baseline을 하나의 coordinated `TIME-03`
-cutover로 적용하고 current/rollback-preserved contract를 한 번만 재실행·재발행한다.
+cutover로 적용하고 current/rollback-preserved verified-query baseline을 한 번만 재실행·재발행한다.
 
 1. Source/admin/verified mutation을 freeze하고 protected inventory, Control backup, pre-ENC artifact/key,
    source별 active 및 rollback-preserved v1/v2 generation/revision/L2를 고정한다. RLS-01을 같은
@@ -759,7 +765,7 @@ cutover로 적용하고 current/rollback-preserved contract를 한 번만 재실
 5. Route 밖 v3 fleet를 시작한다. V1/v2 history는 decode할 수 있지만 active pre-v3인 동안 public
    metadata/query와 source readiness는 unavailable이어야 한다.
 6. 각 current/rollback baseline에 immutable v3 counterpart generation/snapshot/revision을 append하고,
-   해당 verified contract 전체를 새 QueryService로 실행·비교해 새 revision의 verified row와 L2를 남긴다.
+   해당 verified-query baseline 전체를 새 QueryService로 실행·비교해 새 revision의 verified row와 L2를 남긴다.
    마지막에는 intended current v3 counterpart만 active로 둔다.
 7. Server/client encoding, timezone-abbreviation fingerprint, database/column collation version과 ambiguous
    date/time, timezone abbreviation, ordinary backslash string, `expression = NULL`, textual NULL array
@@ -816,7 +822,7 @@ Mixed v1/v2/v3 serving fleet는 같은 SQL의 row/hash와 security attestation�
   distro/libc/ICU/locale-data drift는 자동 fingerprint하지 않으며 image/build/package identity
   change 때 managed inventory와 full verified reissue로 통제한다. Same-name user
   procedure/operator implementation·transitive dependency drift도 자동 감지 밖이며 protected artifact
-  freeze·cutover stop 후 별도 fingerprint/admission 계약 승인이 필요하다. Built-in text-search
+  freeze·cutover stop 후 별도 fingerprint/admission policy 승인이 필요하다. Built-in text-search
   config/dictionary artifact와 unordered float/duplicate-key JSON aggregate의 planner-order 의미도 자동
   fingerprint/SQL rewrite 대상이 아니며 managed inventory stop과 위 residual을 따른다.
 - Data loss: A는 silent loss를 제거한다. B는 값을 거부한다. C는 runtime protection이 없다.
@@ -871,12 +877,12 @@ Mixed v1/v2/v3 serving fleet는 같은 SQL의 row/hash와 security attestation�
   `array_nulls=on|off`, `client_encoding=UTF8|SQL_ASCII`, `timezone_abbreviations=Default|Australia`,
   `bytea_output=hex|escape`와 `default_text_search_config=pg_catalog.english|simple` role
   default에서 exact 결과. PostgreSQL 18의 `extra_float_digits>=1`은 같은
-  shortest-precise 출력을 내며 계약값 1이 더 정밀하다는 주장은 하지 않는다. Direct bytea는
+  shortest-precise 출력을 내며 fixed policy value 1이 더 정밀하다는 주장은 하지 않는다. Direct bytea는
   같은 Base64/hash인 negative control이고 `bytea::text`와 hidden implicit text-search view는 서로 다른
   current hash 뒤 canonical setting에서 같은 결과가 되는 acceptance를 둔다.
 - Forced seq/index plan에서 unordered float sum과 duplicate-key JSONB object aggregate의 exact drift를
   negative corpus로 유지한다. Managed verified inventory는 stable unique aggregate ordering/key
-  evidence가 없는 contract를 cutover stop으로 분류한다.
+  evidence가 없는 query를 cutover stop으로 분류한다.
 - Current/rollback-preserved verified SQL의 ambiguous date/timestamp/timezone abbreviation, ordinary
   backslash string, `expression = NULL`, NULL array literal, non-1 lower-bound array, bytea text cast,
   implicit/custom text-search, order-sensitive aggregate, collation dependency와 result OID inventory 및
@@ -889,8 +895,8 @@ Mixed v1/v2/v3 serving fleet는 같은 SQL의 row/hash와 security attestation�
   shared material identity와 recursive immutability.
 - Lock된 psycopg 3.3.x 뿐 아니라 `pyproject.toml`의 oldest supported 3.2.x로 cursor-local
   loader, named cursor/OID-before-fetch acceptance를 별도 실행한다. 3.2에서 보존할 수 없으면
-  지원 하한을 조용히 올리지 않고 dependency contract 변경을 다시 승인받는다.
-- `QueryExecutor` keyword-only contract, fingerprint verifier 위치, catalog policy violation의
+  지원 하한을 조용히 올리지 않고 dependency baseline 변경을 다시 승인받는다.
+- `QueryExecutor` keyword-only interface, fingerprint verifier 위치, catalog policy violation의
   `METADATA_UNAVAILABLE`, candidate `SOURCE_VALIDATION_FAILED`, live/OID/loader `QUERY_UNAVAILABLE`, probe timeout의
   `QUERY_TIMEOUT`과 raw detail 비노출.
 - Repository fixture와 managed current/rollback inventory 전체 재실행, old/new Control row 공존.
@@ -899,14 +905,15 @@ Mixed v1/v2/v3 serving fleet는 같은 SQL의 row/hash와 security attestation�
 
 ## Approval Boundary
 
-이 ADR은 제안일 뿐 승인된 계약이 아니다. `ENC-01-A`, `ENC-01-B` 또는 미완료 defer인 `ENC-01-C`를
+이 문서는 정확한 제안일 뿐 현재 승인 baseline이나 구현이 아니다. 승인하려면 해당되는 모든 변경
+범주와 영향을 정확히 지정해야 한다. `ENC-01-A`, `ENC-01-B` 또는 미완료 defer인 `ENC-01-C`를
 사용자가 정확히 선택하기 전에는 loader, reader-format setting, encoder, revision, verified hash 또는
 source-semantics fingerprint/persisted snapshot과 production cutover를 변경하지 않는다. A/B만
 implementation/production completion 선택지다. 권장 A
 구현 승인 문구는 다음과 같다.
 위 A의 exact reader/fingerprint/result/policy/codec/Protocol/error/cutover와 residual limitation을 하나의
 implementation-ready 제안으로 묶었다. B는 policy version, migration/cutover, 보존·거부 범위를 다시 exact
-restatement해야 하고 C는 open defer다. 일반적인 “진행/구현/승인”이나 ID만으로 계약 변경을 시작하지 않는다.
+restatement해야 하고 C는 open defer다. 일반적인 “진행/구현/승인”이나 ID만으로 위 범주 변경을 시작하지 않는다.
 
 ```text
 ENC-01-A를 ADR 0020의 Exact reader order/admission, source_semantics_fingerprint v1 shape·정렬·bound·
@@ -925,7 +932,7 @@ current/rollback full v3 verified reissue, mixed v1/v2/v3 fleet 금지와 immuta
 distro/libc/ICU/locale-data drift는 자동 fingerprint하지 않고 PostgreSQL/tzdata/image/build/package
 identity change마다 managed inventory와 full verified reissue로 통제한다. Same-name user
 procedure/operator body·transitive dependency drift는 automatic fingerprint 밖이므로 protected artifact
-freeze·cutover stop 후 별도 fingerprint/admission 계약 승인을 요구하는 residual limitation도 수용한다.
+freeze·cutover stop 후 별도 fingerprint/admission policy 승인을 요구하는 residual limitation도 수용한다.
 Built-in text-search config/dictionary artifact와 unordered float/duplicate-key JSON object aggregate의
 planner-order 의미도 automatic attestation/rewrite 밖이며 managed verified inventory에서 stable unique
 aggregate order/key를 증명하지 못하면 cutover stop한다. General public SQL rejection은 이 승인에

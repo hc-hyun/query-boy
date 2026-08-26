@@ -10,7 +10,8 @@ Reference: [Ponytail](https://github.com/DietrichGebert/ponytail)
 ## Module-Scoped Development
 
 Query Man은 하나의 deployable process를 유지하는 modular monolith다. 논리 module의 owner,
-현재 평면 파일 mapping, 허용 dependency와 계약은 [`docs/modules/README.md`](docs/modules/README.md)를
+현재 평면 파일 mapping, 허용 dependency와 module interface는
+[`docs/modules/README.md`](docs/modules/README.md)를
 유일한 시작점으로 사용한다. 아직 물리 package가 분리되지 않았다는 사실을 숨기지 않는다.
 
 - 작업 시작 시 repository 전체를 선행 학습하지 않는다. 이 파일, module index, primary module의
@@ -18,57 +19,95 @@ Query Man은 하나의 deployable process를 유지하는 modular monolith다. �
 - “관련 실행 흐름과 trust boundary를 끝까지 읽는다”는 repository 전체가 아니라 변경이 영향을
   주는 완전한 end-to-end slice를 뜻한다. Public producer/entry부터 변경 지점, 직접 consumer,
   persistence/transaction/cleanup 경계, 실패 경로와 runnable test까지 확인한다.
-- 흐름이나 trust boundary가 다른 module로 넘어가면 그 module 문서와 직접 관련된 계약/code/test만
+- 흐름이나 trust boundary가 다른 module로 넘어가면 그 module 문서와 직접 관련된
+  interface/code/test만
   추가로 읽는다. 보안 경계는 module 경계에서 조사를 중단할 이유가 되지 않는다.
 - 다른 module의 implementation, table 또는 private symbol에 새로 의존하지 않고 owner가 공개한
-  contract를 소비한다. Production server 조립은 Runtime, 후보 source의 격리 staging 조립은
+  module interface를 소비한다. Production server 조립은 Runtime, 후보 source의 격리 staging 조립은
   Control Plane, offline acceptance 조립은 Assurance CLI entrypoint만 수행한다.
 - 현재 shared transition file을 수정하면 module index에 표시된 모든 owner 문서를 읽고 symbol
   단위로 변경한다. Shared file 정리와 업무 변경을 한 diff에 섞지 않는다.
-- Shared transition file과 공통 contract 문서는 single-writer로 다룬다. 병렬 agent가 동시에
+- Shared transition file과 공통 interface/governance 문서는 single-writer로 다룬다. 병렬 agent가 동시에
   편집하지 않고 coordinating agent가 owner와 변경 순서를 지정한다.
-- Agent 한 명은 기본적으로 primary module 하나를 맡는다. 계약이 고정된 서로 다른 module의
+- Agent 한 명은 기본적으로 primary module 하나를 맡는다. Interface와 별도 경계가 고정된 서로 다른 module의
   implementation은 병렬로 개발할 수 있다.
-- Coordinating agent는 병렬 작업을 시작하기 전에 각 agent에게 primary module, 승인된 contract
+- Coordinating agent는 병렬 작업을 시작하기 전에 각 agent에게 primary module, 승인된 change-set
   ID와 baseline commit, 수정 가능한 file allowlist, 읽기 전용 provider/consumer file, 수정 금지
-  shared file, 필수 test와 contract 변경 발견 시 중단 조건을 지정한다. 할당되지 않은 file까지
+  shared file, 필수 test와 interface 또는 별도 승인 대상 경계 변경 발견 시 중단 조건을 지정한다. 할당되지 않은 file까지
   정리하거나 공통 문서를 함께 갱신하지 않는다.
 - 여러 agent가 같은 worktree를 공유하면 `git add`, commit, rebase, merge와 push는 coordinating
   agent만 수행한다. 별도 worktree/branch와 Git 권한을 명시적으로 할당받은 경우만 예외로 한다.
-- Module별 focused test는 빠른 feedback용이며 root 전체 gate를 대체하지 않는다. Provider contract를
+- Module별 focused test는 빠른 feedback용이며 root 전체 gate를 대체하지 않는다. Provider interface를
   사용하는 코드를 바꾸면 provider와 직접 consumer test를 함께 실행한다.
 
-## Inter-Module Contract Changes
+## Inter-Module Interfaces And Approval-Sensitive Changes
 
-다른 module이 소비하는 다음 항목은 additive change를 포함해 module contract다.
+### Official module interface
 
-- Public Python type, Protocol, function, method와 lifecycle capability
-- HTTP/MCP request, response, error, authentication/authorization와 protocol version
-- Source manifest, budget, persisted/versioned configuration과 public source projection
-- Metadata/SQL policy revision, fingerprint, canonical encoding과 verified result hash
-- Authorization, validation, admission, transaction, cancel, rollback, reload와 shutdown 순서
-- Allowlist, reader/tenant policy, timeout, concurrency와 row/byte/resource limit의 의미
-- Control DB schema, constraint, role/grant, lock/CAS, transaction, generation과 pin/migration 의미
+`Module interface`는 provider가 allowed dependency map과 자기 module 문서에서 다른 logical
+module이 사용하도록 명시적으로 공개한 Python constant/enum/type/DTO/domain error, Protocol,
+function, method, use case와 lifecycle capability다. 그 의미는 Python shape/signature와 호출 단위
+input/output/domain-error semantics로 한정한다. 단순히 Python 이름이 public이거나 여러 module이
+같은 동작에 관심을 가진다는 이유만으로 module interface가 되지는 않는다. Policy, ordering,
+limit와 lifecycle outcome은 아래 별도 범주로 분류한다.
 
-Module contract는 사용자의 명시적 승인 없이 변경하지 않는다.
+다음 범주는 중요하지만 그 자체로 module interface라고 부르지 않는다.
 
-- 계약 변경 필요성을 발견하면 의미상 code/schema/config/contract 문서 수정을 멈추고 현재 계약,
-  제안 계약과 이유, provider/consumer 영향, compatibility/migration/rollback, 보안·데이터 손실 영향,
-  문서·검증 계획을 사용자에게 제시한다. 읽기 전용 조사와 제안은 계속할 수 있다.
-- 사용자가 정확한 계약 변경 내용과 영향 범위를 승인한 뒤에만 진행한다. 원래 요청에 그 내용이
+- `External API/wire format`: HTTP/MCP/CLI request, response, status, error, authentication과 protocol version
+- `Persisted/versioned format`: DB/file/config schema, codec, version과 migration/rollback 의미
+- `Policy/compatibility identity`: revision, fingerprint, canonical encoding/hash, allowlist,
+  reader/tenant/resource policy와 limit 의미
+- `Safety/lifecycle invariant`: authorize, validate, admit, transaction, cancel, rollback, reload,
+  shutdown과 cleanup의 externally required outcome
+- `Ownership/composition boundary`: 허용 dependency, private implementation 접근 금지와 composition-root 권한
+- `Protected operational procedure`: protected inventory, freeze, DDL, cutover, rollback plan과
+  stop/rollback condition
+- `Operational execution authorization`: 실제 protected action의 access, scope, target, stop condition과
+  change-record 책임
+- `Evidence/change record`: 실행된 사실을 보존하는 append-only/immutable evidence와 provenance
+- `Shared transition artifact`: 여러 owner가 함께 검토하고 single-writer가 편집해야 하는 file, 문서와 test
+
+하나의 변경이 여러 범주에 걸칠 수 있다. 예를 들어 SQL-policy descriptor의 Python shape는 module
+interface지만 digest 재료는 policy/compatibility identity이고, HTTP projection은 external wire
+format이다. 범주가 여러 개라는 이유로 관련 없는 변경까지 하나의 승인안으로 묶지 않는다.
+
+### Approval rules
+
+- Module interface의 의미 변경은 additive change를 포함해 사용자의 명시적 승인 없이 진행하지 않는다.
+- External API/wire, persisted/versioned format, policy/compatibility identity, safety/lifecycle invariant,
+  ownership/composition boundary와 protected operational procedure의 의미 변경도 각 범주의 정확한
+  영향으로 별도 승인받는다. 이를
+  module interface 변경이라고 부르거나 서로 자동 승인된 것으로 간주하지 않는다.
+- Protected environment의 operational action은 repository 변경이나 procedure 승인과 별개다. 실제
+  access, scope, target, stop condition과 change-record 책임을 확인한 별도 실행 승인이 필요하다.
+- Evidence/change record는 실행 시점의 사실을 보존한다. 과거 기록을 현재 의미에 맞춰 조용히
+  수정·삭제하지 않고, 정정이 필요하면 원문과 provenance를 남긴 새 기록을 추가한다.
+- Shared transition artifact라는 사실은 single-writer 요구만 만든다. 그 자체가 의미 변경이나 사용자
+  승인 필요성을 뜻하지 않는다.
+- 공식 interface와 위 경계의 의미를 보존하는 private helper, algorithm, lock 구현, file move와
+  오탈자 수정은 module 내부 변경이다. Consumer가 의존하지 않는 내부 순서도 module interface가 아니다.
+- 승인 대상 의미 변경 필요성을 발견하면 code/schema/config와 해당 의미 문서 수정을 멈추고 현재
+  의미, 제안 의미와 이유, provider/consumer 또는 external/persisted/operational 영향,
+  compatibility/migration/rollback, 보안·데이터 손실 영향과 검증 계획을 사용자에게 제시한다.
+  읽기 전용 조사와 제안은 계속할 수 있다.
+- 사용자가 정확한 변경 내용과 영향 범위를 승인한 뒤에만 진행한다. 원래 요청에 그 내용이
   구체적으로 명시되어 있으면 그 범위는 승인된 것으로 본다. 일반적인 “구현”, “refactor”, “정리”
   요청이나 coordinating/sub-agent의 동의는 승인이 아니다.
-- 판단이 불명확하면 계약 변경으로 취급한다. 외부 의미가 동일한 private refactor, 파일 이동과
-  오탈자 수정은 계약 변경이 아니다. 하나의 확정된 ADR/schema/test와 현재 동작에 맞추는 단순한
-  사실 문서 정정도 계약 변경이 아니지만, 둘 이상의 authority가 다른 의미를 주장해 선택이
-  필요하면 사용자에게 보고한다.
-- 승인된 계약 변경은 하나의 coordinating workstream에서 직렬화한다. 같은 계약을 사용하는 병렬
-  작업은 새 baseline이 확정될 때까지 그 경계를 동결한다.
-- 승인 뒤 owner와 모든 직접 consumer의 module 문서, 필요한 ADR/migration/onboarding 절차와
-  contract/integration test를 code와 같은 변경에서 갱신한다. 승인 범위를 넘으면 다시 승인받는다.
-- Accepted ADR, 실제 persisted/wire schema, runnable contract test와 module 문서가 충돌하면 임의로
-  선택하지 말고 불일치를 사용자에게 보고한다. `implementation pending`인 목표를 현재 계약으로
-  오해하지 않는다.
+- 분류가 불명확하거나 둘 이상의 authority가 다른 의미를 주장하면 임의로 하나의 포괄 범주로
+  묶지 말고 변경을 멈춰 사용자에게 보고한다. 하나의 확정된 authority와 현재 동작을 맞추는 bug
+  fix와 사실 문서 정정은 새 의미 선택이 아니다.
+- 승인된 change set은 하나의 coordinating workstream에서 먼저 baseline을 확정한다. 그 change
+  set의 interface, format, policy, invariant, ownership 또는 procedure 의미를 사용하는 병렬 작업은
+  새 baseline이 확정될 때까지 동결한다.
+- 승인 뒤 owner와 직접 consumer의 module 문서, 해당되는 external/persisted format, policy,
+  invariant, operational procedure, ADR/migration/onboarding 절차, evidence/change-record
+  schema/template 및 interface/integration/acceptance test를 code와 같은 변경에서 갱신한다. 실제
+  evidence/change record는 별도 승인된 operational action을 수행한 뒤에만 append한다. 승인 범위를
+  넘으면 다시 승인받는다.
+- Accepted ADR, 실제 module interface, external API/wire, persisted/versioned format,
+  policy/compatibility identity, safety/lifecycle invariant, operational procedure, runnable test,
+  evidence/change record와 module 문서가 충돌하면 임의로 선택하지 말고 불일치를 사용자에게
+  보고한다. `implementation pending`인 목표를 현재 승인 baseline이나 지원 동작으로 오해하지 않는다.
 
 ## Decision Ladder
 
@@ -130,7 +169,10 @@ Module contract는 사용자의 명시적 승인 없이 변경하지 않는다.
 
 ## Documentation And Handoff
 
-- 구현과 같은 변경에서 관련 ADR, contract, onboarding 절차와
+- 구현과 같은 변경에서 관련 ADR, module interface, external API/wire, persisted/versioned format,
+  policy/compatibility identity, safety/lifecycle invariant, protected operational procedure,
+  onboarding 절차, evidence/change-record schema/template와
   `docs/implementation-roadmap.md` checklist를 갱신한다.
+- 실제 evidence/change record는 별도 승인된 operational action을 수행한 뒤에만 append한다.
 - 완료 보고는 구현 결과, 검증 결과, 의도적으로 생략한 범위와 추가해야 할 조건만 짧게 남긴다.
 - 구현하지 않은 미래 기능을 완료한 것처럼 문서화하지 않는다.

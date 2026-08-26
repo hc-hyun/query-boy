@@ -14,7 +14,7 @@ Metadata는 SQL 실행기가 아니다. 질문에 어떤 relation, column, grain
 ## 소유 책임
 
 - Reader privilege 안에서의 `pg_catalog` relation/column/key/index/comment introspection
-- Catalog snapshot shape, validation, serialization contract와 compatibility 확인
+- Catalog snapshot shape와 validation, persisted serialization format 및 compatibility 확인
 - Source definition과 physical snapshot으로부터 `metadata_revision` 계산
 - Metadata refresh coalescing, cache TTL, stale window, retry와 source epoch
 - Persisted immutable revision publish/active/pin을 소비하는 MetadataStore port
@@ -41,7 +41,7 @@ Metadata는 SQL 실행기가 아니다. 질문에 어떤 relation, column, grain
 - [`revision.py`](../../../src/query_man/revision.py): metadata revision digest
 - [`quality_level.py`](../../../src/query_man/quality_level.py): runtime publish quality gate
 - [`errors.py`](../../../src/query_man/errors.py): metadata unavailable/revision mismatch 의미;
-  public rendering은 Delivery 계약
+  public rendering은 Delivery의 external error mapping
 - [`models.py`](../../../src/query_man/models.py): catalog snapshot/prepared metadata type, 작은
   `CatalogProvider`와 Runtime 전용 `RuntimeCatalogProvider`
 - [`metadata_store.py`](../../../src/query_man/metadata_store.py): MetadataStore port, persisted snapshot codec와
@@ -56,7 +56,7 @@ Metadata는 SQL 실행기가 아니다. 질문에 어떤 relation, column, grain
 
 `PostgresMetadataStore`의 Control DB transaction과 pool은
 [Control Plane](../control-plane/README.md)이 소유한다. Metadata는 store capability와 snapshot
-codec/compatibility contract만 소유한다.
+codec/compatibility format만 소유한다.
 
 `MetadataService`와 Control Plane candidate staging은 `load/close`만 제공하는 작은
 `CatalogProvider`를 계속 소비한다. Runtime은 이를 확장한 `RuntimeCatalogProvider`를 요구하고
@@ -72,9 +72,13 @@ persistence decode는 private mutable builder를 사용할 수 있지만 cache/p
 [결정 가이드의 D3-A](../../module-contract-decision-guide.md#d3-공유-data의-deep-immutability)와
 `MOD-07`의 구현 결과다.
 
-## 제공 계약
+## 제공 인터페이스와 소유 경계
 
-### Published metadata contract
+이 절은 다른 module에 공개한 Python interface와 함께 Metadata가 소유하는 wire/persisted format,
+policy identity 및 lifecycle invariant를 기록한다. 각 subsection 제목이 실제 변경 범주이며, 이 절
+전체를 하나의 module interface로 해석하지 않는다.
+
+### Published metadata interface
 
 Guarded Query, Control Plane과 Assurance는 다음을 신뢰한다.
 
@@ -89,7 +93,7 @@ get_published(source_id) -> snapshot + exact metadata_revision
 - Published snapshot relation은 Guarded Query relation allowlist의 최대 범위다.
 - Row estimate는 fresh best-effort hint이며 persisted revision과 correctness 판단의 재료가 아니다.
 
-### Metadata context contract
+### Metadata context application interface and external format
 
 Delivery는 다음 application result를 transport와 무관하게 소비한다.
 
@@ -109,15 +113,16 @@ Relation projection은 `rank`, `name`, `sql_name`, `kind`, `role`, `description`
 `indexes_truncated`, `column_count`, `returned_column_count`, `columns_truncated`, `columns`와 fresh
 catalog에서만 가능한 optional `estimated_rows`를 제공한다. Column은 `name`, `sql_name`, `ordinal`,
 `data_type`, `nullable`, `description`, `aliases`, `value_hints`, `semantic_roles`를 제공한다.
-Approved join, business term, composition hint와 ambiguity의 현재 field/ordering도 contract다.
+Approved join, business term, composition hint와 ambiguity의 현재 field/ordering도 application
+interface 의미에 포함된다.
 
 이 exact top-level/nested shape, compact UTF-8 JSON byte accounting과 revision format은 HTTP/MCP가
-공동으로 사용하는 계약이다. Context에서 column을 생략하는 것은 SQL deny rule이 아니며, query
+공동으로 사용하는 external wire format이다. Context에서 column을 생략하는 것은 SQL deny rule이 아니며, query
 allowlist는 published snapshot relation과 Guarded Query policy가 결정한다.
 Python snapshot tuple/read-only mapping은 projection 경계에서 명시적으로 list/dict로 바꾸므로
 HTTP/MCP application result와 JSON은 기존 array/object shape를 유지한다.
 
-### Metadata revision contract
+### Metadata revision format and compatibility
 
 Revision은 다음 current source/catalog material의 canonical JSON SHA-256(`sha256:` prefix)이다.
 
@@ -132,13 +137,13 @@ Connection/credential, source provenance(owner/environment/database migration re
 generation/state version, `minimum_quality_level`, `estimated_rows`, freshness/cache state는
 revision에서 제외한다. Provenance-only publish는 새 source generation을 만들 수 있지만 query
 metadata revision은 바꾸지 않는다. 포함·제외 재료, list canonical ordering과 digest format은
-persisted snapshot 및 rolling replica compatibility contract다.
+persisted snapshot format 및 rolling replica compatibility identity다.
 Canonicalizer는 list와 tuple, dict와 immutable mapping을 같은 canonical array/object로
 정규화하며 representation만으로 digest를 바꾸지 않는다.
 
 현재 revision에는 source/server encoding, timezone-abbreviation table과 effective database/column
 collation이 없다. PostgreSQL 18 disposable acceptance에서 column `C`→`pg_c_utf8` 변경 뒤 fresh
-snapshot/revision도 같지만 `lower()` 결과/hash가 달라지는 gap을 재현했다. 이는 현 계약의 보장으로
+snapshot/revision도 같지만 `lower()` 결과/hash가 달라지는 gap을 재현했다. 이는 현재 지원 보장으로
 확대하지 않는다. [Proposed ADR 0020](../../decisions/0020-lossless-interval-and-json-numeric-encoding.md)의
 `source_semantics_fingerprint` persisted snapshot/revision 변경은 `ENC-01-A|B|C` exact 승인 전
 구현하지 않는다.
@@ -220,7 +225,7 @@ result-policy v2/SQL-policy v3 descriptor를 소비하므로 descriptor provider
 codec을 재정의하지 않는다. 이는 현재 구현 설명이 아니라 승인 대기 중인 소유권
 제안이다.
 
-### Metadata lifecycle contract
+### Metadata refresh and publish lifecycle
 
 - Fresh candidate를 validate하고 source definition과 함께 revision을 계산한다.
 - Catalog transaction은 Source Catalog의 UTC-first reader-session safety를 통과한 뒤에만 physical
@@ -268,7 +273,7 @@ reporting sink에 실제 replica-local cache 상태만 알린다.
   query correctness의 authority가 아니다. Existing context response, revision digest, cache TTL/stale
   window와 MetadataStore transaction 의미는 그대로다.
 
-### Catalog provider capability contract
+### CatalogProvider interfaces
 
 ```text
 CatalogProvider:
@@ -281,8 +286,8 @@ RuntimeCatalogProvider extends CatalogProvider:
   async close() -> None  # inherited
 ```
 
-Runtime composite는 source generation 교체 때 pool을 반드시 invalidate하기 위한 조립 계약이다.
-`MetadataService`의 `CatalogProvider` type contract는 invalidate capability를 요구하거나 노출하지
+Runtime composite는 source generation 교체 때 pool을 반드시 invalidate하기 위한 조립 규칙이다.
+`MetadataService`의 `CatalogProvider` type interface는 invalidate capability를 요구하거나 노출하지
 않는다. Provider의 `load` 결과는 위의 recursively immutable `CatalogSnapshot`이어야 한다. Runtime이
 같은 concrete adapter를 주입하므로 이는 runtime sandbox가 아니다.
 
@@ -306,18 +311,18 @@ Snapshot codec은 immutable Python tuple을 Control DB JSON array로 명시적�
 array/object document를 새 immutable graph로 decode한다. Persisted JSON shape, revision과 기존 row의
 호환성은 그대로이며 `MOD-07`에는 schema/data migration이 없다.
 
-## 소비 계약
+## 소비 인터페이스와 전제
 
 - [Source Catalog](../source-catalog/README.md)의 `SourceReader`로 얻는 current source profile,
   semantic overlay와 budget
-- Source Catalog의 reader-session safety contract
+- Source Catalog의 reader-session safety policy
 - [Guarded Query](../guarded-query/README.md)의 SQL policy revision/capability descriptor
   와 immutable canonical-time policy material
 - [Control Plane](../control-plane/README.md)이 구현하는 MetadataStore persistence capability
-- [Runtime](../runtime/README.md)의 operations reporting contract
+- [Runtime](../runtime/README.md)의 operations reporting interface
 - Runtime composition이 source mode에 따라 단일 authority에서 주입하는 immutable verified-revision
-  membership. Bootstrap은 filesystem Assurance contract만, managed는 empty map에서 시작해 Control
-  Plane contract만 사용하며 둘을 합치거나 fallback하지 않는다. Input shape와 L2 해석은 Metadata가
+  membership. Bootstrap은 filesystem Assurance dataset만, managed는 empty map에서 시작해 Control
+  Plane projection만 사용하며 둘을 합치거나 fallback하지 않는다. Input shape와 L2 해석은 Metadata가
   소유하고 provider의 내부 implementation은 알지 않는다.
 
 현재 `metadata.py`가 SQL validator constant를 직접 import하지만, 의미상 소비 대상은 immutable
@@ -350,7 +355,11 @@ policy descriptor다. 이 dependency를 바꾸는 refactoring은 외부 context 
 - Public field와 byte accounting을 보존하는 response assembly 정리
 - PostgreSQL query 결과를 같은 snapshot으로 변환하는 catalog query 성능 개선
 
-## 사용자 승인이 필요한 계약 변경
+## 사용자 승인이 필요한 경계 변경
+
+아래 목록에는 module interface, external/persisted format, policy identity와 lifecycle invariant가
+함께 있다. 승인 요청은 실제 변경 범주를 명시하며 목록 전체를 하나의 module interface로 취급하지
+않는다. 이 용어 정리는 기존 승인 범위를 줄이지 않는다.
 
 - Metadata context input/output, answerability status, truncation 또는 byte accounting 변경
 - `metadata_revision` 재료, ordering, digest format 또는 compatibility 의미 변경
@@ -403,7 +412,7 @@ Metadata 작업은 기본적으로 다음만 읽는다.
    [ADR 0009](../../decisions/0009-question-scoped-column-disclosure.md),
    [ADR 0010](../../decisions/0010-revision-scoped-retrieval-index.md)과
    [ADR 0011](../../decisions/0011-metadata-quality-level-publish-gate.md) 중 변경과 직접 관련된 결정
-5. Context 또는 revision을 소비하는 module contract
+5. Context interface 또는 revision identity를 소비하는 module
 
-MCP SDK 구현, source admin HTTP route와 query pool internals는 계약을 변경하지 않는 한 읽을
-필요가 없다.
+MCP SDK 구현, source admin HTTP route와 query pool internals는 위 interface나 경계 의미를 변경하지
+않는 한 읽을 필요가 없다.

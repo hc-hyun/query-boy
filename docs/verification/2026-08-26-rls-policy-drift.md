@@ -1,6 +1,6 @@
 # RLS Policy Drift Security Finding — 2026-08-26
 
-Status: Open — contract decision and fail-closed implementation required
+Status: Open — boundary decision and fail-closed implementation required
 
 ## Why This Is Not Accepted Current Behavior
 
@@ -10,8 +10,8 @@ Status: Open — contract decision and fail-closed implementation required
 공개 view와 reader/session 표면은 확인하지만, view가 읽는 private base relation의 RLS enablement와
 `pg_policy` 의미를 metadata revision 또는 query-time admission에서 attest하지 않는다.
 
-따라서 아래 결과는 호환성을 위해 보존할 current contract가 아니라 accepted tenant-isolation
-contract를 위반하는 보안 결함이다. 누출 결과를 통과 기대값으로 고정하지 않는다.
+따라서 아래 결과는 호환성을 위해 보존할 current baseline이 아니라 accepted tenant-isolation
+policy와 safety invariant를 위반하는 보안 결함이다. 누출 결과를 통과 기대값으로 고정하지 않는다.
 
 ## Independent PostgreSQL 18.6 Reproduction
 
@@ -57,7 +57,7 @@ tenant 행이 성공 결과가 되어서는 안 된다는 안전 기대값을 `s
 cross-tenant 결과를 확인한 전용 `_RlsIsolationViolationError`만 XFAIL로 인정한다. Setup/query/cleanup의
 다른 예외는 숨기지 않는다. 현재 suite에서 두 case는 모두 `XFAIL`이어야 하며 `PASS`로 세지 않는다.
 정확한 provider, fingerprint/admission 위치와 public error는 아직 승인되지 않았으므로 임의의
-`METADATA_UNAVAILABLE` 또는 `QUERY_UNAVAILABLE` 계약을 테스트에 선결정하지 않았다.
+`METADATA_UNAVAILABLE` 또는 `QUERY_UNAVAILABLE` error mapping을 테스트에 선결정하지 않았다.
 
 ## Disposable Lock And Dependency Follow-Up
 
@@ -106,7 +106,7 @@ cross-tenant 결과를 확인한 전용 `_RlsIsolationViolationError`만 XFAIL�
 authority로 두는 방향도 확인했다.
 
 허용 policy의 PostgreSQL 18 stored dependency는 다음 exact shape였다. Numeric catalog OID는
-실행별 값이므로 contract에 저장하거나 hardcode하지 않는다.
+실행별 값이므로 durable identity에 저장하거나 hardcode하지 않는다.
 
 ```text
 pg_depend, unordered exact set:
@@ -170,7 +170,7 @@ acceptance가 아니라, exact 승인 뒤 구현자가 같은 race와 disclosure
   `StoredMetadataInvalidError(... ) from error`로 보존하고 `SourceReloader.sync()`/apply failure는
   `logger.exception`으로 chain을 render할 수 있다. In-memory canary probe는 outer cause가
   `ValidationError`이고 hidden relation canary가 formatted traceback에 포함되는 결과
-  `canary_in_traceback=True`를 확인했다. 제안 계약은 deterministic codec cause/context/input repr을
+  `canary_in_traceback=True`를 확인했다. 제안 change set은 deterministic codec cause/context/input repr을
   제거하되 PostgreSQL I/O/transport/driver failure와 cancellation은 해당 error로 바꾸지 않는다.
 - Immutable history decode와 current runtime serving은 같은 판정이 아니다. Old-policy v2를 historical
   golden으로 읽을 수 있어도 public store/service/cold-start path가 current RLS snapshot으로 제공해서는
@@ -187,7 +187,7 @@ cross-tenant policy-drift sentinel이며 unexpected setup/query/cleanup failure�
 disposable database와 role residue를 다시 조회한 결과도 각각 `0`, `0`이었다.
 
 따라서 단순 fingerprint 추가가 아니라 strict graph/policy admission, lock-first order와 custom/role
-잔여 경계를 하나의 계약으로 결정해야 한다. ADR 0024는 제안 상태이고 정확한 사용자 승인 전에는
+잔여 경계를 하나의 승인 change set으로 결정해야 한다. ADR 0024는 제안 상태이고 정확한 사용자 승인 전에는
 현재 snapshot, query order와 strict xfail을 바꾸지 않는다.
 
 ## Required Decision Before Implementation
@@ -249,11 +249,12 @@ disposable database와 role residue를 다시 조회한 결과도 각각 `0`, `0
 9. Drift의 cache/stale 금지, managed snapshot migration, current/rollback reissue와 rollback
 
 이 범위는 Source Catalog connection admission, Metadata snapshot/revision, Guarded Query admission/error,
-Control Plane apply, Runtime transition과 Assurance acceptance에 영향을 주는 module contract 변경이다.
+Control Plane apply, Runtime transition과 Assurance acceptance에 영향을 주는 module interface,
+persisted format, security policy, lifecycle 및 error mapping 변경이다.
 사용자가 정확한 proposal을 승인하기 전 제품 코드, schema, snapshot codec 또는 production route를
 변경하지 않는다.
 
-이 repository contract 승인은 protected inventory/freeze, policy/data DDL, unroute/deactivate,
+이 repository change-set 승인은 protected inventory/freeze, policy/data DDL, unroute/deactivate,
 credential/pointer/reissue, fleet/route cutover와 rollback 실행 권한이 아니다. Standalone v2 환경 작업은
 access와 change record를 갖춘 별도 `RLS-03` 승인을 요구하며 `ENC-02`/`TIME-03`을 기다리지 않는다.
 Combined direct-v3 환경 작업만 coordinated `RLS-03`/`TIME-03` 승인과 access/change record를 요구한다.

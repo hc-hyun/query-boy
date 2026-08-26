@@ -9,8 +9,13 @@ Date: 2026-08-26
 이 문서는 `COST-01`의 선택지를 미리 검토한 초안이다. 열린 `TIME-03`이 완료되거나 사용자가 이를
 명시적으로 defer하기 전에는 `COST-01`을 공식 시작하지 않고 code, source role/function, Control
 schema/config와 public projection을 바꾸지 않는다. 아래 선택지를 승인하는 것은 `ENC-01`이나
-`TIME-03`의 완료를 뜻하지 않으며 contract 선택만 먼저 승인해도 implementation start gate는 열리지
+`TIME-03`의 완료를 뜻하지 않으며 decision 선택만 먼저 승인해도 implementation start gate는 열리지
 않는다. 열린 ENC 작업보다 먼저 구현하려면 별도의 exact global reprioritization이 필요하다.
+
+이 제안은 하나의 module interface가 아니다. Collector/writer capability는 module interface,
+monitoring/rollup tables는 persisted format, admin projection은 external API, identity/retention/status는
+policy, credential/lease/cleanup은 security/lifecycle invariant다. Approval Boundary는 이 범주별 영향을
+함께 명시한다.
 
 ## Context
 
@@ -65,7 +70,7 @@ privileged information을 넓게 공개할 수 있음을 경고한다. 따라서
    rollback한 뒤 별도 짧은 transaction에서 409 rejection receipt만 기록한다. Physical clone처럼
    `system_identifier+dbid`가 같은 별도 endpoint도 V1에서는 같은 database로 보수적으로 취급한다. 같은
    cluster의 다른 database는 `dbid`가 다르므로 허용한다. 이 제한을 없애려면 monitor-login→reader-OID
-   mapping table과 그 lifecycle을 새 계약으로 승인해야 하며 V1에서 미리 만들지 않는다.
+   mapping table과 그 lifecycle을 새 persisted/lifecycle change로 승인해야 하며 V1에서 미리 만들지 않는다.
 2. Source owner가 관리하는 별도 NOLOGIN function owner만 `pg_read_all_stats`, `public` schema `USAGE`,
    `public.pg_stat_statements`의 아래 21개 direct column-level `SELECT`,
    `public.pg_stat_statements_info`의 `dealloc,stats_reset` column-level `SELECT`, exact non-reset raw
@@ -163,7 +168,7 @@ privileged information을 넓게 공개할 수 있음을 경고한다. 따라서
    두 SQL function의 canonical `prosrc` template는 아래 두 block이다. 각 block은 첫 `WITH` byte부터
    마지막 semicolon 뒤 LF까지 UTF-8 bytes가 material이다. `{{reader_sql_literal}}` 한 token만 active
    source reader username에 PostgreSQL `quote_literal(username)`을 적용한 결과로 치환한다. Reader
-   username contract는 ASCII `[A-Za-z_][A-Za-z0-9_$]{0,62}`라 다른 치환이나 encoding은 없다.
+   username grammar는 ASCII `[A-Za-z_][A-Za-z0-9_$]{0,62}`라 다른 치환이나 encoding은 없다.
    Preflight와 매 scan은 active reader로 치환한 exact `prosrc` bytes를 비교하며 SQL whitespace나
    의미상 동치 body도 허용하지 않는다.
 
@@ -250,7 +255,7 @@ privileged information을 넓게 공개할 수 있음을 경고한다. 따라서
    `proconfig=["search_path=pg_catalog, pg_temp"]`와 extension object/namespace/version을 attest한다.
    따라서 same-OID body 변경도 OID/signature만 믿지 않고 fail-closed한다.
 
-   PostgreSQL output parameter에 `NOT NULL` constraint를 선언할 수 없으므로 contract가 모든 cell의
+   PostgreSQL output parameter에 `NOT NULL` constraint를 선언할 수 없으므로 projection rules가 모든 cell의
    non-null을 요구하고 collector가 cursor-description SQL OID, column order와 null을
    검사한다. `system_identifier`는 unsigned decimal ASCII text, timestamp는 UTC-aware value다.
    `execution_time_us`는 SQL `numeric`의 rounded integer로 받아 collector가 `0..2^63-1`인지 확인한 뒤
@@ -679,8 +684,8 @@ privileged information을 넓게 공개할 수 있음을 경고한다. 따라서
     source_db_usage_rollups            bounded UTC-hour aggregate
     ```
 
-    이 계약을 적용할 경우 다음 파일은 additive migration **6**의 literal schema가 된다. 지금은 승인 전
-    proposal이므로 migration file을 만들거나 실행하지 않는다. Constraint 이름도 migration contract이며
+    이 persisted design을 적용할 경우 다음 파일은 additive migration **6**의 literal schema가 된다. 지금은 승인 전
+    proposal이므로 migration file을 만들거나 실행하지 않는다. Constraint 이름도 migration baseline이며
     기존 migration 1~5를 수정하지 않는다.
 
     ```sql
@@ -1181,7 +1186,7 @@ A와 같은 sanitized no-argument function만 reader에게 실행하게 해 별�
 monitor capacity가 결합되며 sampling statement가 같은 user aggregate를 오염시킬 수 있다. Broad
 predefined role과 direct view access는 여전히 금지한다. 변경량은 작지만 권장하지 않는다.
 
-이는 비교용 direction-only 대안이며 implementation-ready 계약이 아니다. Existing active source generation의
+이는 비교용 direction-only 대안이며 implementation-ready change set이 아니다. Existing active source generation의
 reader credential을 collector가 직접 재사용할지, 별도 monitoring revision/admin endpoint를 만들지,
 disable/rollback/lease/status/public projection을 A와 같게 유지할지 아직 고정하지 않았다. 따라서
 `COST-01-B`라는 ID 선택이나 포괄적 승인은 구현 권한이 아니며, 이 lifecycle·wire·persistence·rollback을
@@ -1192,7 +1197,7 @@ exact restatement한 새 승인 경계를 먼저 제시하고 사용자가 별�
 Query Man은 DB-native row/config/schema/public field를 만들지 않는다. Current `/usage`의 exact
 `resource|gateway|monetary_cost` shape와 monetary `not_configured` placeholder를 그대로 유지하며
 `database_native` section 자체를 추가하지 않는다. 외부 aggregate input은 실제 요구가 생기면 별도
-signed/bounded contract로 설계하고 지금 generic webhook/plugin을 만들지 않는다. 가장 안전한
+signed/bounded external interface로 설계하고 지금 generic webhook/plugin을 만들지 않는다. 가장 안전한
 defer지만 M15는 완료되지 않는다.
 
 ## Explicit Rejections
@@ -1273,7 +1278,8 @@ Base rollup의 explicit-zero/accepted-sample/identity evidence가 생긴 뒤 별
 
 ## Approval Boundary
 
-이 제안은 승인된 계약이 아니다. 아래 문구는 contract 선택만 고정하며 ENC/TIME start gate를 자동으로
+이 문서는 정확한 제안일 뿐 현재 승인 baseline이나 구현이 아니다. 승인하려면 해당되는 모든 변경
+범주와 영향을 정확히 지정해야 한다. 아래 문구는 decision 선택만 고정하며 ENC/TIME start gate를 자동으로
 열지 않는다. 구현까지 먼저 시작하려면 별도로 “열린 ENC-01~02와 TIME-03보다 COST-01~05를 먼저
 수행한다”는 exact reprioritization과 production blocker가 남는 영향을 승인해야 한다.
 현재 A만 base collector/rollup/projection의 implementation-ready 범위를 제시하며 C는 exact defer다.
@@ -1282,7 +1288,7 @@ ID 선택만으로 승인할 수 없고 lifecycle/wire/persistence/rollback을 �
 아래 A 문구는 proposed ADR 0023의 `COST-04` threshold/alert addendum를 승인하지 않는다.
 
 ```text
-COST-01-A 계약을 전용 monitoring LOGIN과
+COST-01-A를 전용 monitoring LOGIN과
 exact query_man_monitor schema의 fully-qualified info/statement sanitized projection,
 database당 monitored source 하나·physical-clone 포함 stable database binding uniqueness,
 source-owner가 case-exact reader literal을 고정한 canonical SQL prosrc/body-template digest,
@@ -1311,5 +1317,5 @@ operation 4개·404/503 non-terminal 의미·18-table/25-FK/5-trigger recovery s
 status/reason/rollup projection과 bounded public monitoring errors,
 Query Man query별 CPU/청구 근거가 아니라는 한계, compatibility-reader-first/migration/writer rollout과
 compatibility release까지만 가능한 schema/data-preserving rollback
-범위로 승인한다. 이는 contract 선택이며 열린 ENC/TIME보다 구현을 먼저 시작하는 승인은 아니다.
+범위로 승인한다. 이는 change-set 선택이며 열린 ENC/TIME보다 구현을 먼저 시작하는 승인은 아니다.
 ```

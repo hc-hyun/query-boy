@@ -9,7 +9,7 @@ Plane에서 계산하고, operator-only `GET /admin/sources/{source_id}/usage`�
 목록·상세·replica endpoint와 HTTP query/MCP surface는 바꾸지 않는다. Provider monetary cost는
 근거가 없으므로 값을 추정하지 않고 `not_configured/PROVIDER_NOT_CONFIGURED`만 제공한다.
 
-## Persistence And Writer Contract
+## Persistence And Writer Boundaries
 
 - Additive migration 5는 latest-only `source_resource_observation_attempts`를 추가한다. `source_id`가
   primary key이고 generation, succeeded/failed outcome, 승인된 failure reason, DB-clock attempt time,
@@ -24,7 +24,7 @@ Plane에서 계산하고, operator-only `GET /admin/sources/{source_id}/usage`�
   metadata revision까지 fence한다. 새 attempt table writer ACL은 SELECT/INSERT/UPDATE뿐이며
   DELETE/TRUNCATE는 없다.
 
-## Projection Contract
+## Projection Behavior
 
 - Resource는 `not_configured|pending|available|stale|unavailable` 중 하나다. Disabled source,
   current-generation attempt 부재, failed attempt, freshness 만료를 서로 구분한다. Fresh last success가
@@ -46,7 +46,7 @@ Plane에서 계산하고, operator-only `GET /admin/sources/{source_id}/usage`�
   logical visibility/input window이고 나이만으로 age-only physical delete하지 않는다. Source별 최신
   1,000행 storage cap은 유지하고 API pagination은 추가하지 않는다.
 
-## Delivery, Privacy And Failure Contract
+## Delivery, Privacy And Failure Boundaries
 
 - Middleware 인증 실패는 401이고 operator가 아니면 path/query validation보다 먼저 403이다. 모든
   query parameter와 잘못된 source path는 400, unknown source는 404, Control read/decode/cardinality
@@ -103,4 +103,4 @@ source authority와 query readiness를 바꾸지 않는다. 물리적 table/data
 - Provider billing, amount/currency, DB-native statement statistic, caller/tenant chargeback은 구현하지 않았다.
 - Source별 1,000행 cap 외에 age-only deletion SLA를 추가하지 않았다.
 - State/reason priority, freshness, generation fence, schema/ACL, exact response, retention 또는 rollback
-  의미를 바꾸면 새 module contract 승인이 필요하다.
+  의미를 바꾸면 해당 interface/format/policy 승인이 필요하다.

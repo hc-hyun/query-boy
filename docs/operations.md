@@ -203,11 +203,11 @@ process의 이후 poll이 실패하면 마지막 verified registry를 유지하�
 3. 새 UUID/change reference와 expected state `0/0`으로 기존 admin API에 source를 L0/L1 staged
    publish한다. Reader credential은 external secret boundary에서 관리자가 전달하고 응답 receipt의
    resulting generation/state와 metadata revision을 기록한다.
-4. 기존 reviewed contract를 verified-query admin endpoint로 실행·저장한다. 현재 revision과
+4. 기존 reviewed verified-query record를 admin endpoint로 실행·저장한다. 현재 revision과
    invariant가 다르면 이관을 중단하고 재검토한다.
 5. 같은 semantic/budget revision에서 L2 generation을 publish하고 `/meta`, guarded query와
    intended inactive state를 확인한다.
-6. 필요한 모든 source와 L2 contract가 Control DB에 있는지 확인한다. 각 serving slot에 고유하고
+6. 필요한 모든 source와 L2 verified-query record가 Control DB에 있는지 확인한다. 각 serving slot에 고유하고
    재시작 뒤에도 유지되는 `QUERY_MAN_REPLICA_ID`를 배정한 뒤 `QUERY_MAN_SOURCE_MODE=managed`로
    순차 재시작한다. Source/verified file이 없어도 같은 inventory와 revision이 복원되고
    deactivate/rollback이 유지되는지 확인한다.
@@ -229,10 +229,10 @@ write-back을 만들지 않는다.
    제한된 offline export한다. Inventory 완전성을 증명하지 못하면 중단한다.
 3. R1 business-calendar source DB migration을 적용하고 managed manifest의
    `database_migration_ref`가 실제 artifact를 가리키게 갱신한다. R1 runtime에서 source별
-   L1→모든 contract 재실행·재발행→L2와 rollback baseline을 확인한다.
+   L1→모든 verified query 재실행·재발행→L2와 rollback baseline을 확인한다.
 4. Old fleet admission/route를 닫고 graceful drain을 완료한다. `pg_stat_activity`에서 old
    query/catalog application connection이 0임을 확인한 뒤에만 R2를 route 밖에서 시작한다.
-5. R2에서 source별 L1→current와 rollback-preserved contract 전체 재실행·재발행→L2를 수행하고,
+5. R2에서 source별 L1→current와 rollback-preserved verified query 전체 재실행·재발행→L2를 수행하고,
    replica `available`, `drift=[]`, stale metadata/SQL policy 409와 `/ready`를 확인한 뒤 route한다.
 6. Rollback은 mutation freeze를 유지한 채 R2를 drain하고 R1 image를 시작해 captured CAS/generation,
    revision, verified/L2와 ready를 복구한 뒤 route한다. R2 snapshot/generation/verified row는 삭제하지
@@ -265,7 +265,7 @@ HTTP timeout이나 연결 단절 뒤에는 다음 순서를 지킨다.
    body를 섞거나 여러 replica에 fan-out하지 않는다. Receipt 생성 전 동시 요청은 staging/verified
    query를 중복 수행할 수 있지만 authority와 terminal receipt는 한 번만 commit된다.
 
-Success receipt와 source/verified-contract 변경은 한 transaction이다. Post-commit local reload가
+Success receipt와 source/verified-query state 변경은 한 transaction이다. Post-commit local reload가
 실패해도 success를 rollback하거나 rejection으로 바꾸지 않고 `source_reload`을 unavailable로
 표시한다. 해당 replica는 poller가 같은 desired state를 적용할 때까지 degraded일 수 있으며
 replica별 convergence는 전용 admin replica endpoint에서 직접 확인한다.
@@ -274,7 +274,7 @@ replica별 convergence는 전용 admin replica endpoint에서 직접 확인한�
 
 Public endpoint는 inventory를 노출하지 않는다.
 
-| Endpoint | Audience | Contract |
+| Endpoint | Audience | External behavior |
 |---|---|---|
 | `GET /health` | Public/load balancer | Process liveness만 `ok` |
 | `GET /ready` | Public/load balancer | 아래 aggregate status만 반환; source ID 없음 |
@@ -437,7 +437,7 @@ restart/OOM, FD와 RSS growth를 검사한다. 주간·수동 workflow에서 실
 | Query reject | 10분 baseline의 3배 또는 20/min | 공격/잘못된 client 배포 확인; response/audit reason별 조사 |
 | Queue pressure | 평균 queue가 timeout의 50% | 80% 또는 `query_pool_exhausted` 5회/5분이면 admission/budget 점검 |
 | Timeout | source별 5분에 3회 | `Δquery_timeout / Δquery_execution_started`가 5분간 5% 초과 시 expensive fingerprint와 DB activity 확인 |
-| Truncation | `Δquery_truncated / Δquery_execution_succeeded`가 10분간 10% | 25%면 질문/aggregation/limit 계약 검토; limit 즉시 상향 금지 |
+| Truncation | `Δquery_truncated / Δquery_execution_succeeded`가 10분간 10% | 25%면 질문/aggregation/limit policy 검토; limit 즉시 상향 금지 |
 | Forced shutdown cancel | 1회 | grace, 장기 query와 배포 drain 순서 조사 |
 
 외부 collector를 구성하면 현재 endpoint에서 execution/reject/timeout/truncation rate,

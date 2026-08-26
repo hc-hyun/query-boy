@@ -16,7 +16,7 @@ Control Plane은 “어떤 source 정의와 metadata/verified revision이 현재
 - Numbered Control DB migration, immutable checksum ledger, schema, constraint, trigger, role와 grant
 - Immutable source generation, encrypted credential과 active source pointer
 - Immutable metadata snapshot, active revision pointer, pin/unpin과 rollback transaction
-- Immutable verified query contract persistence
+- Immutable verified-query artifact persistence
 - Source-scoped advisory transaction lock와 generation/state-version CAS
 - Publish/rotate/deactivate/rollback/resume/verified-publish application use case
 - Idempotency key, keyed canonical request hash, expected state와 terminal mutation receipt/audit
@@ -48,7 +48,7 @@ Control Plane은 “어떤 source 정의와 metadata/verified revision이 현재
   및 Metadata가 소유하는 port/codec이 함께 있는 transition hot spot
 - [`secrets.py`](../../../src/query_man/secrets.py): generation-bound AES-GCM credential encryption
 - [`errors.py`](../../../src/query_man/errors.py): source validation/conflict/control-unavailable 의미;
-  public rendering은 Delivery 계약
+  public rendering은 Delivery의 external error mapping
 - [`05-control-plane.sh`](../../../docker/postgres/init/05-control-plane.sh): disposable container의
   numbered migration entrypoint
 - [`control-migrations`](../../../docker/postgres/init/control-migrations): immutable numbered schema
@@ -67,17 +67,17 @@ Control Plane은 “어떤 source 정의와 metadata/verified revision이 현재
 
 `metadata_store.py`에서 Metadata는 `MetadataStore` capability와 snapshot codec/compatibility를,
 Control Plane은 PostgreSQL pool, SQL, lock과 transaction을 소유한다. 현재 shared file이라는 이유로
-다른 쪽 계약을 함께 바꾸지 않는다.
+다른 쪽 interface나 persisted format을 함께 바꾸지 않는다.
 
 [Proposed ADR 0024](../../decisions/0024-rls-policy-drift-attestation.md)의 `RLS-01-A`가 승인되더라도
 RLS v1/v2 snapshot document의 shape·validation·encoding은 Metadata 소유다. Control Plane은 기존
 JSONB transaction/immutable generation·pointer 생명주기로 encoded document를 저장하고 candidate
-failure, standalone RLS cutover의 current/rollback v2 재발행과 verified contract 전량 재실행을 조율할
+failure, standalone RLS cutover의 current/rollback v2 재발행과 verified-query baseline 전량 재실행을 조율할
 뿐이다. PostgreSQL-version/UTF8, graph text 또는 policy normal/shared dependency가 invalid인 candidate는
 existing validation failure로 거부하며 Control payload/schema에 raw value를 추가하지 않는다. Control SQL
 schema를 추가하거나 v1 row를 update/delete/자동 변환하지 않는다. Protected verified tenant mapping은
 외부 change record의 unique `(source_id, query_id, old_metadata_revision)` key와 existing operator
-caller로 제공하고 누락/mismatch 시 중단한다. 이 v2 의미는 아직 current persisted contract가 아니다.
+caller로 제공하고 누락/mismatch 시 중단한다. 이 v2 의미는 아직 현재 persisted format이 아니다.
 ADR 0020 exact A의 encoding snapshot은 RLS semantics/shape를 fresh live v3 attestation으로 누적하며,
 combined production cutover에서는 route하지 않을 v2 row를 만들지 않고 current/rollback v3만
 재발행한다.
@@ -116,7 +116,7 @@ drain 없이 bookkeeping/status만 복구한다. 그 뒤 bookkeeping 또는 meta
 status만 unavailable/failed로 두며 old profile을 복구하지 않는다. Post-commit external probe cancellation도
 fabricated health/apply failure 없이 그대로 재전파하고 committed projection을 되돌리지 않는다. 이 공용 managed transition lifecycle은 non-RLS source에도 적용하며 그 active
 query도 transition 시 `QUERY_UNAVAILABLE`로 정리될 수 있다. PostgreSQL-18/UTF8, graph/snapshot v2는
-RLS-only다. 이 순서는 아직 승인된 현재 contract가 아니라 ADR 0024의 target이다.
+RLS-only다. 이 순서는 아직 승인된 현재 lifecycle이 아니라 ADR 0024의 target이다.
 Transition이 cancel한 resource observation은 existing generation-fenced reason
 `RESOURCE_READ_FAILED`만 best-effort report하며 success sample을 쓰지 않는다. External observation task
 cancellation은 failure report 없이 재전파한다.
@@ -137,13 +137,17 @@ Public admin route, operator-first request parsing, bounded JSON/header/query va
 rendering은 [Delivery](../delivery/README.md)가 소유한다. Control Plane은 이미 검증된
 `MutationContext`와 use-case input을 받고 persisted transition/result 의미를 소유한다.
 
-## 제공 계약
+## 제공 인터페이스와 소유 경계
 
-### Source administration contract
+이 절은 다른 module에 공개한 Python interface와 함께 Control Plane이 소유하는 persisted schema,
+transaction invariant, external administration projection 및 lifecycle rule을 기록한다. 각 subsection
+제목이 실제 변경 범주이며, 이 절 전체를 하나의 module interface로 해석하지 않는다.
+
+### Source administration application interface
 
 Public 관리 mutation은 authenticated actor에서 만든 `MutationContext`를 받고 현재
 generation/state version을 기준으로 검증한다. Resume은 expected metadata revision도 요구한다.
-Delivery는 Control persistence나 Assurance DTO 대신 다음 public Python 계약만 사용한다.
+Delivery는 Control persistence나 Assurance DTO 대신 다음 public Python interface만 사용한다.
 
 ```text
 CONTROL_SEQUENCE_MAX = 9_223_372_036_854_775_807
@@ -157,7 +161,7 @@ SourceAdminService.publish_verified_query(
 ```
 
 두 input은 frozen dataclass다. Control Plane 서비스만 이를 Assurance의 `VerifiedQuery`와
-`ExpectedResult`로 변환하고 persistence port에는 그 verified contract를 전달한다. Sequence 상한은
+`ExpectedResult`로 변환하고 persistence port에는 그 verified-query artifact를 전달한다. Sequence 상한은
 현재 Control DB `bigint`와 HTTP validation 의미를 그대로 공개한 값이며 독립적으로 변경하지 않는다.
 각 operation은 다음 persisted transition을 시도한다.
 
@@ -170,8 +174,8 @@ resume metadata publish -> current pinned metadata revision unpinned
 publish verified query -> immutable revision-bound expected result
 ```
 
-같은 query ID도 metadata revision이 다르면 별도 immutable contract row다. Global policy 전환은
-current와 rollback-preserved contract 전체를 새 revision에서 재실행하고, 이전 snapshot/generation/
+같은 query ID도 metadata revision이 다르면 별도 immutable verified-query row다. Global policy 전환은
+current와 rollback-preserved verified-query baseline 전체를 새 revision에서 재실행하고, 이전 snapshot/generation/
 verified row를 update/delete하지 않는다.
 
 Operation result status는 `published`, `deactivated`, `rolled_back`, `resumed`, `verified`다. 성공
@@ -181,9 +185,9 @@ expected/resulting state, outcome과 HTTP 의미를 함께 제공한다. 결정�
 다른 쪽은 conflict로 끝난다. Control DB transaction 안의 validation/SQL failure가 partial persisted
 state를 남기면 안 된다. Commit 뒤 runtime apply 의미는 아래 acknowledgement 경계를 따른다.
 
-### Persistence contract
+### Persistence invariants and transaction rules
 
-- Source generation, metadata snapshot과 verified contract는 append-only/immutable이다.
+- Source generation, metadata snapshot과 verified-query artifact는 append-only/immutable이다.
 - Canonical-time처럼 Control schema shape를 바꾸지 않는 global revision migration도 새 snapshot,
   generation과 verified row를 append하고 rollback 대상 old row를 보존한다.
 - Active pointer만 명시된 transaction과 CAS 아래 변경한다.
@@ -196,21 +200,21 @@ state를 남기면 안 된다. Commit 뒤 runtime apply 의미는 아래 acknowl
   `pg_advisory_xact_lock(hashtextextended(source_id, 0))` key를 사용한다.
 - Metadata refresh publish는 active source의 `control_generation`, `control_state_version`과
   `enabled`를 함께 확인해 이전 generation의 지연 refresh를 거부한다.
-- 성공 mutation receipt는 source pointer 또는 verified contract와 같은 transaction에 commit한다.
+- 성공 mutation receipt는 source pointer 또는 verified-query artifact와 같은 transaction에 commit한다.
   결정적인 validation/state rejection은 authority state를 바꾸지 않는 별도 transaction에 terminal
   receipt로 남긴다.
 - FK, constraint와 trigger가 application validation을 보완하며 손상된 조합을 거부한다.
 
-### Management catalog contract
+### Admin projection schema and external surface
 
 Admin read surface는 source list/detail, immutable generation history, source mutation history와
 idempotency-key receipt lookup을 제공한다. Projection은 owner, environment, DB migration reference,
 effective budget, published/active metadata revision과 lifecycle state처럼 명시적으로 허용한 field만
 반환한다. Raw manifest, encrypted credential, metadata snapshot, verified question/SQL과 expected
 business value를 반환하지 않는다. Pagination/filter/order와 published-vs-active revision 의미는
-public Delivery contract와 persisted projection contract다.
+Delivery external API와 persisted projection format에 포함된다.
 
-### Replica observation contract (`CTRL-06`)
+### Replica observation interface (`CTRL-06`)
 
 Control Plane은 Runtime에 persistence-private row가 아니라 다음 public capability만 제공한다.
 
@@ -270,11 +274,11 @@ stale/unavailable observation은 조회 자체의 실패가 아니다. Unknown s
 projection 실패는 내부 정보를 숨긴 503으로 매핑한다. Existing source list/detail/history,
 health/metrics와 MCP response는 바꾸지 않는다.
 
-### Resource and gateway observation baseline (`CTRL-07A`, implemented)
+### Gateway usage writer interface and persisted observation baseline (`CTRL-07A`, implemented)
 
 `CTRL-07A`가 도입한 persistence-private row 격리와 bounded sample/delta 의미는 아래와 같다. 당시의
 resource writer signature는 `CTRL-08`에서 generation/failure fencing을 추가한 현재 signature로
-대체됐으므로 소비자는 다음 subsection의 resource contract만 사용한다. Gateway writer signature는
+대체됐으므로 소비자는 다음 subsection의 resource interface만 사용한다. Gateway writer signature는
 그대로다.
 
 ```text
@@ -301,9 +305,9 @@ Control writer는 resource/cursor table에 SELECT/INSERT/UPDATE, rollup에는 1,
 DELETE까지 가진다. 다른 table의 DELETE/TRUNCATE와 schema ownership은 얻지 않는다. Rollup은
 성공적으로 보고된 lower bound이며 observation write/cleanup 실패는 source authority, query data
 plane, readiness, health, receipt와 shutdown 의미를 바꾸지 않는다. Public status/admin response는
-아래 `CTRL-08` 계약만 제공한다.
+아래 `CTRL-08` application result만 제공한다.
 
-### Resource and usage projection contract (`CTRL-08`, implemented)
+### Resource observation interface and usage projection (`CTRL-08`, implemented)
 
 Runtime resource write capability는 current generation fencing과 bounded failure를 추가한다.
 
@@ -372,7 +376,7 @@ metadata_revision ASC, definition_revision ASC`로 모두 반환한다. Paginati
 1,000행 초과와 malformed persisted field/type/cardinality는 fail-closed read failure다. Decode 가능한
 success marker와 mandatory/optional sample 또는 freshness가 서로 맞지 않으면 정상 200 projection의
 `unavailable/OBSERVATION_INCOMPLETE`로 반환한다. Provider billing이 없으므로 monetary
-amount/currency/provenance는 공개 계약에 만들지 않는다.
+amount/currency/provenance는 public application result에 만들지 않는다.
 
 현재 `CTRL-08` projection에는 DB-native statement usage section이 없다. Lower-priority read-only
 prework인 [proposed ADR 0021](../../decisions/0021-database-native-cost-attribution.md)은 sanitized
@@ -390,7 +394,7 @@ Delivery는 이 application result만 소비하고 table/private DTO를 읽지 �
 unavailable observation 자체는 오류가 아니다. Writer role은 attempt table의 SELECT/INSERT/UPDATE만
 가지며 code rollback은 migration/table/data를 보존한다.
 
-### Runtime projection contract
+### Desired-state application rules
 
 Control DB commit은 desired-state 원자성을 보장하지만 모든 process의 in-memory 적용까지 하나의
 분산 transaction으로 만들지는 않는다. 각 replica의 `SourceReloader`가 polling으로 수렴한다.
@@ -415,7 +419,7 @@ stored state 검증 -> old source pools invalidate -> registry projection 교체
 revision은 적용하지 않는다. Control DB가 일시적으로 unavailable이어도 이미 적용된 data plane은
 안전한 기존 state로 계속 동작하되 management operation은 실패한다.
 
-### Administration acknowledgement contract
+### Mutation receipt and convergence semantics
 
 Public mutation은 caller가 고른 UUID idempotency key와 같은 semantic request에 대해 하나의 terminal
 receipt를 authority로 사용한다. Same key/same canonical request는 staging이나 state transition을
@@ -429,12 +433,13 @@ Timeout 뒤에는 같은 key의 receipt, source detail과 mutation history를 bo
 retry하지 않는다. Receipt가 없고 expected state가 그대로임을 재확인한 경우에만 같은 key와 같은
 semantic request를 한 번 재전송할 수 있다.
 
-Source pointer/contract와 성공 receipt가 commit된 뒤 같은 process의 `SourceReloader.apply`가 실패해도
+Source pointer 또는 verified-query artifact와 성공 receipt가 commit된 뒤 같은 process의
+`SourceReloader.apply`가 실패해도
 receipt는 authoritative desired-state 성공이다. Apply failure는 component health를 unavailable로
 표시하고 polling convergence에 맡기며 성공 receipt를 503으로 뒤집지 않는다. Receipt 성공과 모든
 replica의 in-memory 적용 완료를 같은 distributed transaction으로 해석하지 않는다.
 
-### Credential contract
+### Credential persisted format and security boundary
 
 Credential은 plaintext로 Control DB에 저장하지 않는다. Current persisted format은 AES-256-GCM,
 32-byte key, 12-byte nonce와 다음 exact ASCII associated data를 사용한다.
@@ -447,7 +452,7 @@ query-man/source/{source_id}/generation/{generation}
 bytes 변경은 기존 ciphertext migration 없이는 호환되지 않는다. Plaintext는 validation/runtime
 connection 구성의 필요한 범위를 넘어 log나 response에 남지 않는다.
 
-## 소비 계약
+## 소비 인터페이스와 전제
 
 - [Source Catalog](../source-catalog/README.md)의 strict manifest validator, budget와
   `SourceProjectionWriter`; 검증된 runtime profile graph는 immutable하고 projector에는 새 profile을
@@ -455,8 +460,8 @@ connection 구성의 필요한 범위를 넘어 log나 response에 남지 않는
 - [Metadata](../metadata/README.md)의 candidate preparation, quality gate, store port와 snapshot codec.
   Codec은 immutable Python graph와 기존 Control DB JSON array/object 사이를 변환한다.
 - [Guarded Query](../guarded-query/README.md)의 validated execution for verified publish
-- [Assurance](../assurance/README.md)의 verified DTO, exact revision/relation와 result hash contract
-- [Runtime](../runtime/README.md)의 operational state reporting contract
+- [Assurance](../assurance/README.md)의 verified DTO, exact revision/relation와 result hash identity
+- [Runtime](../runtime/README.md)의 operational state reporting interface
 
 Runtime은 polling schedule과 production lifecycle을 호출하고 Delivery는 authenticated operator 및
 trusted tenant를 확인한 뒤 administration use case를 호출한다. 이 caller obligation은 Control
@@ -495,7 +500,11 @@ Plane이 Delivery/Runtime private implementation에 의존한다는 뜻이 아�
 - Canonical request/receipt 의미를 보존하는 mutation orchestration 정리
 - Public result shape를 바꾸지 않는 administration orchestration 정리
 
-## 사용자 승인이 필요한 계약 변경
+## 사용자 승인이 필요한 경계 변경
+
+아래 목록에는 module interface, external/persisted format, transaction/security invariant와 lifecycle
+rule이 함께 있다. 승인 요청은 실제 변경 범주를 명시하며 목록 전체를 하나의 module interface로
+취급하지 않는다. 이 용어 정리는 기존 승인 범위를 줄이지 않는다.
 
 - `control` schema, migration ledger/checksum, constraint, trigger, role/grant 또는 migration 순서 변경
 - Immutable history, FK, advisory lock, generation/state CAS와 transaction atomicity 변경
@@ -512,7 +521,7 @@ Plane이 Delivery/Runtime private implementation에 의존한다는 뜻이 아�
 - Mutually exclusive bootstrap/managed authority, managed filesystem non-read/fallback와 replica
   convergence 의미 변경
 - Pool/registry/metadata invalidation 및 health 적용 순서 변경
-- Verified query persistence key, exact revision/result contract 변경
+- Verified-query persistence key, exact revision/result identity 변경
 - `CONTROL_SEQUENCE_MAX`, public administration input의 field/frozen shape 또는
   `publish_verified_query` argument 의미 변경
 
@@ -551,12 +560,12 @@ Control Plane 작업은 기본적으로 다음만 읽는다.
 
 1. 이 문서와 [module index](../README.md)
 2. 변경 대상 admin/reloader/store/secret code, numbered migration과 focused tests
-3. Source validator, MetadataStore/codec, verified/query의 소비 계약
+3. Source validator, MetadataStore/codec, verified/query의 소비 interface와 format
 4. [ADR 0012](../../decisions/0012-control-plane-source-revisions.md),
    [ADR 0013](../../decisions/0013-control-plane-verified-query-publishing.md),
    [ADR 0016](../../decisions/0016-centralized-source-management-plane.md)과
    [ADR 0017](../../decisions/0017-shared-source-access-and-resource-tier.md) 중 변경과 직접 관련된 결정
-5. 변경되는 management catalog/mutation의 Delivery와 Runtime 계약
+5. 변경되는 management projection/mutation의 Delivery와 Runtime interface
 
-Metadata relevance algorithm, MCP SDK 내부와 query cursor 구현은 계약을 바꾸지 않는 한 읽을
-필요가 없다.
+Metadata relevance algorithm, MCP SDK 내부와 query cursor 구현은 위 interface나 경계 의미를
+바꾸지 않는 한 읽을 필요가 없다.

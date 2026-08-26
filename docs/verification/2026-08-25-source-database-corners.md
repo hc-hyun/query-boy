@@ -9,10 +9,10 @@ Last updated: 2026-08-26 (`DBEDGE-05` and RLS policy-drift sentinel)
 `DBEDGE-01`과 후속 `DBEDGE-02`~`DBEDGE-05`는 고정 bootstrap fixture를 더 늘리지 않고 test마다 서로
 다른 UUID database를 만든다. 대부분은 Source Catalog → Metadata → Guarded Query의 실제 PostgreSQL
 경계를 검증한다. SQL_ASCII text/bytea identity, domain/enum RowDescription OID, domain-type
-`pg_depend` 같은 raw-only driver/catalog probe는 현재 public 계약으로 확대하지 않고, 필요한 경우
+`pg_depend` 같은 raw-only driver/catalog probe는 현재 public interface나 format으로 확대하지 않고, 필요한 경우
 별도 public companion case가 실제 전파를 검증한다.
 각 database는 전용 NOLOGIN view owner와 최소 권한 LOGIN reader를 사용하고, pool 종료 뒤 database와
-두 role을 삭제한다. Production source/configuration, Control DB와 승인된 public contract는 변경하지
+두 role을 삭제한다. Production source/configuration, Control DB와 승인된 public interface/format은 변경하지
 않는다. 같은 fixture에서 발견한 RLS base-policy 누출은 DBEDGE 완료 결과에 넣지 않고
 [별도 open security finding](2026-08-26-rls-policy-drift.md)과 strict xfail로 분리한다.
 
@@ -27,7 +27,7 @@ Runnable acceptance는
 - Reader는 `CONNECT`, curated schema `USAGE`, curated relation `SELECT`만 받는다. 일반 curated
   owner-rights view의 base relation 권한은 제거하며, RLS `security_invoker` probe만 PostgreSQL이
   요구하는 private schema/table read 권한을 restricted reader에게 부여한다.
-- Reader session은 기존 read-only timeout/memory/temp/parallel/JIT/search-path contract를 사용한다.
+- Reader session은 기존 read-only timeout/memory/temp/parallel/JIT/search-path policy를 사용한다.
 - Temporal acceptance는 role default를 `UTC`, `Asia/Seoul`, `America/New_York`로 각각 만들고,
   production과 같은 reader transaction이 database/role default를 바꾸지 않은 채 transaction-local
   UTC를 설정·검사하는지 검증한다.
@@ -62,7 +62,7 @@ SELECT
 | Catalog hard limits | Cold cache에서 relation 3개/상한 2, column 3개/상한 2, structure 3개/상한 2와 warm cache에서 relation 1개/상한 1 뒤 두 번째 relation grant | 실제 catalog가 partial snapshot을 publish하지 않았고, warm cache도 이전 snapshot을 stale 성공으로 가장하지 않은 채 `METADATA_UNAVAILABLE`로 fail-closed했다. 초과 object를 제거한 뒤 같은 max-one pool은 정상 snapshot을 다시 publish했다. |
 | Unsupported driver values | PostgreSQL infinity date, `int4range`, nonempty `int4multirange`와 nonempty `int4range[]` | 내부 driver/object detail 없이 `QUERY_UNAVAILABLE`로 rollback했고 같은 max-one pool의 다음 supported query가 정상 복구됐다. |
 | Multibyte byte boundary | 한글과 emoji를 포함한 두 row, 첫 row compact UTF-8 exact boundary | 첫 complete row만 반환하고 두 번째 row를 부분 직렬화하지 않은 채 `truncated=true`, exact byte count를 유지했다. |
-| Open scalar/collection/result-type contract characterization | Month/infinity interval, 큰 JSON/JSONB numeric과 4,300/4,301자리 경계, duplicate-key JSON, SQL_ASCII text/bytea, time 24시·temporal year overflow, direct·hidden-view·domain-type collation, custom function/operator, record/unknown OID, unsupported/shifted collection, reader semantic/text-search/bytea GUC와 planner order | Silent hash collision, unsupported SQL type accidental success, same-revision SQL 의미/value/hash drift와 driver availability failure를 exact golden으로 재현했다. Direct bytea는 setting과 무관한 Base64 negative control이지만 허용된 `bytea::text`는 setting별 text/hash가 달랐다. Custom operator의 second-hop function binding과 order-sensitive float/JSONB aggregate도 같은 snapshot/revision에서 결과를 바꿨다. 의미 수정은 `ENC-01` 승인 전 중단했다. |
+| Open scalar/collection/result-type boundary characterization | Month/infinity interval, 큰 JSON/JSONB numeric과 4,300/4,301자리 경계, duplicate-key JSON, SQL_ASCII text/bytea, time 24시·temporal year overflow, direct·hidden-view·domain-type collation, custom function/operator, record/unknown OID, unsupported/shifted collection, reader semantic/text-search/bytea GUC와 planner order | Silent hash collision, unsupported SQL type accidental success, same-revision SQL 의미/value/hash drift와 driver availability failure를 exact golden으로 재현했다. Direct bytea는 setting과 무관한 Base64 negative control이지만 허용된 `bytea::text`는 setting별 text/hash가 달랐다. Custom operator의 second-hop function binding과 order-sensitive float/JSONB aggregate도 같은 snapshot/revision에서 결과를 바꿨다. 의미 수정은 `ENC-01` 승인 전 중단했다. |
 | Open RLS security sentinel | Valid restricted reader, trusted tenant, `row_security=on`, `security_invoker=true` view 뒤 hidden base policy `USING (true)` 또는 RLS disable | 같은 snapshot/revision에서 cross-tenant row가 성공했다. Accepted ADR 0014 위반이므로 누출 golden을 통과시키지 않고 strict xfail과 별도 `RLS-*` 우선 작업으로 분리했다. |
 
 ## Findings And Changes
@@ -74,7 +74,7 @@ profile target을 초과했다. Unit reproduction에서는 target 6에 15개가 
 [ADR 0009](../decisions/0009-question-scoped-column-disclosure.md)의 “필수 correctness column만 target
 초과 허용” 결정과 달랐다.
 
-수정은 기존 계약 안에서 다음 순서로 선택한다.
+수정은 기존 interface와 behavior 안에서 다음 순서로 선택한다.
 
 1. 필수 correctness column 전체
 2. 남은 target까지 질문 match를 ordinal/name 순으로 선택
@@ -93,7 +93,7 @@ Catalog의 명시적 column/structure/relation/per-relation-column 상한과 불
 Metadata module 내부 validation 오류로 분류하고 stale fallback 없이 닫았다. 일반 provider
 `RuntimeError`/`ValueError`와 DB outage는 기존 bounded-stale 대상이다. 따라서 public exception/wire,
 budget 의미와 cache TTL/stale window는 바꾸지 않고 기존 “validation은 fail-closed, transient
-catalog failure만 bounded-stale” 계약에 구현을 맞췄다.
+catalog failure만 bounded-stale” lifecycle rule에 구현을 맞췄다.
 상한 판정 뒤 rollback도 실패하는 fake에서 원래 validation 오류를 primary로 보존해 warm cache가
 다시 열리지 않고 `METADATA_UNAVAILABLE`인 것도 단위 회귀로 고정했다.
 
@@ -107,7 +107,7 @@ catalog failure만 bounded-stale” 계약에 구현을 맞췄다.
 | `UTC` | `2024-03-10T07:00:00+00:00` | `sha256:6d3a744b1171f1b1265a4c6138c01d3cc82f3a2b049a15dab6beddbfb590f6ad` |
 | `Asia/Seoul` | `2024-03-10T16:00:00+09:00` | `sha256:35b7f6f1bed58e7e04bd50f50d8f491c6aa85883f6bf2623cc8ea6f42f55844c` |
 
-이 finding의 repository contract는 사용자가 [ADR 0019](../decisions/0019-canonical-time-stability.md)의
+이 finding의 repository policy/change set은 사용자가 [ADR 0019](../decisions/0019-canonical-time-stability.md)의
 정확한 정책과 영향을 승인한 뒤 `TIME-01`~`TIME-02`에서 해결했다. Catalog/Query는
 transaction-local UTC를 먼저 설정·검사하고 aware datetime을 UTC `+00:00`으로 정규화한다. 현재
 disposable acceptance는
@@ -122,10 +122,11 @@ success/rollback/timeout pool reset을 검증한다. 상세 revision/verified mi
 
 Public view와 reader/session 검사는 모두 통과해도 hidden base relation의 policy를 `USING (true)`로
 바꾸거나 RLS를 disable하면 authenticated tenant query가 다른 tenant 행을 반환했다. Snapshot과
-metadata revision도 바뀌지 않았다. 이는 계약 선택 전 보존할 current behavior가 아니라 accepted
+metadata revision도 바뀌지 않았다. 이는 새 decision 전 보존할 current behavior가 아니라 accepted
 [ADR 0014](../decisions/0014-trusted-rls-tenant-context.md)의 격리 불변조건 위반이다. Exact SQL, hash,
 독립 재현과 승인 경계는 [RLS policy drift finding](2026-08-26-rls-policy-drift.md)에 기록했다.
-제품 수정은 `RLS-01` exact dependency/policy/lock/revision/error 계약 승인 전 중단한다.
+제품 수정은 `RLS-01` exact dependency interface, security policy, lock lifecycle, revision format과
+error mapping 승인 전 중단한다.
 
 ### Approval-required follow-up: lossless encoding and source semantics
 
@@ -302,7 +303,7 @@ implicit text-search/aggregate determinism의 수정은 승인 전 중단했다.
 - Command-like DB comment는 context에 description data로 나타나지만 SQL instruction이나 allowlist로
   해석되지 않았다. Onboarding/Text-to-SQL Skill도 comment를 untrusted data로 취급한다.
 - Partition child hiding, materialized-view index discovery, empty result, array/network/non-finite scalar와
-  result-byte accounting은 현재 계약대로 동작했다.
+  result-byte accounting은 현재 external format대로 동작했다.
 - 테스트를 위해 production manifest, source-specific Python branch, dependency 또는 영구 fixture DB를
   추가하지 않았다.
 - Exact golden은 PostgreSQL 18의 현재 wire/driver 경계를 기록하므로 disposable fixture는 연결한 server

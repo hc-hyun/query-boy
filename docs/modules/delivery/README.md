@@ -47,7 +47,7 @@ HTTP와 MCP parity는 모든 endpoint가 같다는 뜻이 아니다. 공통 data
   `SourceEnvironment`, `Identifier`, `StableSlug` type을 소비한다.
 - [`app.py`](../../../src/query_man/app.py): HTTP request DTO, parent auth middleware, routes, handlers와
   disconnect; composition/lifespan 부분은 Runtime 소유
-- [`errors.py`](../../../src/query_man/errors.py): public `AppError` envelope/rendering contract;
+- [`errors.py`](../../../src/query_man/errors.py): public `AppError` envelope와 external rendering;
   각 domain error의 업무 의미는 해당 producer module과 공동 소유
 - `config/access-policies*.yaml`: bootstrap/Compose caller identity와 capability input
 - [`skills/query-man-text-to-sql`](../../../skills/query-man-text-to-sql): MCP/context/query
@@ -59,12 +59,16 @@ HTTP와 MCP parity는 모든 endpoint가 같다는 뜻이 아니다. 공통 data
   [`test_text_to_sql_skill.py`](../../../tests/test_text_to_sql_skill.py)
 
 현재 `GetContextSuccessOutput`은 `mcp_server.py`에 있지만 HTTP `/meta`도 이를 사용한다. 위치와
-달리 의미상 Delivery 공통 wire contract다. `app.py`와 `errors.py`를 수정할 때는
-[Runtime](../runtime/README.md) 및 오류를 생산하는 domain module 계약도 확인한다.
+달리 의미상 Delivery 공통 wire format이다. `app.py`와 `errors.py`를 수정할 때는
+[Runtime](../runtime/README.md) 및 오류를 생산하는 domain module interface/error 의미도 확인한다.
 
-## 제공 계약
+## 제공 인터페이스와 소유 경계
 
-### Common application contract
+이 절은 다른 module에 공개한 Python interface와 함께 Delivery가 소유하는 HTTP/MCP API, wire
+format, authorization policy 및 transport lifecycle rule을 기록한다. 각 subsection 제목이 실제
+변경 범주이며, 이 절 전체를 하나의 module interface로 해석하지 않는다.
+
+### GatewayService application interface
 
 HTTP와 MCP의 세 data operation은 동일한 `GatewayService`와 `CallerContext`를 사용한다.
 
@@ -82,14 +86,14 @@ Aware datetime은 Guarded Query가 만든 UTC `+00:00` canonical value를 양 tr
 Transport별 HTTP status 대 MCP `isError`, validation issue 형식, health/admin/cancel endpoint와 MCP
 discovery/serialization은 의도적으로 다를 수 있다.
 
-### Caller and authorization contract
+### Caller identity and authorization policy
 
 - `/health`와 `/ready`를 제외한 HTTP/MCP request는 parent bearer policy를 통과한다.
 - Authorization header는 정확히 하나이고 token 원문은 저장하지 않는다.
 - Caller ID, tenant ID와 operator 여부는 server가 결정하며 client field로 받지 않는다.
 - Active source existence는 metadata load, SQL validation과 admission보다 먼저 확인한다.
 - 모든 인증 query identity와 operator는 같은 active source 목록을 본다. Caller별
-  `allowed_sources|all_sources` contract는 없고 operator 여부도 source visibility를 바꾸지 않는다.
+  `allowed_sources|all_sources` 정책은 없고 operator 여부도 source visibility를 바꾸지 않는다.
 - Operator만 administration endpoint와 query cancel을 사용할 수 있다. `operator`는 shared query
   capability에 admin/cancel을 더하는 boolean superset이다.
 - Bootstrap loopback compatibility의 anonymous `local-development`와 legacy single API token의
@@ -100,7 +104,7 @@ discovery/serialization은 의도적으로 다를 수 있다.
   fail-closed한다.
 
 현재 MCP correlation은 한 POST의 server-generated request ID, 그 아래 call ID와 query ID까지만
-연결한다. 여러 POST workflow용 client trace header/audit field는 아직 계약이 아니다. Lower-priority
+연결한다. 여러 POST workflow용 client trace header/audit field는 아직 지원되는 API가 아니다. Lower-priority
 read-only prework인 [proposed ADR 0022](../../decisions/0022-w3c-workflow-trace-context.md)의
 `TRACE-01-A|B|C`와 우선순위를 사용자가 정확히 승인하기 전에는 header parsing, structured field,
 metric이나 propagation을 추가하지 않는다. Exact A가 승인되면 Delivery는 auth-after exact-route
@@ -111,7 +115,7 @@ outbound propagation은 여전히 만들지 않는다. Configured policy가 만�
 in-scope이며 parser는 ASGI-observable header만 보므로 Uvicorn/h11이 wire OWS를 제거한 뒤의 값과 direct-ASGI
 whitespace corpus를 구분해 검증한다.
 
-### Public error contract
+### Public error schema and mapping
 
 HTTP 오류는 `{error: {code, message, details?}}` envelope을 사용하고 MCP는 같은 업무 의미를
 structured tool result로 표현한다. 예상하지 못한 오류는 고정된 internal error로 축약하며 5xx
@@ -124,8 +128,8 @@ metadata violation은 `METADATA_UNAVAILABLE`, same-query lock/live drift는 deta
 `reason_code=TENANT_CONTEXT_REQUIRED`로 매핑하고 policy/role/hidden relation/RLS attestation
 fingerprint와 invalid source encoding/graph/dependency를 public detail이나 새 helper log로 공개하지 않는
 target이다. 기존 gateway trusted-tenant
-deny audit와 public SQL fingerprint audit/redaction 계약은 유지한다. Exact 승인 전에는 현재 error producer나
-HTTP/MCP rendering 계약을 바꾸지 않는다.
+deny audit와 public SQL fingerprint audit/redaction rule은 유지한다. Exact 승인 전에는 현재 error producer나
+HTTP/MCP rendering을 바꾸지 않는다.
 
 같은 proposed RLS target에서 candidate PostgreSQL-version/UTF8/driver-codec invariant 또는 common
 reader-session identity/policy mismatch,
@@ -153,7 +157,7 @@ Non-RLS candidate reader-setting error mapping은 현재 의미를 유지한다.
 거부 결과를 그대로 HTTP/MCP에 전달하고 byte/truncation 계산 및 Assurance/Control verified result hash가
 같은 row 의미를 소비하게 한다. 새 loader/fingerprint를 Delivery에 복제하지 않는다. Duplicate JSON,
 unsupported OID와 non-1 array 등은 existing bounded error로 fail-closed하고 current/rollback v3 verified
-result를 전량 재발행한다. Exact 승인 전에는 현재 public row/hash/error 계약을 바꾸지 않는다.
+result를 전량 재발행한다. Exact 승인 전에는 현재 public row format/hash identity/error mapping을 바꾸지 않는다.
 
 MCP argument validation은 `INVALID_REQUEST`와 다음 exact bounded detail을 structured result로
 반환한다.
@@ -180,7 +184,7 @@ Content-Type, 1 MiB body, 최대 1,024 object member, duplicate key/non-finite n
 bounded header/query/path parsing을 적용한다. MCP와 admin의 더 강한 제한을 다른 HTTP route
 보장으로 확대 해석하지 않는다.
 
-### Replica observation HTTP contract (`CTRL-06`)
+### Replica observation HTTP API (`CTRL-06`)
 
 Delivery는 Control Plane의 `SourceAdminService.source_replicas`만 호출해 다음 operator-only read
 endpoint를 제공한다.
@@ -200,7 +204,7 @@ Replica item은 `replica_id`, `status`, nullable `source_health`, nullable `appl
 unavailable replica가 있어도 known source 조회는 200이다. Existing admin list/detail/history,
 `GET /sources`, `/health`, `/ready`, `/admin/metrics`와 MCP inventory/response는 변경하지 않는다.
 
-### Resource and usage HTTP contract (`CTRL-08`)
+### Resource and usage HTTP API (`CTRL-08`)
 
 Delivery는 Control Plane의 `SourceAdminService.source_usage(source_id)`만 호출해 다음 operator-only
 endpoint를 제공한다.
@@ -238,20 +242,20 @@ question/SQL/fingerprint/query ID와 raw error는 response/audit에 포함하지
 list/detail/history/replica/mutation, `/admin/metrics`, query-facing HTTP와 MCP 세 tool은 바뀌지 않는다.
 
 Lower-priority read-only prework인
-[proposed ADR 0021](../../decisions/0021-database-native-cost-attribution.md)은 현재 Delivery 계약이 아니다.
+[proposed ADR 0021](../../decisions/0021-database-native-cost-attribution.md)은 현재 Delivery API가 아니다.
 정확한 우선순위와 `COST-01-A`를 사용자가 승인하기 전에는 current `/usage` top-level shape,
 `database_native` section, monitoring admin route 또는 error를 추가하지 않는다. A가 승인되면 Delivery는
 operator-first auth/validation, exact monitoring GET/PUT/credential POST/DELETE/rollback POST wire와
 `/usage.database_native` serialization/error mapping을 소유하고 Control Plane의 공개 use case/projection만
 소비한다. Monitoring credential, source function, Control table/lease/baseline을 읽거나 구현하지 않는다.
-Direction-only B는 ID 선택만으로 이 owner 범위를 열지 않으며 별도 exact 계약이 필요하다.
+Direction-only B는 ID 선택만으로 이 owner 범위를 열지 않으며 별도 exact API 승인이 필요하다.
 `COST-04` threshold/alert의 operator wire와 delivery backend도 A base 승인에 포함되지 않는다. 별도
 [proposed ADR 0023](../../decisions/0023-database-native-usage-spike-alert.md)의 exact approval 전 route,
 notification 또는 metric label을 추가하지 않는다. 승인될 경우에도 Delivery는 operator polling GET과
 policy configure/disable/rollback validation/serialization만 소유하고 webhook/email/push를 만들지 않는다.
-기존 base rollup 31일과 proposed alert event 90일 logical visibility는 서로 다른 계약이다.
+기존 base rollup 31일과 proposed alert event 90일 logical visibility는 서로 다른 retention policy다.
 
-### MCP contract
+### MCP protocol surface
 
 - Protocol version은 현재 `2026-07-28`이다.
 - Stateless Streamable HTTP JSON mode를 `/mcp`에서 제공한다.
@@ -264,16 +268,16 @@ policy configure/disable/rollback validation/serialization만 소유하고 webho
 - MCP POST에 1 MiB body limit, single JSON Content-Type/protocol-version header, Host/Origin policy와
   DNS rebinding protection을 적용한다.
 
-### Child lifespan ownership contract
+### Child lifespan ownership and cleanup rule
 
 - Delivery가 제공하는 MCP child lifespan은 자신의 `enter` 도중 만든 partial resource를 정리할
   책임을 가진다. Runtime parent의 cleanup에 그 책임을 넘기지 않는다.
 - Child `enter`가 실패하면 Runtime parent는 진입하지 못한 child의 `exit`를 호출하지 않는다.
 - Runtime은 child 진입을 시도하기 전에 parent composition이 만든 최상위 resource만 자신의
-  startup-failure 계약에 따라 정리한다. 이 경계는 HTTP/MCP wire와 정상 shutdown 순서를 바꾸지
+  startup-failure cleanup rule에 따라 정리한다. 이 경계는 HTTP/MCP wire와 정상 shutdown 순서를 바꾸지
   않는다.
 
-## 소비 계약
+## 소비 인터페이스와 전제
 
 - [Source Catalog](../source-catalog/README.md)의 `SourceReader` sanitized source summaries와 admin wire
   validation에 사용하는 `SourceEnvironment`, `Identifier`, `StableSlug`
@@ -290,7 +294,7 @@ Admin route는 Control Plane의 `source_store.py`와 Assurance의 `verified.py`�
 Plane이 공개한 administration input만 만든다. Assurance `assurance_cli.py`의 offline wiring은
 `app.py`의 production HTTP/MCP composition이나 Delivery route를 import하거나 대체하지 않는다.
 위 Source Catalog validation type의 pattern/range를 바꾸면 admin path/query wire acceptance도 바뀌므로
-두 module의 계약과 기존 client compatibility를 함께 확인한다.
+두 module의 interface/validation policy와 기존 client compatibility를 함께 확인한다.
 Metadata/Source Catalog의 runtime tuple/read-only mapping 전환은 Delivery HTTP/MCP array/object shape를
 바꾸지 않으며 `/meta`와 `get_context`는 같은 기존 projection을 직렬화한다.
 
@@ -301,10 +305,10 @@ Metadata/Source Catalog의 runtime tuple/read-only mapping 전환은 Delivery HT
 - Caller가 DSN, credential, database role 또는 tenant context를 선택할 수 없다.
 - Unknown source, SQL/question/token/credential과 내부 오류를 log/metric label로 새지 않는다.
 - Client disconnect는 실행 task cancellation을 통해 database cancel/rollback으로 전파된다.
-- MCP SDK workaround가 protocol contract나 domain policy를 대신하지 않는다.
+- MCP SDK workaround가 protocol rule이나 domain policy를 대신하지 않는다.
 - Query-facing `GET /sources`/`list_sources()` projection에는 connection endpoint와 internal
   control state가 포함되지 않는다. Operator-only admin detail의 제한된 connection projection은
-  Control Plane management contract를 따른다.
+  Control Plane management projection을 따른다.
 - Admin sequence/verified payload는 Control persistence나 Assurance DTO가 아니라 Control Plane
   public administration input을 통해 전달한다.
 
@@ -318,7 +322,11 @@ Metadata/Source Catalog의 runtime tuple/read-only mapping 전환은 Delivery HT
 - Protocol 동작을 보존하는 MCP SDK adapter/workaround 정리
 - 기존 공개 field만 사용하는 audit logging 구현 개선
 
-## 사용자 승인이 필요한 계약 변경
+## 사용자 승인이 필요한 경계 변경
+
+아래 목록에는 module interface, external API/wire format, authorization policy와 transport lifecycle
+rule이 함께 있다. 승인 요청은 실제 변경 범주를 명시하며 목록 전체를 하나의 module interface로
+취급하지 않는다. 이 용어 정리는 기존 승인 범위를 줄이지 않는다.
 
 - HTTP path/method, request/response field, status 또는 size/range/default 변경
 - MCP tool 이름/개수/schema/description, protocol version 또는 transport mode 변경
@@ -368,13 +376,13 @@ Delivery 작업은 기본적으로 다음만 읽는다.
 
 1. 이 문서와 [module index](../README.md)
 2. 변경 대상 access/gateway/HTTP/MCP/admin-route/error code와 focused tests
-3. 호출하는 domain operation의 input/output/error 계약
+3. 호출하는 domain operation의 input/output/error interface
 4. [ADR 0002](../../decisions/0002-guarded-query-contract.md),
    [ADR 0004](../../decisions/0004-caller-source-authorization.md),
    [ADR 0006](../../decisions/0006-mcp-transport-and-workflow.md),
    [ADR 0015](../../decisions/0015-containerized-local-runtime.md)와
    [ADR 0017](../../decisions/0017-shared-source-access-and-resource-tier.md) 중 변경과 직접 관련된 결정
-5. `app.py` lifecycle을 건드릴 때 Runtime 계약
+5. `app.py` lifecycle을 건드릴 때 Runtime lifecycle rule
 
-Catalog SQL, source persistence transaction과 query executor 내부는 계약을 바꾸지 않는 한 읽을
-필요가 없다.
+Catalog SQL, source persistence transaction과 query executor 내부는 위 interface나 경계 의미를
+바꾸지 않는 한 읽을 필요가 없다.

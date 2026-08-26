@@ -41,9 +41,9 @@ Guarded Query는 이미 선택된 source와 published metadata revision을 기�
 - [`result_encoding.py`](../../../src/query_man/result_encoding.py): result scalar의 JSON-safe
   canonical encoding
 - [`errors.py`](../../../src/query_man/errors.py): query rejection/invalid/overload/timeout/unavailable
-  의미; public rendering은 Delivery 계약
+  의미; public rendering은 Delivery의 external error mapping
 - [`reader_policy.py`](../../../src/query_man/reader_policy.py): Source Catalog가 소유하고 Metadata와
-  이 module이 함께 소비하는 reader-session safety contract
+  이 module이 함께 소비하는 reader-session safety policy
 - [`config/security-evaluation.yaml`](../../../config/security-evaluation.yaml): Assurance가
   소유하고 이 module의 parser/execution safety를 검증하는 versioned corpus
 - Focused tests: [`test_sql_validation.py`](../../../tests/test_sql_validation.py),
@@ -60,9 +60,13 @@ Assurance의 `query-man-verify`는 `assurance_cli.py`에서만 concrete executor
 조립하고 verified core에는 service를 주입한다. Verification SQL은 계속 `QueryService.query`를
 통과하며 CLI가 tenant ID를 추가하지 않는다.
 
-## 제공 계약
+## 제공 인터페이스와 소유 경계
 
-### SQL policy contract
+이 절은 다른 module에 공개한 Python interface와 함께 Guarded Query가 소유하는 policy identity,
+external result/error semantics 및 safety/lifecycle invariant를 기록한다. 각 subsection 제목이 실제
+변경 범주이며, 이 절 전체를 하나의 module interface로 해석하지 않는다.
+
+### SQL admission policy and revision
 
 ```text
 validate_sql(sql, allowed_relations, max_sql_bytes) -> ValidatedSql
@@ -80,7 +84,7 @@ SQL_POLICY_REVISION -> current immutable policy identity
 - SQL policy version 2는 `result_encoding.py`의 immutable canonical-time policy material version 1을
   digest에 포함한다. Metadata는 같은 object/material을 자신의 revision에 포함한다.
 
-### Query application contract
+### QueryService application interface
 
 ```text
 query(source_id, sql, metadata_revision, sql_policy_revision, query_id?, tenant_id?)
@@ -141,13 +145,13 @@ admission과 SQL type allowlist에서 미리 거부하고 base OID 자체를 dom
 동결해 Metadata revision provider에 공개하고, Metadata baseline 확정 후 executor가 fingerprint를
 소비한다. 이는 같은 module의 provider symbol과 consumer symbol을 서로 다른 agent가 동시
 편집한다는 뜻이 아니다.
-이는 승인 대기 제안이며 현재 executor 계약이 아니다.
+이는 승인 대기 제안이며 현재 executor interface나 지원 동작이 아니다.
 
 `result_bytes`는 compact UTF-8 JSON rows array의 `[]`와 comma까지 포함한다. 다음 행이 byte 또는
 row 상한을 넘으면 그 행을 넣지 않고 `truncated=true`로 반환한다. Duplicate result column은
 dictionary row value 손실을 막기 위해 fetch 전에 거부한다.
 
-### Gateway usage signal contract (`CTRL-07A`, implemented)
+### Gateway usage reporting interface (`CTRL-07A`, implemented)
 
 Guarded Query는 Runtime이 제공하는 bounded usage recorder에 server-resolved source ID,
 `SourceProfile.budget.name`, active published metadata revision과 canonical terminal outcome만 보낸다.
@@ -162,14 +166,14 @@ tenant, fingerprint, query ID와 raw database error를 payload에 넣지 않는�
 result/error와 audit event 의미는 유지한다.
 
 Lower-priority [proposed ADR 0022](../../decisions/0022-w3c-workflow-trace-context.md)의 exact A는 아직
-Guarded Query 계약이 아니다. 승인되고 Runtime/Delivery provider baseline이 먼저 확정된 뒤에만
+Guarded Query의 현재 interface가 아니다. 승인되고 Runtime/Delivery provider baseline이 먼저 확정된 뒤에만
 Guarded Query는 current process-local trace만 execution failure, interruption과 plan rejection audit의
 추가 correlation field로 소비한다. Delivery-private MCP call ID는 Guarded Query로 넘기지 않고 Delivery의
 Gateway query lifecycle audit에서만 연결한다. Trace를 authorization, admission, cache, cancel key,
 PostgreSQL `application_name`, result/hash 또는 usage signal에 넣지 않고 target query의 original trace를
 cancel request trace로 덮어쓰지 않는다.
 
-### Error contract
+### Query error taxonomy and safe external mapping
 
 Public query error category는 `SOURCE_NOT_FOUND`, `METADATA_REVISION_MISMATCH`, `QUERY_REJECTED`,
 `QUERY_INVALID`, `QUERY_OVERLOADED`, `QUERY_TIMEOUT`, `QUERY_UNAVAILABLE`다. `QUERY_REJECTED`는
@@ -191,7 +195,7 @@ Detail은 `{reason_code, action: "CORRECT_SQL", retryable: true}`고 message는 
 resolved-object 검증과 commit에서 같은 SQLSTATE가 발생해도 사용자 SQL 오류로
 공개하지 않고 details 없는 `QUERY_UNAVAILABLE`로 fail-closed한다.
 
-### Safe execution contract
+### Safe execution order and invariant
 
 실행 순서는 다음 안전 경계로 고정한다.
 
@@ -212,7 +216,7 @@ resolved-object 검증과 commit에서 같은 SQLSTATE가 발생해도 사용자
 현재 6단계는 transaction-local `row_security=on`, trusted tenant, restricted reader와 published
 security-invoker view를 확인하지만 hidden base relation의 RLS flag/policy 의미를 attest하지 않는다.
 [RLS policy drift finding](../../verification/2026-08-26-rls-policy-drift.md)은 이 gap에서 다른 tenant
-행이 성공함을 재현했으며 strict xfail sentinel로 남아 있다. 이는 안전 contract의 예외 승인이
+행이 성공함을 재현했으며 strict xfail sentinel로 남아 있다. 이는 safety invariant의 예외 승인이
 아니다. [Proposed ADR 0024](../../decisions/0024-rls-policy-drift-attestation.md)의 `RLS-01-A` target은
 `BEGIN` 직후 referenced root view `ACCESS SHARE NOWAIT` lock을 첫 relation action으로 두고, settings와
 reader probe 뒤 Metadata-owned live fingerprint를 비교한 다음 resolved-object/`EXPLAIN`/user SQL로
@@ -248,9 +252,9 @@ only-new/removed projection을 유지한다.
 이 exact-profile lifecycle은 모든 managed
 source transition에 적용되어 non-RLS active query도 transition `QUERY_UNAVAILABLE`로 정리될 수 있지만,
 RLS attestation/UTF8 조건을 non-RLS query로 넓히지 않는다.
-Exact 승인 전에는 위 현재 1~9단계나 `QueryExecutor`/error 계약을 교체하지 않는다.
+Exact 승인 전에는 위 현재 1~9단계나 `QueryExecutor` interface/error mapping을 교체하지 않는다.
 
-### Executor lifecycle contract
+### RuntimeQueryExecutor lifecycle interface
 
 ```text
 RuntimeQueryExecutor extends QueryExecutor:
@@ -265,15 +269,15 @@ RuntimeQueryExecutor extends QueryExecutor:
 - Source generation 변경 시 해당 source pool과 admission state를 `invalidate`한다.
 - `close`는 pool과 active task를 누출하지 않는다.
 
-## 소비 계약
+## 소비 인터페이스와 전제
 
 - [Source Catalog](../source-catalog/README.md)의 `SourceReader`로 얻는 source profile, budget, tenant
   policy와 reader safety. Profile/semantic graph는 recursively immutable한 read-only 입력이다.
 - [Metadata](../metadata/README.md)의 exact recursively immutable published snapshot/revision과 allowed
   relation ceiling
-- [Runtime](../runtime/README.md)의 operations reporting contract
+- [Runtime](../runtime/README.md)의 operations reporting interface
 
-Delivery caller는 shared active source contract를 확인한 뒤 generated query ID와 server-derived
+Delivery caller는 shared active source interface를 확인한 뒤 generated query ID와 server-derived
 tenant를 전달하고 disconnect를 task cancellation로 전파한다. Operator authorization은 Delivery가
 cancel 호출 전에 강제하며 Guarded Query는 active query ID 존재 여부만 반환한다. Runtime caller는
 shutdown/reload 때 lifecycle capability를 정해진 순서로 호출한다. 이는 Guarded Query가 두 module의
@@ -305,7 +309,11 @@ Guarded Query는 Control DB table이나 HTTP/MCP request model을 직접 알지 
 - Public reason code를 유지하는 PostgreSQL exception mapping 정리
 - Cancel/rollback/drain 결과를 유지하는 lock과 task bookkeeping 개선
 
-## 사용자 승인이 필요한 계약 변경
+## 사용자 승인이 필요한 경계 변경
+
+아래 목록에는 module interface, external format/error mapping, policy identity와 safety/lifecycle
+invariant가 함께 있다. 승인 요청은 실제 변경 범주를 명시하며 목록 전체를 하나의 module interface로
+취급하지 않는다. 이 용어 정리는 기존 승인 범위를 줄이지 않는다.
 
 - 허용 SQL statement, relation, function, operator 또는 type 범위 변경
 - `SQL_POLICY_REVISION` 재료나 revision format 변경
@@ -328,7 +336,7 @@ uv run pytest tests/test_registry.py tests/test_sql_validation.py tests/test_sec
   tests/test_query.py tests/test_result_encoding.py
 ```
 
-Result/error contract를 건드리면 HTTP/MCP tests를, concurrency/cancel 경계를 건드리면 load/server
+Result format/error mapping을 건드리면 HTTP/MCP tests를, concurrency/cancel 경계를 건드리면 load/server
 tests를 추가한다. PostgreSQL transaction, reader, RLS 또는 pool 경계를 바꾸면
 `uv run pytest -m integration`도 실행한다. Disposable source corner gate는 다음과 같다.
 
@@ -344,12 +352,13 @@ Guarded Query 작업은 기본적으로 다음만 읽는다.
 
 1. 이 문서와 [module index](../README.md)
 2. 변경 대상 query/validator/encoding code와 focused tests
-3. Source profile의 소비 필드, published metadata와 reader safety 계약
+3. Source profile의 소비 필드, published metadata interface와 reader safety policy
 4. [ADR 0001](../../decisions/0001-postgresql-ast-validation.md),
    [ADR 0002](../../decisions/0002-guarded-query-contract.md),
    [ADR 0003](../../decisions/0003-reader-and-resolved-object-policy.md),
    [ADR 0005](../../decisions/0005-initial-query-budgets.md)와
    [ADR 0014](../../decisions/0014-trusted-rls-tenant-context.md) 중 변경과 직접 관련된 결정
-5. 변경되는 result/error/lifecycle의 직접 consumer contract
+5. 변경되는 result/error/lifecycle의 직접 consumer interface와 외부 경계
 
-Control DB persistence와 metadata relevance algorithm은 계약을 변경하지 않는 한 읽을 필요가 없다.
+Control DB persistence와 metadata relevance algorithm은 위 interface나 경계 의미를 변경하지 않는 한
+읽을 필요가 없다.

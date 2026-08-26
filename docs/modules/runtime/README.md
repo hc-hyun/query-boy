@@ -48,7 +48,7 @@ Query Man은 현재 하나의 deployable process인 modular monolith다. Runtime
 - `compose.yaml`의 `recovery` profile: Assurance의 PostgreSQL 18.4→18.6 Control recovery에서만
   사용하는 tmpfs source fixture; production Runtime topology가 아님
 - [`verify-container.sh`](../../../scripts/verify-container.sh): Assurance가 소유하고 Runtime
-  container contract를 소비하는 shared transition acceptance script
+  container surface를 소비하는 shared transition acceptance script
 - [`pyproject.toml`](../../../pyproject.toml), [`uv.lock`](../../../uv.lock): application
   entrypoint/dependency와 locked build; offline command target과 test tooling 부분은 Assurance와 공유
 - Focused tests: [`test_runtime_config.py`](../../../tests/test_runtime_config.py),
@@ -60,11 +60,15 @@ Query Man은 현재 하나의 deployable process인 modular monolith다. Runtime
 
 `app.py`는 Delivery와 Runtime의 transition hot spot이다. Composition/lifespan symbol만 Runtime
 소유이며 route 또는 wire schema를 함께 정리하지 않는다. `operations.py`의 상태를 다른 module이
-기록할 수 있지만 상태 의미, metric label 허용 범위와 public projection은 Runtime 계약이다.
+기록할 수 있지만 상태 의미, metric label 허용 범위와 public projection은 Runtime 소유 경계다.
 
-## 제공 계약
+## 제공 인터페이스와 소유 경계
 
-### Composition contract
+이 절은 다른 module에 공개한 Python lifecycle/reporting interface와 함께 Runtime이 소유하는
+composition boundary, startup/shutdown invariant, configuration 및 operational semantics를 기록한다.
+각 subsection 제목이 실제 변경 범주이며, 이 절 전체를 하나의 module interface로 해석하지 않는다.
+
+### Production composition ownership
 
 - Production server의 concrete PostgreSQL adapters는 이 composition root에서 capability에 주입한다.
 - Runtime은 concrete `SourceRegistry`를 생성하고 같은 instance를 ordinary service/probe에는
@@ -72,7 +76,7 @@ Query Man은 현재 하나의 deployable process인 modular monolith다. Runtime
 - Query와 catalog adapter는 각각 provider가 소유한 `RuntimeQueryExecutor`와
   `RuntimeCatalogProvider`를 만족해야 한다. Runtime은 default 또는 주입된 adapter를 선택한 직후
   required method 전체가 callable인지 검사하고 누락되면 app composition에서 `TypeError`로
-  fail-closed한다. Sync/async signature는 provider Protocol, mypy와 contract test가 고정한다.
+  fail-closed한다. Sync/async signature는 provider Protocol, mypy와 interface test가 고정한다.
 - Delivery는 Gateway/application service만 받고 persistence/executor internals를 직접 받지 않는다.
 - Metadata와 Guarded Query는 Control DB implementation을 직접 import하지 않는다.
 - Runtime-only dependency edge는 wiring/lifecycle 외의 업무 호출을 허용하지 않는다.
@@ -80,7 +84,7 @@ Query Man은 현재 하나의 deployable process인 modular monolith다. Runtime
   root지만 production HTTP/MCP wiring을 소유하지 않는다. Shared `pyproject.toml`은 두 offline command의
   외부 이름을 유지하고 내부 target만 이 Assurance-owned entrypoint로 연결한다.
 
-### Startup contract
+### Startup sequence and failure cleanup
 
 현재 startup의 의미상 순서는 다음과 같다.
 
@@ -90,7 +94,7 @@ environment/configuration validate -> logging configure -> operations reset
    bootstrap: filesystem source registry; managed: empty registry
 -> catalog adapter 선택 + required Runtime capability validate
 -> verified membership authority 선택
-   bootstrap: filesystem verified contract; managed: empty map
+   bootstrap: filesystem verified dataset; managed: empty map
 -> metadata store/service와 query adapter/service compose
    query adapter 선택 직후 required Runtime capability validate
 -> access/gateway compose
@@ -108,7 +112,7 @@ Managed cold-start scan이 실패하면 empty inventory로 unavailable이며 fil
 요구한다.
 
 SQL policy와 모든 metadata revision을 함께 바꾸는 release는 mixed serving fleet를 허용하지 않는다.
-Startup 자체가 old/new contract를 번역하지 않으며, 운영자는 old fleet drain과 source connection 0,
+Startup 자체가 old/new interface/format을 번역하지 않으며, 운영자는 old fleet drain과 source connection 0,
 route 밖 new fleet의 L1→verified→L2 및 replica convergence를 먼저 증명해야 한다.
 
 필수 configuration 또는 dependency 초기화가 실패하면 ready로 전환하지 않는다. Control
@@ -131,7 +135,7 @@ identity당 정확히 한 번 close/cancel을 시도한다. 한 단계가 실패
 immediate close가 `stop_accepting`과 `drain(0)`을 수행한다. 정상 startup/shutdown 순서는 바뀌지
 않는다.
 
-### Shutdown contract
+### Shutdown sequence and drain rules
 
 ```text
 signal/request shutdown
@@ -188,9 +192,9 @@ shape/semantics를 누적한 v3를 사용하되 RLS attestation은 current live 
 baseline을 보존한다. Combined direct-v3 cutover는 route하지 않을 production v2 row를 만들지 않고
 verified v3 rollback generation을 준비한다. V3→v2 RLS rollback은 별도로 실제 배포·검증해 captured한
 counterpart가 있을 때만 허용하고 v3→v1 binary rollback은 위 RLS deactivate 규칙을 따른다. 이 모든
-순서는 exact A 승인 전에는 현재 Runtime contract가 아니다.
+순서는 exact A 승인 전에는 현재 Runtime lifecycle이 아니다.
 
-### Health and operations contract
+### Health and operations semantics
 
 - `/health`는 process liveness만 나타낸다.
 - `/ready`는 source ID 없는 aggregate 상태만 공개한다.
@@ -221,7 +225,7 @@ explicit-zero/accepted-sample/identity evidence 전에는 background evaluator�
 bounded evaluator 호출 순서만 소유하며
 push worker는 만들지 않는다. 기존 base rollup 31일 window는 proposed alert event 90일 visibility와 다르다.
 
-### Managed replica reporting contract (`CTRL-06`)
+### Managed replica reporting lifecycle (`CTRL-06`)
 
 - Managed mode는 `QUERY_MAN_REPLICA_ID`를 필수로 요구한다. 값은 1~80자의 lowercase stable
   slug(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)다. Bootstrap mode는 이 환경변수가 있어도 읽거나 검증하지
@@ -251,7 +255,7 @@ Runtime이 공개 `ReplicaObservationWriter`와 `ReplicaSourceObservation`을 �
 Control Plane dependency다. `source_store.py`, observation table 또는 persistence-private type을
 직접 import하지 않는다.
 
-### Resource and gateway reporting contract (`CTRL-07A`, implemented)
+### Resource and gateway reporting interfaces and operational lifecycle (`CTRL-07A`, implemented)
 
 Managed Runtime은 source가 성공적으로 apply된 뒤 bounded catalog resource sample을 한 번 시도하고
 이후 24시간 cadence로 갱신한다. 같은 UTC day의 여러 replica report는 Control Plane에서 한 current
@@ -298,7 +302,7 @@ Latest resource failure와 success report는 기존 process-local Control write 
 receipt와 shutdown 성공을 바꾸지 않고 cancellation은 전파한다. Runtime은 CTRL-08 public status를
 계산하거나 Control table을 읽지 않으며 Delivery가 Control Plane projection을 소비한다.
 
-### Runtime authentication configuration contract
+### Runtime authentication configuration rules
 
 - Bootstrap loopback에서 token/access-policy 설정이 없으면 Delivery의 anonymous query-only local
   compatibility caller를 사용한다.
@@ -307,9 +311,9 @@ receipt와 shutdown 성공을 바꾸지 않고 cancellation은 전파한다. Run
 - Managed mode는 single API token/anonymous를 거부하고 version 2 access policy의 non-admin query와
   explicit operator identity를 모두 요구한다.
 - 모든 identity의 shared active-source visibility와 local/legacy query-only, operator admin/cancel
-  의미는 Delivery 계약이며 Runtime은 source mode와 configuration 선택만 소유한다.
+  의미는 Delivery authorization policy이며 Runtime은 source mode와 configuration 선택만 소유한다.
 
-## 소비 계약
+## 소비 인터페이스와 전제
 
 - [Source Catalog](../source-catalog/README.md)의 concrete registry construction,
   `SourceReader`와 `SourceProjectionWriter` configuration capability. 같은 registry instance가 공유하는
@@ -321,7 +325,7 @@ receipt와 shutdown 성공을 바꾸지 않고 cancellation은 전파한다. Run
 - [Control Plane](../control-plane/README.md)의 stores, reloader와 convergence semantics
 - [Delivery](../delivery/README.md)의 Gateway/routes/MCP factory, parent middleware와 transport lifespan
 - [Assurance](../assurance/README.md)의 bootstrap filesystem 또는 managed Control verified membership
-  contract
+  interface
 
 ## 불변조건
 
@@ -351,7 +355,11 @@ receipt와 shutdown 성공을 바꾸지 않고 cancellation은 전파한다. Run
 - Public state/label을 유지하는 operational counter 내부 개선
 - Uvicorn integration의 같은 grace/exit 의미를 유지하는 정리
 
-## 사용자 승인이 필요한 계약 변경
+## 사용자 승인이 필요한 경계 변경
+
+아래 목록에는 module interface, composition/configuration boundary, operational semantics와
+safety/lifecycle invariant가 함께 있다. 승인 요청은 실제 변경 범주를 명시하며 목록 전체를 하나의
+module interface로 취급하지 않는다. 이 용어 정리는 기존 승인 범위를 줄이지 않는다.
 
 - Module 의존 방향, concrete adapter wiring 위치 또는 composition root 분산
 - Environment variable, required/optional/default와 secure-mode validation 변경
@@ -393,12 +401,12 @@ Runtime 작업은 기본적으로 다음만 읽는다.
 
 1. 이 문서와 [module index](../README.md)
 2. 변경 대상 composition/config/operations/server code와 focused tests
-3. 조립하거나 lifecycle을 호출하는 module의 공개 계약
+3. 조립하거나 lifecycle을 호출하는 module의 공개 interface
 4. [ADR 0006](../../decisions/0006-mcp-transport-and-workflow.md),
    [ADR 0015](../../decisions/0015-containerized-local-runtime.md),
    [ADR 0016](../../decisions/0016-centralized-source-management-plane.md)과
    [ADR 0017](../../decisions/0017-shared-source-access-and-resource-tier.md) 중 변경과 직접 관련된 결정
-5. `app.py` route/middleware를 건드릴 때 Delivery 계약
+5. `app.py` route/middleware를 건드릴 때 Delivery external API
 
-Metadata ranking, SQL AST walker와 store transaction 내부는 lifecycle 계약을 바꾸지 않는 한 읽을
-필요가 없다.
+Metadata ranking, SQL AST walker와 store transaction 내부는 lifecycle interface/rule을 바꾸지 않는
+한 읽을 필요가 없다.

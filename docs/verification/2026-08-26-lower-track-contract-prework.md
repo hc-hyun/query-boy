@@ -1,4 +1,4 @@
-# Lower-Track Contract Prework Verification
+# Lower-Track Boundary Prework Verification
 
 Date: 2026-08-26
 
@@ -6,7 +6,7 @@ Baseline: `ff100735c5d3b6057c7861f85c248a55da13b4a1`
 
 ## Scope
 
-이 기록은 아직 우선순위 gate와 exact 사용자 승인을 통과하지 않은 COST/TRACE 계약 초안을 구현 전에
+이 기록은 아직 우선순위 gate와 exact 사용자 승인을 통과하지 않은 COST/TRACE 경계 초안을 구현 전에
 검증한 read-only prework다. Repository production code, numbered migration, source role/function, public wire,
 runtime task와 config는 바꾸지 않았다. Proposed ADR의 literal SQL은 고정 이름의 disposable database에만
 적용했고 trap으로 database와 role을 제거했다.
@@ -17,7 +17,7 @@ runtime task와 config는 바꾸지 않았다. Proposed ADR의 literal SQL은 �
   대문자 reader를 `to_regrole(text)`로 찾던 오류는 exact `pg_roles.rolname` lookup으로 바꿨다.
 - Function owner에 `pg_read_all_stats`만 주면 fixture의 revoked view ACL을 통과하지 못했다. Exact 21+2
   column SELECT, `public` USAGE, raw non-reset pgss/info function과 `pg_control_system()` EXECUTE 및 canonical
-  `prosrc` attestation을 계약에 추가했다. Stock PUBLIC ACL에서는 ordinary reader도 cluster의 다른
+  `prosrc` attestation을 persisted/security 제안에 추가했다. Stock PUBLIC ACL에서는 ordinary reader도 cluster의 다른
   connectable database, target database TEMPORARY, 두 view와 control
   function에 접근했고, raw pgss function EXECUTE를 revoke하면 column-granted owner의 view SELECT도
   실패했다. 따라서 source DBA의 targeted PUBLIC/object revoke, monitor의 direct denial과 unavoidable raw
@@ -29,7 +29,7 @@ runtime task와 config는 바꾸지 않았다. Proposed ADR의 literal SQL은 �
 - 새 mutation receipt는 과거 strict decoder가 읽지 못하므로 compatibility-reader release → migration →
   writer/route 순서와 rollback floor를 명시했다.
 - COST-04의 `accepted_samples>=10`은 whole-hour coverage가 아니라 sample-count heuristic이다. Policy/base
-  activation epoch, A→B→A, transition-hour exclusion, gap/no-backfill과 이 한계를 계약에 명시했다.
+  activation epoch, A→B→A, transition-hour exclusion, gap/no-backfill과 이 한계를 alert policy 제안에 명시했다.
 - Alert event는 exact firing type/policy activation/base epoch를 composite FK로 참조하고 한 firing당 terminal
   event 하나만 허용한다. State/event NULL matrix와 policy transition/wire nullability도 고정했다.
 - TRACE-01-A는 policy-admitted route/auth, ASGI-visible header와 wire OWS 한계, nested scope, MCP call/query
@@ -102,7 +102,7 @@ role과 monitor를 grant option 없이 재grant하고 마지막에만 connection
 
 ## Remaining Gates
 
-- 이 문서는 exact contract 승인이나 production implementation evidence가 아니다.
+- 이 문서는 해당되는 모든 변경 범주의 exact 승인이나 production implementation evidence가 아니다.
 - ENC-01/ENC-02의 정확한 선택과 final encoding baseline이 먼저다.
 - TIME-03은 protected environment inventory, backup, key/artifact, migration reference, fleet drain/route와
   rollback 권한·증거 없이는 수행할 수 없다.
