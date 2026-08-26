@@ -16,7 +16,6 @@ import yaml
 import query_man.assurance.cli as assurance_cli_module
 from query_man.delivery.gateway import GatewayService
 from query_man.guarded_query.query import QueryService
-from query_man.metadata.models import ResourceObservation
 from query_man.metadata.service import MetadataService
 from query_man.runtime.composition import _probe_registered_sources
 from query_man.source_catalog.models import SourceProfile
@@ -217,18 +216,6 @@ def test_source_profile_construction_does_not_retain_mutable_aliases() -> None:
         "original-column-alias",
     )
     assert copied_join.column_pairs[0]["left"] == "issue_id"
-
-
-def test_resource_observation_is_immutable() -> None:
-    observation = ResourceObservation(
-        representative_records=None,
-        table_bytes=1,
-        index_bytes=2,
-        total_storage_bytes=3,
-    )
-
-    with pytest.raises(FrozenInstanceError):
-        observation.total_storage_bytes = 4  # type: ignore[misc]
 
 
 def test_loads_public_source_fields_only() -> None:

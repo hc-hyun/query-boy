@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -75,14 +74,9 @@ DatabaseMigrationRef = Annotated[
     str,
     Field(min_length=1, max_length=255),
 ]
-_FORBIDDEN_SCHEMA = re.compile(
-    r"^(?:information_schema|pg_catalog|pg_toast|pg_temp(?:_\d+)?|pg_toast_temp_\d+)$",
-    re.IGNORECASE,
-)
-
-
 def _is_forbidden_schema(schema: str) -> bool:
-    return bool(_FORBIDDEN_SCHEMA.match(schema)) or schema.casefold().startswith("pg_")
+    normalized = schema.casefold()
+    return normalized == "information_schema" or normalized.startswith("pg_")
 
 
 class RegistryConfigurationError(Exception):
@@ -386,7 +380,7 @@ class SourceRegistry:
         sources: list[SourceProfile] = []
         seen: set[str] = set()
         for path in files:
-            parsed = _parse_source_file(path)
+            parsed = _parse_model(path, _SourceFile)
             if parsed.source_id in seen:
                 raise RegistryConfigurationError(f"Duplicate source_id: {parsed.source_id}")
             seen.add(parsed.source_id)
@@ -427,14 +421,6 @@ def _parse_model[T: BaseModel](path: Path, model: type[T]) -> T:
         with path.open(encoding="utf-8") as stream:
             raw = yaml.safe_load(stream)
         return model.model_validate(raw)
-    except (OSError, yaml.YAMLError, ValidationError) as error:
-        raise RegistryConfigurationError(f"Invalid configuration in {path}: {error}") from error
-
-
-def _parse_source_file(path: Path) -> _SourceFile:
-    try:
-        with path.open(encoding="utf-8") as stream:
-            return _SourceFile.model_validate(yaml.safe_load(stream))
     except (OSError, yaml.YAMLError, ValidationError) as error:
         raise RegistryConfigurationError(f"Invalid configuration in {path}: {error}") from error
 
@@ -530,8 +516,8 @@ def _resolve_source(
             password=password,
             ssl=parsed.connection.ssl,
         ),
-        allowed_schemas=tuple(dict.fromkeys(parsed.allowed_schemas)),
-        allowed_relation_kinds=tuple(dict.fromkeys(parsed.allowed_relation_kinds)),  # type: ignore[arg-type]
+        allowed_schemas=tuple(parsed.allowed_schemas),
+        allowed_relation_kinds=tuple(parsed.allowed_relation_kinds),  # type: ignore[arg-type]
         budget=budget,
         semantic_overlay=overlay,
         provenance=SourceProvenance(

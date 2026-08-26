@@ -159,15 +159,6 @@ class RelationRetrievalIndex:
         return ranked
 
 
-def rank_relations(
-    question: str,
-    relations: Sequence[CatalogRelation],
-    semantics: Sequence[RelationSemantic],
-    default_relation: str | None = None,
-) -> list[RankedRelation]:
-    return RelationRetrievalIndex(relations, semantics, default_relation).rank(question)
-
-
 def _index_relation(
     relation: CatalogRelation,
     semantic: RelationSemantic | None,

@@ -129,9 +129,11 @@ class QueryExecutor(Protocol):
 Runtime만 운영 lifecycle이 추가된 Protocol을 소비한다.
 
 ```python
-class RuntimeQueryExecutor(QueryExecutor, Protocol):
+class DeliveryQueryExecutor(QueryExecutor, Protocol):
     def stop_accepting(self) -> None: ...
     async def drain(self, grace_ms: int) -> None: ...
+
+class RuntimeQueryExecutor(DeliveryQueryExecutor, Protocol):
     async def invalidate(self, source_id: str) -> None: ...
 ```
 

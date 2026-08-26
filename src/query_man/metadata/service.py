@@ -729,7 +729,6 @@ def _has_meaningful_reason(candidate: RankedRelation) -> bool:
             and reason.column is not None
             and reason.term not in generic
         )
-        or (reason.kind == "column_name" and reason.term not in generic)
         for reason in candidate.reasons
     )
 

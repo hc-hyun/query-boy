@@ -99,7 +99,7 @@ async def test_evaluation_cli_preserves_bootstrap_paths_output_exit_and_cleanup(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     events: list[object] = []
-    registry = SimpleNamespace(list=lambda: [{"source_id": "known-source"}])
+    registry = SimpleNamespace(source_ids=lambda: frozenset({"known-source"}))
     catalog = SimpleNamespace(close=_recording_close(events, "catalog"))
     report = QualityReport(1, 1.0, 1.0, 1_024, 1_024, ())
 
@@ -218,7 +218,7 @@ async def test_verify_cli_composes_guarded_query_path_and_preserves_cleanup_orde
 ) -> None:
     events: list[object] = []
     paths: list[object] = []
-    registry = SimpleNamespace(list=lambda: [{"source_id": "known-source"}])
+    registry = SimpleNamespace(source_ids=lambda: frozenset({"known-source"}))
     catalog = SimpleNamespace(close=_recording_close(events, "catalog"))
     executor = SimpleNamespace(close=_recording_close(events, "executor"))
     metadata = object()
@@ -296,7 +296,7 @@ async def test_verify_cli_propagates_failure_without_success_output_and_still_cl
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     events: list[object] = []
-    registry = SimpleNamespace(list=lambda: [{"source_id": "known-source"}])
+    registry = SimpleNamespace(source_ids=lambda: frozenset({"known-source"}))
     catalog = SimpleNamespace(close=_recording_close(events, "catalog"))
     executor = SimpleNamespace(close=_recording_close(events, "executor"))
 
@@ -429,7 +429,7 @@ def _patch_evaluation_composition(
     evaluation: object,
     events: list[object],
 ) -> None:
-    registry = SimpleNamespace(list=lambda: [{"source_id": "known-source"}])
+    registry = SimpleNamespace(source_ids=lambda: frozenset({"known-source"}))
     verified = SimpleNamespace(revision_map=lambda: {})
     catalog = SimpleNamespace(close=_recording_close(events, "catalog"))
     monkeypatch.setattr(assurance_cli, "load_dotenv", lambda _path: None)

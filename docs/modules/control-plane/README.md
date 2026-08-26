@@ -70,7 +70,7 @@ Administration, source/metadata persistence와 secret 구현은 `src/query_man/m
 Runtime의 managed composition과 cross-module tests는 아직 shared transition artifact이므로
 coordinating agent가 single-writer로 다룬다.
 
-### Repository 분리 준비 경계
+### Same-repository managed 경계
 
 `query_man.managed`에는 package marker, source administration/store, concrete metadata store, secret
 cipher, managed-only Delivery route와 Runtime composition을 둔다. `managed/runtime.py`의 owner는
@@ -80,10 +80,11 @@ implementation을 import하지 않는다. Managed authority를 명시적으로 �
 composition을 import한다.
 
 Control migration, acceptance fixture와 tests는 각각 기존 owner에 따라 repository root에 남는다. 따라서
-현재 상태는 **별도 repository가 아니라 추출 가능한 코드 경계**다. Application install/image에는 아직
-managed package가 포함된다. 실제 repository 이동 전에는 managed source tree 없이 static build/test가
-성립하는지, versioned core interface와 compatibility CI, Control DB migration/recovery owner를 별도로
-확정해야 한다.
+이 경계는 비활성 managed 구현이 static 실행·fixture와 기본 탐색 범위에 섞이지 않게 하기 위한 것이다.
+Application install/image에는 managed package가 의도적으로 함께 포함되며 repository, wheel, process를
+분리할 계획은 없다. Managed source tree 없는 static build 검사는 core의 비의존성을 확인하는
+회귀검사이지 repository 이동 준비가 아니다. 독립 배포, version, 접근 권한, owner 또는 운영 lifecycle의
+실제 요구가 생기기 전에는 별도 repository, distribution이나 service를 다시 제안하지 않는다.
 
 ## 제공 인터페이스와 소유 경계
 

@@ -198,14 +198,12 @@ class GatewayService:
         source_id: str,
         operation: str,
     ) -> None:
-        try:
-            if self._registry.get(source_id) is None:
-                raise SourceNotFoundError
-        except SourceNotFoundError:
-            logger.warning(
-                "authorization_denied caller_id=%s tenant_id=%s operation=%s",
-                caller.caller_id,
-                caller.tenant_id,
-                operation,
-            )
-            raise
+        if self._registry.get(source_id) is not None:
+            return
+        logger.warning(
+            "authorization_denied caller_id=%s tenant_id=%s operation=%s",
+            caller.caller_id,
+            caller.tenant_id,
+            operation,
+        )
+        raise SourceNotFoundError

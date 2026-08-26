@@ -1,16 +1,15 @@
-from query_man.metadata.relevance import rank_relations, select_ranked_relations
+from query_man.metadata.relevance import RelationRetrievalIndex, select_ranked_relations
 from tests.helpers import column, load_test_registry, minimal_development_snapshot, relation
 
 
 def _select(source_id: str, question: str, relations: list | None = None) -> list[str]:
     source = load_test_registry().get(source_id)
     assert source is not None
-    ranked = rank_relations(
-        question,
+    ranked = RelationRetrievalIndex(
         relations or minimal_development_snapshot().relations,
         source.semantic_overlay.relations,
         source.semantic_overlay.default_relation,
-    )
+    ).rank(question)
     selected, _ = select_ranked_relations(ranked, 2)
     return [item.relation.qualified_name for item in selected]
 

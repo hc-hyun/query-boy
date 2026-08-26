@@ -70,10 +70,9 @@ def build_app(
         catalog,
         ("load", "close"),
     )
-    source_ids = [source["source_id"] for source in registry.list()]
     verified_revisions = VerifiedQueryRegistry.load(
         runtime_config.source_directory.parent / "verified-queries.yaml",
-        set(source_ids),
+        set(registry.source_ids()),
     ).revision_map()
     metadata = MetadataService(
         registry,

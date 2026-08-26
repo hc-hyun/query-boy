@@ -29,13 +29,14 @@ async def _run_evaluation(root: Path) -> None:
         root / "config" / "sources",
         root / "config" / "budget-profiles.yaml",
     )
+    known_sources = set(registry.source_ids())
     evaluation = QualityEvaluation.load(
         root / "config" / "quality-evaluation.yaml",
-        {source["source_id"] for source in registry.list()},
+        known_sources,
     )
     verified = VerifiedQueryRegistry.load(
         root / "config" / "verified-queries.yaml",
-        {source["source_id"] for source in registry.list()},
+        known_sources,
     )
     catalog = PostgresCatalog(reject_domain_columns=True)
     metadata = MetadataService(
@@ -69,7 +70,7 @@ async def _run_verification(root: Path) -> None:
     )
     verified = VerifiedQueryRegistry.load(
         root / "config" / "verified-queries.yaml",
-        {source["source_id"] for source in registry.list()},
+        set(registry.source_ids()),
     )
     catalog = PostgresCatalog(reject_domain_columns=True)
     executor = PostgresQueryExecutor()

@@ -30,12 +30,7 @@ class PostgresMetadataStore:
             row = await _read_active(connection, source.source_id)
         if row is None:
             return None
-        return decode_snapshot(
-            source,
-            str(row["revision"]),
-            row["snapshot"],
-            freshness_age_ms=int(row["freshness_age_ms"]),
-        )
+        return _decode_active(source, row)
 
     async def get_revision(self, source: SourceProfile, revision: str) -> PreparedMetadata:
         pool = await self._get_pool()
@@ -82,12 +77,7 @@ class PostgresMetadataStore:
             active = await _read_active(connection, source.source_id)
             if active is None:
                 raise StoredMetadataInvalidError("Active metadata revision is unavailable")
-        return decode_snapshot(
-            source,
-            str(active["revision"]),
-            active["snapshot"],
-            freshness_age_ms=int(active["freshness_age_ms"]),
-        )
+        return _decode_active(source, active)
 
     async def activate(self, source: SourceProfile, revision: str) -> PreparedMetadata:
         pool = await self._get_pool()
@@ -115,12 +105,7 @@ class PostgresMetadataStore:
             active = await _read_active(connection, source.source_id)
             if active is None:
                 raise StoredMetadataInvalidError("Active metadata revision is unavailable")
-        return decode_snapshot(
-            source,
-            str(active["revision"]),
-            active["snapshot"],
-            freshness_age_ms=int(active["freshness_age_ms"]),
-        )
+        return _decode_active(source, active)
 
     async def unpin(self, source: SourceProfile) -> None:
         pool = await self._get_pool()
@@ -185,6 +170,15 @@ async def _read_active(connection: Any, source_id: str) -> dict[str, Any] | None
     )
     row: dict[str, Any] | None = await cursor.fetchone()
     return row
+
+
+def _decode_active(source: SourceProfile, row: dict[str, Any]) -> PreparedMetadata:
+    return decode_snapshot(
+        source,
+        str(row["revision"]),
+        row["snapshot"],
+        freshness_age_ms=int(row["freshness_age_ms"]),
+    )
 
 
 async def _require_current_source(connection: Any, source: SourceProfile) -> None:

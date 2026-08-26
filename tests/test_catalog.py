@@ -84,6 +84,18 @@ def test_runtime_catalog_provider_protocol_has_exact_lifecycle_shape() -> None:
     assert get_type_hints(MetadataService.__init__)["catalog"] is CatalogProvider
 
 
+def test_resource_observation_is_immutable() -> None:
+    observation = ResourceObservation(
+        representative_records=None,
+        table_bytes=1,
+        index_bytes=2,
+        total_storage_bytes=3,
+    )
+
+    with pytest.raises(FrozenInstanceError):
+        observation.total_storage_bytes = 4  # type: ignore[misc]
+
+
 def test_static_launch_domain_guard_uses_declared_catalog_type_kind() -> None:
     normalized_query = " ".join(catalog_module.CATALOG_QUERY.casefold().split())
     assert "join pg_catalog.pg_type as type_row" in normalized_query

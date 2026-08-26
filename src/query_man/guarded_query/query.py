@@ -281,15 +281,11 @@ class QueryService:
                 query_id=query_id,
                 tenant_id=tenant_id,
             )
-        except (_QueryCancelledTimeoutError, _QueryCancelledUnavailableError):
-            _record_gateway_usage_safely(
-                self._usage_recorder,
-                source,
-                published.revision,
-                "cancelled",
-            )
-            raise
-        except asyncio.CancelledError:
+        except (
+            _QueryCancelledTimeoutError,
+            _QueryCancelledUnavailableError,
+            asyncio.CancelledError,
+        ):
             _record_gateway_usage_safely(
                 self._usage_recorder,
                 source,
@@ -569,9 +565,6 @@ class PostgresQueryExecutor:
                 raise
             except (QueryInvalidError, QueryOverloadedError, QueryTimeoutError):
                 raise
-            except errors.DatabaseError as error:
-                operations.increment("query_failed", source.source_id)
-                raise QueryUnavailableError from error
             except Exception as error:
                 operations.increment("query_failed", source.source_id)
                 raise QueryUnavailableError from error

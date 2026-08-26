@@ -2249,12 +2249,7 @@ def _validate_idempotency_key(idempotency_key: str) -> None:
 def _validate_event_cursor(before_event_id: int | None) -> None:
     if before_event_id is None:
         return
-    if (
-        isinstance(before_event_id, bool)
-        or not isinstance(before_event_id, int)
-        or not 1 <= before_event_id <= POSTGRES_BIGINT_MAX
-    ):
-        raise ValueError("Mutation event cursor must be a positive PostgreSQL bigint")
+    _validate_positive_bigint(before_event_id, "Mutation event cursor")
 
 
 def _validate_replica_id(replica_id: str) -> None:
@@ -2897,12 +2892,7 @@ def _validate_page_limit(limit: int) -> None:
 def _validate_before_generation(before_generation: int | None) -> None:
     if before_generation is None:
         return
-    if (
-        isinstance(before_generation, bool)
-        or not isinstance(before_generation, int)
-        or not 1 <= before_generation <= POSTGRES_BIGINT_MAX
-    ):
-        raise ValueError("Generation cursor must be a positive PostgreSQL bigint")
+    _validate_positive_bigint(before_generation, "Generation cursor")
 
 
 def _required_text(row: dict[str, Any], key: str, maximum_length: int) -> str:

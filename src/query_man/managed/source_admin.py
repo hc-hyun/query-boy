@@ -1818,11 +1818,7 @@ def _resource_usage_response(
             raise ValueError("Resource success state is invalid")
         return {
             "status": "unavailable",
-            "reason_code": (
-                "SOURCE_DISABLED"
-                if not projection.enabled
-                else attempt.last_attempt_reason_code
-            ),
+            "reason_code": attempt.last_attempt_reason_code,
             "last_attempt": last_attempt,
             "fresh_until": None,
             "metrics": [],
