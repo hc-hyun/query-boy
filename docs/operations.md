@@ -237,8 +237,10 @@ Stale membership/ACL을 복구했거나 security drift를 대응한 뒤에는 ad
 검증한다. Membership 회수는 이미 이전 parent role로 `SET ROLE`한 session을 강제로 종료하거나 원래
 role로 되돌리지 않는다.
 
-Local/CI의 `apply-db.sh`는 development fixture DB에 같은 runner를 적용하지만 production
-migration 명령이 아니다. Control-store와 hot-add integration test는
+Local/CI의 `scripts/apply-managed-acceptance-fixtures.sh`는 `compose.yaml`과
+`compose.acceptance.yaml`을 함께 사용한 별도 `query-man-managed-acceptance` project의 development
+Control DB에 같은 runner를 적용하지만 production migration 명령이 아니다. 기본 `apply-db.sh`는
+current 두 static source만 준비하며 Control schema를 적용하지 않는다. Control-store와 hot-add integration test는
 `query_man_control_test_<random>` DB를 test마다 생성하고, 모든 pool을 닫은 뒤 삭제하며 전후
 development authority fingerprint가 동일한지 확인한다. CI가 비정상 종료돼 scratch DB가 남으면
 해당 ephemeral Compose volume을 폐기한다. 운영 DB나 사용자가 지정한 임의 DB를 test cleanup
@@ -247,18 +249,26 @@ development authority fingerprint가 동일한지 확인한다. CI가 비정상 
 ### Control Recovery Release Gate
 
 빠른 same-cluster schema drill과 isolated Control recovery fixture acceptance를 구분한다.
+둘 다 managed-acceptance PostgreSQL을 사용하며 script/test 안의 bare Compose subprocess가 같은 격리
+project를 보도록 `COMPOSE_FILE`을 유지한다.
 
 ```bash
+export COMPOSE_FILE=compose.yaml:compose.acceptance.yaml
+docker compose up -d --wait postgres
+./scripts/apply-managed-acceptance-fixtures.sh
 ./scripts/control-plane-drill.sh
 uv run pytest -m integration -q tests/test_control_recovery.py
+docker compose down -v --remove-orphans
+unset COMPOSE_FILE
 ```
 
-두 번째 command는 `recovery` profile의 격리 PostgreSQL 18.4 source에서 현재 18.6 fresh DB로
+`test_control_recovery.py` command는 `recovery` profile의 격리 PostgreSQL 18.4 source에서 현재 18.6 fresh DB로
 archive를 복원하고 13-table fingerprint, archive 밖 writer LOGIN/key, 모든 generation decrypt,
 logical retention, receipt replay, source/verified file 없는 두 stable replica와 실제 guarded query를
 검증한다. Existing recovery service를 덮어쓰지 않고 random-prefix database와 임시 artifact만
 정리한다. Global writer reconciliation이 있으므로 production migration, 빠른 drill이나 다른
-disposable migration test와 동시에 실행하지 않는다.
+disposable migration test와 동시에 실행하지 않는다. Cleanup은 `query-man-managed-acceptance` volume만
+삭제하며 base static volume은 건드리지 않는다.
 
 이 repository gate는 production backup scheduler, archive age/access audit, TLS/IAM, secret-manager와
 source business DB 복구를 대신하지 않는다. Release change record에는
@@ -494,9 +504,23 @@ Compose는 `QUERY_MAN_SOURCE_MODE=bootstrap`이고 access policy는
 `QUERY_MAN_CODEX_MCP_TOKEN`을 모든 active bootstrap source를 보는 query-only caller로 만들고
 operator 권한을 주지 않는다. Token과 reader password는 `.env`에서 주입하지만
 image build context와 Git에는 포함하지 않는다. Application container에는 PostgreSQL
-administrator password를 전달하지 않는다. 기본 Compose는 control-plane DSN/key를 주입하지
-않으므로 source admin endpoint가 비활성인 local runtime이다. Managed source test나 production
-설정을 이 Compose default와 섞지 않는다.
+administrator password를 전달하지 않는다. 기본 Compose는 control-plane DSN/key를 주입하지 않고
+source admin route도 등록하지 않는다. Managed acceptance가 필요하면 별도 Compose overlay를
+명시적으로 적용한다. Overlay는 `query-man-managed-acceptance`라는 별도 project, PostgreSQL container와
+volume을 사용한다. Integration fixture의 bare Compose subprocess도 이 project를 찾도록 test session에
+`COMPOSE_FILE`을 유지한다.
+
+```bash
+export COMPOSE_FILE=compose.yaml:compose.acceptance.yaml
+docker compose up -d --wait postgres
+./scripts/apply-managed-acceptance-fixtures.sh
+# 필요한 managed focused/integration test 실행
+docker compose down -v --remove-orphans
+unset COMPOSE_FILE
+```
+
+위 `down -v`는 managed-acceptance volume만 삭제한다. Base `query-man_postgres_data`나 production
+설정을 이 project와 섞거나 삭제하지 않는다.
 
 Container는 non-root, read-only filesystem과 `/tmp` tmpfs로 실행한다. 기본 Docker
 `stop_grace_period` 30초는 application drain 기본값 10초보다 길다.

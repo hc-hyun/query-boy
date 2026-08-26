@@ -12,22 +12,33 @@ from typing import Literal, cast, get_type_hints
 import pytest
 
 import query_man.app as app_module
+import query_man.managed.runtime as managed_runtime_module
 from query_man.access import AccessPolicy, AccessPolicyConfigurationError
 from query_man.catalog import PostgresCatalog
 from query_man.errors import MetadataUnavailableError
+from query_man.managed.source_admin import (
+    ReplicaSourceObservation,
+    ResourceObservationSample,
+)
 from query_man.models import (
+    CatalogProvider,
     CatalogSnapshot,
     PreparedMetadata,
+    RepresentativeRecordsTarget,
     ResourceObservation,
+    ResourceObservationDefinition,
     RuntimeCatalogProvider,
     SourceProfile,
 )
 from query_man.operations import operations
-from query_man.query import PostgresQueryExecutor, RuntimeQueryExecutor
+from query_man.query import (
+    DeliveryQueryExecutor,
+    PostgresQueryExecutor,
+    RuntimeQueryExecutor,
+)
 from query_man.reader_policy import ReaderSessionPolicyError
 from query_man.registry import SourceRegistry
 from query_man.runtime_config import RuntimeConfig
-from query_man.source_admin import ReplicaSourceObservation, ResourceObservationSample
 from query_man.verified import VerifiedQueryRegistry
 from tests.helpers import ROOT_DIRECTORY, load_test_registry
 
@@ -37,15 +48,18 @@ _ADMIN_TOKEN = "admin-token-value-with-at-least-32-characters"
 
 
 def test_runtime_composition_requires_composite_provider_contracts() -> None:
-    hints = get_type_hints(app_module.build_app)
+    static_hints = get_type_hints(app_module.build_app)
+    managed_hints = get_type_hints(managed_runtime_module.build_app)
 
-    assert hints["catalog"] == RuntimeCatalogProvider | None
-    assert hints["query_executor"] == RuntimeQueryExecutor | None
+    assert static_hints["catalog"] == CatalogProvider | None
+    assert static_hints["query_executor"] == DeliveryQueryExecutor | None
+    assert managed_hints["catalog"] == RuntimeCatalogProvider | None
+    assert managed_hints["query_executor"] == RuntimeQueryExecutor | None
 
 
 @pytest.mark.parametrize(
     "method",
-    ["load", "close", "invalidate", "observe_resources"],
+    ["load", "close"],
 )
 def test_runtime_rejects_catalog_with_missing_required_capability(
     method: str,
@@ -66,7 +80,7 @@ def test_runtime_rejects_catalog_with_missing_required_capability(
 
 @pytest.mark.parametrize(
     "method",
-    ["execute", "cancel", "close", "stop_accepting", "drain", "invalidate"],
+    ["execute", "cancel", "close", "stop_accepting", "drain"],
 )
 def test_runtime_rejects_query_executor_with_missing_required_capability(
     method: str,
@@ -85,6 +99,40 @@ def test_runtime_rejects_query_executor_with_missing_required_capability(
         )
 
 
+@pytest.mark.parametrize("method", ["invalidate", "observe_resources"])
+def test_managed_runtime_keeps_control_catalog_capabilities(
+    method: str,
+    tmp_path: Path,
+) -> None:
+    catalog = PostgresCatalog()
+    setattr(catalog, method, None)
+
+    with pytest.raises(
+        TypeError,
+        match=rf"catalog is missing required runtime capabilities: {method}",
+    ):
+        managed_runtime_module.build_app(
+            _runtime("managed", tmp_path / "missing" / "sources"),
+            catalog=catalog,  # type: ignore[arg-type]
+            access_policy=_shared_policy(tmp_path),
+        )
+
+
+def test_managed_runtime_keeps_query_invalidation_capability(tmp_path: Path) -> None:
+    executor = PostgresQueryExecutor()
+    executor.invalidate = None  # type: ignore[assignment]
+
+    with pytest.raises(
+        TypeError,
+        match=r"query_executor is missing required runtime capabilities: invalidate",
+    ):
+        managed_runtime_module.build_app(
+            _runtime("managed", tmp_path / "missing" / "sources"),
+            query_executor=executor,
+            access_policy=_shared_policy(tmp_path),
+        )
+
+
 def test_runtime_does_not_replace_falsey_incomplete_adapters() -> None:
     class FalseyCatalog(PostgresCatalog):
         def __bool__(self) -> bool:
@@ -95,8 +143,8 @@ def test_runtime_does_not_replace_falsey_incomplete_adapters() -> None:
             return False
 
     catalog = FalseyCatalog()
-    catalog.invalidate = None  # type: ignore[assignment]
-    with pytest.raises(TypeError, match=r"catalog.*invalidate"):
+    catalog.close = None  # type: ignore[assignment]
+    with pytest.raises(TypeError, match=r"catalog.*close"):
         app_module.build_app(
             _runtime("bootstrap", ROOT_DIRECTORY / "config" / "sources"),
             registry=load_test_registry(),
@@ -180,7 +228,7 @@ def test_managed_mode_starts_empty_without_loading_source_or_verified_files(
     monkeypatch.setattr(SourceRegistry, "load", _unexpected_file_load)
     monkeypatch.setattr(VerifiedQueryRegistry, "load", _unexpected_file_load)
 
-    app = app_module.build_app(
+    app = managed_runtime_module.build_app(
         _runtime("managed", tmp_path / "missing" / "sources"),
         access_policy=_shared_policy(tmp_path),
     )
@@ -213,11 +261,11 @@ def test_managed_mode_keeps_all_control_writers_on_fixed_source_store(
         def __init__(self, store: object) -> None:
             constructed.append(("gateway", store))
 
-    monkeypatch.setattr(app_module, "ControlReplicaObservationWriter", ReplicaWriter)
-    monkeypatch.setattr(app_module, "ControlResourceObservationWriter", ResourceWriter)
-    monkeypatch.setattr(app_module, "ControlGatewayUsageWriter", GatewayWriter)
+    monkeypatch.setattr(managed_runtime_module, "ControlReplicaObservationWriter", ReplicaWriter)
+    monkeypatch.setattr(managed_runtime_module, "ControlResourceObservationWriter", ResourceWriter)
+    monkeypatch.setattr(managed_runtime_module, "ControlGatewayUsageWriter", GatewayWriter)
 
-    app = app_module.build_app(
+    app = managed_runtime_module.build_app(
         _runtime("managed", tmp_path / "missing" / "sources"),
         access_policy=_shared_policy(tmp_path),
     )
@@ -239,7 +287,7 @@ def test_managed_mode_keeps_all_control_writers_on_fixed_source_store(
 
 def test_managed_mode_rejects_an_injected_registry(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="does not accept a bootstrap registry"):
-        app_module.build_app(
+        managed_runtime_module.build_app(
             _runtime("managed", tmp_path / "missing" / "sources"),
             registry=SourceRegistry([]),
             access_policy=_shared_policy(tmp_path),
@@ -251,12 +299,12 @@ def test_managed_mode_rejects_anonymous_local_compatibility(tmp_path: Path) -> N
         AccessPolicyConfigurationError,
         match="authenticated query and admin identities",
     ):
-        app_module.build_app(_runtime("managed", tmp_path / "missing" / "sources"))
+        managed_runtime_module.build_app(_runtime("managed", tmp_path / "missing" / "sources"))
 
 
 def test_managed_mode_rejects_legacy_query_only_policy(tmp_path: Path) -> None:
     with pytest.raises(AccessPolicyConfigurationError, match="admin identity"):
-        app_module.build_app(
+        managed_runtime_module.build_app(
             _runtime("managed", tmp_path / "missing" / "sources"),
             access_policy=AccessPolicy.legacy(_QUERY_TOKEN),
         )
@@ -274,7 +322,7 @@ def test_managed_mode_rejects_policy_without_admin(tmp_path: Path) -> None:
     )
 
     with pytest.raises(AccessPolicyConfigurationError, match="admin identity"):
-        app_module.build_app(
+        managed_runtime_module.build_app(
             _runtime("managed", tmp_path / "missing" / "sources"),
             access_policy=query_only,
         )
@@ -293,7 +341,7 @@ def test_managed_mode_rejects_policy_without_query_identity(tmp_path: Path) -> N
     )
 
     with pytest.raises(AccessPolicyConfigurationError, match="non-admin query identity"):
-        app_module.build_app(
+        managed_runtime_module.build_app(
             _runtime("managed", tmp_path / "missing" / "sources"),
             access_policy=admin_only,
         )
@@ -318,7 +366,7 @@ def test_managed_mode_loads_shared_policy_file(
     monkeypatch.setenv("QUERY_TOKEN", _QUERY_TOKEN)
     monkeypatch.setenv("ADMIN_TOKEN", _ADMIN_TOKEN)
 
-    app = app_module.build_app(
+    app = managed_runtime_module.build_app(
         _runtime(
             "managed",
             tmp_path / "missing" / "sources",
@@ -349,8 +397,8 @@ def test_bootstrap_mode_preserves_an_explicit_empty_registry(
     )
 
     assert app.state.registry is registry
-    assert app.state.source_admin is None
-    assert app.state.source_reloader is None
+    assert not hasattr(app.state, "source_admin")
+    assert not hasattr(app.state, "source_reloader")
     assert app.state.catalog._reject_domain_columns is True
 
 
@@ -373,35 +421,27 @@ def test_bootstrap_mode_rejects_injected_rls_before_provider_composition(
         )
 
 
-def test_bootstrap_mode_does_not_construct_control_plane_stores(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(app_module, "PostgresMetadataStore", _unexpected_file_load)
-    monkeypatch.setattr(app_module, "PostgresSourceStore", _unexpected_file_load)
-    monkeypatch.setattr(
-        app_module,
-        "ControlResourceObservationWriter",
-        _unexpected_file_load,
-    )
-    monkeypatch.setattr(
-        app_module,
-        "ControlGatewayUsageWriter",
-        _unexpected_file_load,
-    )
-
-    app = app_module.build_app(
-        _runtime("bootstrap", ROOT_DIRECTORY / "config" / "sources"),
-        registry=load_test_registry(),
-    )
-
-    assert app.state.source_admin is None
-    assert app.state.source_reloader is None
-
-
 def _development_source() -> SourceProfile:
     source = load_test_registry().get("development-issues")
     assert source is not None
-    return replace(source, control_generation=1, control_state_version=1)
+    return replace(
+        source,
+        control_generation=1,
+        control_state_version=1,
+        observability=ResourceObservationDefinition(
+            representative_records=RepresentativeRecordsTarget(
+                grain="development_issue",
+                physical_relation="development.issues",
+            ),
+            storage_relations=(
+                "development.users",
+                "development.product_models",
+                "development.test_units",
+                "development.issues",
+                "development.issue_comments",
+            ),
+        ),
+    )
 
 
 def _expected_definition_revision(material: dict[str, object]) -> str:
@@ -425,7 +465,7 @@ def test_resource_samples_have_exact_metrics_and_canonical_definition_hashes() -
         total_storage_bytes=1_250,
     )
 
-    samples = app_module._resource_observation_samples(source, observation)
+    samples = managed_runtime_module._resource_observation_samples(source, observation)
 
     assert [(sample.metric, sample.value, sample.unit, sample.method) for sample in samples] == [
         ("representative_records", 37, "rows", "postgres_catalog_estimate"),
@@ -505,7 +545,7 @@ async def test_resource_collection_omits_missing_estimate_and_unconfigured_sourc
     catalog = Catalog()
     writer = Writer()
 
-    await app_module._collect_resource_observations(  # type: ignore[arg-type]
+    await managed_runtime_module._collect_resource_observations(  # type: ignore[arg-type]
         (source, unconfigured),
         catalog,
         metadata,
@@ -583,7 +623,7 @@ async def test_resource_reporting_is_immediate_for_initial_and_new_profile_ident
     catalog = Catalog()
     writer = Writer()
     task = asyncio.create_task(
-        app_module._reload_sources(  # type: ignore[arg-type]
+        managed_runtime_module._reload_sources(  # type: ignore[arg-type]
             Reloader(),
             1,
             registry=registry,
@@ -609,7 +649,7 @@ async def test_resource_reporting_is_immediate_for_initial_and_new_profile_ident
 async def test_resource_reporting_repeats_on_fixed_twenty_four_hour_cadence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(app_module, "_RESOURCE_OBSERVATION_INTERVAL_SECONDS", 0.01)
+    monkeypatch.setattr(managed_runtime_module, "_RESOURCE_OBSERVATION_INTERVAL_SECONDS", 0.01)
     source = _development_source()
     registry = SourceRegistry([source])
 
@@ -643,7 +683,7 @@ async def test_resource_reporting_repeats_on_fixed_twenty_four_hour_cadence(
 
     writer = Writer()
     task = asyncio.create_task(
-        app_module._reload_sources(  # type: ignore[arg-type]
+        managed_runtime_module._reload_sources(  # type: ignore[arg-type]
             Reloader(),
             60_000,
             registry=registry,
@@ -665,11 +705,28 @@ async def test_resource_reporting_repeats_on_fixed_twenty_four_hour_cadence(
 async def test_new_profile_gets_its_own_full_resource_cadence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(app_module, "_RESOURCE_OBSERVATION_INTERVAL_SECONDS", 0.5)
+    monkeypatch.setattr(managed_runtime_module, "_RESOURCE_OBSERVATION_INTERVAL_SECONDS", 0.5)
     development = _development_source()
     market = load_test_registry().get("market-voc")
     assert market is not None
-    market = replace(market, control_generation=1, control_state_version=1)
+    market = replace(
+        market,
+        control_generation=1,
+        control_state_version=1,
+        observability=ResourceObservationDefinition(
+            representative_records=RepresentativeRecordsTarget(
+                grain="market_voc_case",
+                physical_relation="voc.cases",
+            ),
+            storage_relations=(
+                "voc.users",
+                "voc.product_models",
+                "voc.devices",
+                "voc.cases",
+                "voc.case_comments",
+            ),
+        ),
+    )
     registry = SourceRegistry([development])
 
     class Metadata:
@@ -707,7 +764,7 @@ async def test_new_profile_gets_its_own_full_resource_cadence(
 
     writer = Writer()
     task = asyncio.create_task(
-        app_module._resource_observation_loop(  # type: ignore[arg-type]
+        managed_runtime_module._resource_observation_loop(  # type: ignore[arg-type]
             registry,
             Catalog(),
             Metadata(),
@@ -812,25 +869,25 @@ async def test_resource_failures_are_isolated_and_cancellation_propagates(
         writer = Writer()
         public_before = operations.snapshot()
         replica_before = operations.replica_runtime_snapshot()
-        await app_module._collect_resource_observations(  # type: ignore[arg-type]
+        await managed_runtime_module._collect_resource_observations(  # type: ignore[arg-type]
             (source,),
             Catalog(),
             FailingMetadata(),
             writer,
         )
-        await app_module._collect_resource_observations(  # type: ignore[arg-type]
+        await managed_runtime_module._collect_resource_observations(  # type: ignore[arg-type]
             (source,),
             Catalog(),
             ReaderPolicyFailingMetadata(),
             writer,
         )
-        await app_module._collect_resource_observations(  # type: ignore[arg-type]
+        await managed_runtime_module._collect_resource_observations(  # type: ignore[arg-type]
             (source,),
             FailingCatalog(),
             Metadata(),
             writer,
         )
-        original_samples = app_module._resource_observation_samples
+        original_samples = managed_runtime_module._resource_observation_samples
 
         def fail_samples(
             _source: SourceProfile,
@@ -838,21 +895,21 @@ async def test_resource_failures_are_isolated_and_cancellation_propagates(
         ) -> tuple[ResourceObservationSample, ...]:
             raise RuntimeError("credential=private-sample-secret")
 
-        monkeypatch.setattr(app_module, "_resource_observation_samples", fail_samples)
-        await app_module._collect_resource_observations(  # type: ignore[arg-type]
+        monkeypatch.setattr(managed_runtime_module, "_resource_observation_samples", fail_samples)
+        await managed_runtime_module._collect_resource_observations(  # type: ignore[arg-type]
             (source,),
             Catalog(),
             Metadata(),
             writer,
         )
         monkeypatch.setattr(
-            app_module,
+            managed_runtime_module,
             "_resource_observation_samples",
             original_samples,
         )
 
         writer.fail_failure = True
-        await app_module._collect_resource_observations(  # type: ignore[arg-type]
+        await managed_runtime_module._collect_resource_observations(  # type: ignore[arg-type]
             (source,),
             FailingCatalog(),
             Metadata(),
@@ -862,7 +919,7 @@ async def test_resource_failures_are_isolated_and_cancellation_propagates(
 
         writer.fail_success = True
         failure_count = len(writer.failure_calls)
-        await app_module._collect_resource_observations(  # type: ignore[arg-type]
+        await managed_runtime_module._collect_resource_observations(  # type: ignore[arg-type]
             (source,),
             Catalog(),
             Metadata(),
@@ -890,7 +947,7 @@ async def test_resource_failures_are_isolated_and_cancellation_propagates(
             assert secret not in caplog.text
         writer.cancel_failure = True
         with pytest.raises(asyncio.CancelledError):
-            await app_module._collect_resource_observations(  # type: ignore[arg-type]
+            await managed_runtime_module._collect_resource_observations(  # type: ignore[arg-type]
                 (source,),
                 FailingCatalog(),
                 Metadata(),
@@ -898,14 +955,14 @@ async def test_resource_failures_are_isolated_and_cancellation_propagates(
             )
         writer.cancel_failure = False
         with pytest.raises(asyncio.CancelledError):
-            await app_module._collect_resource_observations(  # type: ignore[arg-type]
+            await managed_runtime_module._collect_resource_observations(  # type: ignore[arg-type]
                 (source,),
                 Catalog(),
                 CancelledMetadata(),
                 writer,
             )
         with pytest.raises(asyncio.CancelledError):
-            await app_module._collect_resource_observations(  # type: ignore[arg-type]
+            await managed_runtime_module._collect_resource_observations(  # type: ignore[arg-type]
                 (source,),
                 CancelledCatalog(),
                 Metadata(),
@@ -921,8 +978,8 @@ async def test_resource_failures_are_isolated_and_cancellation_propagates(
 async def test_slow_reporting_children_do_not_delay_reload_or_replica_heartbeat(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(app_module, "REPLICA_HEARTBEAT_INTERVAL_MIN_MS", 1)
-    monkeypatch.setattr(app_module, "_GATEWAY_USAGE_REPORT_INTERVAL_SECONDS", 0.001)
+    monkeypatch.setattr(managed_runtime_module, "REPLICA_HEARTBEAT_INTERVAL_MIN_MS", 1)
+    monkeypatch.setattr(managed_runtime_module, "_GATEWAY_USAGE_REPORT_INTERVAL_SECONDS", 0.001)
     source = _development_source()
     registry = SourceRegistry([source])
 
@@ -980,7 +1037,8 @@ async def test_slow_reporting_children_do_not_delay_reload_or_replica_heartbeat(
                 self.cancelled.set()
 
     operations.reset()
-    operations.record_gateway_usage(
+    usage_recorder = managed_runtime_module.ManagedGatewayUsageRecorder()
+    usage_recorder.record_gateway_usage(
         source_id=source.source_id,
         budget_profile=source.budget.name,
         metadata_revision=f"sha256:{'a' * 64}",
@@ -991,7 +1049,7 @@ async def test_slow_reporting_children_do_not_delay_reload_or_replica_heartbeat(
     catalog = BlockingCatalog()
     gateway_writer = BlockingGatewayWriter()
     task = asyncio.create_task(
-        app_module._reload_sources(  # type: ignore[arg-type]
+        managed_runtime_module._reload_sources(  # type: ignore[arg-type]
             reloader,
             1,
             replica_writer,
@@ -1001,6 +1059,7 @@ async def test_slow_reporting_children_do_not_delay_reload_or_replica_heartbeat(
             metadata=Metadata(),
             resource_writer=ResourceWriter(),
             gateway_writer=gateway_writer,
+            usage_recorder=usage_recorder,
         )
     )
     try:
@@ -1023,8 +1082,8 @@ async def test_slow_reporting_children_do_not_delay_reload_or_replica_heartbeat(
 async def test_observation_writes_are_serialized_without_blocking_authority_loops(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(app_module, "REPLICA_HEARTBEAT_INTERVAL_MIN_MS", 1)
-    monkeypatch.setattr(app_module, "_GATEWAY_USAGE_REPORT_INTERVAL_SECONDS", 0.001)
+    monkeypatch.setattr(managed_runtime_module, "REPLICA_HEARTBEAT_INTERVAL_MIN_MS", 1)
+    monkeypatch.setattr(managed_runtime_module, "_GATEWAY_USAGE_REPORT_INTERVAL_SECONDS", 0.001)
     source = _development_source()
 
     class Reloader:
@@ -1080,8 +1139,9 @@ async def test_observation_writes_are_serialized_without_blocking_authority_loop
     replica_writer = ReplicaWriter()
     resource_writer = ResourceWriter()
     gateway_writer = GatewayWriter()
+    usage_recorder = managed_runtime_module.ManagedGatewayUsageRecorder()
     task = asyncio.create_task(
-        app_module._reload_sources(  # type: ignore[arg-type]
+        managed_runtime_module._reload_sources(  # type: ignore[arg-type]
             reloader,
             1,
             replica_writer,
@@ -1091,6 +1151,7 @@ async def test_observation_writes_are_serialized_without_blocking_authority_loop
             metadata=Metadata(),
             resource_writer=resource_writer,
             gateway_writer=gateway_writer,
+            usage_recorder=usage_recorder,
         )
     )
     try:
@@ -1113,7 +1174,7 @@ async def test_gateway_report_retries_same_sequence_payload_and_incarnation(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    monkeypatch.setattr(app_module, "_GATEWAY_USAGE_REPORT_INTERVAL_SECONDS", 0.01)
+    monkeypatch.setattr(managed_runtime_module, "_GATEWAY_USAGE_REPORT_INTERVAL_SECONDS", 0.01)
     caplog.set_level(logging.WARNING, logger="query_man")
 
     class Reloader:
@@ -1150,7 +1211,8 @@ async def test_gateway_report_retries_same_sequence_payload_and_incarnation(
             self.reported.set()
 
     operations.reset()
-    operations.record_gateway_usage(
+    usage_recorder = managed_runtime_module.ManagedGatewayUsageRecorder()
+    usage_recorder.record_gateway_usage(
         source_id="development-issues",
         budget_profile="interactive",
         metadata_revision=f"sha256:{'a' * 64}",
@@ -1164,12 +1226,13 @@ async def test_gateway_report_retries_same_sequence_payload_and_incarnation(
     replica_writer = ReplicaWriter()
     gateway_writer = GatewayWriter()
     task = asyncio.create_task(
-        app_module._reload_sources(  # type: ignore[arg-type]
+        managed_runtime_module._reload_sources(  # type: ignore[arg-type]
             Reloader(),
             60_000,
             replica_writer,
             "runtime-gateway",
             gateway_writer=gateway_writer,
+            usage_recorder=usage_recorder,
         )
     )
     try:
@@ -1179,7 +1242,7 @@ async def test_gateway_report_retries_same_sequence_payload_and_incarnation(
         assert gateway_writer.calls[0][:3] == ("runtime-gateway", 11, 1)
         assert gateway_writer.calls[1][:3] == ("runtime-gateway", 11, 1)
         assert gateway_writer.calls[0][3] == gateway_writer.calls[1][3]
-        assert operations.gateway_usage_report_snapshot() is None
+        assert usage_recorder.gateway_usage_report_snapshot() is None
         assert "private-gateway-secret" not in caplog.text
     finally:
         task.cancel()
@@ -1192,7 +1255,7 @@ async def test_gateway_report_retries_same_sequence_payload_and_incarnation(
 async def test_gateway_report_retries_an_empty_heartbeat_exactly(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(app_module, "_GATEWAY_USAGE_REPORT_INTERVAL_SECONDS", 0.01)
+    monkeypatch.setattr(managed_runtime_module, "_GATEWAY_USAGE_REPORT_INTERVAL_SECONDS", 0.01)
 
     class Writer:
         def __init__(self) -> None:
@@ -1211,10 +1274,15 @@ async def test_gateway_report_retries_an_empty_heartbeat_exactly(
                 raise RuntimeError("ambiguous empty report")
             self.reported.set()
 
-    operations.reset()
+    usage_recorder = managed_runtime_module.ManagedGatewayUsageRecorder()
     writer = Writer()
     task = asyncio.create_task(
-        app_module._gateway_usage_loop(writer, "runtime-empty", 17)  # type: ignore[arg-type]
+        managed_runtime_module._gateway_usage_loop(  # type: ignore[arg-type]
+            writer,
+            usage_recorder,
+            "runtime-empty",
+            17,
+        )
     )
     try:
         await asyncio.wait_for(writer.reported.wait(), timeout=1)
@@ -1222,12 +1290,12 @@ async def test_gateway_report_retries_an_empty_heartbeat_exactly(
             ("runtime-empty", 17, 1, ()),
             ("runtime-empty", 17, 1, ()),
         ]
-        assert operations.gateway_usage_report_snapshot() is None
+        assert usage_recorder.gateway_usage_report_snapshot() is None
     finally:
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
-        operations.reset()
+        usage_recorder.reset()
 
 
 @pytest.mark.asyncio
@@ -1236,9 +1304,9 @@ async def test_gateway_report_cancellation_propagates_without_ack() -> None:
         async def report_gateway_usage(self, *_args: object) -> None:
             raise asyncio.CancelledError
 
-    operations.reset()
+    usage_recorder = managed_runtime_module.ManagedGatewayUsageRecorder()
     try:
-        operations.record_gateway_usage(
+        usage_recorder.record_gateway_usage(
             source_id="development-issues",
             budget_profile="interactive",
             metadata_revision=f"sha256:{'a' * 64}",
@@ -1246,18 +1314,19 @@ async def test_gateway_report_cancellation_propagates_without_ack() -> None:
         )
 
         with pytest.raises(asyncio.CancelledError):
-            await app_module._report_gateway_usage(  # type: ignore[arg-type]
+            await managed_runtime_module._report_gateway_usage(  # type: ignore[arg-type]
                 Writer(),
+                usage_recorder,
                 "runtime-gateway",
                 11,
                 1,
             )
 
-        outstanding = operations.gateway_usage_report_snapshot()
+        outstanding = usage_recorder.gateway_usage_report_snapshot()
         assert outstanding is not None
         assert outstanding.snapshot_id == 1
     finally:
-        operations.reset()
+        usage_recorder.reset()
 
 
 @pytest.mark.parametrize(
@@ -1302,7 +1371,7 @@ async def test_managed_reload_task_registers_once_and_reports_internal_snapshot(
         public_before = operations.snapshot()
         writer = Writer()
         task = asyncio.create_task(
-            app_module._reload_sources(  # type: ignore[arg-type]
+            managed_runtime_module._reload_sources(  # type: ignore[arg-type]
                 Reloader(),
                 reload_interval_ms,
                 writer,
@@ -1355,7 +1424,7 @@ async def test_replica_report_omits_sources_during_control_scan_failure() -> Non
         operations.set_replica_scan_failed(True)
         writer = Writer()
 
-        await app_module._report_replica_observation(  # type: ignore[arg-type]
+        await managed_runtime_module._report_replica_observation(  # type: ignore[arg-type]
             writer,
             "runtime-a",
             4,
@@ -1406,7 +1475,7 @@ async def test_replica_observation_failure_does_not_restart_registration_or_relo
     reloader = Reloader()
     writer = Writer()
     task = asyncio.create_task(
-        app_module._reload_sources(  # type: ignore[arg-type]
+        managed_runtime_module._reload_sources(  # type: ignore[arg-type]
             reloader,
             1,
             writer,
@@ -1458,11 +1527,11 @@ async def test_replica_report_failure_retries_same_incarnation_without_reregiste
                 self.retried.set()
             raise RuntimeError("report unavailable")
 
-    monkeypatch.setattr(app_module, "REPLICA_HEARTBEAT_INTERVAL_MIN_MS", 1)
+    monkeypatch.setattr(managed_runtime_module, "REPLICA_HEARTBEAT_INTERVAL_MIN_MS", 1)
     operations.reset()
     writer = Writer()
     task = asyncio.create_task(
-        app_module._reload_sources(  # type: ignore[arg-type]
+        managed_runtime_module._reload_sources(  # type: ignore[arg-type]
             Reloader(),
             1,
             writer,

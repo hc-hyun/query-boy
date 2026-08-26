@@ -22,10 +22,9 @@ from psycopg import AsyncConnection, sql
 from psycopg.conninfo import make_conninfo
 
 from query_man.access import AccessPolicy
-from query_man.app import build_app
-from query_man.runtime_config import RuntimeConfig
-from query_man.secrets import SecretDecryptionError, SourceSecretCipher
-from query_man.source_admin import (
+from query_man.managed.runtime import build_app
+from query_man.managed.secrets import SecretDecryptionError, SourceSecretCipher
+from query_man.managed.source_admin import (
     ControlGatewayUsageWriter,
     ControlReplicaObservationWriter,
     ControlResourceObservationWriter,
@@ -33,7 +32,8 @@ from query_man.source_admin import (
     ReplicaSourceObservation,
     ResourceObservationSample,
 )
-from query_man.source_store import PostgresSourceStore
+from query_man.managed.source_store import PostgresSourceStore
+from query_man.runtime_config import RuntimeConfig
 from query_man.verified import create_result_hash
 from tests.control_database import (
     CONTROL_TABLES,

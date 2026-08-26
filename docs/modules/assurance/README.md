@@ -51,11 +51,14 @@ RLS attestation, 넓은 result type, cost attribution과 trace는 첫 launch 밖
 | Verified query | [`verified.py`](../../../src/query_man/verified.py), [`verified-queries.yaml`](../../../config/verified-queries.yaml) | DTO, registry, comparison, hash와 현재 9개 항목 |
 | Offline 실행 | [`assurance_cli.py`](../../../src/query_man/assurance_cli.py) | 두 command의 유일한 offline composition root |
 | Safety corpus | [`security-evaluation.yaml`](../../../config/security-evaluation.yaml) | Parser와 query safety 입력 |
-| 검증 조립 | [`ci.yml`](../../../.github/workflows/ci.yml), [`verify-container.sh`](../../../scripts/verify-container.sh), [focused tests](../../../tests/test_verified.py) | Repository/container gate와 Assurance core 검증 |
+| 검증 조립 | [`ci.yml`](../../../.github/workflows/ci.yml), [`verify-container.sh`](../../../scripts/verify-container.sh), [focused tests](../../../tests/test_verified.py) | `core-static`/`managed-acceptance`, container gate와 Assurance core 검증 |
+| Static DB fixture | [`compose.yaml`](../../../compose.yaml), [`apply-db.sh`](../../../scripts/apply-db.sh), [`validate-static-fixtures.sh`](../../../scripts/validate-static-fixtures.sh) | Current 두 source만 준비하며 Control/support/commerce를 포함하지 않음 |
+| Managed DB fixture | [`compose.acceptance.yaml`](../../../compose.acceptance.yaml), [`apply-managed-acceptance-fixtures.sh`](../../../scripts/apply-managed-acceptance-fixtures.sh) | 별도 `query-man-managed-acceptance` project/container/volume에서만 Control/support/commerce를 준비 |
 | Evidence | [Verification index](../../verification/README.md) | 실행 시점별 immutable record 색인 |
 
-Source fixture SQL은 acceptance infrastructure이지 production source schema authority가 아니다. Control
-migration과 verified persistence는 Control Plane이 소유한다.
+Source fixture SQL은 acceptance infrastructure이지 production source schema authority가 아니다. Base와
+managed-acceptance project는 PostgreSQL container/volume을 공유하지 않는다. Control migration과 verified
+persistence 의미는 Control Plane이 소유한다.
 
 ## 제공 인터페이스와 소유 경계
 
@@ -205,7 +208,10 @@ uv run pytest tests/test_quality.py tests/test_verified.py tests/test_assurance_
 ```
 
 Launch acceptance 변경은 관련 provider/consumer test, DB integration, container와 두 CLI도 실행한다.
-명령 목록은 evidence가 아니다. 완료 전 root `AGENTS.md`의 전체 gate를 실행하고 실제 결과는 새
+Fixture/CI lane 변경은 base static inventory 부재 검사와 격리 managed inventory 검사를 모두 실행하고
+[managed acceptance fixture 절차](../../development-guidelines.md#managed-acceptance-fixture)의
+`COMPOSE_FILE` 경계를 유지한다. 명령 목록은 evidence가 아니다. 완료 전
+[활성 개발 지침](../../development-guidelines.md#tests)의 전체 gate를 실행하고 실제 결과는 새
 verification record에 commit, fixture와 command 범위를 남긴다.
 
 ## 집중해서 읽을 범위
@@ -217,7 +223,8 @@ Assurance 작업은 기본적으로 다음 순서로 읽는다.
 3. CLI 변경이면 `assurance_cli.py`, entrypoint test와 provider interface
 4. Hash/revision 변경이면 Metadata, Guarded Query 문서와 직접 consumer
 5. Cross-module acceptance 변경이면 해당 Runtime/Delivery/Control 경계와 test
-6. Evidence 추가이면 verification index와 실제 command output
+6. Fixture/CI lane 변경이면 base/acceptance Compose, 두 apply script, CI job과 직접 consumer test
+7. Evidence 추가이면 verification index와 실제 command output
 
 Provider 내부, protected environment와 parked RLS/encoding/COST/TRACE 연구는 변경이 실제로 그 경계를
 건드릴 때만 추가로 읽는다.

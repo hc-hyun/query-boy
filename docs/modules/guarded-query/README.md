@@ -211,8 +211,10 @@ RLS quarantine는 direct executor에서도 pool/DB 전에 적용하며 tenant �
 Connection preflight mismatch는 connection을 close/discard하고 role/database default는 바꾸지 않는다.
 Connection-info transport/driver failure의 기존 transient 분류는 유지한다.
 
-Guarded Query는 Runtime usage recorder에 server-resolved source ID, budget profile, active metadata
-revision과 terminal outcome만 보낸다. 성공만 queue/elapsed/rows/bytes/truncation 합계에 기여한다.
+`QueryService`는 optional `GatewayUsageRecorder`를 받는다. Static composition은 recorder를 주입하지
+않아 query terminal event를 누적하지 않는다. Managed composition만
+`ManagedGatewayUsageRecorder`를 주입해 server-resolved source ID, budget profile, active metadata
+revision과 terminal outcome을 기록한다. 성공만 queue/elapsed/rows/bytes/truncation 합계에 기여한다.
 Recorder 실패는 query 결과를 바꾸지 않고 SQL, literal, tenant, credential, query ID와 raw DB error를
 payload에 넣지 않는다.
 
@@ -222,7 +224,7 @@ payload에 넣지 않는다.
 |---|---|---|
 | [Source Catalog](../source-catalog/README.md) | `SourceReader`, immutable profile/budget, connection/session verifier | Profile을 in-place 변경하지 않고 verifier 순서를 지킴 |
 | [Metadata](../metadata/README.md) | Immutable published snapshot/revision, relation ceiling | Stale revision은 executor 전에 거부 |
-| [Runtime](../runtime/README.md) | Bounded operations/usage recorder와 lifecycle caller | Shutdown/reload별 정해진 drain·invalidate·close 순서를 지킴 |
+| [Runtime](../runtime/README.md) | Query lifecycle caller와 managed-only usage recorder 조립 | Static에는 recorder를 주입하지 않고 shutdown/reload별 정해진 drain·invalidate·close 순서를 지킴 |
 | Delivery | `QueryService`, result/domain error | Source 인가 뒤 generated ID/trusted tenant를 주고 disconnect를 cancellation으로 전파 |
 | Assurance | Public service/executor | Offline CLI에서만 concrete adapter를 조립하고 verified SQL도 같은 query 경로로 실행 |
 

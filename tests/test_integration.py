@@ -585,6 +585,8 @@ async def test_onboards_third_source_without_runtime_restart(
     tmp_path: Path,
     disposable_control_dsn: str,
 ) -> None:
+    from query_man.managed.runtime import build_app as build_managed_app
+
     load_dotenv(ROOT_DIRECTORY / ".env")
     required = ["POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB"]
     if any(not os.environ.get(name) for name in required):
@@ -634,7 +636,7 @@ async def test_onboards_third_source_without_runtime_restart(
         "support-tickets-local-secret",
     )
     access_policy = _shared_access_policy(tmp_path / "support-access.yaml")
-    app = build_app(runtime, access_policy=access_policy)
+    app = build_managed_app(runtime, access_policy=access_policy)
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server_socket.bind(("127.0.0.1", 0))
@@ -913,6 +915,8 @@ async def test_onboards_commerce_edges_across_authenticated_mcp_replicas(
     tmp_path: Path,
     disposable_control_dsn: str,
 ) -> None:
+    from query_man.managed.runtime import build_app as build_managed_app
+
     load_dotenv(ROOT_DIRECTORY / ".env")
     required = [
         "POSTGRES_USER",
@@ -1031,11 +1035,11 @@ async def test_onboards_commerce_edges_across_authenticated_mcp_replicas(
         "sha256:ea0e6ab0c5d498f960968b5e7dca5d164f7b6e0c4616d1ea89415808c527e3e7"
     )
 
-    replica_a = build_app(
+    replica_a = build_managed_app(
         replace(runtime, replica_id="commerce-runtime-a"),
         access_policy=access_policy,
     )
-    replica_b = build_app(
+    replica_b = build_managed_app(
         replace(runtime, replica_id="commerce-runtime-b"),
         access_policy=access_policy,
     )

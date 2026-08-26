@@ -1,6 +1,6 @@
 # Control Plane Module
 
-Status: Logical boundary; physical package split pending
+Status: Logical boundary; physical package split pending for shared adapters — managed package extracted
 
 > **현재 launch에서는 꺼져 있다.** Control Plane의 managed capability는 구현되어 있고
 > 보존되지만, [ADR 0025](../../decisions/0025-static-non-rls-first-launch.md)의 첫 launch는
@@ -52,19 +52,38 @@ Managed capability의 운영자 관점은 [source management plane](../../source
 
 | 위치 | 이 module이 소유하는 범위 | 주의점 |
 |---|---|---|
-| [`source_admin.py`](../../../src/query_man/source_admin.py) | Public administration input/use case, `SourceReloader`, observation writer와 usage projection | Cross-module application interface가 있는 핵심 파일 |
-| [`source_store.py`](../../../src/query_man/source_store.py) | PostgreSQL state transition, projection query와 persistence-private type | Delivery나 다른 module이 직접 import하지 않음 |
-| [`metadata_store.py`](../../../src/query_man/metadata_store.py) | `PostgresMetadataStore`의 pool/SQL/lock/transaction | `MetadataStore` port와 codec은 Metadata 소유인 shared transition file |
-| [`secrets.py`](../../../src/query_man/secrets.py) | Generation-bound AES-GCM encryption | Plaintext와 key를 log/response/DB에 남기지 않음 |
+| [`managed/source_admin.py`](../../../src/query_man/managed/source_admin.py) | Public administration input/use case, `SourceReloader`, observation writer와 usage projection | Cross-module application interface가 있는 managed package 핵심 파일 |
+| [`managed/source_store.py`](../../../src/query_man/managed/source_store.py) | PostgreSQL state transition, projection query와 persistence-private type | Delivery나 다른 module이 직접 import하지 않음 |
+| [`managed/metadata_store.py`](../../../src/query_man/managed/metadata_store.py) | `PostgresMetadataStore`의 pool/SQL/lock/transaction | Core `metadata_store.py`의 Metadata port와 codec을 구현함 |
+| [`managed/secrets.py`](../../../src/query_man/managed/secrets.py) | Generation-bound AES-GCM encryption | Plaintext와 key를 log/response/DB에 남기지 않음 |
 | [`errors.py`](../../../src/query_man/errors.py) | Control administration domain-error 발생 의미 | Public envelope은 Delivery 소유인 shared transition file |
 | [`05-control-plane.sh`](../../../docker/postgres/init/05-control-plane.sh), [`control-migrations`](../../../docker/postgres/init/control-migrations) | Numbered migration, checksum ledger와 least-privilege reconciliation | Migration-first, 과거 migration 수정 금지 |
 | [`apply-control-schema.sh`](../../../scripts/apply-control-schema.sh), [`control-plane-drill.sh`](../../../scripts/control-plane-drill.sh) | Schema apply와 recovery drill | Protected 실행은 별도 승인 필요 |
+| [`compose.acceptance.yaml`](../../../compose.acceptance.yaml), [`apply-managed-acceptance-fixtures.sh`](../../../scripts/apply-managed-acceptance-fixtures.sh) | 격리된 `query-man-managed-acceptance` project의 local/CI Control·onboarding acceptance 조립 | Base static container/volume/apply에는 참여하지 않음 |
 | [`test_source_admin.py`](../../../tests/test_source_admin.py), [`test_source_store.py`](../../../tests/test_source_store.py), [`test_metadata_store.py`](../../../tests/test_metadata_store.py) | Application/persistence focused tests | Provider와 직접 consumer를 함께 확인 |
-| [`test_control_migrations.py`](../../../tests/test_control_migrations.py), [`test_control_startup.py`](../../../tests/test_control_startup.py), [`test_managed_mode.py`](../../../tests/test_managed_mode.py), [`test_control_recovery.py`](../../../tests/test_control_recovery.py) | Migration, composition, convergence와 recovery acceptance | Integration marker가 필요한 test가 있음 |
+| [`test_managed_http.py`](../../../tests/test_managed_http.py), [`test_managed_operations.py`](../../../tests/test_managed_operations.py) | Managed admin Delivery와 Runtime observation direct-consumer tests | External wire와 Runtime private accumulator owner도 함께 확인 |
+| [`test_control_migrations.py`](../../../tests/test_control_migrations.py), [`test_control_startup.py`](../../../tests/test_control_startup.py), [`test_managed_mode.py`](../../../tests/test_managed_mode.py), [`test_managed_runtime_startup_cleanup.py`](../../../tests/test_managed_runtime_startup_cleanup.py), [`test_control_recovery.py`](../../../tests/test_control_recovery.py) | Migration, composition, convergence, cleanup와 recovery acceptance | Integration marker가 필요한 test가 있음 |
 
-현재 Python code는 `src/query_man`의 평면 구조다. 위 표는 논리 ownership이며 이미 별도 package로
-분리됐다는 뜻이 아니다. `metadata_store.py`, `errors.py`, Runtime composition과 cross-module tests는
+Administration, source/metadata persistence와 secret 구현은 `src/query_man/managed` same-repository package로
+격리했다. 이는 별도 repository나 service가 아니며 external/persisted/policy/lifecycle 의미도
+바꾸지 않는다. Core `metadata_store.py`는 Metadata port/error/codec만 남긴다. 공통 `errors.py`,
+Runtime의 managed composition과 cross-module tests는 아직 shared transition artifact이므로
 coordinating agent가 single-writer로 다룬다.
+
+### Repository 분리 준비 경계
+
+`query_man.managed`에는 package marker, source administration/store, concrete metadata store, secret
+cipher, managed-only Delivery route와 Runtime composition을 둔다. `managed/runtime.py`의 owner는
+Runtime이고 나머지 file도 위 코드 지도처럼 기능 owner가 다를 수 있다. 이 package는 core의 공개
+interface를 소비할 수 있지만 static bootstrap composition과 ordinary core provider는 managed
+implementation을 import하지 않는다. Managed authority를 명시적으로 선택한 server만 managed Runtime
+composition을 import한다.
+
+Control migration, acceptance fixture와 tests는 각각 기존 owner에 따라 repository root에 남는다. 따라서
+현재 상태는 **별도 repository가 아니라 추출 가능한 코드 경계**다. Application install/image에는 아직
+managed package가 포함된다. 실제 repository 이동 전에는 managed source tree 없이 static build/test가
+성립하는지, versioned core interface와 compatibility CI, Control DB migration/recovery owner를 별도로
+확정해야 한다.
 
 ## 제공 인터페이스와 소유 경계
 
@@ -75,7 +94,7 @@ persisted format, external API, policy 또는 safety/operational boundary이며 
 
 ### Source administration application interface
 
-Delivery가 소비하는 다음 상수와 frozen input은 `source_admin.py`가 제공한다.
+Managed Delivery가 소비하는 다음 상수와 frozen input은 `managed/source_admin.py`가 제공한다.
 
 ```text
 CONTROL_SEQUENCE_MAX = 9_223_372_036_854_775_807
@@ -249,7 +268,9 @@ uv run pytest tests/test_registry.py tests/test_source_admin.py tests/test_secre
   tests/test_managed_mode.py
 ```
 
-Persistence는 기본 pytest selection에서 제외되므로 별도로 실행한다.
+Persistence와 managed onboarding DB fixture는 base static Compose에 없다. 필요한 local/CI test는
+[managed acceptance fixture](../../development-guidelines.md#managed-acceptance-fixture)를 먼저 준비하고
+별도로 실행한다.
 
 ```text
 uv run pytest -m integration tests/test_source_store.py tests/test_metadata_store.py \
@@ -259,12 +280,13 @@ uv run pytest -m integration tests/test_source_store.py tests/test_metadata_stor
 
 | 변경 영역 | 추가 검증 |
 |---|---|
-| Public admin input/verified mapping | `tests/test_http.py`, `tests/test_documentation.py`, `tests/test_control_startup.py` |
-| Replica/resource/usage projection | `tests/test_source_admin.py`, `tests/test_source_store.py`, 관련 Runtime/HTTP test |
+| Public admin input/verified mapping | `tests/test_managed_http.py`, `tests/test_documentation.py`, `tests/test_control_startup.py` |
+| Replica/resource/usage projection | `tests/test_source_admin.py`, `tests/test_source_store.py`, `tests/test_managed_operations.py`, `tests/test_managed_http.py` |
 | Schema, transaction, lock/CAS, recovery | 전체 integration gate와 `scripts/control-plane-drill.sh` |
 | DB/reader trust boundary | `uv run pytest -m integration` 전체 |
 
-완료 전 root `AGENTS.md`의 `ruff`, `mypy`, full pytest gate를 coordinating agent가 실행한다. Protected
+완료 전 [활성 개발 지침](../../development-guidelines.md#tests)의 `ruff`, `mypy`, full pytest gate를
+coordinating agent가 실행한다. Protected
 deployment evidence는 별도 실행 승인 뒤에만 append한다.
 
 ## 집중해서 읽을 범위
@@ -273,10 +295,10 @@ deployment evidence는 별도 실행 승인 뒤에만 append한다.
 
 | 작업 | 추가로 읽을 code/reference/test |
 |---|---|
-| Admin read/mutation | `source_admin.py`, Delivery의 public admin route, `test_source_admin.py`, `test_http.py`, [persistence and recovery](persistence-and-recovery.md) |
-| Store/migration/secret/recovery | `source_store.py`, `metadata_store.py`, `secrets.py`, numbered migrations, integration tests, [persistence and recovery](persistence-and-recovery.md) |
+| Admin read/mutation | `managed/source_admin.py`, Delivery의 managed-only admin route, `test_source_admin.py`, `test_managed_http.py`, [persistence and recovery](persistence-and-recovery.md) |
+| Store/migration/secret/recovery | `managed/source_store.py`, `managed/metadata_store.py`, `managed/secrets.py`, numbered migrations, integration tests, [persistence and recovery](persistence-and-recovery.md) |
 | Managed reload/convergence | `SourceReloader` symbol, provider lifecycle interface, `test_managed_mode.py`, `test_control_startup.py` |
-| Replica/resource/gateway observation | Writer/projection symbol, Runtime reporter와 Delivery endpoint, related tests, [observability](observability.md) |
+| Replica/resource/gateway observation | Writer/projection symbol, Runtime reporter와 Delivery endpoint, `test_managed_operations.py`, `test_managed_http.py`, [observability](observability.md) |
 | Launch/authority 변경 | [ADR 0025](../../decisions/0025-static-non-rls-first-launch.md), [ADR 0016](../../decisions/0016-centralized-source-management-plane.md), Runtime composition과 operations runbook |
 
 Source revision과 verified lifecycle은 [ADR 0012](../../decisions/0012-control-plane-source-revisions.md),

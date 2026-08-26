@@ -8,9 +8,10 @@ Query Man은 하나의 repository와 하나의 deployable process를 유지하�
 이 문서는 기능을 독립적으로 개발할 수 있도록 논리적 module의 소유권, 허용 의존 방향과
 module interface 및 별도 변경 경계의 승인 절차를 정의한다.
 
-현재 Python 코드는 `src/query_man`의 평면 구조다. 아래 module directory는 개발 소유권과
-interface와 소유 경계를 먼저 고정하기 위한 문서 경계이며, 코드가 이미 물리적으로 package
-분리되었다는 뜻이 아니다. 실제 파일 이동은 외부 의미를 보존한 별도 refactoring으로 수행한다.
+현재 static core Python 코드는 대부분 `src/query_man`의 평면 구조를 유지한다. 비활성 managed
+administration·persistence 묶음은 repository 분리 전 단계로 `src/query_man/managed` package에
+격리했다. 아래 module directory는 개발 소유권과 interface 경계이며 Python package와 일대일로
+대응하지 않는다. 이후 파일 이동도 외부 의미를 보존한 별도 refactoring으로 수행한다.
 
 AI agent는 repository 전체를 기본적으로 읽을 필요가 없다. 작업 module의 문서, 해당 문서가
 가리키는 현재 코드와 테스트, 소비하는 interface 및 관련 ADR만 읽는다. 변경하는 완전한 실행 흐름과
@@ -59,7 +60,8 @@ authority다.
   제공한다.
 - Metadata와 Guarded Query는 pool checkout 직후 verifier를 호출한다.
 - Guarded Query는 final result를 exact 7개 OID로 제한하고 SQL policy v3로 식별한다.
-- Runtime은 static two-source bootstrap, single replica와 exact-ready container를 조립한다.
+- Runtime은 static two-source bootstrap, single replica와 exact-ready container를 조립하며 managed
+  package, admin route와 usage recorder를 import·조립하지 않는다.
 - Metadata revision, verified result hash, HTTP/MCP field와 Control DB schema는 바뀌지 않는다.
 
 RLS attestation, broader lossless encoding, COST와 TRACE 문서는 parked research다. 각 module README에는
@@ -70,8 +72,8 @@ RLS attestation, broader lossless encoding, COST와 TRACE 문서는 parked resea
 아래 `->`는 왼쪽 module이 오른쪽 module의 official module interface를 소비한다는 뜻이다.
 
 ```text
-Delivery -> Source Catalog(read), Metadata, Guarded Query,
-            Control Plane administration use cases, Runtime operations interface
+Delivery -> Source Catalog(read), Metadata, Guarded Query, Runtime operations interface
+Managed Delivery -> Control Plane administration use cases
 Metadata -> Source Catalog(read), reader-connection/session verifier interface,
             Guarded Query immutable SQL-policy descriptor, Runtime operations interface
 Guarded Query -> Source Catalog(read and reader verifier), Metadata published-revision interface,
@@ -90,6 +92,11 @@ Runtime --compose--> every production implementation, for server composition and
 Control Plane candidate staging --compose--> candidate validation에 필요한 implementation only
 Assurance offline CLI --compose--> offline acceptance에 필요한 implementation only
 ```
+
+Ordinary provider dependency는 `managed -> core` 한 방향이다. Static bootstrap composition은
+`query_man.managed`를 import하지 않으며 managed authority를 명시적으로 선택한 Runtime composition만
+허용된 조립 예외로 그 package를 지연 import한다. 같은 repository에 있다는 사실은 그 외 core
+module이 managed private 구현을 소비할 권한을 만들지 않는다.
 
 이 graph는 production Python/runtime dependency다. Source Catalog 소유의 plan-only onboarding
 workflow에는 다음 문서 소비 방향을 별도로 허용한다.
@@ -117,8 +124,9 @@ Control Plane/Delivery implementation에 의존할 수 있다는 뜻이 아니�
 - Source별 차이를 `source_id` Python branch로 구현하는 것
 - Prompt, Skill 또는 caller 관례를 safety enforcement policy로 사용하는 것
 
-현재 평면 구조에서 같은 파일이 두 module 책임을 포함할 수 있다. 그런 파일은 아래의
-transition map과 두 module 문서를 모두 읽고, 수정 범위를 symbol 단위로 제한한다.
+현재 flat core와 shared transition file에서는 같은 파일이 두 module 책임을 포함할 수 있다. Managed
+package도 Control Plane implementation과 managed-only Delivery route를 함께 두므로 아래 transition
+map과 두 module 문서를 모두 읽고 수정 범위를 symbol 단위로 제한한다.
 
 Metadata와 Guarded Query 사이의 published-revision/SQL-policy interface 및 여러 module이 쓰는
 Runtime operations sink는 현재 official interface 수준의 양방향 transition debt다. 이를 다른 module의
@@ -144,13 +152,14 @@ file이나 owner가 애매한 artifact를 확인할 때만 펼쳐 봅니다.
 | `models.py` catalog/prepared metadata/provider/resource-observation types | Metadata | Catalog column/key/index/relation/snapshot/prepared graph는 recursively immutable하다. 작은 `CatalogProvider`와 resource/invalidate lifecycle을 포함하는 `RuntimeCatalogProvider`를 제공한다. `SourceProfile`을 소비하므로 Source Catalog interface를 변경하지 않는다. |
 | `registry.py` | Source Catalog | `SourceReader`와 이를 확장하는 `SourceProjectionWriter`를 제공한다. Control Plane은 validator/writer를, ordinary consumer는 reader를 소비한다. Delivery admin validation은 공개 `Identifier`와 `StableSlug` type을 소비하므로 validation 의미 변경 시 Delivery도 확인한다. |
 | `catalog.py`, `metadata.py`, `relevance.py`, `revision.py`, `quality_level.py` | Metadata | Catalog는 private mutable builder를 public boundary 전에 freeze한다. `MetadataService`는 immutable graph와 `SourceReader`를 소비하고 wire projection은 list/dict를 유지한다. `revision.py`는 Guarded Query의 immutable canonical-time material을 metadata digest에 포함한다. Catalog connection은 BEGIN 전에 Source Catalog의 launch verifier를 통과한다. |
-| `query.py`, `sql_validation.py`, `result_encoding.py` | Guarded Query | `QueryService`는 `SourceReader`와 작은 `QueryExecutor`를 소비하고 Runtime에는 이를 확장하는 `RuntimeQueryExecutor`를 제공한다. `result_encoding.py`가 canonical-time material과 exact seven-OID policy를 소유하고 `sql_validation.py`가 이를 SQL policy v3 digest에 포함한다. Trusted terminal outcome은 Runtime usage recorder에만 전달하며 result dictionary는 별도 application interface다. |
+| `query.py`, `sql_validation.py`, `result_encoding.py` | Guarded Query | `QueryService`는 `SourceReader`와 작은 `QueryExecutor`를 소비하고 Runtime에는 이를 확장하는 `RuntimeQueryExecutor`를 제공한다. `result_encoding.py`가 canonical-time material과 exact seven-OID policy를 소유하고 `sql_validation.py`가 이를 SQL policy v3 digest에 포함한다. Managed composition이 recorder를 주입한 경우에만 trusted terminal outcome을 Runtime usage recorder에 전달하며 static composition에는 recorder가 없다. Result dictionary는 별도 application interface다. |
 | `reader_policy.py` | Source Catalog | `READER_CLIENT_ENCODING`과 no-SQL PostgreSQL 18/UTF-8 connection verifier, transaction-local session verifier를 제공한다. Metadata와 Guarded Query가 connection verifier→BEGIN→UTC/session 순서로 소비하며 role/database default는 바꾸지 않는다. |
-| `source_admin.py`, `source_store.py`, `secrets.py` | Control Plane | `SourceReloader`는 `SourceProjectionWriter`와 작은 `SourcePoolInvalidator`, isolated staging은 `SourceReader`/`RuntimeCatalogProvider`를 소비한다. `source_admin.py`는 public administration input/sequence, replica/resource/gateway observation writer, usage projection과 use case를 제공하고 `source_store.py`는 persistence-private type/transaction을 소유한다. Source projection, management catalog, mutation receipt, attempt/success freshness/fencing와 logical retention 의미를 함께 보존한다. |
-| `metadata_store.py` Protocol/codec | Metadata interface/format | Store port는 module interface이고 codec은 immutable Python graph와 기존 persisted JSON array/object를 상호 변환하는 persisted format이다. PostgreSQL store와 Control DB transaction ownership은 Control Plane이다. |
-| `metadata_store.py` PostgreSQL implementation | Control Plane | Metadata가 implementation을 알지 않도록 한다. |
+| `managed/source_admin.py`, `managed/source_store.py`, `managed/secrets.py` | Control Plane | Same-repository managed package다. `SourceReloader`는 `SourceProjectionWriter`와 작은 `SourcePoolInvalidator`, isolated staging은 `SourceReader`/`RuntimeCatalogProvider`를 소비한다. `source_admin.py`는 public administration input/sequence, replica/resource/gateway observation writer, usage projection과 use case를 제공하고 `source_store.py`는 persistence-private type/transaction을 소유한다. Source projection, management catalog, mutation receipt, attempt/success freshness/fencing와 logical retention 의미를 함께 보존한다. |
+| `managed/__init__.py` | Control Plane | Same-repository managed package marker다. Core interface를 재-export하거나 static import를 유도하지 않는다. |
+| `metadata_store.py` Protocol/error/codec | Metadata interface/format | Store port는 module interface이고 codec은 immutable Python graph와 기존 persisted JSON array/object를 상호 변환하는 persisted format이다. PostgreSQL store와 Control DB transaction ownership은 Control Plane이다. |
+| `managed/metadata_store.py` PostgreSQL implementation | Control Plane | Metadata가 concrete implementation을 알지 않도록 하며 managed composition만 import한다. |
 | `gateway.py`, `access.py`, `mcp_server.py`, `http_validation.py` | Delivery | `GatewayService`는 `SourceReader`를 소비한다. Public caller/application interface, external transport와 bounded validation policy를 소유한다. |
-| `source_admin_routes.py` | Delivery | Control Plane의 public `CONTROL_SEQUENCE_MAX`, verified-publish input/use case와 source-usage projection, Source Catalog의 `SourceEnvironment`, `Identifier`, `StableSlug` validation type을 소비하는 public admin HTTP API/validation boundary다. Control persistence와 Assurance DTO를 import하지 않는다. |
+| `managed/source_admin_routes.py` | Delivery | Managed package 안의 managed-only Delivery adapter다. Control Plane의 public `CONTROL_SEQUENCE_MAX`, verified-publish input/use case와 source-usage projection, Source Catalog의 `SourceEnvironment`, `Identifier`, `StableSlug` validation type을 소비하는 public admin HTTP API/validation boundary다. Control persistence와 Assurance DTO를 import하지 않는다. Static composition은 이 module을 import하거나 route를 등록하지 않는다. |
 | `errors.py`의 `AppError` carrier field | Delivery | Delivery가 HTTP/MCP public envelope와 `status_code/code/message/details` rendering compatibility를 소유한다. Domain subclass를 생성하는 module은 자신의 오류 발생 조건과 의미를 소유하며 file은 coordinating agent가 single-writer로 편집한다. |
 | `errors.py`의 `SourceNotFoundError` | Source Catalog | Source 존재 의미는 Source Catalog module interface다. Metadata, Guarded Query와 Delivery가 생산·소비하고 public status/code/message rendering은 Delivery가 소유한다. |
 | `errors.py`의 `MetadataUnavailableError`, `MetadataRevisionMismatchError` | Metadata | Metadata availability와 published revision 의미를 Metadata가 소유한다. Guarded Query와 Control Plane이 소비하고 public envelope는 Delivery가 소유한다. |
@@ -158,8 +167,9 @@ file이나 owner가 애매한 artifact를 확인할 때만 펼쳐 봅니다.
 | `errors.py`의 `OperatorRequiredError`, `QueryNotFoundError` | Delivery | Delivery가 operator authorization을 강제하고 Guarded Query의 `cancel(query_id) -> found boolean`을 public cancel-not-found 오류로 매핑한다. Guarded Query는 active query ID 존재 의미를 소유한다. |
 | `errors.py`의 `SourceValidationError`, `SourceGenerationConflictError`, `SourceControlUnavailableError`, `MutationNotFoundError`, `MutationIdempotencyConflictError` | Control Plane | Source administration state/error 의미는 Control Plane이 소유하고 Delivery는 status/code/message envelope를 rendering한다. 같은 이름의 persistence-private exception과 혼동하지 않는다. |
 | `app.py` request/middleware/routes/MCP mount | Delivery | `build_app`와 lifespan 부분은 Runtime 책임이다. |
-| `app.py` composition/lifespan/probe/reporters | Runtime | Concrete `SourceRegistry`를 capability별로 주입하고 query/catalog Runtime composite의 required callable을 검증한 뒤 invalidator, direct drain, 24시간 resource와 60초 gateway reporter를 조립한다. Observation Control write는 고정 source pool 안에서 직렬화하며 Delivery route 동작을 함께 바꾸지 않는다. |
-| `server.py`, `runtime_config.py`, `operations.py` | Runtime | Domain module은 operations reporting interface만 소비하며 lifecycle/redaction/health, managed replica identity와 bounded gateway usage accumulator 의미는 Runtime이 소유한다. Existing public operations snapshot은 internal observation을 위해 확장하지 않는다. |
+| `app.py` static composition/lifespan/probe | Runtime | Static provider만 조립하고 managed package, admin route, reporter와 usage recorder를 import·생성하지 않는다. Query/catalog Runtime capability를 static 요구 범위에서 검증한다. Request/middleware/data routes는 Delivery 소유다. |
+| `managed/runtime.py` | Runtime | Managed-only production composition, reload/resource/replica/gateway reporter와 bounded usage accumulator를 소유한다. Control/Delivery concrete implementation은 이 조립 위치에서만 사용하며 static `app.py`로 역수입하지 않는다. |
+| `server.py`, `runtime_config.py`, `operations.py` | Runtime | `server.py`는 검증된 source mode에 따라 static 또는 managed composition root 하나만 import한다. Domain module은 operations reporting interface만 소비하며 lifecycle/redaction/health와 managed replica identity 의미는 Runtime이 소유한다. Existing public operations snapshot은 internal observation을 위해 확장하지 않는다. |
 | `__init__.py` | Runtime | Package identity/version만 소유하며 domain interface export를 모으지 않는다. |
 | `verified.py`, `quality.py` | Assurance | Quality/verified DTO, configuration, comparison, verification과 hash core다. Concrete registry/catalog/query adapter를 조립하지 않는다. Verified DTO/hash는 Control Plane만 직접 소비하고 hash는 Guarded Query encoding에 의존한다. Delivery는 Control Plane public input을 사용한다. |
 | `assurance_cli.py` | Assurance | `query-man-evaluate`/`query-man-verify`의 유일한 offline concrete composition root다. Bootstrap filesystem config만 읽고 registry application reference는 `SourceReader`로 좁히며 production/Control staging wiring을 소유하지 않는다. |
@@ -169,12 +179,16 @@ file이나 owner가 애매한 artifact를 확인할 때만 펼쳐 봅니다.
 | `tests/test_documentation.py` | Assurance | 모든 module의 문서 link, owner mapping, immutable ledger, governance와 금지된 Delivery hidden import guard를 조립한다. 각 module이 자신의 사실을 검토하되 coordinating agent만 이 shared gate를 편집한다. |
 | `tests/test_registry.py` | Source Catalog interface verification | Registry behavior, source/semantic graph의 deep immutability·alias 차단과 exact `SourceReader`/`SourceProjectionWriter` shape 및 직접 consumer annotation을 함께 검증한다. Capability interface 변경 때 coordinating agent가 single-writer를 맡는다. |
 | `tests/test_catalog.py`, `tests/test_query.py` | Metadata/Guarded Query provider-interface verification | Catalog graph의 deep immutability와 작은 application Protocol/Runtime composite의 exact method set, 상속 및 sync/async signature를 각 provider가 검증한다. UTC setter→공통 verifier→catalog/planning/query 순서와 stale revision의 executor-before 거부도 여기서 고정한다. Composite를 함께 바꾸면 coordinating agent가 consumer 순서를 정한다. |
-| `tests/test_http.py` | Delivery | HTTP/MCP parent surface가 primary 범위이며 Runtime lifespan과 Control Plane public admin input/use case도 검증한다. Symbol별 owner review 뒤 coordinating agent가 file single-writer를 맡는다. |
-| `tests/test_runtime_startup_cleanup.py` | Runtime | MCP child `enter` 실패 시 Runtime parent cleanup 순서·exactly-once 시도·최초 오류 보존과 failed child `exit` 비호출을 검증한다. Runtime owner가 primary writer이고 Delivery는 child partial-enter 책임 경계만 검토한다. |
+| `tests/test_http.py` | Delivery; Runtime static verification | Static HTTP/MCP parent surface, Runtime lifespan과 source-admin 13개 route 미등록을 검증한다. Managed admin wire/use case는 포함하지 않는다. Symbol별 owner review 뒤 coordinating agent가 file single-writer를 맡는다. |
+| `tests/test_managed_http.py` | Delivery managed API; Control Plane/Runtime direct-consumer verification | Managed admin authentication/validation/wire와 Control Plane public input/use-case mapping, managed composition의 route 등록을 검증한다. 세 owner가 함께 검토하고 coordinating agent가 file single-writer를 맡는다. |
+| `tests/test_managed_runtime_startup_cleanup.py` | Runtime managed composition | Managed MCP child `enter` 실패 시 Runtime parent cleanup 순서·exactly-once 시도·최초 오류 보존과 failed child `exit` 비호출을 검증한다. Runtime owner가 primary writer이고 Delivery는 child partial-enter 책임 경계만 검토한다. |
 | `tests/test_managed_mode.py`, `tests/test_control_startup.py` | Runtime | Runtime composite annotation/누락 capability fail-closed와 managed composition/startup가 primary 범위이며 Delivery access, Control Plane authority와 Assurance verified membership을 함께 검증한다. Coordinating agent가 provider/consumer 변경 순서를 정한다. |
 | `tests/test_runtime_config.py` | Runtime | Environment/source authority 조립이 primary 범위이며 Source Catalog의 source directory와 budget configuration 입력을 함께 검증한다. 두 owner가 같은 fixture/config assertion을 병렬 편집하지 않도록 coordinating agent가 single-writer를 지정한다. |
+| `tests/test_operations.py` | Runtime static/common operations | Safe logging/redaction, public readiness와 source/metric projection을 managed observation state 없이 검증한다. |
+| `tests/test_managed_operations.py` | Runtime managed operations; Control Plane direct-consumer verification | Managed-only gateway usage accumulator와 replica/source observation state, reset/fencing projection을 검증한다. Runtime owner가 primary writer이고 Control Plane은 writer/projection 의미를 검토한다. |
 | `tests/test_source_admin.py` | Control Plane | Source Catalog validation, Metadata publish, Guarded Query execution, public verified input에서 Assurance DTO로의 exact mapping을 함께 검증한다. Control Plane owner가 primary writer이고 cross-module interface 변경 시 coordinating single-writer로 전환한다. |
-| `tests/test_metadata_store.py` | Metadata interface/format; Control Plane implementation | Persisted metadata port/codec, legacy array/object round-trip와 immutable decode graph 및 Control DB implementation을 함께 검증하는 transition test다. 두 owner가 병렬 편집하지 않고 coordinating agent가 test-case 단위 변경 순서를 지정한다. |
+| `tests/test_metadata_codec.py` | Metadata interface/format | Legacy JSON array/object round-trip, immutable decode graph와 pre-immutability golden을 DB 없이 검증한다. Codec/format 의미 변경은 Metadata와 persisted consumer가 함께 검토한다. |
+| `tests/test_metadata_store.py` | Control Plane implementation; Metadata port consumer | Managed PostgreSQL store의 immutable publish/rollback과 Control generation fencing을 disposable Control DB에서 검증한다. Metadata codec 자체의 focused test가 아니다. |
 | `tests/test_quality_level.py` | Metadata | Publish quality 판정이 primary 범위이고 Assurance verified membership을 소비한다. 두 interface를 함께 바꾸면 coordinating agent가 single-writer를 지정한다. |
 | `tests/test_result_encoding.py` | Guarded Query | Canonical result scalar encoding과 immutable canonical-time material이 primary 범위이며 Assurance verified result hash와 Metadata revision이 직접 소비한다. Encoding/hash/revision 경계를 함께 바꿀 때 coordinating agent가 single-writer를 맡는다. |
 | `tests/test_assurance_cli.py` | Assurance CLI/composition; Runtime entrypoint verification | Offline concrete construction 허용 위치, console-script target, bootstrap path, help/output/exit와 cleanup 순서를 검증한다. `pyproject.toml`과 함께 coordinating agent가 single-writer로 편집한다. |
@@ -185,17 +199,19 @@ file이나 owner가 애매한 artifact를 확인할 때만 펼쳐 봅니다.
 | `tests/test_onboarding_skill.py` | Assurance; Source Catalog workflow verification | Plan-only Skill metadata/reference, 8-section handoff, secret/mutation 금지와 owner/admin 경계를 검증한다. Behavioral forward evaluation과 zero-mutation evidence는 별도 acceptance가 보완한다. |
 | `tests/test_text_to_sql_skill.py` | Assurance; Delivery workflow verification | Query Man 세 MCP tool이 없을 때 server/HTTP/DB/fixture fallback과 추정 결과를 금지하는 fail-closed consumer workflow를 검증한다. |
 | `docker/postgres/init/05-control-plane.sh`, `docker/postgres/init/control-migrations/` | Control Plane | Migration ledger/checksum, 번호, FK, lock, CAS와 privilege는 하나의 owner가 관리한다. |
-| `config/sources/`, `config/budget-profiles.yaml` | Source Catalog | Fixture이자 ADR 0025 static first-launch의 reviewed two-source definition과 versioned resource tier다. Dynamic managed authority와 섞지 않는다. |
+| `config/sources/`, `config/budget-profiles.yaml` | Source Catalog | Fixture이자 ADR 0025 static first-launch의 reviewed two-source definition과 versioned resource tier다. 두 static manifest에는 managed-only `observability` 정의가 없다. Dynamic managed authority와 섞지 않는다. |
 | `config/access-policies*.yaml` | Delivery | Caller identity/capability 입력이며 source visibility와 tier 의미는 ADR 0017을 함께 따른다. |
 | `config/quality-evaluation.yaml`, `config/verified-queries.yaml`, `config/security-evaluation.yaml` | Assurance | Metadata/Guarded Query acceptance data다. Version, case와 expected result 변경은 관련 provider interface/policy도 확인한다. |
 | `config/onboarding/<source>.yaml`, `config/onboarding/<source>-l2.yaml` | Source Catalog | Control Plane candidate staging이 소비하는 fixture source/semantic input이다. |
 | `config/onboarding/<source>-verified-query.yaml` | Assurance | Control Plane candidate staging이 소비하는 verified expectation이다. |
-| `Dockerfile`, `compose.yaml`, `.env.example` | Runtime | Image, process, network, secret/config와 lifecycle composition boundary다. `recovery` profile의 PostgreSQL 18.4 tmpfs service는 Assurance의 minor-version test fixture이며 production topology가 아니다. HTTP/MCP probe 변경은 Delivery도 확인한다. |
+| `Dockerfile`, `compose.yaml`, `.env.example` | Runtime | Current static image, process, network, secret/config와 lifecycle composition boundary다. Base Compose는 두 current source만 준비하며 Control/support/commerce fixture를 포함하지 않는다. `recovery` profile의 PostgreSQL 18.4 tmpfs service는 Assurance fixture다. HTTP/MCP probe 변경은 Delivery도 확인한다. |
+| `compose.acceptance.yaml` | Assurance; Control Plane fixture input | 별도 `query-man-managed-acceptance` project/container/volume에서만 Control migration과 support/commerce onboarding fixture를 추가한다. Serving topology나 static default가 아니다. |
 | `scripts/verify-container.sh` | Assurance | Runtime container surface와 Delivery HTTP/MCP API를 소비하는 shared transition acceptance script다. |
 | `scripts/apply-control-schema.sh`, `scripts/control-plane-drill.sh` | Control Plane | Schema apply/recovery 절차다. Drill의 acceptance 결과는 Assurance evidence로 남긴다. |
-| `scripts/apply-db.sh` | Assurance | Source fixture와 Control Plane migration을 함께 호출하는 shared transition composition script다. 각 provider-owned script의 의미를 바꾸지 않는다. |
-| `docker/postgres/init/00-bootstrap.sql`, `01-source-bootstrap.sh`, source fixture SQL `10`~`90` | Assurance | Production source schema authority가 아닌 fixture infrastructure다. `05-control-plane.sh`와 `control-migrations/`는 포함하지 않는다. |
-| `.github/workflows/ci.yml`, `.github/workflows/mcp-soak.yml` | Assurance | 모든 provider의 repository gate와 실행 증거를 조립하는 shared transition artifact다. |
+| `scripts/apply-db.sh`, `scripts/validate-static-fixtures.sh` | Assurance | Base Compose의 `development-issues`, `market-voc`만 준비·검증한다. Control migration이나 managed onboarding fixture를 호출하지 않는다. |
+| `scripts/apply-managed-acceptance-fixtures.sh` | Assurance; Control Plane fixture composition | `compose.acceptance.yaml`로 시작한 PostgreSQL에서만 Control migration과 support/commerce fixture를 명시적으로 준비한다. |
+| `docker/postgres/init/00-bootstrap.sql`, `01-source-bootstrap.sh`, static source fixture SQL `10`~`45` | Assurance | Production source schema authority가 아닌 base static fixture infrastructure다. `05-control-plane.sh`, `control-migrations/`와 support/commerce SQL은 base mount에 포함하지 않는다. |
+| `.github/workflows/ci.yml`, `.github/workflows/mcp-soak.yml` | Assurance | `core-static`은 base fixture와 current static acceptance를 쓰고 dedicated managed/Control test file을 제외한다. Repository-wide Ruff/mypy와 install에는 managed tree가 포함된다. `managed-acceptance`만 격리 overlay와 managed direct-consumer/Control/onboarding/recovery test를 실행한다. Container job은 base static fixture를 쓴다. Workflow는 shared transition artifact다. |
 | `skills/query-man-text-to-sql/` | Delivery | Delivery의 external MCP API와 workflow를 사용하는 client-side plan이며 Metadata/Guarded Query Python interface나 enforcement boundary 자체는 아니다. |
 | `skills/query-man-source-onboarding/` | Source Catalog | Onboarding/runbook, Control Plane public administration, Delivery public admin transport와 Assurance acceptance scope를 읽어 plan-only owner/admin handoff를 만든다. 공개 문서 소비일 뿐 Python/runtime dependency가 아니며 credential, mutation, authorization 또는 validation boundary가 아니다. |
 | `pyproject.toml` package/dependency/entrypoint sections | Runtime | 모든 module이 소비하는 shared transition toolchain이다. Offline command 이름은 유지하고 내부 target은 Assurance의 `assurance_cli.py`를 가리킨다. |
@@ -205,7 +221,7 @@ file이나 owner가 애매한 artifact를 확인할 때만 펼쳐 봅니다.
 | `.gitleaksignore`, `.trivyignore.yaml` | Assurance | Secret/vulnerability scan의 bounded exception이다. 변경 시 근거·scope를 검토하고 vulnerability exception의 expiry를 유지한다. |
 | `.github/dependabot.yml` | Runtime | Dependency update automation이다. Assurance gate와 lockfile single-writer 절차를 따른다. |
 | `.gitignore` | Coordinating agent | Repository hygiene artifact다. Secret/runtime file 포함 여부를 바꾸면 Runtime과 Assurance 경계를 확인한다. |
-| Root `README.md`, `docs/README.md`, `docs/glossary.md`, `docs/architecture.md`, `docs/mvp.md`, `docs/decisions/README.md` | Coordinating agent | 전체 system navigation, 공통 용어와 current/target/record 구분을 여러 module에 handoff한다. 각 사실의 module owner가 검토하고 coordinating agent가 single-writer로 편집한다. |
+| Root `README.md`, `docs/README.md`, `docs/development-guidelines.md`, `docs/glossary.md`, `docs/architecture.md`, `docs/mvp.md`, `docs/decisions/README.md` | Coordinating agent | 전체 system navigation, repository-wide 개발 규칙, 공통 용어와 current/target/record 구분을 여러 module에 handoff한다. 각 사실의 module owner가 검토하고 coordinating agent가 single-writer로 편집한다. |
 | `docs/development-todo.md`, `docs/future-work.md` | Coordinating agent | Repository 전체 active priority와 parked start gate를 분리해 소유한다. TODO나 future ID 추가는 interface 또는 경계 변경 승인이 아니며 병렬 agent가 직접 priority를 재배열하지 않는다. |
 | `docs/source-onboarding.md`, `docs/managed-source-onboarding.md`, `docs/source-extension-checklist.md` | Source Catalog | 현재 static inventory 경로와 별도 승인 뒤의 managed onboarding 절차를 분리한다. Managed 절차를 current launch로 확대하지 않는다. |
 | `docs/implementation-roadmap.md` | Coordinating agent | 완료 ID와 evidence를 보존하는 immutable completion ledger다. Primary module 결과와 Assurance evidence를 확인한 뒤 한 writer가 갱신한다. |
@@ -218,7 +234,7 @@ file이나 owner가 애매한 artifact를 확인할 때만 펼쳐 봅니다.
 `pyproject.toml`, `uv.lock`이다. Test 영역에서는 `tests/helpers.py`, `tests/conftest.py`,
 `tests/control_database.py`, `tests/test_documentation.py`와 위 표의 cross-module focused/acceptance
 test가 shared transition artifact다. 문서 영역에서는 root `README.md`, `AGENTS.md`, 이 index,
-`docs/README.md`, `docs/glossary.md`, `docs/architecture.md`, `docs/mvp.md`,
+`docs/README.md`, `docs/development-guidelines.md`, `docs/glossary.md`, `docs/architecture.md`, `docs/mvp.md`,
 `docs/development-todo.md`, `docs/future-work.md`, `docs/decisions/README.md`,
 `docs/implementation-roadmap.md`, `docs/module-boundary-decision-guide.md`, cross-module accepted ADR과
 `docs/verification/` evidence가 공통 handoff artifact다.
@@ -322,7 +338,8 @@ latest-attempt/usage projection도 승인된 change-set 의미를 고정해 구�
 ## Agent 작업 절차
 
 1. 요청을 담당하는 primary module을 고른다.
-2. Root `AGENTS.md`와 primary module의 `README.md`를 읽는다.
+2. Root `AGENTS.md`와 primary module의 `README.md`를 읽고, 변경 종류에 해당하는
+   [활성 개발 지침](../development-guidelines.md) 절만 추가로 읽는다.
 3. `집중해서 읽을 범위`의 코드·테스트와 소비 interface, 관련 ADR만 읽는다.
 4. 다른 module 구현을 직접 수정하기 전에 official interface로 해결할 수 있는지 확인한다.
 5. Interface와 별도 경계를 보존하는 최소 end-to-end slice를 구현하고 module별 검증을 실행한다.
@@ -337,7 +354,8 @@ module 구현을 병렬로 진행한다.
 
 ## 문서 우선순위
 
-1. Root `AGENTS.md`의 safety와 작업 절차
+1. Root `AGENTS.md`의 safety·승인 trigger·routing과 [활성 개발 지침](../development-guidelines.md)의
+   해당 작업 절차
 2. Accepted ADR, external API/wire, persisted/versioned format, policy/compatibility identity,
    safety/lifecycle invariant와 protected operational procedure
 3. Official module interface, 실제 schema, runnable interface/integration/acceptance test와

@@ -41,6 +41,28 @@ onboarding과 HA를 한 번에 완료하면 첫 오픈 범위와 일정이 불�
 이 범위는 ADR 0016의 “bootstrap은 local/CI 전용이고 production은 managed” 결정에 대한 정확히
 한정된 예외다. Managed authority의 persistence, mutation과 recovery 의미는 바꾸지 않는다.
 
+#### 2026-08-26 static/managed physical isolation refinement
+
+승인된 `PRE-REPO-SPLIT-20260826`은 위 authority 분리를 같은 repository의 물리 경계에도 적용한다.
+
+- Managed administration, store, secret, concrete metadata-store와 managed Runtime 구현은
+  `query_man.managed` package에 보존한다. 별도 repository나 service로 분리하지 않는다.
+- Static bootstrap composition은 managed package를 import하지 않고 Control DB/reloader/reporter,
+  managed admin route와 gateway usage recorder를 만들지 않는다.
+- Current 두 static manifest는 managed-only optional `observability` definition을 선언하지 않는다.
+  Manifest v2 schema와 managed onboarding fixture의 definition은 보존한다.
+- 따라서 static HTTP OpenAPI에는 13개 source-admin route가 없고 해당 path는 route-not-found다. Managed
+  authority를 명시적으로 조립한 process에서만 기존 admin wire가 존재한다.
+- Base `compose.yaml`/`scripts/apply-db.sh`와 CI `core-static`은 current 두 static source만 준비한다.
+  Control/onboarding/recovery fixture는 `compose.acceptance.yaml` overlay와
+  `scripts/apply-managed-acceptance-fixtures.sh`를 쓰는 별도 `query-man-managed-acceptance` project와 CI
+  `managed-acceptance` lane에서만 준비한다. Base와 acceptance PostgreSQL container/volume은 공유하지
+  않는다.
+
+이는 static external surface와 ownership/composition boundary를 좁히는 승인된 변경이다. Current
+HTTP/MCP data surface, authentication/authorization 순서, Control DB persisted format, managed admin
+wire, source lifecycle와 rollback 의미는 바꾸지 않는다.
+
 ### 2. RLS quarantine
 
 `tenant_isolation=rls` shape, `TenantIsolation`, historical Control row와 기존 implementation은
@@ -204,6 +226,9 @@ Repository completion에는 다음 증거가 모두 필요하다.
 - 첫 오픈 범위는 작고 fail-closed하며 현재 데이터와 검증 질문을 그대로 제공한다.
 - 기존에 우연히 성공하던 결과 타입과 모든 RLS source는 명시적으로 unavailable이 된다.
 - Static source 변경은 configuration review와 재배포가 필요하다.
+- Static process는 managed package와 admin/observation work를 import·조립하지 않고 기본 fixture는
+  Control schema/onboarding database를 준비하지 않는다. Application install/image와 repository-wide
+  Ruff/mypy에는 아직 managed package가 포함되며 dedicated managed test만 별도 CI lane에서 실행한다.
 - Managed onboarding, full RLS, broader lossless types, multi-replica/HA, cost attribution와 workflow trace는
   구현 삭제가 아니라 first-launch 이후의 별도 결정이다.
 - 실제 protected deployment 증거가 없으면 repository가 launch profile을 구현했다는 사실만 말할 수

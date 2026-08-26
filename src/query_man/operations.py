@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import re
 import threading
 from collections import defaultdict
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
@@ -60,56 +59,9 @@ ReplicaSourceReason = Literal[
     "RUNTIME_APPLY_FAILED",
     "METADATA_PROBE_FAILED",
 ]
-GatewayUsageOutcome = Literal[
-    "success",
-    "rejected",
-    "timeout",
-    "overloaded",
-    "cancelled",
-    "failed",
-]
 _REPLICA_SOURCE_HEALTH = frozenset(
     {"initializing", "healthy", "stale", "unavailable"}
 )
-_GATEWAY_USAGE_OUTCOMES = frozenset(
-    {"success", "rejected", "timeout", "overloaded", "cancelled", "failed"}
-)
-_GATEWAY_USAGE_MAX_GROUPS = 1_000
-_GATEWAY_USAGE_MAX_REPORT_DELTAS = 100
-_GATEWAY_USAGE_DEFINITION = {
-    "bucket_start": "terminal_event_utc_hour",
-    "query_count": "sum_terminal_counts",
-    "terminal_counts": {
-        "cancelled_count": ["operator", "disconnect", "shutdown"],
-        "failed_count": ["unavailable", "unexpected"],
-        "overloaded_count": ["queue", "pool"],
-        "rejected_count": [
-            "revision",
-            "policy",
-            "ast",
-            "allowlist",
-            "plan",
-            "user_sql_invalid",
-        ],
-        "success_count": ["completed"],
-        "timeout_count": ["statement", "transaction"],
-    },
-    "success_only_aggregates": [
-        "queue_ms_sum",
-        "elapsed_ms_sum",
-        "returned_rows_sum",
-        "result_bytes_sum",
-        "truncated_count",
-    ],
-}
-GATEWAY_USAGE_DEFINITION_REVISION = "sha256:" + hashlib.sha256(
-    json.dumps(
-        _GATEWAY_USAGE_DEFINITION,
-        ensure_ascii=True,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-).hexdigest()
 _REPLICA_SOURCE_REASONS = frozenset(
     {
         "RUNTIME_VALIDATION_REJECTED",
@@ -134,58 +86,6 @@ class ReplicaSourceRuntimeState:
 class ReplicaRuntimeSnapshot:
     reason_code: ReplicaRuntimeReason | None
     sources: tuple[ReplicaSourceRuntimeState, ...]
-
-
-@dataclass(frozen=True)
-class GatewayUsageDelta:
-    source_id: str
-    budget_profile: str
-    metadata_revision: str
-    definition_revision: str
-    bucket_start: datetime
-    query_count: int
-    success_count: int
-    rejected_count: int
-    timeout_count: int
-    overloaded_count: int
-    cancelled_count: int
-    failed_count: int
-    queue_ms_sum: int
-    elapsed_ms_sum: int
-    returned_rows_sum: int
-    result_bytes_sum: int
-    truncated_count: int
-
-
-@dataclass(frozen=True)
-class GatewayUsageReportSnapshot:
-    snapshot_id: int
-    deltas: tuple[GatewayUsageDelta, ...]
-
-
-@dataclass(frozen=True)
-class _GatewayUsageKey:
-    source_id: str
-    budget_profile: str
-    metadata_revision: str
-    definition_revision: str
-    bucket_start: datetime
-
-
-@dataclass
-class _GatewayUsageAccumulator:
-    query_count: int = 0
-    success_count: int = 0
-    rejected_count: int = 0
-    timeout_count: int = 0
-    overloaded_count: int = 0
-    cancelled_count: int = 0
-    failed_count: int = 0
-    queue_ms_sum: int = 0
-    elapsed_ms_sum: int = 0
-    returned_rows_sum: int = 0
-    result_bytes_sum: int = 0
-    truncated_count: int = 0
 
 
 class SafeJsonFormatter(logging.Formatter):
@@ -226,9 +126,8 @@ def redact(value: str) -> str:
 
 
 class OperationalState:
-    def __init__(self, *, clock: Callable[[], datetime] | None = None) -> None:
+    def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._clock = clock or (lambda: datetime.now(UTC))
         self._counters: defaultdict[tuple[str, str | None], int] = defaultdict(int)
         self._totals: defaultdict[tuple[str, str | None], float] = defaultdict(float)
         self._source_health: dict[str, str] = {}
@@ -237,11 +136,6 @@ class OperationalState:
         self._accepting = True
         self._replica_scan_failed = False
         self._replica_sources: dict[str, ReplicaSourceRuntimeState] = {}
-        self._gateway_usage_groups: dict[
-            _GatewayUsageKey, _GatewayUsageAccumulator
-        ] = {}
-        self._gateway_usage_outstanding: GatewayUsageReportSnapshot | None = None
-        self._gateway_usage_next_snapshot_id = 1
 
     def reset(self) -> None:
         with self._lock:
@@ -253,9 +147,6 @@ class OperationalState:
             self._accepting = True
             self._replica_scan_failed = False
             self._replica_sources.clear()
-            self._gateway_usage_groups.clear()
-            self._gateway_usage_outstanding = None
-            self._gateway_usage_next_snapshot_id = 1
 
     def increment(self, name: str, source_id: str | None = None, value: int = 1) -> None:
         with self._lock:
@@ -265,206 +156,6 @@ class OperationalState:
         with self._lock:
             self._counters[(f"{name}_count", source_id)] += 1
             self._totals[(f"{name}_sum", source_id)] += value
-
-    def record_gateway_usage(
-        self,
-        *,
-        source_id: str,
-        budget_profile: str,
-        metadata_revision: str,
-        outcome: GatewayUsageOutcome,
-        queue_ms: int = 0,
-        elapsed_ms: int = 0,
-        returned_rows: int = 0,
-        result_bytes: int = 0,
-        truncated: bool = False,
-    ) -> None:
-        if outcome not in _GATEWAY_USAGE_OUTCOMES:
-            raise ValueError("Gateway usage outcome is invalid")
-        if not source_id or not budget_profile or not metadata_revision:
-            raise ValueError("Gateway usage attribution is incomplete")
-        if outcome == "success":
-            success_values = (queue_ms, elapsed_ms, returned_rows, result_bytes)
-            if any(
-                isinstance(value, bool) or not isinstance(value, int) or value < 0
-                for value in success_values
-            ) or not isinstance(truncated, bool):
-                raise ValueError("Gateway usage success values are invalid")
-        else:
-            queue_ms = 0
-            elapsed_ms = 0
-            returned_rows = 0
-            result_bytes = 0
-            truncated = False
-
-        observed_at = self._clock()
-        if observed_at.tzinfo is None or observed_at.utcoffset() is None:
-            raise ValueError("Gateway usage clock must return an aware datetime")
-        bucket_start = observed_at.astimezone(UTC).replace(
-            minute=0,
-            second=0,
-            microsecond=0,
-        )
-        key = _GatewayUsageKey(
-            source_id=source_id,
-            budget_profile=budget_profile,
-            metadata_revision=metadata_revision,
-            definition_revision=GATEWAY_USAGE_DEFINITION_REVISION,
-            bucket_start=bucket_start,
-        )
-
-        with self._lock:
-            accumulator = self._gateway_usage_groups.get(key)
-            if accumulator is None:
-                if len(self._gateway_usage_groups) >= _GATEWAY_USAGE_MAX_GROUPS:
-                    protected = (
-                        {
-                            self._gateway_usage_key(delta)
-                            for delta in self._gateway_usage_outstanding.deltas
-                        }
-                        if self._gateway_usage_outstanding is not None
-                        else set()
-                    )
-                    eviction_candidates = (
-                        candidate
-                        for candidate in self._gateway_usage_groups
-                        if candidate not in protected
-                    )
-                    oldest = min(
-                        eviction_candidates,
-                        key=self._gateway_usage_sort_key,
-                        default=None,
-                    )
-                    if oldest is None:
-                        return
-                    self._gateway_usage_groups.pop(oldest)
-                accumulator = _GatewayUsageAccumulator()
-                self._gateway_usage_groups[key] = accumulator
-
-            accumulator.query_count += 1
-            if outcome == "success":
-                accumulator.success_count += 1
-                accumulator.queue_ms_sum += queue_ms
-                accumulator.elapsed_ms_sum += elapsed_ms
-                accumulator.returned_rows_sum += returned_rows
-                accumulator.result_bytes_sum += result_bytes
-                accumulator.truncated_count += int(truncated)
-            elif outcome == "rejected":
-                accumulator.rejected_count += 1
-            elif outcome == "timeout":
-                accumulator.timeout_count += 1
-            elif outcome == "overloaded":
-                accumulator.overloaded_count += 1
-            elif outcome == "cancelled":
-                accumulator.cancelled_count += 1
-            else:
-                accumulator.failed_count += 1
-
-    def gateway_usage_report_snapshot(
-        self,
-        limit: int = _GATEWAY_USAGE_MAX_REPORT_DELTAS,
-    ) -> GatewayUsageReportSnapshot | None:
-        if (
-            isinstance(limit, bool)
-            or not isinstance(limit, int)
-            or not 1 <= limit <= _GATEWAY_USAGE_MAX_REPORT_DELTAS
-        ):
-            raise ValueError("Gateway usage report limit must be between 1 and 100")
-        with self._lock:
-            if self._gateway_usage_outstanding is not None:
-                return self._gateway_usage_outstanding
-            if not self._gateway_usage_groups:
-                return None
-            keys = sorted(
-                self._gateway_usage_groups,
-                key=self._gateway_usage_sort_key,
-            )[:limit]
-            snapshot = GatewayUsageReportSnapshot(
-                snapshot_id=self._gateway_usage_next_snapshot_id,
-                deltas=tuple(
-                    self._gateway_usage_delta(
-                        key,
-                        self._gateway_usage_groups[key],
-                    )
-                    for key in keys
-                ),
-            )
-            self._gateway_usage_next_snapshot_id += 1
-            self._gateway_usage_outstanding = snapshot
-            return snapshot
-
-    def ack_gateway_usage_report(self, snapshot_id: int) -> None:
-        with self._lock:
-            snapshot = self._gateway_usage_outstanding
-            if snapshot is None or snapshot.snapshot_id != snapshot_id:
-                return
-            for delta in snapshot.deltas:
-                key = self._gateway_usage_key(delta)
-                accumulator = self._gateway_usage_groups.get(key)
-                if accumulator is None:
-                    continue
-                accumulator.query_count -= delta.query_count
-                accumulator.success_count -= delta.success_count
-                accumulator.rejected_count -= delta.rejected_count
-                accumulator.timeout_count -= delta.timeout_count
-                accumulator.overloaded_count -= delta.overloaded_count
-                accumulator.cancelled_count -= delta.cancelled_count
-                accumulator.failed_count -= delta.failed_count
-                accumulator.queue_ms_sum -= delta.queue_ms_sum
-                accumulator.elapsed_ms_sum -= delta.elapsed_ms_sum
-                accumulator.returned_rows_sum -= delta.returned_rows_sum
-                accumulator.result_bytes_sum -= delta.result_bytes_sum
-                accumulator.truncated_count -= delta.truncated_count
-                if accumulator.query_count == 0:
-                    self._gateway_usage_groups.pop(key)
-            self._gateway_usage_outstanding = None
-
-    @staticmethod
-    def _gateway_usage_sort_key(
-        key: _GatewayUsageKey,
-    ) -> tuple[datetime, str, str, str, str]:
-        return (
-            key.bucket_start,
-            key.source_id,
-            key.budget_profile,
-            key.metadata_revision,
-            key.definition_revision,
-        )
-
-    @staticmethod
-    def _gateway_usage_key(delta: GatewayUsageDelta) -> _GatewayUsageKey:
-        return _GatewayUsageKey(
-            source_id=delta.source_id,
-            budget_profile=delta.budget_profile,
-            metadata_revision=delta.metadata_revision,
-            definition_revision=delta.definition_revision,
-            bucket_start=delta.bucket_start,
-        )
-
-    @staticmethod
-    def _gateway_usage_delta(
-        key: _GatewayUsageKey,
-        accumulator: _GatewayUsageAccumulator,
-    ) -> GatewayUsageDelta:
-        return GatewayUsageDelta(
-            source_id=key.source_id,
-            budget_profile=key.budget_profile,
-            metadata_revision=key.metadata_revision,
-            definition_revision=key.definition_revision,
-            bucket_start=key.bucket_start,
-            query_count=accumulator.query_count,
-            success_count=accumulator.success_count,
-            rejected_count=accumulator.rejected_count,
-            timeout_count=accumulator.timeout_count,
-            overloaded_count=accumulator.overloaded_count,
-            cancelled_count=accumulator.cancelled_count,
-            failed_count=accumulator.failed_count,
-            queue_ms_sum=accumulator.queue_ms_sum,
-            elapsed_ms_sum=accumulator.elapsed_ms_sum,
-            returned_rows_sum=accumulator.returned_rows_sum,
-            result_bytes_sum=accumulator.result_bytes_sum,
-            truncated_count=accumulator.truncated_count,
-        )
 
     def set_source_health(self, source_id: str, status: str) -> None:
         if _source_health_updates_suppressed.get():

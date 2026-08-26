@@ -53,14 +53,17 @@ snapshot**으로 고정하고, 질문에 필요한 relation·column·join·busin
 | [`revision.py`](../../../src/query_man/revision.py) | Canonical metadata revision digest | Guarded Query policy material을 소비하는 shared identity |
 | [`quality_level.py`](../../../src/query_man/quality_level.py) | L0/L1/L2 publish gate | Assurance verified membership을 소비 |
 | [`models.py`](../../../src/query_man/models.py) | Catalog DTO, `PreparedMetadata`, provider Protocol | Source Catalog type도 있는 shared transition file |
-| [`metadata_store.py`](../../../src/query_man/metadata_store.py) | `MetadataStore` port와 snapshot codec | PostgreSQL implementation/transaction은 Control Plane 소유 |
+| [`metadata_store.py`](../../../src/query_man/metadata_store.py) | `MetadataStore` port, domain error와 snapshot codec | PostgreSQL implementation은 [`managed/metadata_store.py`](../../../src/query_man/managed/metadata_store.py)의 Control Plane 소유 |
 | [`errors.py`](../../../src/query_man/errors.py) | Metadata availability/revision domain-error 의미 | Public envelope은 Delivery 소유인 shared transition file |
 | [`test_catalog.py`](../../../tests/test_catalog.py), [`test_metadata.py`](../../../tests/test_metadata.py), [`test_relevance.py`](../../../tests/test_relevance.py), [`test_revision.py`](../../../tests/test_revision.py) | Catalog, service, retrieval과 revision focused tests | Provider 의미를 고정 |
-| [`test_quality_level.py`](../../../tests/test_quality_level.py), [`test_metadata_store.py`](../../../tests/test_metadata_store.py), [`test_source_database_corners.py`](../../../tests/test_source_database_corners.py) | Quality, codec/persistence와 PostgreSQL edge acceptance | Store test는 shared transition test |
+| [`test_quality_level.py`](../../../tests/test_quality_level.py), [`test_metadata_codec.py`](../../../tests/test_metadata_codec.py), [`test_source_database_corners.py`](../../../tests/test_source_database_corners.py) | Quality, core codec와 PostgreSQL edge acceptance | Codec test는 DB 없이 persisted JSON compatibility를 고정 |
+| [`test_metadata_store.py`](../../../tests/test_metadata_store.py) | Managed PostgreSQL store integration | Control Plane implementation이 Metadata port/codec을 소비하는 direct-consumer test |
 
-현재 code는 `src/query_man`의 평면 구조다. `models.py`, `metadata_store.py`, `errors.py`와 관련
-cross-module test는 coordinating agent가 single-writer로 다룬다. Physical package 이동은 동작 변경과
-섞지 않는 별도 mechanical refactoring이다.
+Metadata core code는 `src/query_man`의 평면 구조를 유지한다. Control Plane의 concrete PostgreSQL
+store는 `src/query_man/managed/metadata_store.py`로 격리했고 core `metadata_store.py`에는 port,
+domain error와 codec만 남겼다. `models.py`, `metadata_store.py`, `errors.py`와 관련 cross-module test는
+coordinating agent가 single-writer로 다룬다. 이후 physical package 이동도 동작 변경과 섞지 않는
+별도 mechanical refactoring이다.
 
 ## 제공 인터페이스와 소유 경계
 
@@ -161,7 +164,9 @@ async unpin(source: SourceProfile) -> None
 async close() -> None
 ```
 
-Runtime이 managed composition에서 Control Plane의 `PostgresMetadataStore`를 이 port에 주입한다.
+Runtime이 managed composition에서만 Control Plane의
+`query_man.managed.metadata_store.PostgresMetadataStore`를 이 port에 주입한다. Static composition은
+managed package를 import하거나 store를 조립하지 않는다.
 Metadata는 Control Plane module/table/SQL/lock를 import하지 않는다. 즉 `Metadata -> Control Plane`
 dependency가 아니라 Control Plane이 Metadata-owned port를 구현하는 dependency inversion이다.
 
@@ -183,7 +188,7 @@ array/object를 호환한다. Exact persisted meaning은 [ADR 0007](../../decisi
 
 List/tuple과 dict/read-only mapping은 같은 canonical array/object다. Exact material/order/golden은
 [`revision.py`](../../../src/query_man/revision.py), [`test_revision.py`](../../../tests/test_revision.py)와
-[`test_metadata_store.py`](../../../tests/test_metadata_store.py)가 고정한다. ADR 0025의 PG18/UTF-8 및 SQL
+[`test_metadata_codec.py`](../../../tests/test_metadata_codec.py)가 고정한다. ADR 0025의 PG18/UTF-8 및 SQL
 policy v3 전환은 algorithm/canonical-time/two-source revision을 바꾸지 않았다. RLS identity 미포함은
 serving 호환성이 아니라 RLS 전면 차단을 전제로 한다.
 
@@ -272,18 +277,19 @@ Source Catalog, Guarded Query, Control Plane, Delivery, Runtime, Assurance와 pe
 ```text
 uv run pytest tests/test_reader_policy.py tests/test_registry.py tests/test_catalog.py \
   tests/test_metadata.py tests/test_relevance.py tests/test_revision.py \
-  tests/test_metadata_store.py tests/test_quality_level.py
+  tests/test_metadata_codec.py tests/test_quality_level.py
 ```
 
 | 변경 영역 | 추가 검증 |
 |---|---|
-| Store/codec/Control DB | `uv run pytest -m integration tests/test_metadata_store.py` |
+| Core snapshot codec/legacy JSON | `uv run pytest tests/test_metadata_codec.py` |
+| Managed store/Control DB | `uv run pytest -m integration tests/test_metadata_store.py` |
 | PostgreSQL catalog/reader/domain/resource | `uv run pytest -m integration tests/test_source_database_corners.py` |
 | Context external projection | Delivery HTTP/MCP tests |
 | Revision/quality/verified membership | Guarded Query와 Assurance consumer/golden tests |
 
 DB privilege, source epoch/CAS 또는 reader trust boundary를 바꾸면 전체 integration gate를 실행한다.
-완료 전 root `AGENTS.md`의 `ruff`, `mypy`, full pytest도 실행한다.
+완료 전 [활성 개발 지침](../../development-guidelines.md#tests)의 `ruff`, `mypy`, full pytest도 실행한다.
 
 ## 집중해서 읽을 범위
 
@@ -293,7 +299,8 @@ DB privilege, source epoch/CAS 또는 reader trust boundary를 바꾸면 전체 
 |---|---|
 | Catalog/introspection/key/index | `catalog.py`, catalog DTO, `test_catalog.py`, [ADR 0008](../../decisions/0008-physical-key-and-index-disclosure.md) |
 | Context/disclosure/retrieval | `metadata.py`, `relevance.py`, related tests, [ADR 0009](../../decisions/0009-question-scoped-column-disclosure.md), [ADR 0010](../../decisions/0010-revision-scoped-retrieval-index.md) |
-| Revision/store/rollback/stale | `revision.py`, `metadata_store.py`, related tests, [ADR 0007](../../decisions/0007-immutable-metadata-publishing.md) |
+| Revision/core codec/stale | `revision.py`, `metadata_store.py`, `test_revision.py`, `test_metadata_codec.py`, [ADR 0007](../../decisions/0007-immutable-metadata-publishing.md) |
+| Managed store/rollback | `managed/metadata_store.py`, Control Plane README, `test_metadata_store.py`, [ADR 0007](../../decisions/0007-immutable-metadata-publishing.md) |
 | Quality/verified membership | `quality_level.py`, `test_quality_level.py`, [ADR 0011](../../decisions/0011-metadata-quality-level-publish-gate.md), Assurance interface |
 | Reader/resource/launch policy | `reader_policy.py`, `catalog.py`, source DB corner tests, [ADR 0025](../../decisions/0025-static-non-rls-first-launch.md) |
 

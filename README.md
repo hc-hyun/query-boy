@@ -108,8 +108,9 @@ test -f .env || cp .env.example .env
 openssl rand -hex 32
 ```
 
-두 번째 명령의 결과를 `.env`의 `QUERY_MAN_CODEX_MCP_TOKEN`에 넣습니다. 주석이 아닌 모든
-`replace-with-...` 값도 각각 로컬 전용 password로 바꿉니다.
+두 번째 명령의 결과를 `.env`의 `QUERY_MAN_CODEX_MCP_TOKEN`에 넣습니다. 기본 Compose가 사용하는
+PostgreSQL과 current 두 reader의 `replace-with-...` 값도 각각 로컬 전용 password로 바꿉니다.
+Support/commerce 값은 managed acceptance overlay를 실행할 때만 필요합니다.
 
 - `.env`는 Git에서 제외됩니다. commit하지 마세요.
 - `.env.example`은 로컬 Compose용 예시일 뿐 운영 비밀값 관리 방법이 아닙니다.
@@ -124,9 +125,10 @@ docker compose up -d --build --wait query-man
 docker compose ps
 ```
 
-`apply-db.sh`는 로컬·CI용 DB, role과 예제 데이터를 만듭니다. 네 개의 fixture DB가 생기지만 Query
-Man이 제공하는 source는 `development-issues`, `market-voc` 두 개뿐입니다. 이 스크립트는 운영 DB
-migration 도구가 아닙니다.
+`apply-db.sh`는 현재 static launch와 같은 `development-issues`, `market-voc` 두 fixture DB의
+role·schema·예제 데이터만 적용하고 검증합니다. Control DB와 managed onboarding acceptance
+fixture는 [별도 개발 지침](docs/development-guidelines.md)의 managed acceptance 절차를 사용합니다.
+어느 스크립트도 운영 DB migration 도구가 아닙니다.
 
 ### 3. 정상 동작 확인하기
 
@@ -282,13 +284,28 @@ uv run mypy src
 uv run pytest
 ```
 
-실제 PostgreSQL과 결과 기준까지 확인하려면 다음을 추가로 실행합니다.
+기본 두 source의 PostgreSQL과 결과 기준은 CI의 `core-static` DB selector를 따라 확인하고 다음
+두 acceptance를 실행합니다.
 
 ```bash
-uv run pytest -m integration
 uv run query-man-evaluate
 uv run query-man-verify
 ```
+
+Control DB와 support/commerce onboarding까지 포함한 전체 integration gate는 기본 volume과 분리된
+managed acceptance project에서 실행합니다.
+
+```bash
+export COMPOSE_FILE=compose.yaml:compose.acceptance.yaml
+docker compose up -d --wait postgres
+./scripts/apply-managed-acceptance-fixtures.sh
+uv run pytest -m integration
+docker compose down -v --remove-orphans
+unset COMPOSE_FILE
+```
+
+중간 실패 시에도 같은 `COMPOSE_FILE` 값으로 `down -v --remove-orphans`를 실행한 뒤 unset합니다.
+이는 `query-man-managed-acceptance` volume만 지우며 기본 `query-man_postgres_data`는 건드리지 않습니다.
 
 실행 중인 Compose container와 MCP 경계는 다음 명령으로 확인합니다.
 

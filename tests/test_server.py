@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import signal
 import socket
+import subprocess
+import sys
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import replace
@@ -14,6 +17,58 @@ from fastapi import FastAPI
 
 from query_man import server as server_module
 from query_man.operations import operations
+from tests.helpers import ROOT_DIRECTORY
+
+
+def test_static_app_import_does_not_load_managed_package() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; import query_man.app; "
+                "assert not any(name == 'query_man.managed' or "
+                "name.startswith('query_man.managed.') for name in sys.modules)"
+            ),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_static_server_dispatch_does_not_load_managed_package() -> None:
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("QUERY_MAN_")
+    }
+    environment.update(
+        {
+            "DEVELOPMENT_ISSUES_READER_PASSWORD": "static-import-test",
+            "MARKET_VOC_READER_PASSWORD": "static-import-test",
+        }
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; import query_man.server; "
+                "assert not any(name == 'query_man.managed' or "
+                "name.startswith('query_man.managed.') for name in sys.modules)"
+            ),
+        ],
+        check=False,
+        capture_output=True,
+        cwd=ROOT_DIRECTORY,
+        env=environment,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize(

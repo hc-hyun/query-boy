@@ -21,7 +21,7 @@ HTTP와 MCP가 같다는 말은 endpoint가 모두 같다는 뜻이 아니다. �
 |---|---|
 | Static launch data surface | `development-issues`, `market-voc`를 단일 replica의 HTTP와 MCP로 제공 |
 | Operator cancel | HTTP에만 있으며 explicit operator만 사용 가능 |
-| Managed administration | HTTP 구현은 보존됐지만 ADR 0025 static launch에는 Control Plane과 함께 조립되지 않음 |
+| Managed administration | `query_man.managed` package에 보존되며 managed authority에서만 route를 등록함 |
 
 현재 기준은 [ADR 0025](../../decisions/0025-static-non-rls-first-launch.md)다.
 
@@ -53,14 +53,17 @@ HTTP와 MCP가 같다는 말은 endpoint가 모두 같다는 뜻이 아니다. �
 | [`gateway.py`](../../../src/query_man/gateway.py) | Transport-independent `GatewayService` |
 | [`mcp_server.py`](../../../src/query_man/mcp_server.py) | MCP server, schema, error와 disconnect |
 | [`http_validation.py`](../../../src/query_man/http_validation.py) | HTTP/MCP/admin 공통 JSON Content-Type 검사 |
-| [`source_admin_routes.py`](../../../src/query_man/source_admin_routes.py) | Managed-only admin HTTP validation과 Control Plane use-case 호출 |
+| [`managed/source_admin_routes.py`](../../../src/query_man/managed/source_admin_routes.py) | Managed-only admin HTTP validation과 Control Plane use-case 호출; static composition은 import·등록하지 않음 |
 | [`app.py`](../../../src/query_man/app.py) | HTTP DTO, middleware, route와 handler; composition/lifespan은 Runtime 소유 |
 | [`errors.py`](../../../src/query_man/errors.py) | `AppError` public carrier와 external rendering; domain 오류 발생 의미는 producer 소유 |
 | `config/access-policies*.yaml` | Caller identity와 capability 입력 |
 | [`query-man-text-to-sql`](../../../skills/query-man-text-to-sql) | MCP consumer workflow; safety enforcement가 아님 |
+| [`test_http.py`](../../../tests/test_http.py), [`test_mcp.py`](../../../tests/test_mcp.py) | Static HTTP/MCP surface, source-admin route 부재와 common transport behavior |
+| [`test_managed_http.py`](../../../tests/test_managed_http.py), [`test_managed_runtime_startup_cleanup.py`](../../../tests/test_managed_runtime_startup_cleanup.py) | Managed admin wire/use-case mapping과 managed parent/child lifespan boundary |
 
 `GetContextSuccessOutput`은 현재 `mcp_server.py`에 있지만 HTTP `/meta`도 사용하는 Delivery 공통 wire
-format이다. `app.py`나 `errors.py`를 바꾸면 [Runtime](../runtime/README.md)과 오류 producer도 확인한다.
+format이다. Managed admin adapter는 물리적으로 managed package에 있지만 external wire owner는 계속
+Delivery다. `app.py`나 `errors.py`를 바꾸면 [Runtime](../runtime/README.md)과 오류 producer도 확인한다.
 
 ## 제공 인터페이스와 소유 경계
 
@@ -199,7 +202,8 @@ Managed Control Plane을 별도로 조립했을 때만 source inventory/history,
 mutation HTTP route를 사용한다. 전체 route와 mutation header/receipt 의미는 [current management
 operations](../../source-management-plane.md#current-management-operations)과 [mutation wire
 format](../../source-management-plane.md#mutation-request-and-receipt-wire-format-and-semantics)에 정리돼
-있다. MCP admin tool은 없다.
+있다. Static composition은 이 13개 route를 등록하지 않으므로 OpenAPI에 없고 요청은 route-not-found다.
+MCP admin tool은 없다.
 
 Delivery가 계속 소유하는 wire 불변조건은 다음과 같다.
 
@@ -243,7 +247,7 @@ Delivery status나 field가 아니다.
 | [Runtime](../runtime/README.md) | Aggregate health/operations state와 lifecycle context | Health 계산이나 production composition을 Delivery로 옮기지 않음 |
 
 `GatewayService`는 concrete registry 대신 `SourceReader`를 받아 `list/get`만 사용한다. Admin route는
-Control Plane public input만 만들고 `source_store.py`나 Assurance `verified.py`를 import하지 않는다.
+Control Plane public input만 만들고 `managed/source_store.py`나 Assurance `verified.py`를 import하지 않는다.
 Metadata/Source Catalog가 내부 tuple/read-only mapping을 사용해도 `/meta`와 `get_context`의 기존
 array/object projection은 유지한다.
 
@@ -261,7 +265,8 @@ validation type의 pattern/range를 바꾸면 admin wire compatibility도 함께
 - MCP SDK workaround가 protocol rule이나 domain policy를 대신하지 않는다.
 - Query-facing source 목록에는 connection과 internal control state가 없다.
 - Admin payload는 Control Plane public input만 사용한다.
-- Static first launch는 두 source와 단일 replica이며 managed admin/hot onboarding을 활성화하지 않는다.
+- Static first launch는 두 source와 단일 replica이며 managed admin adapter를 import하거나 13개 route와
+  hot onboarding을 활성화하지 않는다.
 
 ## 모듈 내부 변경
 
@@ -291,13 +296,15 @@ Delivery는 audit event 의미와 기록 금지 대상을 소유하고 Runtime�
 
 ```text
 uv run pytest tests/test_registry.py tests/test_access.py tests/test_http.py tests/test_mcp.py \
-  tests/test_runtime_startup_cleanup.py tests/test_text_to_sql_skill.py
+  tests/test_text_to_sql_skill.py
+uv run pytest tests/test_managed_http.py tests/test_managed_runtime_startup_cleanup.py
 ```
 
 실제 MCP server는 `uv run pytest -m 'mcp_server and not soak' -s tests/test_mcp_server.py`로 별도
-검증한다. Protocol/socket 변경은 disconnect integration을, admin 변경은 source-admin/control-store와
-hidden-import test를, concurrency/session 변경은 MCP load/soak를 추가한다. 완료 전 root 전체 gate를
-실행한다.
+검증한다. Protocol/socket 변경은 disconnect integration을, managed admin 변경은
+`test_managed_http.py`와 source-admin/control-store/hidden-import test를, managed child lifespan 변경은
+`test_managed_runtime_startup_cleanup.py`를, concurrency/session 변경은 MCP load/soak를 추가한다. 완료 전
+root 전체 gate를 실행한다.
 
 ## 집중해서 읽을 범위
 

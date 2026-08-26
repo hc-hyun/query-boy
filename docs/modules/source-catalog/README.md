@@ -25,13 +25,14 @@ Source Catalog는 Query Man의 **검증된 source 주소록과 규칙 묶음**�
 
 | 구분 | 상태 |
 |---|---|
-| 현재 first launch | Repository의 두 non-RLS manifest, PostgreSQL 18/server·client UTF-8와 SQL 전 connection 검사 |
+| 현재 first launch | Repository의 두 non-RLS manifest, PostgreSQL 18/server·client UTF-8와 SQL 전 connection 검사; managed-only `observability` 정의 없음 |
 | 구현되어 보존된 기능 | Control Plane이 검증된 managed projection을 writer로 반영하는 capability. 현재 serving에는 조립하지 않음 |
 | 새 static source | 별도 inventory review, 정확한 사용자 승인, traffic-off acceptance와 재배포가 필요 |
 | 미래 후보 | RLS serving과 넓은 encoding/result 범위는 [future work](../../future-work.md)이며 현재 interface나 일정이 아님 |
 
-현재 Python은 `src/query_man`의 평면 구조다. 이 문서는 논리적 owner와 interface를 정하며 이미 별도
-package로 물리 분리됐다는 뜻이 아니다.
+Source Catalog provider는 `src/query_man`의 flat core에 남고, managed writer consumer는
+`src/query_man/managed` package에 격리돼 있다. 이 문서는 논리적 owner와 interface를 정하며 Python
+package와 일대일로 대응한다는 뜻은 아니다.
 
 ## 소유 책임
 
@@ -74,6 +75,9 @@ package로 물리 분리됐다는 뜻이 아니다.
 
 Source-related type 이동과 package 분리는 외부 의미를 보존하는 별도 mechanical refactoring으로 한다.
 Shared transition file 정리와 업무 변경을 한 diff에 섞지 않는다.
+
+Manifest v2의 optional `observability` schema와 managed onboarding fixture는 보존한다. Current static
+`config/sources` 두 manifest는 managed reporter를 조립하지 않으므로 이 field를 선언하지 않는다.
 
 ## 제공 인터페이스와 소유 경계
 

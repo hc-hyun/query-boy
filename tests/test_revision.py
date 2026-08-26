@@ -5,7 +5,12 @@ import pytest
 
 import query_man.revision as revision_module
 import query_man.sql_validation as sql_validation_module
-from query_man.models import CatalogForeignKey, CatalogIndex
+from query_man.models import (
+    CatalogForeignKey,
+    CatalogIndex,
+    RepresentativeRecordsTarget,
+    ResourceObservationDefinition,
+)
 from query_man.result_encoding import CANONICAL_TIME_POLICY_MATERIAL
 from query_man.revision import _canonicalize, create_metadata_revision
 from tests.helpers import load_test_registry, minimal_development_snapshot
@@ -223,9 +228,23 @@ def test_revision_ignores_source_provenance() -> None:
 def test_revision_ignores_resource_observation_definition() -> None:
     source = load_test_registry().get("development-issues")
     assert source is not None
-    assert source.observability is not None
+    assert source.observability is None
+    source = replace(
+        source,
+        observability=ResourceObservationDefinition(
+            representative_records=RepresentativeRecordsTarget(
+                grain="development_issue",
+                physical_relation="development.issues",
+            ),
+            storage_relations=(
+                "development.issues",
+                "development.issue_comments",
+            ),
+        ),
+    )
     snapshot = minimal_development_snapshot()
     revision = create_metadata_revision(source, snapshot)
+    assert source.observability is not None
     changed_definition = replace(
         source,
         observability=replace(

@@ -13,10 +13,10 @@ import yaml
 from dotenv import load_dotenv
 
 from query_man.access import AccessPolicy
-from query_man.app import build_app
+from query_man.managed.runtime import build_app
+from query_man.managed.source_admin import PublishVerifiedQueryInput, VerifiedExpectedInput
+from query_man.managed.source_store import PostgresSourceStore
 from query_man.runtime_config import RuntimeConfig
-from query_man.source_admin import PublishVerifiedQueryInput, VerifiedExpectedInput
-from query_man.source_store import PostgresSourceStore
 from tests.helpers import ROOT_DIRECTORY
 
 _SOURCE_ID = "support-tickets"

@@ -14,18 +14,10 @@ import yaml
 from psycopg import AsyncConnection, Error
 from psycopg.errors import RaiseException
 
-import query_man.source_store as source_store_module
-from query_man.metadata_store import PostgresMetadataStore
-from query_man.models import PreparedMetadata
-from query_man.registry import (
-    POSTGRES_IDENTIFIER_MAX_LENGTH,
-    ValidatedSourceManifest,
-    load_budget_profiles,
-    validate_source_manifest,
-)
-from query_man.revision import create_metadata_revision
-from query_man.secrets import SourceSecretCipher
-from query_man.source_store import (
+import query_man.managed.source_store as source_store_module
+from query_man.managed.metadata_store import PostgresMetadataStore
+from query_man.managed.secrets import SourceSecretCipher
+from query_man.managed.source_store import (
     _CATALOG_PROJECTION,
     _MUTATION_PROJECTION,
     POSTGRES_BIGINT_MAX,
@@ -46,6 +38,14 @@ from query_man.source_store import (
     _ReplicaSourceObservationWrite,
     _ResourceObservationWrite,
 )
+from query_man.models import PreparedMetadata
+from query_man.registry import (
+    POSTGRES_IDENTIFIER_MAX_LENGTH,
+    ValidatedSourceManifest,
+    load_budget_profiles,
+    validate_source_manifest,
+)
+from query_man.revision import create_metadata_revision
 from query_man.verified import ExpectedResult, VerifiedQuery, create_result_hash
 from tests.helpers import ROOT_DIRECTORY, minimal_development_snapshot
 
@@ -86,7 +86,15 @@ def _source_fixture(
         f"{source_id.replace('-', '_').upper()}_READER_PASSWORD"
     )
     raw["minimum_quality_level"] = "L0"
-    if not resource_observability:
+    if resource_observability:
+        raw["observability"] = {
+            "representative_records": {
+                "grain": "development_issue",
+                "physical_relation": "development.issues",
+            },
+            "storage_relations": ["development.issues"],
+        }
+    else:
         raw.pop("observability", None)
     validated = validate_source_manifest(
         raw,

@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-import hashlib
-import json
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
-from contextlib import asynccontextmanager, suppress
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Mapping
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -20,7 +18,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from query_man.access import AccessPolicy, CallerContext
 from query_man.catalog import PostgresCatalog
-from query_man.errors import AppError, QueryTimeoutError
+from query_man.errors import AppError, OperatorRequiredError, QueryTimeoutError
 from query_man.gateway import GatewayService
 from query_man.http_validation import is_json_content_type
 from query_man.mcp_server import (
@@ -29,32 +27,11 @@ from query_man.mcp_server import (
     create_mcp_server,
 )
 from query_man.metadata import MetadataService
-from query_man.metadata_store import PostgresMetadataStore
-from query_man.models import ResourceObservation, RuntimeCatalogProvider, SourceProfile
+from query_man.models import CatalogProvider
 from query_man.operations import operations
-from query_man.query import PostgresQueryExecutor, QueryService, RuntimeQueryExecutor
-from query_man.reader_policy import ReaderSessionPolicyError
-from query_man.registry import SourceReader, SourceRegistry, load_budget_profiles
+from query_man.query import DeliveryQueryExecutor, PostgresQueryExecutor, QueryService
+from query_man.registry import SourceReader, SourceRegistry
 from query_man.runtime_config import RuntimeConfig
-from query_man.secrets import SourceSecretCipher
-from query_man.source_admin import (
-    REPLICA_HEARTBEAT_INTERVAL_MIN_MS,
-    ControlGatewayUsageWriter,
-    ControlReplicaObservationWriter,
-    ControlResourceObservationWriter,
-    GatewayUsageDelta,
-    GatewayUsageWriter,
-    ReplicaObservationWriter,
-    ReplicaSourceObservation,
-    ResourceObservationFailureReason,
-    ResourceObservationSample,
-    ResourceObservationWriter,
-    SourceAdminService,
-    SourcePoolInvalidator,
-    SourceReloader,
-)
-from query_man.source_admin_routes import register_source_admin_routes, require_operator
-from query_man.source_store import PostgresSourceStore
 from query_man.verified import VerifiedQueryRegistry
 
 logger = logging.getLogger("query_man")
@@ -64,8 +41,6 @@ _current_caller: contextvars.ContextVar[CallerContext | None] = contextvars.Cont
     "query_man_current_caller",
     default=None,
 )
-_GATEWAY_USAGE_REPORT_INTERVAL_SECONDS = 60.0
-_RESOURCE_OBSERVATION_INTERVAL_SECONDS = 24 * 60 * 60.0
 
 
 def _unexpected_error_response() -> JSONResponse:
@@ -236,58 +211,41 @@ def build_app(
     runtime_config: RuntimeConfig,
     *,
     registry: SourceRegistry | None = None,
-    catalog: RuntimeCatalogProvider | None = None,
-    query_executor: RuntimeQueryExecutor | None = None,
+    catalog: CatalogProvider | None = None,
+    query_executor: DeliveryQueryExecutor | None = None,
     access_policy: AccessPolicy | None = None,
 ) -> FastAPI:
+    if runtime_config.source_mode != "bootstrap":
+        raise ValueError("Managed source mode must use query_man.managed.runtime")
     operations.reset()
-    if runtime_config.source_mode == "managed":
-        if registry is not None:
-            raise ValueError("Managed source mode does not accept a bootstrap registry")
-        registry = SourceRegistry([])
-    elif registry is None:
+    if registry is None:
         registry = SourceRegistry.load(runtime_config.source_directory, runtime_config.budget_file)
     _require_launch_inventory(registry)
     operations.reconcile_sources(registry.source_ids())
-    catalog = (
-        PostgresCatalog(reject_domain_columns=runtime_config.source_mode == "bootstrap")
-        if catalog is None
-        else catalog
-    )
+    catalog = PostgresCatalog(reject_domain_columns=True) if catalog is None else catalog
     _require_runtime_capabilities(
         "catalog",
         catalog,
-        ("load", "close", "invalidate", "observe_resources"),
+        ("load", "close"),
     )
     source_ids = [source["source_id"] for source in registry.list()]
-    verified_revisions = (
-        VerifiedQueryRegistry.load(
-            runtime_config.source_directory.parent / "verified-queries.yaml",
-            set(source_ids),
-        ).revision_map()
-        if runtime_config.source_mode == "bootstrap"
-        else {}
-    )
-    metadata_store: PostgresMetadataStore | None = None
-    if runtime_config.source_mode == "managed":
-        control_dsn = runtime_config.control_dsn
-        if control_dsn is None:
-            raise ValueError("Managed source mode requires a Control DB DSN")
-        metadata_store = PostgresMetadataStore(control_dsn)
+    verified_revisions = VerifiedQueryRegistry.load(
+        runtime_config.source_directory.parent / "verified-queries.yaml",
+        set(source_ids),
+    ).revision_map()
     metadata = MetadataService(
         registry,
         catalog,
         cache_ttl_ms=runtime_config.metadata_cache_ttl_ms,
         max_stale_ms=runtime_config.metadata_max_stale_ms,
         refresh_retry_ms=runtime_config.metadata_retry_delay_ms,
-        store=metadata_store,
         verified_revisions=verified_revisions,
     )
     query_executor = PostgresQueryExecutor() if query_executor is None else query_executor
     _require_runtime_capabilities(
         "query_executor",
         query_executor,
-        ("execute", "cancel", "close", "stop_accepting", "drain", "invalidate"),
+        ("execute", "cancel", "close", "stop_accepting", "drain"),
     )
     query_service = QueryService(registry, metadata, query_executor)
     if access_policy is None:
@@ -297,47 +255,84 @@ def build_app(
             access_policy = AccessPolicy.legacy(runtime_config.api_token)
         else:
             access_policy = AccessPolicy.local()
-    if runtime_config.source_mode == "managed":
-        access_policy.require_shared_access()
     gateway = GatewayService(registry, metadata, query_service)
-    source_store: PostgresSourceStore | None = None
-    source_reloader: SourceReloader | None = None
-    source_admin: SourceAdminService | None = None
-    replica_observation_writer: ReplicaObservationWriter | None = None
-    resource_observation_writer: ResourceObservationWriter | None = None
-    gateway_usage_writer: GatewayUsageWriter | None = None
-    if runtime_config.source_mode == "managed":
-        control_dsn = runtime_config.control_dsn
-        encryption_key = runtime_config.source_encryption_key
-        if control_dsn is None or encryption_key is None or metadata_store is None:
-            raise ValueError("Managed source mode configuration is incomplete")
-        source_store = PostgresSourceStore(control_dsn)
-        replica_observation_writer = ControlReplicaObservationWriter(source_store)
-        resource_observation_writer = ControlResourceObservationWriter(source_store)
-        gateway_usage_writer = ControlGatewayUsageWriter(source_store)
-        cipher = SourceSecretCipher.from_base64(encryption_key)
-        invalidators: tuple[SourcePoolInvalidator, ...] = (catalog, query_executor)
-        budgets = load_budget_profiles(runtime_config.budget_file)
-        source_reloader = SourceReloader(
-            registry,
-            metadata,
-            metadata_store,
-            source_store,
-            cipher,
-            budgets,
-            verified_revisions,
-            invalidators,
-        )
-        source_admin = SourceAdminService(
-            source_store,
-            source_reloader,
-            metadata,
-            query_service,
-            cipher,
-            budgets,
-            verified_revisions,
-            PostgresCatalog,
-        )
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        async def cleanup_step(
+            step: str,
+            cleanup: Callable[[], Awaitable[None]],
+        ) -> None:
+            try:
+                await cleanup()
+            except BaseException:
+                logger.warning("startup_cleanup_step_failed step=%s", step)
+
+        async def cleanup_failed_startup() -> None:
+            cleanup_steps: list[tuple[str, object, Callable[[], Awaitable[None]]]] = [
+                ("query_executor", query_executor, query_executor.close),
+                ("catalog", catalog, catalog.close),
+                ("metadata", metadata, metadata.close),
+            ]
+            attempted_resources: set[int] = set()
+            for step, resource, cleanup in cleanup_steps:
+                resource_id = id(resource)
+                if resource_id in attempted_resources:
+                    continue
+                attempted_resources.add(resource_id)
+                await cleanup_step(step, cleanup)
+
+        operations.reconcile_sources(registry.source_ids())
+        await _probe_registered_sources(registry, metadata)
+        child_entered = False
+        try:
+            mcp_app: FastAPI = app.state.mcp_app
+            async with mcp_app.router.lifespan_context(mcp_app):
+                child_entered = True
+                try:
+                    yield
+                finally:
+                    operations.set_accepting(False)
+                    await query_executor.drain(runtime_config.shutdown_grace_ms)
+                    try:
+                        await query_executor.close()
+                    finally:
+                        try:
+                            await catalog.close()
+                        finally:
+                            await metadata.close()
+        except BaseException:
+            if not child_entered:
+                await cleanup_failed_startup()
+            raise
+
+    return _build_delivery_app(
+        runtime_config,
+        registry=registry,
+        catalog=catalog,
+        metadata=metadata,
+        query_executor=query_executor,
+        query_service=query_service,
+        access_policy=access_policy,
+        gateway=gateway,
+        lifespan=lifespan,
+    )
+
+
+def _build_delivery_app(
+    runtime_config: RuntimeConfig,
+    *,
+    registry: SourceRegistry,
+    catalog: CatalogProvider,
+    metadata: MetadataService,
+    query_executor: DeliveryQueryExecutor,
+    query_service: QueryService,
+    access_policy: AccessPolicy,
+    gateway: GatewayService,
+    lifespan: Callable[[FastAPI], AbstractAsyncContextManager[None]],
+    route_registrar: Callable[[FastAPI], None] | None = None,
+    extra_state: Mapping[str, object] | None = None,
+) -> FastAPI:
     mcp_server = create_mcp_server(gateway, _mcp_caller)
     mcp_app = mcp_server.streamable_http_app(
         streamable_http_path="/mcp",
@@ -351,102 +346,6 @@ def build_app(
         ),
         host=runtime_config.host,
     )
-
-    @asynccontextmanager
-    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-        reload_task: asyncio.Task[None] | None = None
-
-        async def cleanup_step(
-            step: str,
-            cleanup: Callable[[], Awaitable[None]],
-        ) -> None:
-            try:
-                await cleanup()
-            except BaseException:
-                logger.warning("startup_cleanup_step_failed step=%s", step)
-
-        async def cleanup_failed_startup() -> None:
-            if reload_task is not None:
-                task = reload_task
-
-                async def cancel_reload_task() -> None:
-                    task.cancel()
-                    with suppress(asyncio.CancelledError):
-                        await task
-
-                await cleanup_step("reload_task", cancel_reload_task)
-
-            cleanup_steps: list[tuple[str, object, Callable[[], Awaitable[None]]]] = [
-                ("query_executor", query_executor, query_executor.close),
-                ("catalog", catalog, catalog.close),
-                ("metadata", metadata, metadata.close),
-            ]
-            if source_store is not None:
-                cleanup_steps.append(("source_store", source_store, source_store.close))
-            attempted_resources: set[int] = set()
-            for step, resource, cleanup in cleanup_steps:
-                resource_id = id(resource)
-                if resource_id in attempted_resources:
-                    continue
-                attempted_resources.add(resource_id)
-                await cleanup_step(step, cleanup)
-
-        if source_reloader is not None:
-            operations.set_component_health("source_reload", "initializing")
-            await source_reloader.sync()
-        operations.reconcile_sources(registry.source_ids())
-        await _probe_registered_sources(registry, metadata)
-        if source_reloader is not None:
-            replica_id = runtime_config.replica_id
-            if (
-                replica_id is None
-                or replica_observation_writer is None
-                or resource_observation_writer is None
-                or gateway_usage_writer is None
-            ):
-                raise ValueError("Managed replica observation configuration is incomplete")
-            reload_task = asyncio.create_task(
-                _reload_sources(
-                    source_reloader,
-                    runtime_config.source_reload_interval_ms,
-                    replica_observation_writer,
-                    replica_id,
-                    registry=registry,
-                    catalog=catalog,
-                    metadata=metadata,
-                    resource_writer=resource_observation_writer,
-                    gateway_writer=gateway_usage_writer,
-                )
-            )
-        child_entered = False
-        try:
-            async with mcp_app.router.lifespan_context(mcp_app):
-                child_entered = True
-                try:
-                    yield
-                finally:
-                    operations.set_accepting(False)
-                    if reload_task is not None:
-                        reload_task.cancel()
-                        with suppress(asyncio.CancelledError):
-                            await reload_task
-                    await query_executor.drain(runtime_config.shutdown_grace_ms)
-                    try:
-                        await query_executor.close()
-                    finally:
-                        try:
-                            await catalog.close()
-                        finally:
-                            try:
-                                await metadata.close()
-                            finally:
-                                if source_store is not None:
-                                    await source_store.close()
-        except BaseException:
-            if not child_entered:
-                await cleanup_failed_startup()
-            raise
-
     app = FastAPI(title="query-man", lifespan=lifespan)
     app.state.registry = registry
     app.state.catalog = catalog
@@ -456,8 +355,9 @@ def build_app(
     app.state.access_policy = access_policy
     app.state.gateway = gateway
     app.state.mcp_server = mcp_server
-    app.state.source_admin = source_admin
-    app.state.source_reloader = source_reloader
+    app.state.mcp_app = mcp_app
+    for name, value in (extra_state or {}).items():
+        setattr(app.state, name, value)
 
     @app.middleware("http")
     async def authenticate(request: Request, call_next: object) -> Response:
@@ -579,7 +479,7 @@ def build_app(
 
     @app.get("/admin/health")
     async def detailed_health(request: Request) -> dict[str, object]:
-        require_operator(request)
+        _require_operator(request)
         snapshot = operations.snapshot()
         return {
             "status": operations.public_status(),
@@ -590,7 +490,7 @@ def build_app(
 
     @app.get("/admin/metrics")
     async def metrics(request: Request) -> dict[str, object]:
-        require_operator(request)
+        _require_operator(request)
         return operations.snapshot()
 
     @app.get("/sources")
@@ -624,7 +524,7 @@ def build_app(
 
     @app.delete("/queries/{query_id}")
     async def cancel_query(query_id: str, request: Request) -> dict[str, str]:
-        caller = require_operator(request)
+        caller = _require_operator(request)
         try:
             parsed_query_id = uuid.UUID(query_id)
         except ValueError as error:
@@ -640,7 +540,8 @@ def build_app(
             ) from error
         return await gateway.cancel_query(caller, str(parsed_query_id))
 
-    register_source_admin_routes(app)
+    if route_registrar is not None:
+        route_registrar(app)
     app.add_middleware(_MCPRequestLifecycleMiddleware)
     app.mount("/", mcp_app)
 
@@ -686,530 +587,23 @@ def _caller(request: Request) -> CallerContext:
     return caller
 
 
+def _require_operator(request: Request) -> CallerContext:
+    caller = _caller(request)
+    if not caller.operator:
+        audit_logger.warning(
+            "authorization_denied caller_id=%s tenant_id=%s operation=source_admin",
+            caller.caller_id,
+            caller.tenant_id,
+        )
+        raise OperatorRequiredError
+    return caller
+
+
 def _mcp_caller() -> CallerContext:
     caller = _current_caller.get()
     if caller is None:
         raise RuntimeError("MCP caller context is unavailable")
     return caller
-
-
-async def _reload_sources(
-    reloader: SourceReloader,
-    interval_ms: int,
-    observation_writer: ReplicaObservationWriter | None = None,
-    replica_id: str | None = None,
-    *,
-    registry: SourceReader | None = None,
-    catalog: RuntimeCatalogProvider | None = None,
-    metadata: MetadataService | None = None,
-    resource_writer: ResourceObservationWriter | None = None,
-    gateway_writer: GatewayUsageWriter | None = None,
-) -> None:
-    loop = asyncio.get_running_loop()
-    reload_interval = interval_ms / 1_000
-    heartbeat_interval_ms = max(interval_ms, REPLICA_HEARTBEAT_INTERVAL_MIN_MS)
-    report_interval = heartbeat_interval_ms / 1_000
-    incarnation: int | None = None
-    resource_dependencies = (registry, catalog, metadata, resource_writer)
-    if any(dependency is not None for dependency in resource_dependencies) and any(
-        dependency is None for dependency in resource_dependencies
-    ):
-        raise ValueError("Resource observation reporting configuration is incomplete")
-
-    if observation_writer is not None:
-        if replica_id is None:
-            raise ValueError("Replica ID is required for observation reporting")
-        try:
-            incarnation = await observation_writer.register_replica(
-                replica_id,
-                heartbeat_interval_ms,
-            )
-        except Exception:
-            logger.exception("replica_observation_registration_failed")
-        if incarnation is not None:
-            await _report_replica_observation(
-                observation_writer,
-                replica_id,
-                incarnation,
-            )
-
-    next_reload = loop.time() + reload_interval
-    next_report = loop.time() + report_interval
-    reporting_tasks: list[asyncio.Task[None]] = []
-    # ponytail: process-local serialization preserves one slot in the fixed
-    # two-connection Control source pool for authority and replica operations.
-    observation_write_lock = asyncio.Lock()
-    if (
-        registry is not None
-        and catalog is not None
-        and metadata is not None
-        and resource_writer is not None
-    ):
-        reporting_tasks.append(
-            asyncio.create_task(
-                _resource_observation_loop(
-                    registry,
-                    catalog,
-                    metadata,
-                    resource_writer,
-                    reload_interval,
-                    observation_write_lock,
-                )
-            )
-        )
-    if gateway_writer is not None and incarnation is not None:
-        assert replica_id is not None
-        reporting_tasks.append(
-            asyncio.create_task(
-                _gateway_usage_loop(
-                    gateway_writer,
-                    replica_id,
-                    incarnation,
-                    observation_write_lock,
-                )
-            )
-        )
-
-    try:
-        while True:
-            deadline = next_reload if incarnation is None else min(next_reload, next_report)
-            await asyncio.sleep(max(0.0, deadline - loop.time()))
-            if loop.time() >= next_reload:
-                await reloader.sync()
-                next_reload = loop.time() + reload_interval
-            if incarnation is not None and loop.time() >= next_report:
-                assert observation_writer is not None
-                assert replica_id is not None
-                await _report_replica_observation(
-                    observation_writer,
-                    replica_id,
-                    incarnation,
-                )
-                next_report = loop.time() + report_interval
-    finally:
-        for task in reporting_tasks:
-            task.cancel()
-        if reporting_tasks:
-            await asyncio.gather(*reporting_tasks, return_exceptions=True)
-
-
-async def _report_replica_observation(
-    writer: ReplicaObservationWriter,
-    replica_id: str,
-    incarnation: int,
-) -> None:
-    snapshot = operations.replica_runtime_snapshot()
-    sources = (
-        ()
-        if snapshot.reason_code is not None
-        else tuple(
-            ReplicaSourceObservation(
-                source_id=source.source_id,
-                applied_generation=source.applied_generation,
-                applied_state_version=source.applied_state_version,
-                applied_enabled=source.applied_enabled,
-                applied_metadata_revision=source.applied_metadata_revision,
-                source_health=source.source_health,
-                reason_code=source.reason_code,
-            )
-            for source in snapshot.sources
-        )
-    )
-    try:
-        await writer.report_replica(
-            replica_id,
-            incarnation,
-            reason_code=snapshot.reason_code,
-            sources=sources,
-        )
-    except Exception:
-        logger.exception("replica_observation_report_failed")
-
-
-def _registered_profiles(registry: SourceReader) -> dict[str, SourceProfile]:
-    profiles: dict[str, SourceProfile] = {}
-    for source_id in sorted(registry.source_ids()):
-        source = registry.get(source_id)
-        if source is not None:
-            profiles[source_id] = source
-    return profiles
-
-
-async def _resource_observation_loop(
-    registry: SourceReader,
-    catalog: RuntimeCatalogProvider,
-    metadata: MetadataService,
-    writer: ResourceObservationWriter,
-    poll_interval: float,
-    write_lock: asyncio.Lock | None = None,
-) -> None:
-    loop = asyncio.get_running_loop()
-    tracked_profiles = _registered_profiles(registry)
-    initial_profiles = tuple(
-        source
-        for source in tracked_profiles.values()
-        if source.observability is not None
-    )
-    next_observation_by_source: dict[str, float] = {}
-    if initial_profiles:
-        await _collect_resource_observations(
-            initial_profiles,
-            catalog,
-            metadata,
-            writer,
-            write_lock,
-        )
-        next_observation_by_source.update(
-            {
-                source.source_id: loop.time()
-                + _RESOURCE_OBSERVATION_INTERVAL_SECONDS
-                for source in initial_profiles
-            }
-        )
-    while True:
-        next_due = min(next_observation_by_source.values(), default=None)
-        await asyncio.sleep(
-            min(
-                poll_interval,
-                (
-                    max(0.0, next_due - loop.time())
-                    if next_due is not None
-                    else poll_interval
-                ),
-            )
-        )
-        current_profiles = _registered_profiles(registry)
-        now = loop.time()
-        profiles = tuple(
-            source
-            for source_id, source in current_profiles.items()
-            if source.observability is not None
-            and (
-                tracked_profiles.get(source_id) is not source
-                or source_id not in next_observation_by_source
-                or now >= next_observation_by_source[source_id]
-            )
-        )
-        active_configured = {
-            source_id
-            for source_id, source in current_profiles.items()
-            if source.observability is not None
-        }
-        next_observation_by_source = {
-            source_id: deadline
-            for source_id, deadline in next_observation_by_source.items()
-            if source_id in active_configured
-        }
-        tracked_profiles = current_profiles
-        if profiles:
-            await _collect_resource_observations(
-                profiles,
-                catalog,
-                metadata,
-                writer,
-                write_lock,
-            )
-            attempted_at = loop.time()
-            next_observation_by_source.update(
-                {
-                    source.source_id: attempted_at
-                    + _RESOURCE_OBSERVATION_INTERVAL_SECONDS
-                    for source in profiles
-                }
-            )
-
-
-async def _gateway_usage_loop(
-    writer: GatewayUsageWriter,
-    replica_id: str,
-    incarnation: int,
-    write_lock: asyncio.Lock | None = None,
-) -> None:
-    loop = asyncio.get_running_loop()
-    sequence = 1
-    pending: tuple[int | None, tuple[GatewayUsageDelta, ...]] | None = None
-    next_report = loop.time() + _GATEWAY_USAGE_REPORT_INTERVAL_SECONDS
-    while True:
-        await asyncio.sleep(max(0.0, next_report - loop.time()))
-        sequence, pending = await _report_gateway_usage(
-            writer,
-            replica_id,
-            incarnation,
-            sequence,
-            pending,
-            write_lock,
-        )
-        while next_report <= loop.time():
-            next_report += _GATEWAY_USAGE_REPORT_INTERVAL_SECONDS
-
-
-def _definition_revision(material: dict[str, object]) -> str:
-    encoded = json.dumps(
-        material,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-    return "sha256:" + hashlib.sha256(encoded).hexdigest()
-
-
-def _resource_observation_samples(
-    source: SourceProfile,
-    observation: ResourceObservation,
-) -> tuple[ResourceObservationSample, ...]:
-    definition = source.observability
-    if definition is None:
-        return ()
-    migration_ref = source.provenance.database_migration_ref
-    samples: list[ResourceObservationSample] = []
-    if observation.representative_records is not None:
-        representative = definition.representative_records
-        samples.append(
-            ResourceObservationSample(
-                metric="representative_records",
-                value=observation.representative_records,
-                unit="rows",
-                method="postgres_catalog_estimate",
-                definition_revision=_definition_revision(
-                    {
-                        "database_migration_ref": migration_ref,
-                        "grain": representative.grain,
-                        "method": "postgres_catalog_estimate",
-                        "metric": "representative_records",
-                        "physical_relation": representative.physical_relation,
-                    }
-                ),
-            )
-        )
-    relations = sorted(definition.storage_relations)
-    samples.extend(
-        (
-            ResourceObservationSample(
-                metric="table_bytes",
-                value=observation.table_bytes,
-                unit="bytes",
-                method="postgres_relation_size",
-                definition_revision=_definition_revision(
-                    {
-                        "database_migration_ref": migration_ref,
-                        "method": "postgres_relation_size",
-                        "metric": "table_bytes",
-                        "relations": relations,
-                    }
-                ),
-            ),
-            ResourceObservationSample(
-                metric="index_bytes",
-                value=observation.index_bytes,
-                unit="bytes",
-                method="postgres_relation_size",
-                definition_revision=_definition_revision(
-                    {
-                        "database_migration_ref": migration_ref,
-                        "method": "postgres_relation_size",
-                        "metric": "index_bytes",
-                        "relations": relations,
-                    }
-                ),
-            ),
-            ResourceObservationSample(
-                metric="total_storage_bytes",
-                value=observation.total_storage_bytes,
-                unit="bytes",
-                method="postgres_relation_size",
-                definition_revision=_definition_revision(
-                    {
-                        "database_migration_ref": migration_ref,
-                        "method": "postgres_relation_size",
-                        "metric": "total_storage_bytes",
-                        "relations": relations,
-                    }
-                ),
-            ),
-        )
-    )
-    return tuple(samples)
-
-
-async def _collect_resource_observations(
-    sources: tuple[SourceProfile, ...],
-    catalog: RuntimeCatalogProvider,
-    metadata: MetadataService,
-    writer: ResourceObservationWriter,
-    write_lock: asyncio.Lock | None = None,
-) -> None:
-    for source in sources:
-        if source.observability is None:
-            continue
-        generation = source.control_generation
-        if generation is None:
-            logger.warning(
-                "resource_observation_report_failed",
-                extra={"source_id": source.source_id},
-            )
-            continue
-        try:
-            with operations.suppress_source_health_updates():
-                prepared = await metadata.get_published(source.source_id)
-        except asyncio.CancelledError:
-            raise
-        except Exception as error:
-            if isinstance(error.__cause__, ReaderSessionPolicyError):
-                await _report_resource_observation_failure(
-                    writer,
-                    source.source_id,
-                    generation,
-                    "RESOURCE_READ_FAILED",
-                    write_lock,
-                )
-            else:
-                await _report_resource_observation_failure(
-                    writer,
-                    source.source_id,
-                    generation,
-                    "METADATA_UNAVAILABLE",
-                    write_lock,
-                )
-            continue
-        try:
-            with operations.suppress_source_health_updates():
-                observation = await catalog.observe_resources(source)
-            samples = _resource_observation_samples(source, observation)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            await _report_resource_observation_failure(
-                writer,
-                source.source_id,
-                generation,
-                "RESOURCE_READ_FAILED",
-                write_lock,
-            )
-            continue
-        try:
-            if write_lock is None:
-                await writer.report_resource_observations(
-                    source.source_id,
-                    generation,
-                    prepared.revision,
-                    samples,
-                )
-            else:
-                async with write_lock:
-                    await writer.report_resource_observations(
-                        source.source_id,
-                        generation,
-                        prepared.revision,
-                        samples,
-                    )
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.warning(
-                "resource_observation_report_failed",
-                extra={"source_id": source.source_id},
-            )
-
-
-async def _report_resource_observation_failure(
-    writer: ResourceObservationWriter,
-    source_id: str,
-    generation: int,
-    reason_code: ResourceObservationFailureReason,
-    write_lock: asyncio.Lock | None,
-) -> None:
-    logger.warning(
-        "resource_observation_failed",
-        extra={"source_id": source_id, "reason_code": reason_code},
-    )
-    try:
-        if write_lock is None:
-            await writer.report_resource_observation_failure(
-                source_id,
-                generation,
-                reason_code,
-            )
-        else:
-            async with write_lock:
-                await writer.report_resource_observation_failure(
-                    source_id,
-                    generation,
-                    reason_code,
-                )
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        logger.warning(
-            "resource_observation_failure_report_failed",
-            extra={"source_id": source_id, "reason_code": reason_code},
-        )
-
-
-async def _report_gateway_usage(
-    writer: GatewayUsageWriter,
-    replica_id: str,
-    incarnation: int,
-    sequence: int,
-    pending: tuple[int | None, tuple[GatewayUsageDelta, ...]] | None = None,
-    write_lock: asyncio.Lock | None = None,
-) -> tuple[int, tuple[int | None, tuple[GatewayUsageDelta, ...]] | None]:
-    if pending is None:
-        snapshot = operations.gateway_usage_report_snapshot(100)
-        pending = (
-            None,
-            (),
-        )
-        if snapshot is not None:
-            pending = (
-                snapshot.snapshot_id,
-                tuple(
-                    GatewayUsageDelta(
-                        source_id=delta.source_id,
-                        budget_profile=delta.budget_profile,
-                        metadata_revision=delta.metadata_revision,
-                        definition_revision=delta.definition_revision,
-                        bucket_start=delta.bucket_start,
-                        query_count=delta.query_count,
-                        success_count=delta.success_count,
-                        rejected_count=delta.rejected_count,
-                        timeout_count=delta.timeout_count,
-                        overloaded_count=delta.overloaded_count,
-                        cancelled_count=delta.cancelled_count,
-                        failed_count=delta.failed_count,
-                        queue_ms_sum=delta.queue_ms_sum,
-                        elapsed_ms_sum=delta.elapsed_ms_sum,
-                        returned_rows_sum=delta.returned_rows_sum,
-                        result_bytes_sum=delta.result_bytes_sum,
-                        truncated_count=delta.truncated_count,
-                    )
-                    for delta in snapshot.deltas
-                ),
-            )
-    snapshot_id, deltas = pending
-    try:
-        if write_lock is None:
-            await writer.report_gateway_usage(
-                replica_id,
-                incarnation,
-                sequence,
-                deltas,
-            )
-        else:
-            async with write_lock:
-                await writer.report_gateway_usage(
-                    replica_id,
-                    incarnation,
-                    sequence,
-                    deltas,
-                )
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        logger.warning("gateway_usage_report_failed")
-        return sequence, pending
-    if snapshot_id is not None:
-        operations.ack_gateway_usage_report(snapshot_id)
-    return sequence + 1, None
 
 
 async def _probe_registered_sources(

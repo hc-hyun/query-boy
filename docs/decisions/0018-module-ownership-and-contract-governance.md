@@ -70,6 +70,34 @@ interface와 forwarding layer를 미리 만들 위험이 있다. 필요한 것�
 이동했다. 여섯 boundary 강화는 모두 현재 구현 baseline이며 승인 범위를 넘어서는 interface나 별도
 경계 의미 변경은 다시 승인받는다.
 
+### 2026-08-26 Approved Pre-Repository Separation
+
+사용자는 change-set `PRE-REPO-SPLIT-20260826`으로 managed 기능의 repository 분리 전 단계를
+승인했다. 이 결정은 별도 service나 repository를 만들지 않고 다음 ownership/composition 경계를
+현재 baseline으로 추가한다.
+
+- Source administration, Control persistence, encrypted secret와 concrete PostgreSQL metadata store를
+  same-repository `query_man.managed` package에 둔다. Managed-only admin Delivery adapter와 Runtime
+  composition도 이 package에 두되 external wire owner는 계속 Delivery, production composition owner는
+  계속 Runtime이다.
+- Ordinary provider dependency는 `managed -> core` 한 방향이다. Static bootstrap composition은 managed
+  package를 import하지 않는다. Managed authority를 명시적으로 선택한 Runtime composition만 concrete
+  implementation을 지연 import·조립할 수 있다.
+- Static composition은 Control DB/store/reloader/reporter, source-admin route와 managed usage recorder를
+  만들지 않는다. 따라서 source-admin path는 static OpenAPI에 없고 static request는 route-not-found다.
+- Base `compose.yaml`/`scripts/apply-db.sh`와 CI `core-static`의 DB-backed acceptance는 current
+  두-source static fixture만 쓴다. Control DB와 managed onboarding/recovery fixture는
+  `compose.acceptance.yaml`과 `scripts/apply-managed-acceptance-fixtures.sh`를 쓰는 CI
+  `managed-acceptance` lane에서만 준비한다. Shared Runtime/Delivery direct-consumer unit test가 두
+  composition branch를 함께 검증하는 것은 허용한다.
+- Module interface, Control DB schema/codec/history, SQL·result policy, source lifecycle transaction,
+  managed admin request/response와 failure 의미는 변경하지 않는다. 과거 migration과 evidence도 보존한다.
+
+이 단계는 managed 배포 단위나 release cadence를 독립시켰다는 뜻이 아니다. 이후 별도 repository로
+이동하려면 static build/test가 managed source tree 없이 성립하는지, versioned core interface와
+cross-repository compatibility gate, Control DB migration/recovery owner가 준비됐는지를 다시 확인한다.
+별도 network service는 이 승인 범위가 아니다.
+
 ## Consequences
 
 - Agent는 담당 module을 중심으로 읽고 작업하면서도 직접 consumer와 안전 경계를 놓치지 않는다.

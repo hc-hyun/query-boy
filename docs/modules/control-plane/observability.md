@@ -26,7 +26,8 @@ Missing/failure를 0으로 만들지 않으며 credential, relation 이름, call
 
 ## Public writer interface
 
-Runtime은 persistence-private table/row가 아니라 `source_admin.py`의 다음 Python interface만 소비한다.
+Managed Runtime은 persistence-private table/row가 아니라 `managed/source_admin.py`의 다음 Python
+interface만 소비한다. Static Runtime은 이 package와 interface를 import하지 않는다.
 모든 method는 async다.
 
 ```text
@@ -438,7 +439,8 @@ format, policy, privacy, migration과 operational 영향을 각각 제안해 별
 Focused tests:
 
 ```text
-uv run pytest tests/test_source_admin.py tests/test_managed_mode.py tests/test_http.py
+uv run pytest tests/test_source_admin.py tests/test_managed_operations.py \
+  tests/test_managed_mode.py tests/test_managed_http.py
 uv run pytest -m integration tests/test_source_store.py tests/test_control_migrations.py \
   tests/test_control_startup.py tests/test_control_recovery.py
 ```

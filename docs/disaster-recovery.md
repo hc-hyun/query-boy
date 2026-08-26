@@ -43,8 +43,9 @@ authority가 아니다.
 3. Database owner/관리자용 `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`와
    `PGPASSFILE`/managed-auth를 설정하고 `./scripts/apply-control-schema.sh`를 실행한다.
    이 script는 checksum이 일치하는 pending numbered migration을 transaction별로 적용한 뒤
-   NOLOGIN writer group/ACL을 반복적으로 reconcile한다. 네 fixture와 seed를 만드는
-   `./scripts/apply-db.sh`는 production migration이 아니다.
+   NOLOGIN writer group/ACL을 반복적으로 reconcile한다. Development fixture용
+   `./scripts/apply-db.sh`와 `./scripts/apply-managed-acceptance-fixtures.sh`는 production
+   migration이 아니다.
 4. Dedicated runtime LOGIN이 `query_man_control_writer` membership만 상속하는지, replica당
    metadata/source store pool 2개씩을 반영한 유한 connection limit와 TLS가 적용됐는지
    확인한다. Role password/certificate/IAM credential은 SQL repository 밖에서 생성·회전한다.
@@ -131,10 +132,17 @@ migration/restore job이 다른 Control 작업과
 겹치지 않는 상태에서 실행한다.
 
 ```bash
+export COMPOSE_FILE=compose.yaml:compose.acceptance.yaml
 docker compose up -d --wait postgres
-./scripts/apply-db.sh
+./scripts/apply-managed-acceptance-fixtures.sh
 uv run pytest -m integration -q tests/test_control_recovery.py
+docker compose down -v --remove-orphans
+unset COMPOSE_FILE
 ```
+
+이 절차의 `down -v`는 별도 `query-man-managed-acceptance` project volume만 삭제한다. Test가 중간에
+실패해도 같은 `COMPOSE_FILE` 값으로 cleanup한 뒤 unset한다. Base `query-man_postgres_data`는
+재사용하거나 삭제하지 않는다.
 
 이 test는 기존 `postgres-control-recovery-source` service가 있으면 덮어쓰지 않는다. `recovery`
 profile의 tmpfs PostgreSQL 18.4에 13개 table을 모두 채우고 custom archive를 만들어 현재 18.6의

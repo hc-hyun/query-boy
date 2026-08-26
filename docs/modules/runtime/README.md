@@ -22,7 +22,7 @@ production 조립과 lifecycle 때문이며, 이 예외로 다른 module의 priv
 | 구분 | 현재 상태 |
 |---|---|
 | First launch | `development-issues`, `market-voc`의 static `bootstrap`, non-RLS, 단일 serving replica |
-| Managed runtime | 구현과 test는 보존됐지만 first launch에서는 Control DB, hot reload와 reporter를 조립하지 않음 |
+| Managed runtime | `query_man.managed` package에 보존됐으며 명시적 managed composition에서만 import·조립 |
 | `soak` / `recovery` profile | 각각 두 replica와 PostgreSQL 18.4 복구를 검증하는 acceptance fixture; serving topology가 아님 |
 | Protected environment | Repository acceptance는 완료. 실제 TLS·secret·route·cutover는 별도 승인 대상 `LAUNCH-02` |
 
@@ -48,17 +48,25 @@ production 조립과 lifecycle 때문이며, 이 예외로 다른 module의 priv
 
 | 위치 | 역할 |
 |---|---|
-| [`app.py`](../../../src/query_man/app.py) | `build_app`, production 조립, lifespan, startup probe와 managed task; route/DTO는 Delivery 소유 |
-| [`server.py`](../../../src/query_man/server.py) | Uvicorn process와 shutdown signal ordering |
+| [`app.py`](../../../src/query_man/app.py) | Static `build_app`, production 조립, lifespan과 startup probe; route/DTO는 Delivery 소유 |
+| [`managed/runtime.py`](../../../src/query_man/managed/runtime.py) | Managed `build_app`, Control/admin/reload/reporter/usage composition과 lifecycle |
+| [`server.py`](../../../src/query_man/server.py) | 검증된 source mode별 composition-root 선택, Uvicorn process와 shutdown signal ordering |
 | [`runtime_config.py`](../../../src/query_man/runtime_config.py) | Environment model/validation과 `RuntimeConfig` |
 | [`operations.py`](../../../src/query_man/operations.py) | Process-local operations sink, health/metric state와 safe formatter/redaction |
-| [`Dockerfile`](../../../Dockerfile), [`compose.yaml`](../../../compose.yaml), [`.env.example`](../../../.env.example) | Image, process, network, config와 health lifecycle |
+| [`Dockerfile`](../../../Dockerfile), [`compose.yaml`](../../../compose.yaml), [`.env.example`](../../../.env.example) | Current two-source static image, process, network, config와 health lifecycle |
+| [`compose.acceptance.yaml`](../../../compose.acceptance.yaml) | 별도 project/container/volume의 Control/support/commerce managed acceptance overlay; base serving topology가 아님 |
 | [`verify-container.sh`](../../../scripts/verify-container.sh) | Assurance 소유의 container acceptance; Runtime surface를 소비하는 shared transition artifact |
 | [`pyproject.toml`](../../../pyproject.toml), [`uv.lock`](../../../uv.lock) | Entrypoint와 locked dependency; 여러 owner가 쓰는 shared transition artifact |
+| [`test_runtime_config.py`](../../../tests/test_runtime_config.py), [`test_server.py`](../../../tests/test_server.py), [`test_operations.py`](../../../tests/test_operations.py), [`test_http.py`](../../../tests/test_http.py) | Source authority, process/common operations와 static composition tests |
+| [`test_managed_mode.py`](../../../tests/test_managed_mode.py), [`test_managed_operations.py`](../../../tests/test_managed_operations.py), [`test_managed_runtime_startup_cleanup.py`](../../../tests/test_managed_runtime_startup_cleanup.py), [`test_managed_http.py`](../../../tests/test_managed_http.py) | Managed composition, observation, cleanup와 Delivery direct-consumer tests |
 
-현재 Python 코드는 `src/query_man`의 평면 구조다. 특히 `app.py`는 Delivery/Runtime transition hot spot이다.
-Runtime 작업에서는 composition/lifespan symbol만 수정하고 route나 wire schema 정리를 같은 diff에 섞지
-않는다. `compose.yaml`의 `soak`와 `recovery` profile도 각각 Assurance acceptance fixture다.
+Static core Python 코드는 대부분 `src/query_man`의 평면 구조이고 managed implementation은
+`src/query_man/managed` package에 격리했다. `app.py`는 여전히 Delivery/Runtime transition hot spot이지만
+static composition은 managed package를 import하지 않는다. Runtime 작업에서는 composition/lifespan
+symbol만 수정하고 route나 wire schema 정리를 같은 diff에 섞지 않는다. Base `compose.yaml`과
+`scripts/apply-db.sh`는 current 두 source만 준비한다. Managed Control/support/commerce fixture는
+`compose.acceptance.yaml` overlay와 `scripts/apply-managed-acceptance-fixtures.sh`를 명시적으로 사용한
+별도 `query-man-managed-acceptance` project에서만 준비하며 serving topology가 아니다.
 
 ## 제공 인터페이스와 소유 경계
 
@@ -74,7 +82,7 @@ Runtime이 다른 logical module에 제공하는 공식 Python interface는 proc
 |---|---|
 | Delivery | `operations.increment`, `operations.observe`, `operations.public_status`, `operations.snapshot` |
 | Metadata | `operations.increment`, `operations.set_source_health`, `operations.set_replica_metadata_revision` |
-| Guarded Query | `GatewayUsageOutcome`, `operations.increment`, `operations.observe`, `operations.record_gateway_usage` |
+| Guarded Query | `operations.increment`, `operations.observe` |
 | Control Plane | `operations.increment`, `operations.set_component_health`, `operations.set_replica_scan_failed`, `operations.set_replica_source_applied`, `operations.set_replica_source_failure`, `operations.clear_replica_source_apply_failure`, `operations.reconcile_sources`, `operations.set_source_health`, `operations.suppress_source_health_updates` |
 | Runtime lifecycle/reporter | `operations.set_accepting`, `operations.replica_runtime_snapshot`, `ReplicaRuntimeSnapshot`, `ReplicaSourceRuntimeState` |
 
@@ -93,10 +101,6 @@ operations.reconcile_sources(source_ids: Iterable[str]) -> None
 operations.set_accepting(accepting: bool) -> None
 operations.public_status() -> str
 operations.snapshot() -> dict[str, Any]
-operations.record_gateway_usage(*, source_id: str, budget_profile: str,
-    metadata_revision: str, outcome: GatewayUsageOutcome, queue_ms: int = 0,
-    elapsed_ms: int = 0, returned_rows: int = 0, result_bytes: int = 0,
-    truncated: bool = False) -> None
 operations.set_replica_scan_failed(failed: bool) -> None
 operations.set_replica_source_applied(source_id: str, generation: int,
     state_version: int, enabled: bool) -> None
@@ -107,8 +111,6 @@ operations.set_replica_metadata_revision(source_id: str, revision: str | None) -
 operations.replica_runtime_snapshot() -> ReplicaRuntimeSnapshot
 operations.suppress_source_health_updates() -> Iterator[None]
 
-GatewayUsageOutcome = Literal["success", "rejected", "timeout", "overloaded",
-    "cancelled", "failed"]
 ReplicaSourceRuntimeState(source_id: str, applied_generation: int | None,
     applied_state_version: int | None, applied_enabled: bool | None,
     applied_metadata_revision: str | None, source_health: ReplicaSourceHealth | None,
@@ -119,16 +121,22 @@ ReplicaRuntimeSnapshot(reason_code: ReplicaRuntimeReason | None,
 
 </details>
 
+Managed `QueryService`에만 주입하는 `ManagedGatewayUsageRecorder`는 Guarded Query가 제공한
+`GatewayUsageRecorder` Protocol과 `GatewayUsageOutcome`을 구현·소비하는 Runtime private adapter다.
+이는 `operations` interface가 아니며 static composition에는 instance가 없다.
+
 Python shape와 호출 단위 input/output/domain-error 의미만 module interface다. Metric label, readiness
 판정, reporter cadence, failure 격리와 공개 projection은 각각 policy 또는 lifecycle/operational
 boundary다. `RuntimeConfig`, `load_runtime_config()`와 `build_app()`은 Runtime 내부
-configuration/composition entry이며 cross-module 업무 interface가 아니다. `operations.reset`, gateway
-report snapshot/ack와 logging helper도 Runtime 내부다.
+configuration/composition entry이며 cross-module 업무 interface가 아니다. `operations.reset`, managed
+gateway report snapshot/ack와 logging helper도 Runtime 내부다.
 
 ### Production composition ownership
 
 - Production server의 concrete PostgreSQL adapter는 Runtime만 조립한다. Control Plane candidate staging과
   Assurance offline CLI는 각 bounded workflow에서만 별도 composition root가 될 수 있다.
+- Static composition은 `query_man.managed`를 import하지 않는다. 명시적으로 managed authority를 고른
+  composition만 package를 지연 import하고 Control store, admin adapter, reloader와 reporter를 조립한다.
 - Runtime은 concrete `SourceRegistry`를 ordinary consumer에는 `SourceReader`, managed reloader에는
   `SourceProjectionWriter`로 좁혀 주입한다.
 - Catalog/query adapter는 provider의 `RuntimeCatalogProvider`와 `RuntimeQueryExecutor`를 만족해야 한다.
@@ -147,8 +155,8 @@ report snapshot/ack와 logging helper도 Runtime 내부다.
 - Managed cold RLS record는 `RUNTIME_VALIDATION_REJECTED`가 되고 registry에 projection되지 않는다.
   Managed publish/rotate도 기존 `SOURCE_VALIDATION_FAILED`로 끝난다.
 - Bootstrap과 managed authority를 합치거나 실패 시 서로 fallback하지 않는다.
-- Managed implementation과 RLS type/code/history는 물리적으로 삭제하지 않지만 first launch에는 Control
-  DB, admin mutation, hot onboarding, reload와 observation task가 참여하지 않는다.
+- Managed implementation과 RLS type/code/history는 보존하지만 first launch에는 managed package import,
+  Control DB, admin route, mutation, hot onboarding, reload와 observation task가 참여하지 않는다.
 
 이는 Python interface가 아니라 [ADR 0025의 RLS quarantine](../../decisions/0025-static-non-rls-first-launch.md#2-rls-quarantine)과
 composition/lifecycle invariant다. RLS serving 또는 managed launch 활성화는 별도 영향,
@@ -160,7 +168,7 @@ migration과 rollback 승인이 필요하다.
 config/logging validate -> operations reset -> source authority 하나 선택
 -> RLS inventory guard -> catalog/query capability 검사
 -> metadata/query/access/gateway 조립
--> managed only: Control store/reloader 조립과 initial sync
+-> managed only: managed package 지연 import, Control store/admin/reloader 조립과 initial sync
 -> inventory reconcile -> source별 bounded metadata probe
 -> managed only: reload/report task 시작
 -> MCP child lifespan enter -> ready/degraded serving
@@ -215,9 +223,11 @@ Build, exact-ready와 artifact 확인 절차는 [Operations Guide](../../operati
 
 ### Preserved managed runtime outside first launch
 
-Managed path는 구현과 test만 보존한다. 별도 활성화 시 empty registry에서 시작하고 Control DB의 source와
-verified membership만 authority로 사용하며 filesystem으로 복구하지 않는다. Version 2 access policy,
-stable replica ID, initial sync, inventory reconcile, metadata probe와 reload task가 필요하다.
+Managed path는 same-repository `query_man.managed` package, `compose.acceptance.yaml` fixture overlay와
+CI `managed-acceptance` lane에 보존한다. CI `core-static`과 container lane은 base static fixture만 쓴다. 별도
+활성화 시 empty registry에서 시작하고 Control DB의 source와 verified membership만 authority로 사용하며
+filesystem으로 복구하지 않는다. Version 2 access policy, stable replica ID, initial sync, inventory
+reconcile, metadata probe와 reload task가 필요하다.
 
 Runtime은 Control Plane의 공개 replica/resource/gateway writer만 소비한다. Reporter는 fixed Control pool과
 process-local write lock을 재사용하며 startup, query result, readiness와 shutdown 성공을 바꾸지 않는
@@ -297,14 +307,15 @@ change-record 책임을 확인한 실행 승인이 필요하다. 과거 evidence
 
 ```text
 uv run pytest tests/test_registry.py tests/test_runtime_config.py tests/test_operations.py \
-  tests/test_server.py tests/test_http.py tests/test_managed_mode.py \
-  tests/test_runtime_startup_cleanup.py
+  tests/test_server.py tests/test_http.py
+uv run pytest tests/test_managed_mode.py tests/test_managed_operations.py \
+  tests/test_managed_runtime_startup_cleanup.py tests/test_managed_http.py
 ```
 
 | 변경 범위 | 추가 검증 |
 |---|---|
 | Lifecycle/disconnect | Query/MCP와 관련 integration test |
-| Managed reload/reporter | Source-admin, Control startup/observability test |
+| Managed reload/reporter | `test_managed_mode.py`, `test_managed_operations.py`, source-admin/Control startup test |
 | Container/artifact | `docker compose config --quiet`, approved revision build, `./scripts/verify-container.sh`, `uv run query-man-verify` |
 
 Built image의 OCI revision label/digest와 Compose exact-ready를 확인한다. Protected deployment evidence는
@@ -315,10 +326,10 @@ Built image의 OCI revision label/digest와 Compose exact-ready를 확인한다.
 | 작업 | 먼저 읽을 범위 |
 |---|---|
 | Environment/source authority | `runtime_config.py`, `test_runtime_config.py`, ADR 0025 |
-| Production composition/startup cleanup | `app.py`의 composition/lifespan symbol, provider lifecycle interface, `test_runtime_startup_cleanup.py`, `test_managed_mode.py` |
-| Health/logging/shutdown | `operations.py`, `server.py`, 직접 consumer와 `test_operations.py`, `test_server.py` |
-| Container/image/readiness | `Dockerfile`, `compose.yaml`, `verify-container.sh`, [Operations Guide](../../operations.md)와 관련 acceptance |
-| Preserved managed path | Runtime의 managed symbol, [Control Plane](../control-plane/README.md), 관련 managed/Control test |
+| Production composition/startup cleanup | Static은 `app.py`, managed는 `managed/runtime.py`의 composition/lifespan symbol, provider lifecycle interface, `test_managed_runtime_startup_cleanup.py`, `test_managed_mode.py` |
+| Health/logging/shutdown | `operations.py`, `server.py`, 직접 consumer와 static/common `test_operations.py`, managed `test_managed_operations.py`, `test_server.py` |
+| Container/image/readiness | `Dockerfile`, base `compose.yaml`, managed fixture면 `compose.acceptance.yaml`, `verify-container.sh`, [Operations Guide](../../operations.md)와 관련 acceptance |
+| Preserved managed path | `managed/runtime.py`, [Control Plane](../control-plane/README.md), `test_managed_mode.py`, `test_managed_operations.py`, `test_managed_http.py`와 관련 Control test |
 | Protected procedure/execution | [Operations Guide](../../operations.md); 실제 실행이면 승인 범위와 append-only evidence schema |
 
 `app.py` route/middleware를 바꾸면 Delivery 문서와 external API test까지 읽는다. Metadata ranking, SQL AST

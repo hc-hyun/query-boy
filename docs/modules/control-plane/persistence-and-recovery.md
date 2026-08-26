@@ -127,7 +127,7 @@ Generation, metadata와 active pointer를 변경하지 않는다. Cold stored RL
 
 ## Transaction과 migration 불변조건
 
-- 같은 source의 `source_store.py`와 `metadata_store.py`는 정확히
+- 같은 source의 `managed/source_store.py`와 `managed/metadata_store.py`는 정확히
   `pg_advisory_xact_lock(hashtextextended(source_id, 0))` key를 사용한다.
 - Active pointer 변경에는 generation과 monotonic `state_version` CAS를 함께 사용한다. 이는 lost update와
   deactivate→same-generation rollback ABA를 막는다.

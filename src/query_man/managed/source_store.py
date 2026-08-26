@@ -14,6 +14,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
+from query_man.managed.secrets import EncryptedSecret
 from query_man.metadata_store import encode_snapshot
 from query_man.models import PreparedMetadata
 from query_man.registry import (
@@ -24,7 +25,6 @@ from query_man.registry import (
     STABLE_SLUG_MAX_LENGTH,
     STABLE_SLUG_PATTERN,
 )
-from query_man.secrets import EncryptedSecret
 from query_man.verified import VerifiedQuery
 
 POSTGRES_BIGINT_MAX = 9_223_372_036_854_775_807

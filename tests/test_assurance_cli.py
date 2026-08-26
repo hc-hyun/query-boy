@@ -353,29 +353,58 @@ def test_quality_and_verified_core_do_not_import_concrete_composition_adapters()
 
 
 def test_concrete_service_construction_stays_in_approved_composition_roots() -> None:
+    source_root = ROOT_DIRECTORY / "src" / "query_man"
     allowed_files = {
-        "SourceRegistry": {"app.py", "source_admin.py", "assurance_cli.py"},
-        "PostgresCatalog": {"app.py", "assurance_cli.py"},
-        "PostgresQueryExecutor": {"app.py", "assurance_cli.py"},
-        "MetadataService": {"app.py", "source_admin.py", "assurance_cli.py"},
-        "QueryService": {"app.py", "assurance_cli.py"},
+        "SourceRegistry": {
+            "app.py",
+            "assurance_cli.py",
+            "managed/runtime.py",
+            "managed/source_admin.py",
+        },
+        "PostgresCatalog": {
+            "app.py",
+            "assurance_cli.py",
+            "managed/runtime.py",
+        },
+        "PostgresQueryExecutor": {
+            "app.py",
+            "assurance_cli.py",
+            "managed/runtime.py",
+        },
+        "MetadataService": {
+            "app.py",
+            "assurance_cli.py",
+            "managed/runtime.py",
+            "managed/source_admin.py",
+        },
+        "QueryService": {
+            "app.py",
+            "assurance_cli.py",
+            "managed/runtime.py",
+        },
     }
+    if not (source_root / "managed").is_dir():
+        for files in allowed_files.values():
+            files.difference_update(
+                path for path in files if path.startswith("managed/")
+            )
     actual_files = {name: set() for name in allowed_files}
 
-    for path in (ROOT_DIRECTORY / "src" / "query_man").glob("*.py"):
+    for path in source_root.rglob("*.py"):
+        relative_path = path.relative_to(source_root).as_posix()
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if not isinstance(node, ast.Call):
                 continue
             called = node.func
             if isinstance(called, ast.Name) and called.id in actual_files:
-                actual_files[called.id].add(path.name)
+                actual_files[called.id].add(relative_path)
             elif (
                 isinstance(called, ast.Attribute)
                 and isinstance(called.value, ast.Name)
                 and called.value.id == "SourceRegistry"
                 and called.attr == "load"
             ):
-                actual_files["SourceRegistry"].add(path.name)
+                actual_files["SourceRegistry"].add(relative_path)
 
     assert actual_files == allowed_files
 

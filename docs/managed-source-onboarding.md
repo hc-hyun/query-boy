@@ -318,8 +318,10 @@ Managed mode를 별도 활성화할 때는 target database/schema/control object
 
 이 script는 현재 `PGDATABASE`에 checksum이 일치하는 pending numbered migration만 적용하고,
 `query_man_control_writer` NOLOGIN group과 최소 ACL을 매번 reconcile한다. 이미 적용된 migration
-file은 수정하지 않고 schema 변경마다 새 번호를 추가한다. 네 fixture database·role·seed를
-만드는 `scripts/apply-db.sh`는 production migration에 사용하지 않는다.
+file은 수정하지 않고 schema 변경마다 새 번호를 추가한다. 기본 `scripts/apply-db.sh`는 current
+두 static fixture만 만들며, 네 fixture와 development Control schema가 필요한 acceptance는
+`compose.acceptance.yaml`과 `scripts/apply-managed-acceptance-fixtures.sh`를 명시적으로 사용한다.
+어느 script도 production migration에 사용하지 않는다.
 전용 LOGIN은 database/IAM 운영 절차로 별도 생성하고 `query_man_control_writer` membership만
 부여한다. LOGIN은 `INHERIT`, `NOSUPERUSER`, `NOCREATEDB`, `NOCREATEROLE`, `NOREPLICATION`,
 `NOBYPASSRLS`와 유한 connection limit를 사용한다. Metadata/source store pool이 각각 replica당

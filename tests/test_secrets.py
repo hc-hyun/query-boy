@@ -4,7 +4,11 @@ import base64
 
 import pytest
 
-from query_man.secrets import SecretDecryptionError, SecretKeyConfigurationError, SourceSecretCipher
+from query_man.managed.secrets import (
+    SecretDecryptionError,
+    SecretKeyConfigurationError,
+    SourceSecretCipher,
+)
 
 
 def test_source_secret_round_trip_is_bound_to_source_and_generation() -> None:

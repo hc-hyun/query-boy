@@ -15,6 +15,7 @@ acceptance는 완료됐습니다.
 |---|---|
 | Source | `development-issues`, `market-voc` |
 | Runtime | 단일 Query Man replica |
+| Managed | `query_man.managed` package와 별도 acceptance lane에 보존; static composition에는 미참여 |
 | Database | PostgreSQL 18, server/client UTF-8 |
 | RLS | 전면 차단 |
 | 결과 type | OID `20, 21, 23, 25, 1082, 1184, 1700` |

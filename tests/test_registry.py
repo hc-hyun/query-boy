@@ -28,7 +28,6 @@ from query_man.registry import (
     load_budget_profiles,
     validate_source_manifest,
 )
-from query_man.source_admin import SourceAdminService, SourceReloader
 from tests.helpers import DUMMY_ENVIRONMENT, ROOT_DIRECTORY, load_test_registry
 
 
@@ -62,6 +61,32 @@ def _development_manifest() -> dict[str, object]:
     return raw
 
 
+def _development_manifest_with_observability() -> dict[str, object]:
+    raw = _development_manifest()
+    raw["observability"] = {
+        "representative_records": {
+            "grain": "development_issue",
+            "physical_relation": "development.issues",
+        },
+        "storage_relations": [
+            "development.users",
+            "development.product_models",
+            "development.test_units",
+            "development.issues",
+            "development.issue_comments",
+        ],
+    }
+    return raw
+
+
+def _development_source_with_observability() -> SourceProfile:
+    return validate_source_manifest(
+        _development_manifest_with_observability(),
+        load_budget_profiles(ROOT_DIRECTORY / "config" / "budget-profiles.yaml"),
+        "reader-secret",
+    ).profile
+
+
 def test_source_capability_protocols_have_exact_approved_shapes() -> None:
     assert _public_methods(SourceReader) == {"get", "list", "source_ids"}
     assert get_type_hints(SourceReader.list) == {
@@ -92,10 +117,6 @@ def test_source_consumers_receive_only_the_capability_they_need() -> None:
     assert get_type_hints(QueryService.__init__)["registry"] is SourceReader
     assert get_type_hints(_probe_registered_sources)["registry"] is SourceReader
     assert (
-        get_type_hints(SourceReloader.__init__)["registry"]
-        is SourceProjectionWriter
-    )
-    assert (
         _local_annotation(assurance_cli_module._run_evaluation, "registry")
         == "SourceReader"
     )
@@ -103,7 +124,6 @@ def test_source_consumers_receive_only_the_capability_they_need() -> None:
         _local_annotation(assurance_cli_module._run_verification, "registry")
         == "SourceReader"
     )
-    assert _local_annotation(SourceAdminService._stage, "registry") == "SourceReader"
 
 
 def test_published_source_profile_graph_is_recursively_immutable() -> None:
@@ -114,8 +134,7 @@ def test_published_source_profile_graph_is_recursively_immutable() -> None:
 
     assert isinstance(source.allowed_schemas, tuple)
     assert isinstance(source.allowed_relation_kinds, tuple)
-    assert source.observability is not None
-    assert isinstance(source.observability.storage_relations, tuple)
+    assert source.observability is None
     assert isinstance(overlay.relations, tuple)
     assert isinstance(overlay.joins, tuple)
     assert isinstance(overlay.business_terms, tuple)
@@ -149,8 +168,11 @@ def test_published_source_profile_graph_is_recursively_immutable() -> None:
 
     with pytest.raises(FrozenInstanceError):
         source.name = "mutated"  # type: ignore[misc]
+    observable_source = _development_source_with_observability()
+    assert observable_source.observability is not None
+    assert isinstance(observable_source.observability.storage_relations, tuple)
     with pytest.raises(FrozenInstanceError):
-        source.observability.representative_records.grain = "mutated"  # type: ignore[misc]
+        observable_source.observability.representative_records.grain = "mutated"  # type: ignore[misc]
     with pytest.raises(TypeError):
         overlay.relations[0].column_aliases["mutated"] = ()  # type: ignore[index]
     with pytest.raises(TypeError):
@@ -160,8 +182,7 @@ def test_published_source_profile_graph_is_recursively_immutable() -> None:
 
 
 def test_source_profile_construction_does_not_retain_mutable_aliases() -> None:
-    source = load_test_registry().get("development-issues")
-    assert source is not None
+    source = _development_source_with_observability()
     relation = source.semantic_overlay.relations[0]
     join = source.semantic_overlay.joins[0]
     assert source.observability is not None
@@ -240,8 +261,7 @@ def test_loads_public_source_fields_only() -> None:
 
 
 def test_loads_optional_resource_observation_definition() -> None:
-    source = load_test_registry().get("development-issues")
-    assert source is not None
+    source = _development_source_with_observability()
     assert source.observability is not None
 
     assert source.observability.representative_records.grain == "development_issue"
@@ -262,7 +282,7 @@ def test_loads_optional_resource_observation_definition() -> None:
 def test_rejects_unapproved_resource_observation_fields(
     extra_location: str,
 ) -> None:
-    raw = _development_manifest()
+    raw = _development_manifest_with_observability()
     observability = raw["observability"]
     assert isinstance(observability, dict)
     if extra_location == "observability":
@@ -284,7 +304,6 @@ def test_rejects_unapproved_resource_observation_fields(
 
 def test_manifest_without_observability_remains_valid() -> None:
     raw = _development_manifest()
-    raw.pop("observability")
 
     validated = validate_source_manifest(
         raw,
@@ -702,7 +721,7 @@ def test_validates_control_plane_manifest_without_storing_secret(
     assert isinstance(validated.document["allowed_relation_kinds"], list)
     assert isinstance(validated.document["semantic_overlay"], dict)
     assert isinstance(validated.document["semantic_overlay"]["relations"], list)  # type: ignore[index]
-    assert validated.document["observability"] == raw["observability"]
+    assert "observability" not in validated.document
     assert validated.document["version"] == 2
     assert validated.document["provenance"] == raw["provenance"]
     assert validated.profile.provenance.owner == "query-man"
@@ -715,8 +734,7 @@ def test_validates_control_plane_manifest_without_storing_secret(
     assert validated.document["connection"]["host"] == "postgres"  # type: ignore[index]
     assert validated.profile.connection.port == 55_432
     assert validated.document["connection"]["port"] == 55_432  # type: ignore[index]
-    assert validated.profile.observability is not None
-    assert isinstance(validated.profile.observability.storage_relations, tuple)
+    assert validated.profile.observability is None
     assert "host_env" not in validated.document["connection"]  # type: ignore[operator]
     assert "port_env" not in validated.document["connection"]  # type: ignore[operator]
 

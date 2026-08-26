@@ -24,27 +24,8 @@ from query_man.errors import (
     MutationIdempotencyConflictError as MutationIdempotencyConflictAppError,
 )
 from query_man.errors import SourceGenerationConflictError as SourceGenerationConflictAppError
-from query_man.metadata import MetadataService
-from query_man.metadata_store import MetadataStore
-from query_man.models import (
-    BudgetProfile,
-    PreparedMetadata,
-    RuntimeCatalogProvider,
-    SourceProfile,
-)
-from query_man.operations import operations
-from query_man.quality_level import assess_quality_level
-from query_man.query import QueryService
-from query_man.reader_policy import ReaderSessionPolicyError
-from query_man.registry import (
-    RegistryConfigurationError,
-    SourceProjectionWriter,
-    SourceReader,
-    SourceRegistry,
-    validate_source_manifest,
-)
-from query_man.secrets import EncryptedSecret, SecretDecryptionError, SourceSecretCipher
-from query_man.source_store import (
+from query_man.managed.secrets import EncryptedSecret, SecretDecryptionError, SourceSecretCipher
+from query_man.managed.source_store import (
     POSTGRES_BIGINT_MAX,
     MutationIdempotencyConflictError,
     MutationPage,
@@ -66,6 +47,25 @@ from query_man.source_store import (
     _GatewayUsageDeltaWrite,
     _ReplicaSourceObservationWrite,
     _ResourceObservationWrite,
+)
+from query_man.metadata import MetadataService
+from query_man.metadata_store import MetadataStore
+from query_man.models import (
+    BudgetProfile,
+    PreparedMetadata,
+    RuntimeCatalogProvider,
+    SourceProfile,
+)
+from query_man.operations import operations
+from query_man.quality_level import assess_quality_level
+from query_man.query import QueryService
+from query_man.reader_policy import ReaderSessionPolicyError
+from query_man.registry import (
+    RegistryConfigurationError,
+    SourceProjectionWriter,
+    SourceReader,
+    SourceRegistry,
+    validate_source_manifest,
 )
 from query_man.sql_validation import SQL_POLICY_REVISION, SqlValidationError, validate_sql
 from query_man.verified import ExpectedResult, VerifiedQuery, create_result_hash

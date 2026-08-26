@@ -26,7 +26,7 @@ from query_man.errors import (
 )
 from query_man.metadata import MetadataService
 from query_man.models import SourceProfile
-from query_man.operations import GatewayUsageOutcome, operations
+from query_man.operations import operations
 from query_man.reader_policy import (
     READER_CLIENT_ENCODING,
     READER_SESSION_BUDGET_SETTERS,
@@ -155,12 +155,41 @@ class QueryExecutor(Protocol):
     async def close(self) -> None: ...
 
 
-class RuntimeQueryExecutor(QueryExecutor, Protocol):
+class DeliveryQueryExecutor(QueryExecutor, Protocol):
     def stop_accepting(self) -> None: ...
 
     async def drain(self, grace_ms: int) -> None: ...
 
+
+class RuntimeQueryExecutor(DeliveryQueryExecutor, Protocol):
+
     async def invalidate(self, source_id: str) -> None: ...
+
+
+GatewayUsageOutcome = Literal[
+    "success",
+    "rejected",
+    "timeout",
+    "overloaded",
+    "cancelled",
+    "failed",
+]
+
+
+class GatewayUsageRecorder(Protocol):
+    def record_gateway_usage(
+        self,
+        *,
+        source_id: str,
+        budget_profile: str,
+        metadata_revision: str,
+        outcome: GatewayUsageOutcome,
+        queue_ms: int = 0,
+        elapsed_ms: int = 0,
+        returned_rows: int = 0,
+        result_bytes: int = 0,
+        truncated: bool = False,
+    ) -> None: ...
 
 
 class _QueryCancelledTimeoutError(QueryTimeoutError):
@@ -177,10 +206,12 @@ class QueryService:
         registry: SourceReader,
         metadata: MetadataService,
         executor: QueryExecutor,
+        usage_recorder: GatewayUsageRecorder | None = None,
     ) -> None:
         self._registry = registry
         self._metadata = metadata
         self._executor = executor
+        self._usage_recorder = usage_recorder
 
     async def query(
         self,
@@ -209,6 +240,7 @@ class QueryService:
         ):
             operations.increment("query_revision_rejected", source.source_id)
             _record_gateway_usage_safely(
+                self._usage_recorder,
                 source,
                 published.revision,
                 "rejected",
@@ -223,6 +255,7 @@ class QueryService:
         except SqlValidationError as error:
             operations.increment("query_rejected", source.source_id)
             _record_gateway_usage_safely(
+                self._usage_recorder,
                 source,
                 published.revision,
                 "rejected",
@@ -233,6 +266,7 @@ class QueryService:
             ) from error
         except Exception:
             _record_gateway_usage_safely(
+                self._usage_recorder,
                 source,
                 published.revision,
                 "failed",
@@ -249,6 +283,7 @@ class QueryService:
             )
         except (_QueryCancelledTimeoutError, _QueryCancelledUnavailableError):
             _record_gateway_usage_safely(
+                self._usage_recorder,
                 source,
                 published.revision,
                 "cancelled",
@@ -256,6 +291,7 @@ class QueryService:
             raise
         except asyncio.CancelledError:
             _record_gateway_usage_safely(
+                self._usage_recorder,
                 source,
                 published.revision,
                 "cancelled",
@@ -263,6 +299,7 @@ class QueryService:
             raise
         except (QueryRejectedError, QueryInvalidError):
             _record_gateway_usage_safely(
+                self._usage_recorder,
                 source,
                 published.revision,
                 "rejected",
@@ -270,6 +307,7 @@ class QueryService:
             raise
         except QueryOverloadedError:
             _record_gateway_usage_safely(
+                self._usage_recorder,
                 source,
                 published.revision,
                 "overloaded",
@@ -277,6 +315,7 @@ class QueryService:
             raise
         except QueryTimeoutError:
             _record_gateway_usage_safely(
+                self._usage_recorder,
                 source,
                 published.revision,
                 "timeout",
@@ -284,6 +323,7 @@ class QueryService:
             raise
         except Exception:
             _record_gateway_usage_safely(
+                self._usage_recorder,
                 source,
                 published.revision,
                 "failed",
@@ -291,6 +331,7 @@ class QueryService:
             raise
         result["sql_policy_revision"] = SQL_POLICY_REVISION
         _record_gateway_usage_safely(
+            self._usage_recorder,
             source,
             published.revision,
             "success",
@@ -303,15 +344,18 @@ class QueryService:
 
 
 def _record_gateway_usage_safely(
+    recorder: GatewayUsageRecorder | None,
     source: SourceProfile,
     metadata_revision: str,
     outcome: GatewayUsageOutcome,
     *,
     result: dict[str, object] | None = None,
 ) -> None:
+    if recorder is None:
+        return
     try:
         if outcome != "success":
-            operations.record_gateway_usage(
+            recorder.record_gateway_usage(
                 source_id=source.source_id,
                 budget_profile=source.budget.name,
                 metadata_revision=metadata_revision,
@@ -323,7 +367,7 @@ def _record_gateway_usage_safely(
         truncated = result.get("truncated")
         if not isinstance(truncated, bool):
             raise ValueError("Successful gateway usage requires a truncation flag")
-        operations.record_gateway_usage(
+        recorder.record_gateway_usage(
             source_id=source.source_id,
             budget_profile=source.budget.name,
             metadata_revision=metadata_revision,

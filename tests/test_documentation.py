@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import ast
 import re
 from pathlib import Path
 from urllib.parse import unquote
+
+import yaml
 
 import query_man.sql_validation as sql_validation_module
 from tests.helpers import ROOT_DIRECTORY
@@ -347,41 +348,6 @@ def test_runtime_has_no_fixture_source_specialization() -> None:
         assert not any(value in content for value in forbidden), path
 
 
-def test_delivery_admin_routes_only_import_public_control_interface() -> None:
-    path = ROOT_DIRECTORY / "src" / "query_man" / "source_admin_routes.py"
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    imported_modules: set[str] = set()
-    public_control_names: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imported_modules.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom):
-            module = node.module or ""
-            imported_modules.add(module)
-            imported_modules.update(
-                f"{module}.{alias.name}" if module else alias.name
-                for alias in node.names
-            )
-            if module in {"query_man.source_admin", "source_admin"}:
-                public_control_names.update(alias.name for alias in node.names)
-
-    for forbidden in (
-        "query_man.source_store",
-        "query_man.verified",
-        "source_store",
-        "verified",
-    ):
-        assert not any(
-            imported == forbidden or imported.startswith(f"{forbidden}.")
-            for imported in imported_modules
-        )
-    assert {
-        "CONTROL_SEQUENCE_MAX",
-        "PublishVerifiedQueryInput",
-        "VerifiedExpectedInput",
-    } <= public_control_names
-
-
 def test_container_inputs_are_immutable_and_revision_labeled() -> None:
     dockerfile = (ROOT_DIRECTORY / "Dockerfile").read_text(encoding="utf-8")
     compose = (ROOT_DIRECTORY / "compose.yaml").read_text(encoding="utf-8")
@@ -400,6 +366,24 @@ def test_container_inputs_are_immutable_and_revision_labeled() -> None:
         in workflow
     )
     assert 'test "$revision" = "$QUERY_MAN_VCS_REF"' in workflow
+
+
+def test_managed_acceptance_compose_uses_an_isolated_project() -> None:
+    base = yaml.safe_load((ROOT_DIRECTORY / "compose.yaml").read_text(encoding="utf-8"))
+    acceptance = yaml.safe_load(
+        (ROOT_DIRECTORY / "compose.acceptance.yaml").read_text(encoding="utf-8")
+    )
+    workflow = (ROOT_DIRECTORY / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert base["name"] == "query-man"
+    assert acceptance["name"] == "query-man-managed-acceptance"
+    assert (
+        base["services"]["postgres"]["container_name"]
+        != acceptance["services"]["postgres"]["container_name"]
+    )
+    assert "COMPOSE_FILE: compose.yaml:compose.acceptance.yaml" in workflow
 
 
 def test_verification_index_lists_every_immutable_record_once() -> None:

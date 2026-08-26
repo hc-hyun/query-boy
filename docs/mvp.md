@@ -157,8 +157,9 @@ docker compose up -d --wait postgres
 ./scripts/apply-db.sh
 ```
 
-`apply-db.sh`는 현재 두 bootstrap source 외에 managed onboarding integration 검사용 fixture도
-준비합니다. 그 추가 fixture가 현재 serving inventory라는 뜻은 아닙니다.
+`apply-db.sh`는 현재 두 bootstrap source만 준비합니다. Control DB와 managed onboarding integration
+fixture는 `compose.acceptance.yaml`과 `scripts/apply-managed-acceptance-fixtures.sh`를 명시적으로
+사용할 때만 준비되며 현재 serving inventory가 아닙니다.
 
 ## 안전 정책은 어디서 보나
 

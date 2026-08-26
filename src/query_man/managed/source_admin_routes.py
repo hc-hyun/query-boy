@@ -12,15 +12,15 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 from query_man.access import CallerContext
 from query_man.errors import OperatorRequiredError, SourceControlUnavailableError
 from query_man.http_validation import is_json_content_type
-from query_man.models import SourceEnvironment
-from query_man.registry import Identifier, StableSlug
-from query_man.source_admin import (
+from query_man.managed.source_admin import (
     CONTROL_SEQUENCE_MAX,
     MutationContext,
     PublishVerifiedQueryInput,
     SourceAdminService,
     VerifiedExpectedInput,
 )
+from query_man.models import SourceEnvironment
+from query_man.registry import Identifier, StableSlug
 
 audit_logger = logging.getLogger("query_man.audit")
 _router = APIRouter()

@@ -13,7 +13,8 @@
 2. [용어 사전](glossary.md): 낯선 단어를 쉬운 말로 풉니다.
 3. [Architecture](architecture.md): 현재 실행 구조와 일곱 모듈의 관계를 보여줍니다.
 
-코드를 수정하려면 그다음 [모듈 안내](modules/README.md)에서 담당 모듈 하나를 고릅니다.
+코드를 수정하려면 그다음 [활성 개발 지침](development-guidelines.md)의 공통 규칙을 확인하고
+[모듈 안내](modules/README.md)에서 담당 모듈 하나를 고릅니다.
 
 ## 문서 상태 읽는 법
 
@@ -26,7 +27,8 @@
 | 기록 | 과거 결정·완료·실행 사실 | 현재 지침으로 해석하거나 소급 수정하지 않습니다. |
 
 “구현됐다”와 “현재 운영에 사용한다”는 같은 말이 아닙니다. 예를 들어 Control Plane의 managed
-기능은 구현돼 있지만 현재 static first launch에는 참여하지 않습니다.
+기능은 `query_man.managed` package와 별도 acceptance lane에 보존돼 있지만 현재 static first
+launch의 import, fixture, route와 runtime work에는 참여하지 않습니다.
 
 ## 하고 싶은 일로 찾기
 
@@ -34,6 +36,7 @@
 |---|---|---|
 | 로컬에서 실행하기 | [프로젝트 README](../README.md) | [로컬·운영 안내](operations.md) |
 | 현재 구조 이해하기 | [Architecture](architecture.md) | [모듈 안내](modules/README.md) |
+| 코드를 수정하기 | [활성 개발 지침](development-guidelines.md) | [모듈 안내](modules/README.md)와 담당 module README |
 | 모듈 하나 수정하기 | [모듈 안내](modules/README.md) | 해당 모듈의 `README.md` |
 | 지금 남은 일 확인하기 | [Active TODO](development-todo.md) | [과거 완료 원장](implementation-roadmap.md) |
 | 실제 첫 오픈 준비하기 | [Operations](operations.md) | [ADR 0025](decisions/0025-static-non-rls-first-launch.md) |
@@ -46,6 +49,7 @@
 ## 현재 안내
 
 - [Architecture](architecture.md): 현재 static launch 구조, 요청 흐름과 안전 경계
+- [Development guidelines](development-guidelines.md): root router와 함께 적용하는 구현·병렬 작업·테스트·handoff 규칙
 - [Module index](modules/README.md): 모듈 owner, 허용 의존, 코드·테스트 지도와 승인 규칙
 - [Operations](operations.md): 현재 첫 오픈, 로깅, 상태 확인, 로컬 컨테이너와 종료 절차
 - [Active TODO](development-todo.md): 실제로 지금 남은 작업

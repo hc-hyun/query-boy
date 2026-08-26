@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import ast
+import inspect
+import textwrap
 from dataclasses import FrozenInstanceError, fields, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, get_type_hints
@@ -18,24 +21,8 @@ from query_man.errors import (
 from query_man.errors import (
     MutationIdempotencyConflictError as MutationIdempotencyConflictAppError,
 )
-from query_man.metadata import MetadataService
-from query_man.models import (
-    CatalogSnapshot,
-    PreparedMetadata,
-    ResourceObservation,
-    SourceProfile,
-)
-from query_man.operations import operations
-from query_man.query import QueryService
-from query_man.reader_policy import ReaderSessionPolicyError
-from query_man.registry import (
-    RegistryConfigurationError,
-    SourceRegistry,
-    load_budget_profiles,
-    validate_source_manifest,
-)
-from query_man.secrets import EncryptedSecret, SourceSecretCipher
-from query_man.source_admin import (
+from query_man.managed.secrets import EncryptedSecret, SourceSecretCipher
+from query_man.managed.source_admin import (
     CONTROL_SEQUENCE_MAX,
     REPLICA_HEARTBEAT_INTERVAL_MAX_MS,
     REPLICA_HEARTBEAT_INTERVAL_MIN_MS,
@@ -53,7 +40,7 @@ from query_man.source_admin import (
     SourceReloader,
     VerifiedExpectedInput,
 )
-from query_man.source_store import (
+from query_man.managed.source_store import (
     GatewayUsageRollupRecord,
     MutationIdempotencyConflictError,
     MutationPage,
@@ -76,9 +63,46 @@ from query_man.source_store import (
     StoredSourceNotFoundError,
     _ReplicaSourceObservationWrite,
 )
+from query_man.metadata import MetadataService
+from query_man.models import (
+    CatalogSnapshot,
+    PreparedMetadata,
+    ResourceObservation,
+    SourceProfile,
+)
+from query_man.operations import operations
+from query_man.query import QueryService
+from query_man.reader_policy import ReaderSessionPolicyError
+from query_man.registry import (
+    RegistryConfigurationError,
+    SourceProjectionWriter,
+    SourceRegistry,
+    load_budget_profiles,
+    validate_source_manifest,
+)
 from query_man.sql_validation import ValidatedSql
 from query_man.verified import ExpectedResult, VerifiedQuery, create_result_hash
 from tests.helpers import ROOT_DIRECTORY, minimal_development_snapshot
+
+
+def _local_annotation(function: object, variable: str) -> str | None:
+    tree = ast.parse(textwrap.dedent(inspect.getsource(function)))
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == variable
+        ):
+            return ast.unparse(node.annotation)
+    return None
+
+
+def test_control_plane_consumes_public_source_capabilities() -> None:
+    assert (
+        get_type_hints(SourceReloader.__init__)["registry"]
+        is SourceProjectionWriter
+    )
+    assert _local_annotation(SourceAdminService._stage, "registry") == "SourceReader"
 
 
 def test_verified_publish_input_is_frozen_control_contract() -> None:
@@ -870,6 +894,18 @@ def _manifest() -> dict[str, Any]:
     return raw
 
 
+def _manifest_with_observability() -> dict[str, Any]:
+    raw = _manifest()
+    raw["observability"] = {
+        "representative_records": {
+            "grain": "development_issue",
+            "physical_relation": "development.issues",
+        },
+        "storage_relations": ["development.issues"],
+    }
+    return raw
+
+
 def _services(
     catalog_factory: object = StaticCatalog,
 ) -> tuple[
@@ -1563,7 +1599,8 @@ async def test_staging_validates_configured_resource_targets() -> None:
         catalog_factory
     )
 
-    await admin.publish("third-source", _manifest(), "first-secret")
+    manifest = _manifest_with_observability()
+    await admin.publish("third-source", manifest, "first-secret")
 
     assert catalog_factory.observed_sources == ["third-source"]
     before = store.active["third-source"]
@@ -1571,7 +1608,7 @@ async def test_staging_validates_configured_resource_targets() -> None:
         "configured resource target is unavailable"
     )
     with pytest.raises(SourceValidationError):
-        await admin.publish("third-source", _manifest(), "bad-update-secret")
+        await admin.publish("third-source", manifest, "bad-update-secret")
 
     assert store.active["third-source"] == before
     assert catalog_factory.observed_sources == ["third-source"]
@@ -2070,7 +2107,10 @@ async def test_replica_admin_maps_malformed_projection_to_safe_unavailable() -> 
 
 
 @pytest.mark.asyncio
-async def test_admin_read_models_are_paginated_and_secret_free() -> None:
+async def test_admin_read_models_are_paginated_and_secret_free(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("POSTGRES_PORT", raising=False)
     admin, _registry, _store, _invalidator, _cipher, _reloader = _services()
     first = await admin.publish("third-source", _manifest(), "first-secret")
     republished = _manifest()
