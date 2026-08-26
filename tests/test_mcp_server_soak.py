@@ -12,7 +12,7 @@ from mcp.types import CallToolResult
 from psycopg import AsyncConnection
 from psycopg.conninfo import make_conninfo
 
-from query_man.verified import VerifiedQueryRegistry
+from query_man.assurance.verified import VerifiedQueryRegistry
 from tests.test_mcp_server import (
     McpServerSettings,
     _assert_verified_result,

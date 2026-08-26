@@ -17,7 +17,7 @@ from psycopg import AsyncConnection, errors, sql
 from psycopg.conninfo import make_conninfo
 from psycopg.pq import TransactionStatus
 
-from query_man.catalog import PostgresCatalog, _CatalogValidationError
+from query_man.assurance.verified import create_result_hash
 from query_man.errors import (
     MetadataRevisionMismatchError,
     MetadataUnavailableError,
@@ -26,8 +26,12 @@ from query_man.errors import (
     QueryTimeoutError,
     QueryUnavailableError,
 )
-from query_man.metadata import MetadataService
-from query_man.models import (
+from query_man.guarded_query.query import PostgresQueryExecutor, QueryService
+from query_man.guarded_query.result_encoding import encode_result_value
+from query_man.guarded_query.sql_validation import SQL_POLICY_REVISION, validate_sql
+from query_man.metadata.catalog import PostgresCatalog, _CatalogValidationError
+from query_man.metadata.service import MetadataService
+from query_man.source_catalog.models import (
     AllowedRelationKind,
     BudgetProfile,
     ResolvedConnection,
@@ -35,11 +39,7 @@ from query_man.models import (
     SourceProfile,
     SourceProvenance,
 )
-from query_man.query import PostgresQueryExecutor, QueryService
-from query_man.registry import SourceRegistry
-from query_man.result_encoding import encode_result_value
-from query_man.sql_validation import SQL_POLICY_REVISION, validate_sql
-from query_man.verified import create_result_hash
+from query_man.source_catalog.registry import SourceRegistry
 from tests.helpers import ROOT_DIRECTORY
 
 _DATABASE_PREFIX = "query_man_corner_db_"

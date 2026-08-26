@@ -1,6 +1,6 @@
 # Metadata Module
 
-Status: Logical boundary; physical package split pending
+Status: Physical package boundary active
 
 ## 목적
 
@@ -47,23 +47,22 @@ snapshot**으로 고정하고, 질문에 필요한 relation·column·join·busin
 
 | 위치 | Metadata가 소유하는 범위 | 주의점 |
 |---|---|---|
-| [`catalog.py`](../../../src/query_man/catalog.py) | PostgreSQL catalog adapter와 bounded resource observation | Reader-policy/transaction 순서를 보존 |
-| [`metadata.py`](../../../src/query_man/metadata.py) | `MetadataService`, cache/refresh/quality/context lifecycle | Main application use case |
-| [`relevance.py`](../../../src/query_man/relevance.py) | Revision-scoped retrieval index와 deterministic ranking | Disclosure policy를 임의로 바꾸지 않음 |
-| [`revision.py`](../../../src/query_man/revision.py) | Canonical metadata revision digest | Guarded Query policy material을 소비하는 shared identity |
-| [`quality_level.py`](../../../src/query_man/quality_level.py) | L0/L1/L2 publish gate | Assurance verified membership을 소비 |
-| [`models.py`](../../../src/query_man/models.py) | Catalog DTO, `PreparedMetadata`, provider Protocol | Source Catalog type도 있는 shared transition file |
-| [`metadata_store.py`](../../../src/query_man/metadata_store.py) | `MetadataStore` port, domain error와 snapshot codec | PostgreSQL implementation은 [`managed/metadata_store.py`](../../../src/query_man/managed/metadata_store.py)의 Control Plane 소유 |
+| [`metadata/catalog.py`](../../../src/query_man/metadata/catalog.py) | PostgreSQL catalog adapter와 bounded resource observation | Reader-policy/transaction 순서를 보존 |
+| [`metadata/service.py`](../../../src/query_man/metadata/service.py) | `MetadataService`, cache/refresh/quality/context lifecycle | Main application use case |
+| [`metadata/relevance.py`](../../../src/query_man/metadata/relevance.py) | Revision-scoped retrieval index와 deterministic ranking | Disclosure policy를 임의로 바꾸지 않음 |
+| [`metadata/revision.py`](../../../src/query_man/metadata/revision.py) | Canonical metadata revision digest | Guarded Query policy material을 소비하는 shared identity |
+| [`metadata/quality_level.py`](../../../src/query_man/metadata/quality_level.py) | L0/L1/L2 publish gate | Assurance verified membership을 소비 |
+| [`metadata/models.py`](../../../src/query_man/metadata/models.py) | Catalog DTO, `PreparedMetadata`, provider Protocol | Source types는 `source_catalog/models.py`에서 leaf import |
+| [`metadata/store.py`](../../../src/query_man/metadata/store.py) | `MetadataStore` port, domain error와 snapshot codec | PostgreSQL implementation은 [`managed/metadata_store.py`](../../../src/query_man/managed/metadata_store.py)의 Control Plane 소유 |
 | [`errors.py`](../../../src/query_man/errors.py) | Metadata availability/revision domain-error 의미 | Public envelope은 Delivery 소유인 shared transition file |
 | [`test_catalog.py`](../../../tests/test_catalog.py), [`test_metadata.py`](../../../tests/test_metadata.py), [`test_relevance.py`](../../../tests/test_relevance.py), [`test_revision.py`](../../../tests/test_revision.py) | Catalog, service, retrieval과 revision focused tests | Provider 의미를 고정 |
 | [`test_quality_level.py`](../../../tests/test_quality_level.py), [`test_metadata_codec.py`](../../../tests/test_metadata_codec.py), [`test_source_database_corners.py`](../../../tests/test_source_database_corners.py) | Quality, core codec와 PostgreSQL edge acceptance | Codec test는 DB 없이 persisted JSON compatibility를 고정 |
 | [`test_metadata_store.py`](../../../tests/test_metadata_store.py) | Managed PostgreSQL store integration | Control Plane implementation이 Metadata port/codec을 소비하는 direct-consumer test |
 
-Metadata core code는 `src/query_man`의 평면 구조를 유지한다. Control Plane의 concrete PostgreSQL
-store는 `src/query_man/managed/metadata_store.py`로 격리했고 core `metadata_store.py`에는 port,
-domain error와 codec만 남겼다. `models.py`, `metadata_store.py`, `errors.py`와 관련 cross-module test는
-coordinating agent가 single-writer로 다룬다. 이후 physical package 이동도 동작 변경과 섞지 않는
-별도 mechanical refactoring이다.
+Metadata core는 `src/query_man/metadata` physical package에 있고 Control Plane의 concrete PostgreSQL
+store는 `src/query_man/managed/metadata_store.py`에 격리했다. `metadata/store.py`에는 port, domain
+error와 codec만 둔다. Package marker는 re-export하지 않고 consumer는 leaf path를 직접 import한다.
+공통 `errors.py`와 관련 cross-module test는 coordinating agent가 single-writer로 다룬다.
 
 ## 제공 인터페이스와 소유 경계
 
@@ -100,7 +99,7 @@ async close() -> None
 - Source가 없으면 `SourceNotFoundError`, compatible current value가 없으면 `MetadataUnavailableError`다.
   Stale caller revision의 `MetadataRevisionMismatchError` 의미도 Metadata가 소유한다.
 
-Exact nested DTO field는 [`models.py`](../../../src/query_man/models.py)와
+Exact nested DTO field는 [`metadata/models.py`](../../../src/query_man/metadata/models.py)와
 [`test_catalog.py`](../../../tests/test_catalog.py)가 고정한다. Published relation은 Guarded Query
 allowlist의 최대 범위이며 `estimated_rows`는 revision/correctness 재료가 아닌 best-effort hint다.
 
@@ -187,7 +186,7 @@ array/object를 호환한다. Exact persisted meaning은 [ADR 0007](../../decisi
 | Relation/column/key/index와 definition/security identity | Runtime health와 usage |
 
 List/tuple과 dict/read-only mapping은 같은 canonical array/object다. Exact material/order/golden은
-[`revision.py`](../../../src/query_man/revision.py), [`test_revision.py`](../../../tests/test_revision.py)와
+[`metadata/revision.py`](../../../src/query_man/metadata/revision.py), [`test_revision.py`](../../../tests/test_revision.py)와
 [`test_metadata_codec.py`](../../../tests/test_metadata_codec.py)가 고정한다. ADR 0025의 PG18/UTF-8 및 SQL
 policy v3 전환은 algorithm/canonical-time/two-source revision을 바꾸지 않았다. RLS identity 미포함은
 serving 호환성이 아니라 RLS 전면 차단을 전제로 한다.
@@ -297,12 +296,12 @@ DB privilege, source epoch/CAS 또는 reader trust boundary를 바꾸면 전체 
 
 | 작업 | 추가로 읽을 code, decision과 test |
 |---|---|
-| Catalog/introspection/key/index | `catalog.py`, catalog DTO, `test_catalog.py`, [ADR 0008](../../decisions/0008-physical-key-and-index-disclosure.md) |
-| Context/disclosure/retrieval | `metadata.py`, `relevance.py`, related tests, [ADR 0009](../../decisions/0009-question-scoped-column-disclosure.md), [ADR 0010](../../decisions/0010-revision-scoped-retrieval-index.md) |
-| Revision/core codec/stale | `revision.py`, `metadata_store.py`, `test_revision.py`, `test_metadata_codec.py`, [ADR 0007](../../decisions/0007-immutable-metadata-publishing.md) |
+| Catalog/introspection/key/index | `metadata/catalog.py`, `metadata/models.py`, `test_catalog.py`, [ADR 0008](../../decisions/0008-physical-key-and-index-disclosure.md) |
+| Context/disclosure/retrieval | `metadata/service.py`, `metadata/relevance.py`, related tests, [ADR 0009](../../decisions/0009-question-scoped-column-disclosure.md), [ADR 0010](../../decisions/0010-revision-scoped-retrieval-index.md) |
+| Revision/core codec/stale | `metadata/revision.py`, `metadata/store.py`, `test_revision.py`, `test_metadata_codec.py`, [ADR 0007](../../decisions/0007-immutable-metadata-publishing.md) |
 | Managed store/rollback | `managed/metadata_store.py`, Control Plane README, `test_metadata_store.py`, [ADR 0007](../../decisions/0007-immutable-metadata-publishing.md) |
-| Quality/verified membership | `quality_level.py`, `test_quality_level.py`, [ADR 0011](../../decisions/0011-metadata-quality-level-publish-gate.md), Assurance interface |
-| Reader/resource/launch policy | `reader_policy.py`, `catalog.py`, source DB corner tests, [ADR 0025](../../decisions/0025-static-non-rls-first-launch.md) |
+| Quality/verified membership | `metadata/quality_level.py`, `test_quality_level.py`, [ADR 0011](../../decisions/0011-metadata-quality-level-publish-gate.md), Assurance interface |
+| Reader/resource/launch policy | `source_catalog/reader_policy.py`, `metadata/catalog.py`, source DB corner tests, [ADR 0025](../../decisions/0025-static-non-rls-first-launch.md) |
 
 MCP SDK internals, source admin HTTP parsing, Control DB table/SQL와 query cursor internals는 위 interface나
 승인 대상 의미를 바꾸지 않는 한 읽을 필요가 없다.

@@ -1,4 +1,4 @@
-from query_man.relevance import rank_relations, select_ranked_relations
+from query_man.metadata.relevance import rank_relations, select_ranked_relations
 from tests.helpers import column, load_test_registry, minimal_development_snapshot, relation
 
 

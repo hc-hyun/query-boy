@@ -6,7 +6,7 @@ from urllib.parse import unquote
 
 import yaml
 
-import query_man.sql_validation as sql_validation_module
+import query_man.guarded_query.sql_validation as sql_validation_module
 from tests.helpers import ROOT_DIRECTORY
 
 ROADMAP = ROOT_DIRECTORY / "docs" / "implementation-roadmap.md"
@@ -270,7 +270,7 @@ def test_module_docs_cover_owners_interfaces_and_current_python_files() -> None:
         path = MODULE_INDEX.parent / module_name / "README.md"
         content = path.read_text(encoding="utf-8")
         assert f"({module_name}/README.md)" in index
-        assert "Status: Logical boundary; physical package split pending" in content
+        assert "Status: Physical package boundary active" in content
         for heading in REQUIRED_MODULE_HEADINGS:
             assert content.count(heading) == 1, (
                 f"{path.relative_to(ROOT_DIRECTORY)}: {heading}"
@@ -279,7 +279,7 @@ def test_module_docs_cover_owners_interfaces_and_current_python_files() -> None:
     source_root = ROOT_DIRECTORY / "src" / "query_man"
     for path in source_root.rglob("*.py"):
         relative = path.relative_to(source_root)
-        mapped = path.name if relative.parent == Path(".") else relative.as_posix()
+        mapped = relative.as_posix()
         assert f"`{mapped}`" in index, f"Unmapped module owner: {relative}"
     for mapping in CRITICAL_NON_PYTHON_MAPPINGS:
         assert mapping in index, mapping
@@ -343,7 +343,7 @@ def test_runtime_has_no_fixture_source_specialization() -> None:
         "commerce-edges",
         "commerce_edges",
     }
-    for path in (ROOT_DIRECTORY / "src" / "query_man").glob("*.py"):
+    for path in (ROOT_DIRECTORY / "src" / "query_man").rglob("*.py"):
         content = path.read_text(encoding="utf-8")
         assert not any(value in content for value in forbidden), path
 

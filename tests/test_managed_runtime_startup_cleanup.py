@@ -7,17 +7,17 @@ from pathlib import Path
 import pytest
 from fastapi import FastAPI
 
-import query_man.app as app_module
+import query_man.delivery.app as app_module
 import query_man.managed.runtime as managed_runtime_module
-from query_man.access import AccessPolicy
-from query_man.models import (
+from query_man.delivery.access import AccessPolicy
+from query_man.guarded_query.query import RuntimeQueryExecutor
+from query_man.metadata.models import (
     CatalogSnapshot,
     ResourceObservation,
     RuntimeCatalogProvider,
-    SourceProfile,
 )
-from query_man.query import RuntimeQueryExecutor
-from query_man.runtime_config import RuntimeConfig
+from query_man.runtime.config import RuntimeConfig
+from query_man.source_catalog.models import SourceProfile
 from tests.helpers import ROOT_DIRECTORY
 
 _SOURCE_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="

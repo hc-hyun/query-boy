@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from query_man.runtime_config import RuntimeConfig, load_runtime_config
+from query_man.runtime.config import RuntimeConfig, load_runtime_config
 from tests.helpers import ROOT_DIRECTORY
 
 _SOURCE_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="

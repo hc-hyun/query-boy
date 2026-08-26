@@ -7,14 +7,15 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
-from query_man.metadata_store import (
+from query_man.metadata.models import PreparedMetadata
+from query_man.metadata.store import (
     StoredMetadataInvalidError,
     StoredMetadataNotFoundError,
     StoredMetadataSupersededError,
     decode_snapshot,
     encode_snapshot,
 )
-from query_man.models import PreparedMetadata, SourceProfile
+from query_man.source_catalog.models import SourceProfile
 
 
 class PostgresMetadataStore:

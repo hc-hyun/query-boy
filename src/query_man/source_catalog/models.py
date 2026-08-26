@@ -1,17 +1,15 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Literal, Protocol
+from typing import Literal
 
 RelationRole = Literal["event", "comment", "population", "dimension", "other"]
 QualityLevel = Literal["L0", "L1", "L2"]
 TenantIsolation = Literal["none", "rls"]
 SourceEnvironment = Literal["production", "staging", "development", "test"]
 AllowedRelationKind = Literal["table", "partitioned_table", "view", "materialized_view"]
-CatalogRelationKind = Literal["table", "partitioned_table", "view", "materialized_view", "foreign_table"]
-Nullability = bool | Literal["unknown"]
 
 
 @dataclass(frozen=True)
@@ -225,95 +223,6 @@ class SourceProfile:
     def __post_init__(self) -> None:
         object.__setattr__(self, "allowed_schemas", tuple(self.allowed_schemas))
         object.__setattr__(self, "allowed_relation_kinds", tuple(self.allowed_relation_kinds))
-
-
-@dataclass(frozen=True)
-class CatalogColumn:
-    name: str
-    sql_name: str
-    ordinal: int
-    data_type: str
-    nullable: Nullability
-    comment: str | None = None
-
-
-@dataclass(frozen=True)
-class CatalogForeignKey:
-    columns: tuple[str, ...]
-    referenced_relation: str
-    referenced_columns: tuple[str, ...]
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "columns", tuple(self.columns))
-        object.__setattr__(self, "referenced_columns", tuple(self.referenced_columns))
-
-
-@dataclass(frozen=True)
-class CatalogIndex:
-    columns: tuple[str, ...]
-    unique: bool
-    primary: bool
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "columns", tuple(self.columns))
-
-
-@dataclass(frozen=True)
-class CatalogRelation:
-    schema: str
-    name: str
-    qualified_name: str
-    sql_name: str
-    kind: CatalogRelationKind
-    columns: tuple[CatalogColumn, ...]
-    comment: str | None = None
-    estimated_rows: int | None = None
-    definition_hash: str | None = None
-    primary_key: tuple[str, ...] = field(default_factory=tuple)
-    foreign_keys: tuple[CatalogForeignKey, ...] = field(default_factory=tuple)
-    indexes: tuple[CatalogIndex, ...] = field(default_factory=tuple)
-    security_invoker: bool = False
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "columns", tuple(self.columns))
-        object.__setattr__(self, "primary_key", tuple(self.primary_key))
-        object.__setattr__(self, "foreign_keys", tuple(self.foreign_keys))
-        object.__setattr__(self, "indexes", tuple(self.indexes))
-
-
-@dataclass(frozen=True)
-class CatalogSnapshot:
-    relations: tuple[CatalogRelation, ...] = field(default_factory=tuple)
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "relations", tuple(self.relations))
-
-
-@dataclass(frozen=True)
-class PreparedMetadata:
-    snapshot: CatalogSnapshot
-    revision: str
-    freshness_age_ms: int | None = field(default=None, compare=False)
-
-
-@dataclass(frozen=True)
-class ResourceObservation:
-    representative_records: int | None
-    table_bytes: int
-    index_bytes: int
-    total_storage_bytes: int
-
-
-class CatalogProvider(Protocol):
-    async def load(self, source: SourceProfile) -> CatalogSnapshot: ...
-
-    async def close(self) -> None: ...
-
-
-class RuntimeCatalogProvider(CatalogProvider, Protocol):
-    async def invalidate(self, source_id: str) -> None: ...
-
-    async def observe_resources(self, source: SourceProfile) -> ResourceObservation: ...
 
 
 def _freeze_string_sequences(

@@ -6,8 +6,8 @@ from typing import Any, get_type_hints
 import pytest
 from psycopg import AsyncConnection
 
-import query_man.reader_policy as reader_policy_module
-from query_man.reader_policy import (
+import query_man.source_catalog.reader_policy as reader_policy_module
+from query_man.source_catalog.reader_policy import (
     READER_CLIENT_ENCODING,
     ReaderSessionPolicyError,
     require_reader_connection_policy,

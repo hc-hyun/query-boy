@@ -16,6 +16,11 @@
 코드를 수정하려면 그다음 [활성 개발 지침](development-guidelines.md)의 공통 규칙을 확인하고
 [모듈 안내](modules/README.md)에서 담당 모듈 하나를 고릅니다.
 
+Static core는 `query_man.source_catalog`, `metadata`, `guarded_query`, `delivery`, `runtime`,
+`assurance`의 여섯 physical package로 나뉘며 managed 구현은 `query_man.managed`에 있습니다. 모두
+같은 repository·wheel·process에 속하고 package marker는 interface를 re-export하지 않으므로 module
+README가 가리키는 leaf path에서 시작합니다.
+
 ## 문서 상태 읽는 법
 
 | 표시 | 뜻 | 행동 |

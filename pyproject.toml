@@ -17,9 +17,9 @@ dependencies = [
 ]
 
 [project.scripts]
-query-man = "query_man.server:main"
-query-man-evaluate = "query_man.assurance_cli:evaluate_main"
-query-man-verify = "query_man.assurance_cli:verify_main"
+query-man = "query_man.runtime.server:main"
+query-man-evaluate = "query_man.assurance.cli:evaluate_main"
+query-man-verify = "query_man.assurance.cli:verify_main"
 
 [dependency-groups]
 dev = [

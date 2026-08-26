@@ -5,11 +5,12 @@ from dataclasses import replace
 import pytest
 
 from query_man.errors import MetadataUnavailableError
-from query_man.metadata import MetadataService
-from query_man.models import CatalogSnapshot, PreparedMetadata, SemanticOverlay, SourceProfile
-from query_man.quality_level import assess_quality_level
-from query_man.registry import SourceRegistry
-from query_man.revision import create_metadata_revision
+from query_man.metadata.models import CatalogSnapshot, PreparedMetadata
+from query_man.metadata.quality_level import assess_quality_level
+from query_man.metadata.revision import create_metadata_revision
+from query_man.metadata.service import MetadataService
+from query_man.source_catalog.models import SemanticOverlay, SourceProfile
+from query_man.source_catalog.registry import SourceRegistry
 from tests.helpers import load_test_registry, minimal_development_snapshot
 from tests.test_metadata import MemoryMetadataStore
 

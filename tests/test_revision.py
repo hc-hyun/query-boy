@@ -3,16 +3,18 @@ from types import MappingProxyType
 
 import pytest
 
-import query_man.revision as revision_module
-import query_man.sql_validation as sql_validation_module
-from query_man.models import (
+import query_man.guarded_query.sql_validation as sql_validation_module
+import query_man.metadata.revision as revision_module
+from query_man.guarded_query.result_encoding import CANONICAL_TIME_POLICY_MATERIAL
+from query_man.metadata.models import (
     CatalogForeignKey,
     CatalogIndex,
+)
+from query_man.metadata.revision import _canonicalize, create_metadata_revision
+from query_man.source_catalog.models import (
     RepresentativeRecordsTarget,
     ResourceObservationDefinition,
 )
-from query_man.result_encoding import CANONICAL_TIME_POLICY_MATERIAL
-from query_man.revision import _canonicalize, create_metadata_revision
 from tests.helpers import load_test_registry, minimal_development_snapshot
 
 

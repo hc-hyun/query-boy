@@ -16,10 +16,10 @@ from mcp.types import CallToolResult, InputRequiredResult, TextContent
 from pydantic import BaseModel, ConfigDict, Field, RootModel, StringConstraints, ValidationError
 from starlette.requests import Request
 
-from query_man.access import CallerContext
+from query_man.delivery.access import CallerContext
+from query_man.delivery.gateway import GatewayService
 from query_man.errors import AppError
-from query_man.gateway import GatewayService
-from query_man.operations import operations
+from query_man.runtime.operations import operations
 
 logger = logging.getLogger("query_man.mcp")
 MCP_PROTOCOL_VERSION = "2026-07-28"

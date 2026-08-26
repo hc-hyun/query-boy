@@ -4,7 +4,7 @@ import json
 import logging
 import sys
 
-from query_man.operations import OperationalState, SafeJsonFormatter
+from query_man.runtime.operations import OperationalState, SafeJsonFormatter
 
 
 def test_safe_json_formatter_redacts_secrets_literals_and_exception_details() -> None:

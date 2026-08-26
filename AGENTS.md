@@ -9,7 +9,9 @@ source는 [활성 개발 지침](docs/development-guidelines.md)이다. Primary 
 
 1. [문서 안내](docs/README.md)와 [용어 사전](docs/glossary.md)에서 현재/기록/비활성 문서를 구분한다.
 2. [module index](docs/modules/README.md)에서 primary module 하나를 고른다.
-3. 그 module README의 `30초 요약`과 `집중해서 읽을 범위`를 따라 관련 code·test만 읽는다.
+3. 그 module README의 `30초 요약`과 `집중해서 읽을 범위`를 따라 owner package의 관련 leaf
+   module·root `tests/`만 읽는다. Package `__init__.py`는 marker-only이므로 interface re-export를
+   기대하지 않는다.
 4. 변경 지점부터 직접 consumer, transaction·cleanup, 실패 경로와 runnable test까지 확인한다.
 5. 다른 module이 쓰는 interface나 external/persisted/policy/lifecycle/procedure 의미를 바꿔야 하면
    구현을 멈추고 아래 승인 trigger와 [상세 절차](docs/development-guidelines.md#승인-규칙)를 따른다.

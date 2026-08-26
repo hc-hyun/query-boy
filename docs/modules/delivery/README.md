@@ -1,6 +1,6 @@
 # Delivery Module
 
-Status: Logical boundary; physical package split pending
+Status: Physical package boundary active
 
 ## 목적
 
@@ -49,21 +49,21 @@ HTTP와 MCP가 같다는 말은 endpoint가 모두 같다는 뜻이 아니다. �
 
 | 위치 | 역할 |
 |---|---|
-| [`access.py`](../../../src/query_man/access.py) | `CallerContext`, `AccessPolicy`와 token 확인 |
-| [`gateway.py`](../../../src/query_man/gateway.py) | Transport-independent `GatewayService` |
-| [`mcp_server.py`](../../../src/query_man/mcp_server.py) | MCP server, schema, error와 disconnect |
-| [`http_validation.py`](../../../src/query_man/http_validation.py) | HTTP/MCP/admin 공통 JSON Content-Type 검사 |
+| [`delivery/access.py`](../../../src/query_man/delivery/access.py) | `CallerContext`, `AccessPolicy`와 token 확인 |
+| [`delivery/gateway.py`](../../../src/query_man/delivery/gateway.py) | Transport-independent `GatewayService` |
+| [`delivery/mcp_server.py`](../../../src/query_man/delivery/mcp_server.py) | MCP server, schema, error와 disconnect |
+| [`delivery/http_validation.py`](../../../src/query_man/delivery/http_validation.py) | HTTP/MCP/admin 공통 JSON Content-Type 검사 |
 | [`managed/source_admin_routes.py`](../../../src/query_man/managed/source_admin_routes.py) | Managed-only admin HTTP validation과 Control Plane use-case 호출; static composition은 import·등록하지 않음 |
-| [`app.py`](../../../src/query_man/app.py) | HTTP DTO, middleware, route와 handler; composition/lifespan은 Runtime 소유 |
+| [`delivery/app.py`](../../../src/query_man/delivery/app.py) | HTTP DTO, middleware, route, handler와 transport child 조립 | Production provider/lifespan은 `runtime/composition.py` 또는 `managed/runtime.py`가 주입 |
 | [`errors.py`](../../../src/query_man/errors.py) | `AppError` public carrier와 external rendering; domain 오류 발생 의미는 producer 소유 |
 | `config/access-policies*.yaml` | Caller identity와 capability 입력 |
 | [`query-man-text-to-sql`](../../../skills/query-man-text-to-sql) | MCP consumer workflow; safety enforcement가 아님 |
 | [`test_http.py`](../../../tests/test_http.py), [`test_mcp.py`](../../../tests/test_mcp.py) | Static HTTP/MCP surface, source-admin route 부재와 common transport behavior |
 | [`test_managed_http.py`](../../../tests/test_managed_http.py), [`test_managed_runtime_startup_cleanup.py`](../../../tests/test_managed_runtime_startup_cleanup.py) | Managed admin wire/use-case mapping과 managed parent/child lifespan boundary |
 
-`GetContextSuccessOutput`은 현재 `mcp_server.py`에 있지만 HTTP `/meta`도 사용하는 Delivery 공통 wire
+`GetContextSuccessOutput`은 현재 `delivery/mcp_server.py`에 있지만 HTTP `/meta`도 사용하는 Delivery 공통 wire
 format이다. Managed admin adapter는 물리적으로 managed package에 있지만 external wire owner는 계속
-Delivery다. `app.py`나 `errors.py`를 바꾸면 [Runtime](../runtime/README.md)과 오류 producer도 확인한다.
+Delivery다. `delivery/app.py`나 `errors.py`를 바꾸면 [Runtime](../runtime/README.md)과 오류 producer도 확인한다.
 
 ## 제공 인터페이스와 소유 경계
 
@@ -247,7 +247,7 @@ Delivery status나 field가 아니다.
 | [Runtime](../runtime/README.md) | Aggregate health/operations state와 lifecycle context | Health 계산이나 production composition을 Delivery로 옮기지 않음 |
 
 `GatewayService`는 concrete registry 대신 `SourceReader`를 받아 `list/get`만 사용한다. Admin route는
-Control Plane public input만 만들고 `managed/source_store.py`나 Assurance `verified.py`를 import하지 않는다.
+Control Plane public input만 만들고 `managed/source_store.py`나 Assurance `assurance/verified.py`를 import하지 않는다.
 Metadata/Source Catalog가 내부 tuple/read-only mapping을 사용해도 `/meta`와 `get_context`의 기존
 array/object projection은 유지한다.
 
@@ -317,7 +317,7 @@ root 전체 gate를 실행한다.
    [container](../../decisions/0015-containerized-local-runtime.md),
    [shared access](../../decisions/0017-shared-source-access-and-resource-tier.md) ADR
 5. Current launch 변경이면 [ADR 0025](../../decisions/0025-static-non-rls-first-launch.md)
-6. `app.py` lifecycle 변경이면 Runtime lifecycle rule
+6. `delivery/app.py` child lifecycle 변경이면 Runtime composition/lifecycle rule
 
 Catalog SQL, Control persistence transaction과 query executor 내부는 위 interface나 경계 의미가 바뀔
 때만 추가로 읽는다.

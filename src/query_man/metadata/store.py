@@ -4,7 +4,7 @@ from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from query_man.models import (
+from query_man.metadata.models import (
     CatalogColumn,
     CatalogForeignKey,
     CatalogIndex,
@@ -12,9 +12,9 @@ from query_man.models import (
     CatalogRelationKind,
     CatalogSnapshot,
     PreparedMetadata,
-    SourceProfile,
 )
-from query_man.revision import create_metadata_revision
+from query_man.metadata.revision import create_metadata_revision
+from query_man.source_catalog.models import SourceProfile
 
 
 class MetadataStore(Protocol):

@@ -1,6 +1,6 @@
 # Runtime Module
 
-Status: Logical boundary; physical package split pending
+Status: Physical package boundary active
 
 Current launch baseline: [ADR 0025](../../decisions/0025-static-non-rls-first-launch.md)
 `LAUNCH-01-A`
@@ -48,11 +48,12 @@ production 조립과 lifecycle 때문이며, 이 예외로 다른 module의 priv
 
 | 위치 | 역할 |
 |---|---|
-| [`app.py`](../../../src/query_man/app.py) | Static `build_app`, production 조립, lifespan과 startup probe; route/DTO는 Delivery 소유 |
+| [`runtime/composition.py`](../../../src/query_man/runtime/composition.py) | Static `build_app`, provider 조립, lifespan과 startup probe |
+| [`delivery/app.py`](../../../src/query_man/delivery/app.py) | Delivery-owned HTTP/MCP parent surface; Runtime composition이 provider와 lifespan을 주입 |
 | [`managed/runtime.py`](../../../src/query_man/managed/runtime.py) | Managed `build_app`, Control/admin/reload/reporter/usage composition과 lifecycle |
-| [`server.py`](../../../src/query_man/server.py) | 검증된 source mode별 composition-root 선택, Uvicorn process와 shutdown signal ordering |
-| [`runtime_config.py`](../../../src/query_man/runtime_config.py) | Environment model/validation과 `RuntimeConfig` |
-| [`operations.py`](../../../src/query_man/operations.py) | Process-local operations sink, health/metric state와 safe formatter/redaction |
+| [`runtime/server.py`](../../../src/query_man/runtime/server.py) | 검증된 source mode별 composition-root 선택, Uvicorn process와 shutdown signal ordering |
+| [`runtime/config.py`](../../../src/query_man/runtime/config.py) | Environment model/validation과 `RuntimeConfig` |
+| [`runtime/operations.py`](../../../src/query_man/runtime/operations.py) | Process-local operations sink, health/metric state와 safe formatter/redaction |
 | [`Dockerfile`](../../../Dockerfile), [`compose.yaml`](../../../compose.yaml), [`.env.example`](../../../.env.example) | Current two-source static image, process, network, config와 health lifecycle |
 | [`compose.acceptance.yaml`](../../../compose.acceptance.yaml) | 별도 project/container/volume의 Control/support/commerce managed acceptance overlay; base serving topology가 아님 |
 | [`verify-container.sh`](../../../scripts/verify-container.sh) | Assurance 소유의 container acceptance; Runtime surface를 소비하는 shared transition artifact |
@@ -60,10 +61,10 @@ production 조립과 lifecycle 때문이며, 이 예외로 다른 module의 priv
 | [`test_runtime_config.py`](../../../tests/test_runtime_config.py), [`test_server.py`](../../../tests/test_server.py), [`test_operations.py`](../../../tests/test_operations.py), [`test_http.py`](../../../tests/test_http.py) | Source authority, process/common operations와 static composition tests |
 | [`test_managed_mode.py`](../../../tests/test_managed_mode.py), [`test_managed_operations.py`](../../../tests/test_managed_operations.py), [`test_managed_runtime_startup_cleanup.py`](../../../tests/test_managed_runtime_startup_cleanup.py), [`test_managed_http.py`](../../../tests/test_managed_http.py) | Managed composition, observation, cleanup와 Delivery direct-consumer tests |
 
-Static core Python 코드는 대부분 `src/query_man`의 평면 구조이고 managed implementation은
-`src/query_man/managed` package에 격리했다. `app.py`는 여전히 Delivery/Runtime transition hot spot이지만
-static composition은 managed package를 import하지 않는다. Runtime 작업에서는 composition/lifespan
-symbol만 수정하고 route나 wire schema 정리를 같은 diff에 섞지 않는다. Base `compose.yaml`과
+Static Runtime은 `src/query_man/runtime` physical package, managed implementation은
+`src/query_man/managed` package에 있다. Delivery surface는 `delivery/app.py`, static provider/lifespan
+조립은 `runtime/composition.py`로 분리돼 있고 static composition은 managed package를 import하지 않는다.
+Runtime 작업에서는 composition/lifespan symbol만 수정하고 route나 wire schema 정리를 같은 diff에 섞지 않는다. Base `compose.yaml`과
 `scripts/apply-db.sh`는 current 두 source만 준비한다. Managed Control/support/commerce fixture는
 `compose.acceptance.yaml` overlay와 `scripts/apply-managed-acceptance-fixtures.sh`를 명시적으로 사용한
 별도 `query-man-managed-acceptance` project에서만 준비하며 serving topology가 아니다.
@@ -280,7 +281,7 @@ Concrete implementation을 조립할 권한은 provider의 private table/type을
 
 Official interface와 별도 config/policy/lifecycle/operation 의미가 같다면 dependency-construction helper,
 lifespan context, private task bookkeeping, process-local counter 내부와 Dockerfile layer/cache를 독립적으로
-정리할 수 있다. Shared `app.py`, container/toolchain artifact는 coordinating agent가 owner와 writer 순서를
+정리할 수 있다. Delivery/Runtime interface, container/toolchain artifact는 coordinating agent가 owner와 writer 순서를
 지정한다.
 
 ## 사용자 승인이 필요한 경계 변경
@@ -325,13 +326,13 @@ Built image의 OCI revision label/digest와 Compose exact-ready를 확인한다.
 
 | 작업 | 먼저 읽을 범위 |
 |---|---|
-| Environment/source authority | `runtime_config.py`, `test_runtime_config.py`, ADR 0025 |
-| Production composition/startup cleanup | Static은 `app.py`, managed는 `managed/runtime.py`의 composition/lifespan symbol, provider lifecycle interface, `test_managed_runtime_startup_cleanup.py`, `test_managed_mode.py` |
-| Health/logging/shutdown | `operations.py`, `server.py`, 직접 consumer와 static/common `test_operations.py`, managed `test_managed_operations.py`, `test_server.py` |
+| Environment/source authority | `runtime/config.py`, `test_runtime_config.py`, ADR 0025 |
+| Production composition/startup cleanup | Static은 `runtime/composition.py`, managed는 `managed/runtime.py`의 composition/lifespan symbol, `delivery/app.py` child interface, `test_managed_runtime_startup_cleanup.py`, `test_managed_mode.py` |
+| Health/logging/shutdown | `runtime/operations.py`, `runtime/server.py`, 직접 consumer와 static/common `test_operations.py`, managed `test_managed_operations.py`, `test_server.py` |
 | Container/image/readiness | `Dockerfile`, base `compose.yaml`, managed fixture면 `compose.acceptance.yaml`, `verify-container.sh`, [Operations Guide](../../operations.md)와 관련 acceptance |
 | Preserved managed path | `managed/runtime.py`, [Control Plane](../control-plane/README.md), `test_managed_mode.py`, `test_managed_operations.py`, `test_managed_http.py`와 관련 Control test |
 | Protected procedure/execution | [Operations Guide](../../operations.md); 실제 실행이면 승인 범위와 append-only evidence schema |
 
-`app.py` route/middleware를 바꾸면 Delivery 문서와 external API test까지 읽는다. Metadata ranking, SQL AST
+`delivery/app.py` route/middleware를 바꾸면 Delivery 문서와 external API test까지 읽는다. Metadata ranking, SQL AST
 walker, Control private table과 parked RLS/encoding/cost/trace proposal은 소비 interface나 승인된 lifecycle을
 바꾸지 않는 한 읽을 필요가 없다.

@@ -8,8 +8,8 @@ from typing import Any, get_type_hints
 import pytest
 from psycopg import errors
 
-import query_man.query as query_module
-from query_man.app import _until_disconnect
+import query_man.guarded_query.query as query_module
+from query_man.delivery.app import _until_disconnect
 from query_man.errors import (
     MetadataRevisionMismatchError,
     MetadataUnavailableError,
@@ -20,10 +20,7 @@ from query_man.errors import (
     QueryUnavailableError,
     SourceNotFoundError,
 )
-from query_man.metadata import MetadataService
-from query_man.models import CatalogSnapshot, SourceProfile
-from query_man.operations import operations
-from query_man.query import (
+from query_man.guarded_query.query import (
     DeliveryQueryExecutor,
     GatewayUsageOutcome,
     GatewayUsageRecorder,
@@ -34,10 +31,14 @@ from query_man.query import (
     RuntimeQueryExecutor,
     _summarize_plan,
 )
-from query_man.reader_policy import ReaderSessionPolicyError
-from query_man.registry import SourceRegistry
-from query_man.result_encoding import ResultEncodingError
-from query_man.sql_validation import SQL_POLICY_REVISION, ValidatedSql
+from query_man.guarded_query.result_encoding import ResultEncodingError
+from query_man.guarded_query.sql_validation import SQL_POLICY_REVISION, ValidatedSql
+from query_man.metadata.models import CatalogSnapshot
+from query_man.metadata.service import MetadataService
+from query_man.runtime.operations import operations
+from query_man.source_catalog.models import SourceProfile
+from query_man.source_catalog.reader_policy import ReaderSessionPolicyError
+from query_man.source_catalog.registry import SourceRegistry
 from tests.helpers import load_test_registry, minimal_development_snapshot
 
 

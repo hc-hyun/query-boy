@@ -8,7 +8,7 @@ from typing import Annotated, Literal, cast
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from query_man.metadata import MetadataService
+from query_man.metadata.service import MetadataService
 
 Identifier = Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,99}$")]
 RelationName = Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_$]*\.[A-Za-z_][A-Za-z0-9_$]*$")]

@@ -7,9 +7,10 @@ ADR은 중요한 설계 선택과 그 이유를 보존하는 기록입니다. �
 ## 현재 기준을 찾는 순서
 
 1. [ADR 0025](0025-static-non-rls-first-launch.md)에서 현재 first-launch 범위를 확인합니다.
-2. 작업 모듈의 README가 지정한 accepted ADR만 추가로 읽습니다.
-3. 이전 ADR과 후속 ADR이 겹치면 후속 문서의 supersede·exception note를 따릅니다.
-4. `research`, `parked`, `deferred` 문서는 구현 승인이 아닙니다.
+2. 현재 Python package와 import 위치는 [ADR 0026](0026-physical-module-packages.md)을 확인합니다.
+3. 작업 모듈의 README가 지정한 accepted ADR만 추가로 읽습니다.
+4. 이전 ADR과 후속 ADR이 겹치면 후속 문서의 supersede·exception note를 따릅니다.
+5. `research`, `parked`, `deferred` 문서는 구현 승인이 아닙니다.
 
 ## Accepted decisions
 
@@ -35,6 +36,7 @@ ADR은 중요한 설계 선택과 그 이유를 보존하는 기록입니다. �
 | [0018](0018-module-ownership-and-contract-governance.md) | Module ownership과 변경 승인 | 현재 모듈 개발 지침 |
 | [0019](0019-canonical-time-stability.md) | 시간 표현 안정성 | Repository 구현 완료; 환경별 cutover는 별도 작업 |
 | [0025](0025-static-non-rls-first-launch.md) | Static non-RLS first launch | 현재 launch authority; protected 실행은 `LAUNCH-02` |
+| [0026](0026-physical-module-packages.md) | Owner별 physical Python package | 같은 repository/wheel/process의 path와 composition 경계; serving 의미는 ADR 0025 유지 |
 
 ## 보류된 연구
 

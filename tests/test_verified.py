@@ -3,16 +3,16 @@ from pathlib import Path
 
 import pytest
 
-from query_man.errors import QueryUnavailableError
-from query_man.models import PreparedMetadata
-from query_man.query import QueryService
-from query_man.registry import SourceRegistry
-from query_man.verified import (
+from query_man.assurance.verified import (
     ExpectedResult,
     VerifiedQuery,
     VerifiedQueryConfigurationError,
     VerifiedQueryRegistry,
 )
+from query_man.errors import QueryUnavailableError
+from query_man.guarded_query.query import QueryService
+from query_man.metadata.models import PreparedMetadata
+from query_man.source_catalog.registry import SourceRegistry
 from tests.helpers import (
     ROOT_DIRECTORY,
     load_test_registry,

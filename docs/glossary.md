@@ -74,6 +74,8 @@ accepted ADR이 기준이고, 이 문서는 개념을 쉽게 이해하기 위한
 | 용어 | 쉽게 말하면 |
 |---|---|
 | Modular monolith | 배포 process는 하나지만, 개발 책임과 의존 규칙을 여러 논리 모듈로 나눈 구조입니다. Microservice라는 뜻은 아닙니다. |
+| Physical module package | 같은 repository·wheel·process 안에서 한 module owner의 Python 파일을 모은 directory입니다. 별도 service나 repository라는 뜻이 아닙니다. |
+| Leaf import | Package `__init__.py`의 재수출에 기대지 않고 `query_man.metadata.service`처럼 실제 symbol을 소유한 module을 직접 import하는 방식입니다. |
 | Module owner | 특정 기능·파일·의미를 최종적으로 책임지는 모듈입니다. |
 | Module interface | Provider가 다른 내부 모듈이 사용하도록 명시적으로 공개한 Python 상수·type·Protocol·함수·method·lifecycle capability입니다. 단순히 이름이 public인 것만으로는 포함되지 않습니다. |
 | External API / wire format | HTTP·MCP·CLI에서 주고받는 request, response, error와 인증 형식입니다. 내부 module interface와 별도 경계입니다. |

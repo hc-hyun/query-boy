@@ -9,20 +9,21 @@ from mcp.client import Client
 from mcp.types import CallToolResult
 from pydantic import BaseModel, ValidationError
 
-from query_man.access import CallerContext
+from query_man.delivery.access import CallerContext
+from query_man.delivery.gateway import GatewayService
+from query_man.delivery.mcp_server import _invalid_tool_arguments_response, create_mcp_server
 from query_man.errors import QueryInvalidError, QueryUnavailableError
-from query_man.gateway import GatewayService
-from query_man.mcp_server import _invalid_tool_arguments_response, create_mcp_server
-from query_man.metadata import MetadataService
-from query_man.models import CatalogSnapshot, SourceProfile
-from query_man.operations import operations
-from query_man.query import QueryService
-from query_man.sql_validation import (
+from query_man.guarded_query.query import QueryService
+from query_man.guarded_query.sql_validation import (
     DEFAULT_ALLOWED_FUNCTIONS,
     DEFAULT_ALLOWED_TYPES,
     DEFAULT_ALLOWED_UNQUALIFIED_TYPES,
     ValidatedSql,
 )
+from query_man.metadata.models import CatalogSnapshot
+from query_man.metadata.service import MetadataService
+from query_man.runtime.operations import operations
+from query_man.source_catalog.models import SourceProfile
 from tests.helpers import load_test_registry, minimal_development_snapshot
 
 

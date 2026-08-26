@@ -9,8 +9,8 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-import query_man.result_encoding as result_encoding
-from query_man.result_encoding import (
+import query_man.guarded_query.result_encoding as result_encoding
+from query_man.guarded_query.result_encoding import (
     CANONICAL_TIME_POLICY_MATERIAL,
     RESULT_OID_POLICY_MATERIAL,
     ResultEncodingError,

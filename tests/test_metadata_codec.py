@@ -4,9 +4,9 @@ import hashlib
 import json
 from dataclasses import replace
 
-from query_man.metadata_store import decode_snapshot, encode_snapshot
-from query_man.models import CatalogForeignKey, CatalogIndex
-from query_man.revision import create_metadata_revision
+from query_man.metadata.models import CatalogForeignKey, CatalogIndex
+from query_man.metadata.revision import create_metadata_revision
+from query_man.metadata.store import decode_snapshot, encode_snapshot
 from tests.helpers import load_test_registry, minimal_development_snapshot
 
 

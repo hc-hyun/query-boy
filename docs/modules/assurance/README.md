@@ -1,6 +1,6 @@
 # Assurance Module
 
-Status: Logical boundary; physical package split pending; `LAUNCH-01-A` repository acceptance complete;
+Status: Physical package boundary active; `LAUNCH-01-A` repository acceptance complete;
 protected execution separately gated
 
 ## 목적
@@ -47,9 +47,9 @@ RLS attestation, 넓은 result type, cost attribution과 trace는 첫 launch 밖
 
 | 영역 | 위치 | 역할 |
 |---|---|---|
-| Metadata 품질 | [`quality.py`](../../../src/query_man/quality.py), [`quality-evaluation.yaml`](../../../config/quality-evaluation.yaml) | 질문별 relation 선택과 answerability 품질 검사 |
-| Verified query | [`verified.py`](../../../src/query_man/verified.py), [`verified-queries.yaml`](../../../config/verified-queries.yaml) | DTO, registry, comparison, hash와 현재 9개 항목 |
-| Offline 실행 | [`assurance_cli.py`](../../../src/query_man/assurance_cli.py) | 두 command의 유일한 offline composition root |
+| Metadata 품질 | [`assurance/quality.py`](../../../src/query_man/assurance/quality.py), [`quality-evaluation.yaml`](../../../config/quality-evaluation.yaml) | 질문별 relation 선택과 answerability 품질 검사 |
+| Verified query | [`assurance/verified.py`](../../../src/query_man/assurance/verified.py), [`verified-queries.yaml`](../../../config/verified-queries.yaml) | DTO, registry, comparison, hash와 현재 9개 항목 |
+| Offline 실행 | [`assurance/cli.py`](../../../src/query_man/assurance/cli.py) | 두 command의 유일한 offline composition root |
 | Safety corpus | [`security-evaluation.yaml`](../../../config/security-evaluation.yaml) | Parser와 query safety 입력 |
 | 검증 조립 | [`ci.yml`](../../../.github/workflows/ci.yml), [`verify-container.sh`](../../../scripts/verify-container.sh), [focused tests](../../../tests/test_verified.py) | `core-static`/`managed-acceptance`, container gate와 Assurance core 검증 |
 | Static DB fixture | [`compose.yaml`](../../../compose.yaml), [`apply-db.sh`](../../../scripts/apply-db.sh), [`validate-static-fixtures.sh`](../../../scripts/validate-static-fixtures.sh) | Current 두 source만 준비하며 Control/support/commerce를 포함하지 않음 |
@@ -108,11 +108,11 @@ hashes는 SQL policy v3 전환에서도 유지한다. SQL policy v3 digest는
 | `query-man-evaluate` | Metadata retrieval 품질 gate 검사 | 지정한 root의 static configuration |
 | `query-man-verify` | 9개 verified SQL 결과 회귀검사 | 지정한 root의 static configuration |
 
-Console-script target은 `query_man.assurance_cli:evaluate_main`과
-`query_man.assurance_cli:verify_main`이다. Command 이름, `--root`와 기본값, JSON stdout 및 exit 의미는
+Console-script target은 `query_man.assurance.cli:evaluate_main`과
+`query_man.assurance.cli:verify_main`이다. Command 이름, `--root`와 기본값, JSON stdout 및 exit 의미는
 external CLI surface다.
 
-`assurance_cli.py`만 offline 검사에 필요한 concrete Source Registry, Catalog, Metadata와 Query adapter를
+`assurance/cli.py`만 offline 검사에 필요한 concrete Source Registry, Catalog, Metadata와 Query adapter를
 조립한다. Runtime authority selector나 Control DB를 사용하지 않는다. Static RLS manifest는 registry
 load에서 먼저 거부되고 CLI는 tenant ID를 추가하지 않는다. Verify SQL은 `QueryService`를 통과한다.
 Production server나 Control candidate staging을 여기서 조립하지 않는다.
@@ -219,8 +219,8 @@ verification record에 commit, fixture와 command 범위를 남긴다.
 Assurance 작업은 기본적으로 다음 순서로 읽는다.
 
 1. 이 문서, [module index](../README.md)와 [ADR 0025](../../decisions/0025-static-non-rls-first-launch.md)
-2. 변경하는 `quality.py` 또는 `verified.py`, 대응 config와 focused test
-3. CLI 변경이면 `assurance_cli.py`, entrypoint test와 provider interface
+2. 변경하는 `assurance/quality.py` 또는 `assurance/verified.py`, 대응 config와 focused test
+3. CLI 변경이면 `assurance/cli.py`, entrypoint test와 provider interface
 4. Hash/revision 변경이면 Metadata, Guarded Query 문서와 직접 consumer
 5. Cross-module acceptance 변경이면 해당 Runtime/Delivery/Control 경계와 test
 6. Fixture/CI lane 변경이면 base/acceptance Compose, 두 apply script, CI job과 직접 consumer test

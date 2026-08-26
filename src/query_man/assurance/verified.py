@@ -9,9 +9,9 @@ from typing import Annotated
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from query_man.metadata import MetadataService
-from query_man.query import QueryService
-from query_man.sql_validation import SQL_POLICY_REVISION, validate_sql
+from query_man.guarded_query.query import QueryService
+from query_man.guarded_query.sql_validation import SQL_POLICY_REVISION, validate_sql
+from query_man.metadata.service import MetadataService
 
 Identifier = Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,99}$")]
 RelationName = Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_$]*\.[A-Za-z_][A-Za-z0-9_$]*$")]

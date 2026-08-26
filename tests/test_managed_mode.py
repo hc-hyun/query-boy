@@ -11,35 +11,37 @@ from typing import Literal, cast, get_type_hints
 
 import pytest
 
-import query_man.app as app_module
 import query_man.managed.runtime as managed_runtime_module
-from query_man.access import AccessPolicy, AccessPolicyConfigurationError
-from query_man.catalog import PostgresCatalog
+import query_man.runtime.composition as app_module
+from query_man.assurance.verified import VerifiedQueryRegistry
+from query_man.delivery.access import AccessPolicy, AccessPolicyConfigurationError
 from query_man.errors import MetadataUnavailableError
-from query_man.managed.source_admin import (
-    ReplicaSourceObservation,
-    ResourceObservationSample,
-)
-from query_man.models import (
-    CatalogProvider,
-    CatalogSnapshot,
-    PreparedMetadata,
-    RepresentativeRecordsTarget,
-    ResourceObservation,
-    ResourceObservationDefinition,
-    RuntimeCatalogProvider,
-    SourceProfile,
-)
-from query_man.operations import operations
-from query_man.query import (
+from query_man.guarded_query.query import (
     DeliveryQueryExecutor,
     PostgresQueryExecutor,
     RuntimeQueryExecutor,
 )
-from query_man.reader_policy import ReaderSessionPolicyError
-from query_man.registry import SourceRegistry
-from query_man.runtime_config import RuntimeConfig
-from query_man.verified import VerifiedQueryRegistry
+from query_man.managed.source_admin import (
+    ReplicaSourceObservation,
+    ResourceObservationSample,
+)
+from query_man.metadata.catalog import PostgresCatalog
+from query_man.metadata.models import (
+    CatalogProvider,
+    CatalogSnapshot,
+    PreparedMetadata,
+    ResourceObservation,
+    RuntimeCatalogProvider,
+)
+from query_man.runtime.config import RuntimeConfig
+from query_man.runtime.operations import operations
+from query_man.source_catalog.models import (
+    RepresentativeRecordsTarget,
+    ResourceObservationDefinition,
+    SourceProfile,
+)
+from query_man.source_catalog.reader_policy import ReaderSessionPolicyError
+from query_man.source_catalog.registry import SourceRegistry
 from tests.helpers import ROOT_DIRECTORY, load_test_registry
 
 _SOURCE_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="

@@ -6,10 +6,10 @@ from typing import cast
 import pytest
 from dotenv import load_dotenv
 
-from query_man.catalog import PostgresCatalog
-from query_man.metadata import MetadataService
-from query_man.quality import QualityEvaluation, QualityGateError
-from query_man.registry import SourceRegistry
+from query_man.assurance.quality import QualityEvaluation, QualityGateError
+from query_man.metadata.catalog import PostgresCatalog
+from query_man.metadata.service import MetadataService
+from query_man.source_catalog.registry import SourceRegistry
 from tests.helpers import ROOT_DIRECTORY
 
 

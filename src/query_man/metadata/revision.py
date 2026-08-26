@@ -6,8 +6,9 @@ from collections.abc import Mapping, Sequence
 from dataclasses import fields, is_dataclass
 from typing import Any
 
-from query_man.models import CatalogSnapshot, SourceProfile
-from query_man.result_encoding import CANONICAL_TIME_POLICY_MATERIAL
+from query_man.guarded_query.result_encoding import CANONICAL_TIME_POLICY_MATERIAL
+from query_man.metadata.models import CatalogSnapshot
+from query_man.source_catalog.models import SourceProfile
 
 
 def create_metadata_revision(source: SourceProfile, catalog: CatalogSnapshot) -> str:

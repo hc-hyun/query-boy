@@ -4,11 +4,11 @@ import asyncio
 import logging
 import uuid
 
-from query_man.access import CallerContext
+from query_man.delivery.access import CallerContext
 from query_man.errors import AppError, OperatorRequiredError, QueryNotFoundError, SourceNotFoundError
-from query_man.metadata import MetadataService
-from query_man.query import QueryService
-from query_man.registry import SourceReader
+from query_man.guarded_query.query import QueryService
+from query_man.metadata.service import MetadataService
+from query_man.source_catalog.registry import SourceReader
 
 logger = logging.getLogger("query_man.audit")
 

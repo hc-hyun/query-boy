@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from query_man.sql_validation import SqlValidationError, validate_sql
+from query_man.guarded_query.sql_validation import SqlValidationError, validate_sql
 
 CORPUS_PATH = Path(__file__).parents[1] / "config" / "security-evaluation.yaml"
 ALLOWED_RELATIONS = {"ai.issue_overview"}

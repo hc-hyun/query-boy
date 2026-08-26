@@ -6,7 +6,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from math import log
 
-from query_man.models import CatalogRelation, RelationSemantic
+from query_man.metadata.models import CatalogRelation
+from query_man.source_catalog.models import RelationSemantic
 
 _KOREAN_SUFFIXES = [
     "으로부터",

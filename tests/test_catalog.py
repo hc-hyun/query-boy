@@ -11,29 +11,31 @@ from dotenv import load_dotenv
 from psycopg import AsyncConnection
 from psycopg.conninfo import make_conninfo
 
-import query_man.catalog as catalog_module
-from query_man.catalog import PostgresCatalog, _apply_structures, _CatalogValidationError
+import query_man.metadata.catalog as catalog_module
 from query_man.errors import MetadataUnavailableError
-from query_man.metadata import MetadataService
-from query_man.models import (
+from query_man.metadata.catalog import PostgresCatalog, _apply_structures, _CatalogValidationError
+from query_man.metadata.models import (
     CatalogForeignKey,
     CatalogIndex,
     CatalogProvider,
     CatalogSnapshot,
     PreparedMetadata,
-    RepresentativeRecordsTarget,
     ResourceObservation,
-    ResourceObservationDefinition,
     RuntimeCatalogProvider,
+)
+from query_man.metadata.service import MetadataService
+from query_man.source_catalog.models import (
+    RepresentativeRecordsTarget,
+    ResourceObservationDefinition,
     SourceProfile,
 )
-from query_man.reader_policy import (
+from query_man.source_catalog.reader_policy import (
     READER_CLIENT_ENCODING,
     READER_SESSION_TIMEZONE_SETTER,
     ReaderSessionPolicyError,
     require_reader_session_policy,
 )
-from query_man.registry import SourceRegistry
+from query_man.source_catalog.registry import SourceRegistry
 from tests.helpers import (
     ROOT_DIRECTORY,
     column,

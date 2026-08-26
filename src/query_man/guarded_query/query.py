@@ -24,10 +24,21 @@ from query_man.errors import (
     QueryUnavailableError,
     SourceNotFoundError,
 )
-from query_man.metadata import MetadataService
-from query_man.models import SourceProfile
-from query_man.operations import operations
-from query_man.reader_policy import (
+from query_man.guarded_query.result_encoding import (
+    ResultEncodingError,
+    _require_supported_result_oids,
+    encode_result_value,
+)
+from query_man.guarded_query.sql_validation import (
+    SQL_POLICY_REVISION,
+    SqlValidationError,
+    ValidatedSql,
+    validate_sql,
+)
+from query_man.metadata.service import MetadataService
+from query_man.runtime.operations import operations
+from query_man.source_catalog.models import SourceProfile
+from query_man.source_catalog.reader_policy import (
     READER_CLIENT_ENCODING,
     READER_SESSION_BUDGET_SETTERS,
     READER_SESSION_TIMEZONE_SETTER,
@@ -36,18 +47,7 @@ from query_man.reader_policy import (
     require_reader_connection_policy,
     require_reader_session_policy,
 )
-from query_man.registry import SourceReader
-from query_man.result_encoding import (
-    ResultEncodingError,
-    _require_supported_result_oids,
-    encode_result_value,
-)
-from query_man.sql_validation import (
-    SQL_POLICY_REVISION,
-    SqlValidationError,
-    ValidatedSql,
-    validate_sql,
-)
+from query_man.source_catalog.registry import SourceReader
 
 audit_logger = logging.getLogger("query_man.audit")
 _RESULT_CURSOR_NAME = "query_man_result"

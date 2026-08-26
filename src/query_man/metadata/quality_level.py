@@ -3,7 +3,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from query_man.models import CatalogSnapshot, QualityLevel, SourceProfile
+from query_man.metadata.models import CatalogSnapshot
+from query_man.source_catalog.models import QualityLevel, SourceProfile
 
 _LEVEL_ORDER: dict[QualityLevel, int] = {"L0": 0, "L1": 1, "L2": 2}
 

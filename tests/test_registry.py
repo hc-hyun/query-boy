@@ -13,13 +13,14 @@ from typing import get_type_hints
 import pytest
 import yaml
 
-import query_man.assurance_cli as assurance_cli_module
-from query_man.app import _probe_registered_sources
-from query_man.gateway import GatewayService
-from query_man.metadata import MetadataService
-from query_man.models import ResourceObservation, SourceProfile
-from query_man.query import QueryService
-from query_man.registry import (
+import query_man.assurance.cli as assurance_cli_module
+from query_man.delivery.gateway import GatewayService
+from query_man.guarded_query.query import QueryService
+from query_man.metadata.models import ResourceObservation
+from query_man.metadata.service import MetadataService
+from query_man.runtime.composition import _probe_registered_sources
+from query_man.source_catalog.models import SourceProfile
+from query_man.source_catalog.registry import (
     POSTGRES_IDENTIFIER_MAX_LENGTH,
     RegistryConfigurationError,
     SourceProjectionWriter,

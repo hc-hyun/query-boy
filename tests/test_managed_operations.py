@@ -11,7 +11,7 @@ from query_man.managed.runtime import (
     ManagedGatewayUsageRecorder,
 )
 from query_man.managed.source_admin import GatewayUsageDelta
-from query_man.operations import (
+from query_man.runtime.operations import (
     OperationalState,
     ReplicaRuntimeSnapshot,
     ReplicaSourceRuntimeState,

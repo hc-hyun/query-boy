@@ -9,14 +9,14 @@ from psycopg import AsyncConnection, errors
 from query_man.managed.metadata_store import PostgresMetadataStore
 from query_man.managed.secrets import SourceSecretCipher
 from query_man.managed.source_store import PostgresSourceStore
-from query_man.metadata_store import (
+from query_man.metadata.models import CatalogForeignKey, CatalogIndex, PreparedMetadata
+from query_man.metadata.revision import create_metadata_revision
+from query_man.metadata.store import (
     StoredMetadataInvalidError,
     StoredMetadataNotFoundError,
     StoredMetadataSupersededError,
 )
-from query_man.models import CatalogForeignKey, CatalogIndex, PreparedMetadata
-from query_man.registry import load_budget_profiles, validate_source_manifest
-from query_man.revision import create_metadata_revision
+from query_man.source_catalog.registry import load_budget_profiles, validate_source_manifest
 from tests.helpers import ROOT_DIRECTORY, load_test_registry, minimal_development_snapshot
 
 

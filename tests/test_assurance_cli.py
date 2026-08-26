@@ -9,8 +9,8 @@ from typing import Any
 
 import pytest
 
-import query_man.assurance_cli as assurance_cli
-from query_man.quality import QualityGateError, QualityReport
+import query_man.assurance.cli as assurance_cli
+from query_man.assurance.quality import QualityGateError, QualityReport
 from tests.helpers import ROOT_DIRECTORY
 
 
@@ -20,10 +20,10 @@ def test_console_scripts_target_the_assurance_cli_composition_root() -> None:
     )
 
     assert configuration["project"]["scripts"]["query-man-evaluate"] == (
-        "query_man.assurance_cli:evaluate_main"
+        "query_man.assurance.cli:evaluate_main"
     )
     assert configuration["project"]["scripts"]["query-man-verify"] == (
-        "query_man.assurance_cli:verify_main"
+        "query_man.assurance.cli:verify_main"
     )
 
 
@@ -333,12 +333,12 @@ async def test_verify_cli_propagates_failure_without_success_output_and_still_cl
 
 def test_quality_and_verified_core_do_not_import_concrete_composition_adapters() -> None:
     forbidden = {
-        "query_man.catalog.PostgresCatalog",
-        "query_man.query.PostgresQueryExecutor",
-        "query_man.registry.SourceRegistry",
+        "query_man.metadata.catalog.PostgresCatalog",
+        "query_man.guarded_query.query.PostgresQueryExecutor",
+        "query_man.source_catalog.registry.SourceRegistry",
     }
 
-    for filename in ("quality.py", "verified.py"):
+    for filename in ("assurance/quality.py", "assurance/verified.py"):
         path = ROOT_DIRECTORY / "src" / "query_man" / filename
         imported: set[str] = set()
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
@@ -356,30 +356,30 @@ def test_concrete_service_construction_stays_in_approved_composition_roots() -> 
     source_root = ROOT_DIRECTORY / "src" / "query_man"
     allowed_files = {
         "SourceRegistry": {
-            "app.py",
-            "assurance_cli.py",
+            "runtime/composition.py",
+            "assurance/cli.py",
             "managed/runtime.py",
             "managed/source_admin.py",
         },
         "PostgresCatalog": {
-            "app.py",
-            "assurance_cli.py",
+            "runtime/composition.py",
+            "assurance/cli.py",
             "managed/runtime.py",
         },
         "PostgresQueryExecutor": {
-            "app.py",
-            "assurance_cli.py",
+            "runtime/composition.py",
+            "assurance/cli.py",
             "managed/runtime.py",
         },
         "MetadataService": {
-            "app.py",
-            "assurance_cli.py",
+            "runtime/composition.py",
+            "assurance/cli.py",
             "managed/runtime.py",
             "managed/source_admin.py",
         },
         "QueryService": {
-            "app.py",
-            "assurance_cli.py",
+            "runtime/composition.py",
+            "assurance/cli.py",
             "managed/runtime.py",
         },
     }

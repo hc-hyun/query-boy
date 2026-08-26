@@ -26,9 +26,9 @@ from psycopg import AsyncConnection, sql
 from psycopg.conninfo import make_conninfo
 from psycopg.rows import dict_row
 
-from query_man.access import AccessPolicy
-from query_man.app import build_app
-from query_man.catalog import PostgresCatalog
+from query_man.assurance.verified import VerifiedQueryRegistry, create_result_hash
+from query_man.delivery.access import AccessPolicy
+from query_man.delivery.mcp_server import MCP_PROTOCOL_VERSION
 from query_man.errors import (
     QueryInvalidError,
     QueryOverloadedError,
@@ -36,23 +36,24 @@ from query_man.errors import (
     QueryTimeoutError,
     QueryUnavailableError,
 )
-from query_man.mcp_server import MCP_PROTOCOL_VERSION
-from query_man.metadata import MetadataService
-from query_man.models import CatalogSnapshot, ResourceObservation, SourceProfile
-from query_man.query import PostgresQueryExecutor, QueryService
-from query_man.reader_policy import (
-    ReaderSessionPolicyError,
-    require_reader_session_policy,
-)
-from query_man.registry import SourceRegistry
-from query_man.runtime_config import RuntimeConfig
-from query_man.sql_validation import (
+from query_man.guarded_query.query import PostgresQueryExecutor, QueryService
+from query_man.guarded_query.sql_validation import (
     DEFAULT_ALLOWED_FUNCTIONS,
     SQL_POLICY_REVISION,
     ValidatedSql,
     validate_sql,
 )
-from query_man.verified import VerifiedQueryRegistry, create_result_hash
+from query_man.metadata.catalog import PostgresCatalog
+from query_man.metadata.models import CatalogSnapshot, ResourceObservation
+from query_man.metadata.service import MetadataService
+from query_man.runtime.composition import build_app
+from query_man.runtime.config import RuntimeConfig
+from query_man.source_catalog.models import SourceProfile
+from query_man.source_catalog.reader_policy import (
+    ReaderSessionPolicyError,
+    require_reader_session_policy,
+)
+from query_man.source_catalog.registry import SourceRegistry
 from tests.helpers import ROOT_DIRECTORY, load_test_registry, minimal_development_snapshot
 
 _SESSION_BUDGET_SELECT = """
@@ -401,8 +402,14 @@ def test_injected_rls_registry_is_rejected_before_app_provider_composition(
         provider_calls += 1
         raise AssertionError("RLS launch rejection must precede provider composition")
 
-    monkeypatch.setattr("query_man.app.PostgresCatalog", unexpected_provider)
-    monkeypatch.setattr("query_man.app.PostgresQueryExecutor", unexpected_provider)
+    monkeypatch.setattr(
+        "query_man.runtime.composition.PostgresCatalog",
+        unexpected_provider,
+    )
+    monkeypatch.setattr(
+        "query_man.runtime.composition.PostgresQueryExecutor",
+        unexpected_provider,
+    )
 
     with pytest.raises(
         ValueError,
@@ -526,7 +533,7 @@ async def test_catalog_and_query_enforce_versioned_session_budget(
             await require_reader_session_policy(connection, profile)
 
         monkeypatch.setattr(
-            "query_man.catalog.require_reader_session_policy",
+            "query_man.metadata.catalog.require_reader_session_policy",
             record_catalog_settings,
         )
         snapshot = await catalog.load(source)

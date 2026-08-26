@@ -8,12 +8,12 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from query_man.catalog import PostgresCatalog
-from query_man.metadata import MetadataService
-from query_man.quality import QualityEvaluation, QualityGateError
-from query_man.query import PostgresQueryExecutor, QueryService
-from query_man.registry import SourceReader, SourceRegistry
-from query_man.verified import VerifiedQueryRegistry
+from query_man.assurance.quality import QualityEvaluation, QualityGateError
+from query_man.assurance.verified import VerifiedQueryRegistry
+from query_man.guarded_query.query import PostgresQueryExecutor, QueryService
+from query_man.metadata.catalog import PostgresCatalog
+from query_man.metadata.service import MetadataService
+from query_man.source_catalog.registry import SourceReader, SourceRegistry
 
 
 def evaluate_main() -> None:

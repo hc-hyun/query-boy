@@ -8,12 +8,13 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from query_man.access import AccessPolicy
+from query_man.delivery.access import AccessPolicy
 from query_man.errors import (
     MutationNotFoundError,
     SourceControlUnavailableError,
     SourceNotFoundError,
 )
+from query_man.guarded_query.query import RuntimeQueryExecutor
 from query_man.managed.runtime import build_app as build_managed_app
 from query_man.managed.source_admin import (
     CONTROL_SEQUENCE_MAX,
@@ -21,9 +22,8 @@ from query_man.managed.source_admin import (
     PublishVerifiedQueryInput,
     VerifiedExpectedInput,
 )
-from query_man.models import RuntimeCatalogProvider
-from query_man.query import RuntimeQueryExecutor
-from query_man.runtime_config import RuntimeConfig
+from query_man.metadata.models import RuntimeCatalogProvider
+from query_man.runtime.config import RuntimeConfig
 from tests.helpers import load_test_registry
 from tests.test_http import (
     _ADMIN_TOKEN,
@@ -64,7 +64,7 @@ def test_admin_routes_only_import_public_control_interface() -> None:
 
     for forbidden in (
         "query_man.managed.source_store",
-        "query_man.verified",
+        "query_man.assurance.verified",
     ):
         assert not any(
             imported == forbidden or imported.startswith(f"{forbidden}.")

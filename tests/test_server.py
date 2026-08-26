@@ -15,8 +15,8 @@ import pytest
 import uvicorn
 from fastapi import FastAPI
 
-from query_man import server as server_module
-from query_man.operations import operations
+import query_man.runtime.server as server_module
+from query_man.runtime.operations import operations
 from tests.helpers import ROOT_DIRECTORY
 
 
@@ -26,7 +26,7 @@ def test_static_app_import_does_not_load_managed_package() -> None:
             sys.executable,
             "-c",
             (
-                "import sys; import query_man.app; "
+                "import sys; import query_man.runtime.composition; "
                 "assert not any(name == 'query_man.managed' or "
                 "name.startswith('query_man.managed.') for name in sys.modules)"
             ),
@@ -56,7 +56,7 @@ def test_static_server_dispatch_does_not_load_managed_package() -> None:
             sys.executable,
             "-c",
             (
-                "import sys; import query_man.server; "
+                "import sys; import query_man.runtime.server; "
                 "assert not any(name == 'query_man.managed' or "
                 "name.startswith('query_man.managed.') for name in sys.modules)"
             ),

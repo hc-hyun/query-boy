@@ -17,7 +17,7 @@ from pydantic import (
     model_validator,
 )
 
-from query_man.models import (
+from query_man.source_catalog.models import (
     BudgetProfile,
     BusinessPredicate,
     BusinessTermDefinition,

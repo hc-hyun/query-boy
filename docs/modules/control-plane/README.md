@@ -1,6 +1,6 @@
 # Control Plane Module
 
-Status: Logical boundary; physical package split pending for shared adapters — managed package extracted
+Status: Physical package boundary active; managed capability current first launch inactive
 
 > **현재 launch에서는 꺼져 있다.** Control Plane의 managed capability는 구현되어 있고
 > 보존되지만, [ADR 0025](../../decisions/0025-static-non-rls-first-launch.md)의 첫 launch는
@@ -54,7 +54,7 @@ Managed capability의 운영자 관점은 [source management plane](../../source
 |---|---|---|
 | [`managed/source_admin.py`](../../../src/query_man/managed/source_admin.py) | Public administration input/use case, `SourceReloader`, observation writer와 usage projection | Cross-module application interface가 있는 managed package 핵심 파일 |
 | [`managed/source_store.py`](../../../src/query_man/managed/source_store.py) | PostgreSQL state transition, projection query와 persistence-private type | Delivery나 다른 module이 직접 import하지 않음 |
-| [`managed/metadata_store.py`](../../../src/query_man/managed/metadata_store.py) | `PostgresMetadataStore`의 pool/SQL/lock/transaction | Core `metadata_store.py`의 Metadata port와 codec을 구현함 |
+| [`managed/metadata_store.py`](../../../src/query_man/managed/metadata_store.py) | `PostgresMetadataStore`의 pool/SQL/lock/transaction | Core `metadata/store.py`의 Metadata port와 codec을 구현함 |
 | [`managed/secrets.py`](../../../src/query_man/managed/secrets.py) | Generation-bound AES-GCM encryption | Plaintext와 key를 log/response/DB에 남기지 않음 |
 | [`errors.py`](../../../src/query_man/errors.py) | Control administration domain-error 발생 의미 | Public envelope은 Delivery 소유인 shared transition file |
 | [`05-control-plane.sh`](../../../docker/postgres/init/05-control-plane.sh), [`control-migrations`](../../../docker/postgres/init/control-migrations) | Numbered migration, checksum ledger와 least-privilege reconciliation | Migration-first, 과거 migration 수정 금지 |
@@ -66,7 +66,7 @@ Managed capability의 운영자 관점은 [source management plane](../../source
 
 Administration, source/metadata persistence와 secret 구현은 `src/query_man/managed` same-repository package로
 격리했다. 이는 별도 repository나 service가 아니며 external/persisted/policy/lifecycle 의미도
-바꾸지 않는다. Core `metadata_store.py`는 Metadata port/error/codec만 남긴다. 공통 `errors.py`,
+바꾸지 않는다. Core `metadata/store.py`는 Metadata port/error/codec만 남긴다. 공통 `errors.py`,
 Runtime의 managed composition과 cross-module tests는 아직 shared transition artifact이므로
 coordinating agent가 single-writer로 다룬다.
 

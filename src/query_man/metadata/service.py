@@ -7,41 +7,43 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
-from query_man.catalog import _CatalogValidationError
 from query_man.errors import MetadataUnavailableError, SourceNotFoundError
-from query_man.metadata_store import MetadataStore, StoredMetadataSupersededError
-from query_man.models import (
-    BusinessTermDefinition,
+from query_man.guarded_query.sql_validation import (
+    DEFAULT_ALLOWED_FUNCTIONS,
+    DEFAULT_ALLOWED_TYPES,
+    DEFAULT_ALLOWED_UNQUALIFIED_TYPES,
+    SQL_POLICY_REVISION,
+)
+from query_man.metadata.catalog import _CatalogValidationError
+from query_man.metadata.models import (
     CatalogColumn,
     CatalogProvider,
     CatalogRelation,
     CatalogSnapshot,
-    CompositionHint,
-    JoinDefinition,
-    MeasureDefinition,
     PreparedMetadata,
-    QuestionRule,
-    RelationSemantic,
-    SourceProfile,
 )
-from query_man.operations import operations
-from query_man.quality_level import QualityLevelReport, assess_quality_level
-from query_man.reader_policy import ReaderSessionPolicyError
-from query_man.registry import SourceReader
-from query_man.relevance import (
+from query_man.metadata.quality_level import QualityLevelReport, assess_quality_level
+from query_man.metadata.relevance import (
     RankedRelation,
     RelationRetrievalIndex,
     SelectionReason,
     normalize_business_text,
     select_ranked_relations,
 )
-from query_man.revision import create_metadata_revision
-from query_man.sql_validation import (
-    DEFAULT_ALLOWED_FUNCTIONS,
-    DEFAULT_ALLOWED_TYPES,
-    DEFAULT_ALLOWED_UNQUALIFIED_TYPES,
-    SQL_POLICY_REVISION,
+from query_man.metadata.revision import create_metadata_revision
+from query_man.metadata.store import MetadataStore, StoredMetadataSupersededError
+from query_man.runtime.operations import operations
+from query_man.source_catalog.models import (
+    BusinessTermDefinition,
+    CompositionHint,
+    JoinDefinition,
+    MeasureDefinition,
+    QuestionRule,
+    RelationSemantic,
+    SourceProfile,
 )
+from query_man.source_catalog.reader_policy import ReaderSessionPolicyError
+from query_man.source_catalog.registry import SourceReader
 
 
 @dataclass

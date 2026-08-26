@@ -5,8 +5,8 @@ import contextvars
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Mapping
-from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
+from collections.abc import Callable, Coroutine, Mapping
+from contextlib import AbstractAsyncContextManager, suppress
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -16,23 +16,20 @@ from mcp.types import UNSUPPORTED_PROTOCOL_VERSION
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from query_man.access import AccessPolicy, CallerContext
-from query_man.catalog import PostgresCatalog
-from query_man.errors import AppError, OperatorRequiredError, QueryTimeoutError
-from query_man.gateway import GatewayService
-from query_man.http_validation import is_json_content_type
-from query_man.mcp_server import (
+from query_man.delivery.access import AccessPolicy, CallerContext
+from query_man.delivery.gateway import GatewayService
+from query_man.delivery.http_validation import is_json_content_type
+from query_man.delivery.mcp_server import (
     MCP_PROTOCOL_VERSION,
     GetContextSuccessOutput,
     create_mcp_server,
 )
-from query_man.metadata import MetadataService
-from query_man.models import CatalogProvider
-from query_man.operations import operations
-from query_man.query import DeliveryQueryExecutor, PostgresQueryExecutor, QueryService
-from query_man.registry import SourceReader, SourceRegistry
-from query_man.runtime_config import RuntimeConfig
-from query_man.verified import VerifiedQueryRegistry
+from query_man.errors import AppError, OperatorRequiredError, QueryTimeoutError
+from query_man.guarded_query.query import DeliveryQueryExecutor, QueryService
+from query_man.metadata.models import CatalogProvider
+from query_man.metadata.service import MetadataService
+from query_man.runtime.operations import operations
+from query_man.source_catalog.registry import SourceReader
 
 logger = logging.getLogger("query_man")
 audit_logger = logging.getLogger("query_man.audit")
@@ -184,145 +181,12 @@ class QueryRequest(BaseModel):
     sql_policy_revision: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
 
 
-def _require_runtime_capabilities(
-    component: str,
-    provider: object,
-    methods: tuple[str, ...],
-) -> None:
-    missing = tuple(
-        method
-        for method in methods
-        if not callable(getattr(provider, method, None))
-    )
-    if missing:
-        raise TypeError(
-            f"{component} is missing required runtime capabilities: {', '.join(missing)}"
-        )
-
-
-def _require_launch_inventory(registry: SourceReader) -> None:
-    for source_id in registry.source_ids():
-        source = registry.get(source_id)
-        if source is not None and source.tenant_isolation == "rls":
-            raise ValueError("Runtime launch inventory does not accept RLS sources")
-
-
-def build_app(
-    runtime_config: RuntimeConfig,
+def build_http_app(
     *,
-    registry: SourceRegistry | None = None,
-    catalog: CatalogProvider | None = None,
-    query_executor: DeliveryQueryExecutor | None = None,
-    access_policy: AccessPolicy | None = None,
-) -> FastAPI:
-    if runtime_config.source_mode != "bootstrap":
-        raise ValueError("Managed source mode must use query_man.managed.runtime")
-    operations.reset()
-    if registry is None:
-        registry = SourceRegistry.load(runtime_config.source_directory, runtime_config.budget_file)
-    _require_launch_inventory(registry)
-    operations.reconcile_sources(registry.source_ids())
-    catalog = PostgresCatalog(reject_domain_columns=True) if catalog is None else catalog
-    _require_runtime_capabilities(
-        "catalog",
-        catalog,
-        ("load", "close"),
-    )
-    source_ids = [source["source_id"] for source in registry.list()]
-    verified_revisions = VerifiedQueryRegistry.load(
-        runtime_config.source_directory.parent / "verified-queries.yaml",
-        set(source_ids),
-    ).revision_map()
-    metadata = MetadataService(
-        registry,
-        catalog,
-        cache_ttl_ms=runtime_config.metadata_cache_ttl_ms,
-        max_stale_ms=runtime_config.metadata_max_stale_ms,
-        refresh_retry_ms=runtime_config.metadata_retry_delay_ms,
-        verified_revisions=verified_revisions,
-    )
-    query_executor = PostgresQueryExecutor() if query_executor is None else query_executor
-    _require_runtime_capabilities(
-        "query_executor",
-        query_executor,
-        ("execute", "cancel", "close", "stop_accepting", "drain"),
-    )
-    query_service = QueryService(registry, metadata, query_executor)
-    if access_policy is None:
-        if runtime_config.access_policy_file is not None:
-            access_policy = AccessPolicy.load(runtime_config.access_policy_file)
-        elif runtime_config.api_token is not None:
-            access_policy = AccessPolicy.legacy(runtime_config.api_token)
-        else:
-            access_policy = AccessPolicy.local()
-    gateway = GatewayService(registry, metadata, query_service)
-
-    @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        async def cleanup_step(
-            step: str,
-            cleanup: Callable[[], Awaitable[None]],
-        ) -> None:
-            try:
-                await cleanup()
-            except BaseException:
-                logger.warning("startup_cleanup_step_failed step=%s", step)
-
-        async def cleanup_failed_startup() -> None:
-            cleanup_steps: list[tuple[str, object, Callable[[], Awaitable[None]]]] = [
-                ("query_executor", query_executor, query_executor.close),
-                ("catalog", catalog, catalog.close),
-                ("metadata", metadata, metadata.close),
-            ]
-            attempted_resources: set[int] = set()
-            for step, resource, cleanup in cleanup_steps:
-                resource_id = id(resource)
-                if resource_id in attempted_resources:
-                    continue
-                attempted_resources.add(resource_id)
-                await cleanup_step(step, cleanup)
-
-        operations.reconcile_sources(registry.source_ids())
-        await _probe_registered_sources(registry, metadata)
-        child_entered = False
-        try:
-            mcp_app: FastAPI = app.state.mcp_app
-            async with mcp_app.router.lifespan_context(mcp_app):
-                child_entered = True
-                try:
-                    yield
-                finally:
-                    operations.set_accepting(False)
-                    await query_executor.drain(runtime_config.shutdown_grace_ms)
-                    try:
-                        await query_executor.close()
-                    finally:
-                        try:
-                            await catalog.close()
-                        finally:
-                            await metadata.close()
-        except BaseException:
-            if not child_entered:
-                await cleanup_failed_startup()
-            raise
-
-    return _build_delivery_app(
-        runtime_config,
-        registry=registry,
-        catalog=catalog,
-        metadata=metadata,
-        query_executor=query_executor,
-        query_service=query_service,
-        access_policy=access_policy,
-        gateway=gateway,
-        lifespan=lifespan,
-    )
-
-
-def _build_delivery_app(
-    runtime_config: RuntimeConfig,
-    *,
-    registry: SourceRegistry,
+    host: str,
+    mcp_allowed_hosts: tuple[str, ...],
+    mcp_allowed_origins: tuple[str, ...],
+    registry: SourceReader,
     catalog: CatalogProvider,
     metadata: MetadataService,
     query_executor: DeliveryQueryExecutor,
@@ -341,10 +205,10 @@ def _build_delivery_app(
         max_request_body_size=1_048_576,
         transport_security=TransportSecuritySettings(
             enable_dns_rebinding_protection=True,
-            allowed_hosts=list(runtime_config.mcp_allowed_hosts),
-            allowed_origins=list(runtime_config.mcp_allowed_origins),
+            allowed_hosts=list(mcp_allowed_hosts),
+            allowed_origins=list(mcp_allowed_origins),
         ),
-        host=runtime_config.host,
+        host=host,
     )
     app = FastAPI(title="query-man", lifespan=lifespan)
     app.state.registry = registry
@@ -604,24 +468,3 @@ def _mcp_caller() -> CallerContext:
     if caller is None:
         raise RuntimeError("MCP caller context is unavailable")
     return caller
-
-
-async def _probe_registered_sources(
-    registry: SourceReader,
-    metadata: MetadataService,
-) -> None:
-    async def probe(source_id: str) -> None:
-        source = registry.get(source_id)
-        if source is None:
-            return
-        try:
-            async with asyncio.timeout(
-                max(1, source.budget.metadata_statement_timeout_ms) / 1_000
-            ):
-                await metadata.get_published(source_id)
-        except Exception:
-            operations.increment("startup_metadata_probe_failed", source_id)
-            operations.set_source_health(source_id, "unavailable")
-            logger.exception("startup_metadata_probe_failed source_id=%s", source_id)
-
-    await asyncio.gather(*(probe(source_id) for source_id in registry.source_ids()))

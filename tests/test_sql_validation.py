@@ -5,9 +5,8 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from pglast.parser import get_postgresql_version
 
-import query_man.sql_validation as sql_validation_module
-from query_man.reader_policy import READER_CLIENT_ENCODING
-from query_man.sql_validation import (
+import query_man.guarded_query.sql_validation as sql_validation_module
+from query_man.guarded_query.sql_validation import (
     DEFAULT_ALLOWED_FUNCTIONS,
     DEFAULT_ALLOWED_TYPES,
     DEFAULT_ALLOWED_UNQUALIFIED_TYPES,
@@ -15,6 +14,7 @@ from query_man.sql_validation import (
     SqlValidationError,
     validate_sql,
 )
+from query_man.source_catalog.reader_policy import READER_CLIENT_ENCODING
 
 ALLOWED_RELATIONS = {
     "ai.issue_comments",

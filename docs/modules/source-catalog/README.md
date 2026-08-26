@@ -1,6 +1,6 @@
 # Source Catalog Module
 
-Status: Logical boundary; physical package split pending
+Status: Physical package boundary active
 
 > **현재 launch에서는 두 source만 정적으로 읽는다.** Source Catalog의 managed validation과 runtime
 > projection 기능은 구현 상태로 보존되지만, [ADR 0025](../../decisions/0025-static-non-rls-first-launch.md)의
@@ -30,9 +30,9 @@ Source Catalog는 Query Man의 **검증된 source 주소록과 규칙 묶음**�
 | 새 static source | 별도 inventory review, 정확한 사용자 승인, traffic-off acceptance와 재배포가 필요 |
 | 미래 후보 | RLS serving과 넓은 encoding/result 범위는 [future work](../../future-work.md)이며 현재 interface나 일정이 아님 |
 
-Source Catalog provider는 `src/query_man`의 flat core에 남고, managed writer consumer는
-`src/query_man/managed` package에 격리돼 있다. 이 문서는 논리적 owner와 interface를 정하며 Python
-package와 일대일로 대응한다는 뜻은 아니다.
+Source Catalog provider는 `src/query_man/source_catalog` package에 있고 managed writer consumer는
+`src/query_man/managed` package에 격리돼 있다. 둘은 같은 repository·wheel·process에 있으며 package
+marker는 interface를 re-export하지 않는다.
 
 ## 소유 책임
 
@@ -63,9 +63,9 @@ package와 일대일로 대응한다는 뜻은 아니다.
 
 | 위치 | Source Catalog가 소유하는 범위 | 주의점 |
 |---|---|---|
-| [`registry.py`](../../../src/query_man/registry.py) | Manifest/budget parser, strict validator, `SourceReader`, `SourceProjectionWriter`, concrete registry | Control Plane은 validator/writer, 일반 consumer는 reader만 사용 |
-| [`models.py`](../../../src/query_man/models.py) | Source, budget, semantic, provenance와 observation-definition type | Metadata type도 있는 shared transition file이므로 symbol 단위로 수정 |
-| [`reader_policy.py`](../../../src/query_man/reader_policy.py) | PostgreSQL connection/session compatibility와 최소 권한 검사 | Metadata·Guarded Query가 함께 소비하는 shared transition file |
+| [`source_catalog/registry.py`](../../../src/query_man/source_catalog/registry.py) | Manifest/budget parser, strict validator, `SourceReader`, `SourceProjectionWriter`, concrete registry | Control Plane은 validator/writer, 일반 consumer는 reader만 사용 |
+| [`source_catalog/models.py`](../../../src/query_man/source_catalog/models.py) | Source, budget, semantic, provenance와 observation-definition type | Metadata-owned catalog DTO와 분리된 canonical Source type leaf |
+| [`source_catalog/reader_policy.py`](../../../src/query_man/source_catalog/reader_policy.py) | PostgreSQL connection/session compatibility와 최소 권한 검사 | Metadata·Guarded Query가 leaf path를 직접 소비 |
 | [`errors.py`](../../../src/query_man/errors.py) | `SourceNotFoundError`의 domain 발생 의미 | Public HTTP/MCP envelope은 Delivery 소유 |
 | [`config/sources`](../../../config/sources) | `development-issues`, `market-voc` static inventory | ADR 0025 current authority; managed desired state가 아님 |
 | [`budget-profiles.yaml`](../../../config/budget-profiles.yaml) | Versioned resource-tier definitions | Source 하나를 위해 임의 override하지 않음 |
@@ -73,8 +73,8 @@ package와 일대일로 대응한다는 뜻은 아니다.
 | [`query-man-source-onboarding`](../../../skills/query-man-source-onboarding/SKILL.md) | 변경하지 않는 owner/admin planning workflow | Production authority, credential broker나 mutation executor가 아님 |
 | [`test_registry.py`](../../../tests/test_registry.py), [`test_reader_policy.py`](../../../tests/test_reader_policy.py), [`test_runtime_config.py`](../../../tests/test_runtime_config.py) | Protocol, immutability, validation, reader policy와 bootstrap input test | Provider와 직접 consumer 변경을 함께 확인 |
 
-Source-related type 이동과 package 분리는 외부 의미를 보존하는 별도 mechanical refactoring으로 한다.
-Shared transition file 정리와 업무 변경을 한 diff에 섞지 않는다.
+Package split은 완료됐고 old flat forwarding module은 없다. Consumer는 위 leaf path를 직접 import한다.
+이후 file move나 interface 의미 변경을 private 구현 정리와 한 diff에 섞지 않는다.
 
 Manifest v2의 optional `observability` schema와 managed onboarding fixture는 보존한다. Current static
 `config/sources` 두 manifest는 managed reporter를 조립하지 않으므로 이 field를 선언하지 않는다.
@@ -298,8 +298,9 @@ managed runbook은 managed activation이 별도 승인된 뒤에만 읽는다.
 - Existing schema 안의 non-authoritative fixture 정리
 - 같은 policy 결과와 marker를 만드는 reader 검사 내부 정리
 
-`models.py`, `reader_policy.py`, cross-module test 같은 shared transition artifact는 coordinating agent가
-single-writer와 consumer 검토 순서를 정한다.
+공통 `errors.py`와 cross-module test 같은 shared transition artifact는 coordinating agent가
+single-writer와 consumer 검토 순서를 정한다. Source Catalog package leaf는 이 module owner가 쓰되
+official interface consumer를 함께 검토한다.
 
 ## 사용자 승인이 필요한 경계 변경
 
@@ -344,9 +345,9 @@ Repository 전체를 먼저 읽지 말고 작업 종류에 따라 다음 범위�
 
 | 작업 | 먼저 읽을 것 | 추가로 읽을 직접 경계 |
 |---|---|---|
-| Manifest, budget, semantic validation | 이 문서, `registry.py`, 관련 config와 `test_registry.py` | Metadata revision 의미 또는 Control candidate staging이 바뀔 때 해당 module/test |
-| `SourceReader`/writer capability | `registry.py`, exact Protocol tests | Delivery/Metadata/Query/Runtime/Control 중 실제 소비자와 test |
-| Reader connection/session | `reader_policy.py`, `test_reader_policy.py` | `catalog.py`, `query.py`와 직접 순서 test |
+| Manifest, budget, semantic validation | 이 문서, `source_catalog/registry.py`, 관련 config와 `test_registry.py` | Metadata revision 의미 또는 Control candidate staging이 바뀔 때 해당 module/test |
+| `SourceReader`/writer capability | `source_catalog/registry.py`, exact Protocol tests | Delivery/Metadata/Query/Runtime/Control 중 실제 소비자와 test |
+| Reader connection/session | `source_catalog/reader_policy.py`, `test_reader_policy.py` | `metadata/catalog.py`, `guarded_query/query.py`와 직접 순서 test |
 | Static source inventory | [ADR 0025](../../decisions/0025-static-non-rls-first-launch.md), [onboarding 안내](../../source-onboarding.md), Runtime/Assurance acceptance | Protected procedure와 target environment는 별도 승인 뒤에만 |
 | Managed validation/projection | Public validator/writer, [Control Plane](../control-plane/README.md), `test_source_admin.py`/`test_managed_mode.py` | Store/private apply 내부는 실제 lifecycle 변경 때만 |
 | Plan-only onboarding Skill | Skill, current checklist와 `test_onboarding_skill.py` | Managed 문서는 activation이 이미 별도 승인된 경우에만 |

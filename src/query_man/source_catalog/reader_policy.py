@@ -4,7 +4,7 @@ from typing import Any, Final
 
 from psycopg import AsyncConnection
 
-from query_man.models import SourceProfile
+from query_man.source_catalog.models import SourceProfile
 
 
 class ReaderSessionPolicyError(RuntimeError):

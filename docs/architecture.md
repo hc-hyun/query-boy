@@ -116,9 +116,11 @@ metadata revision이 바뀌지는 않습니다.
 | Assurance | 검사소 | Metadata 품질과 verified query 결과 검증 |
 | Control Plane | 관리실 | Managed mode의 source·revision·이력 관리; 현재 launch에서는 비활성 |
 
-코드는 아직 `src/query_man` 아래의 평면 파일 구조입니다. 모듈 directory가 이미 Python package로
-분리된 것처럼 가정하지 않습니다. 파일 owner와 허용 의존은
-[module index](modules/README.md)의 transition map에서 확인합니다.
+Static core는 `src/query_man` 아래 `source_catalog`, `metadata`, `guarded_query`, `delivery`, `runtime`,
+`assurance`의 여섯 physical package로 나뉘고 managed 구현은 `managed` package에 있습니다. 모두 같은
+repository·wheel·process에 속하며 별도 service가 아닙니다. Package `__init__.py`는 marker-only이고
+interface는 owner의 leaf module에서 직접 import합니다. 정확한 file owner와 허용 의존은
+[module index](modules/README.md)의 map에서 확인합니다.
 
 ## 개발 모듈 경계
 
@@ -196,6 +198,7 @@ Managed hot-add가 실제 요구가 되면 [source onboarding 안내](source-onb
 ## 결정과 상세 문서
 
 - 현재 launch 범위: [ADR 0025](decisions/0025-static-non-rls-first-launch.md)
+- 현재 physical package 구조: [ADR 0026](decisions/0026-physical-module-packages.md)
 - 결정 전체 색인: [ADR index](decisions/README.md)
 - 정확한 모듈 owner와 interface: [module index](modules/README.md)
 - 현재 운영 전환: [operations](operations.md)

@@ -1,6 +1,6 @@
 # Guarded Query Module
 
-Status: Logical boundary; physical package split pending
+Status: Physical package boundary active
 
 > **현재 launch 기준은 [ADR 0025](../../decisions/0025-static-non-rls-first-launch.md)의 `LAUNCH-01-A`다.** SQL policy v3와 PostgreSQL 18의 일곱 result OID만 지원하고 모든 RLS source는 DB 전에 격리한다.
 
@@ -49,15 +49,17 @@ Guarded Query는 **SQL 안전문**이다. 이미 인가된 source와 발행된 m
 
 | 위치 | 역할 | 함께 볼 test |
 |---|---|---|
-| [`sql_validation.py`](../../../src/query_man/sql_validation.py) | AST policy, `ValidatedSql`, `SQL_POLICY_REVISION` | [`test_sql_validation.py`](../../../tests/test_sql_validation.py), [`test_security_evaluation.py`](../../../tests/test_security_evaluation.py) |
-| [`query.py`](../../../src/query_man/query.py) | `QueryService`, executor Protocol과 PostgreSQL 실행/lifecycle | [`test_query.py`](../../../tests/test_query.py) |
-| [`result_encoding.py`](../../../src/query_man/result_encoding.py) | Canonical scalar encoding과 launch OID policy material | [`test_result_encoding.py`](../../../tests/test_result_encoding.py) |
+| [`guarded_query/sql_validation.py`](../../../src/query_man/guarded_query/sql_validation.py) | AST policy, `ValidatedSql`, `SQL_POLICY_REVISION` | [`test_sql_validation.py`](../../../tests/test_sql_validation.py), [`test_security_evaluation.py`](../../../tests/test_security_evaluation.py) |
+| [`guarded_query/query.py`](../../../src/query_man/guarded_query/query.py) | `QueryService`, executor Protocol과 PostgreSQL 실행/lifecycle | [`test_query.py`](../../../tests/test_query.py) |
+| [`guarded_query/result_encoding.py`](../../../src/query_man/guarded_query/result_encoding.py) | Canonical scalar encoding과 launch OID policy material | [`test_result_encoding.py`](../../../tests/test_result_encoding.py) |
 | [`errors.py`](../../../src/query_man/errors.py) | Query-domain error 발생 의미 | Delivery가 external envelope를 소유 |
-| [`reader_policy.py`](../../../src/query_man/reader_policy.py) | Source Catalog가 제공하는 connection/session 검사 | [`test_reader_policy.py`](../../../tests/test_reader_policy.py) |
+| [`source_catalog/reader_policy.py`](../../../src/query_man/source_catalog/reader_policy.py) | Source Catalog가 제공하는 connection/session 검사 | [`test_reader_policy.py`](../../../tests/test_reader_policy.py) |
 | [`security-evaluation.yaml`](../../../config/security-evaluation.yaml) | Assurance 소유 parser/execution corpus | [`test_security_evaluation.py`](../../../tests/test_security_evaluation.py) |
 | [`test_source_database_corners.py`](../../../tests/test_source_database_corners.py) | 실제 PostgreSQL type/OID/rollback corner | Integration 전용 |
 
-현재 `src/query_man`은 평면 구조다. 위 표는 논리적 소유권이다. `errors.py`, `reader_policy.py`와 cross-module test는 shared transition artifact다.
+Guarded Query 구현은 `src/query_man/guarded_query` physical package에 있다. Package marker는 re-export하지
+않고 consumer는 위 leaf path를 직접 import한다. Root `errors.py`와 cross-module test는 shared
+transition artifact다.
 
 ## 제공 인터페이스와 소유 경계
 
@@ -289,12 +291,12 @@ Focused gate는 root `ruff`, `mypy`, full pytest를 대신하지 않는다.
 
 | 작업 | 먼저 읽을 것 | 직접 경계가 바뀔 때만 추가 |
 |---|---|---|
-| SQL validation | 이 문서, `sql_validation.py`, parser/security tests, [ADR 0001](../../decisions/0001-postgresql-ast-validation.md) | Metadata relation ceiling과 Delivery error projection |
-| Query 실행·limit | `query.py`, `test_query.py`, [query-limit 문서](../../query-cost-control.md), [ADR 0005](../../decisions/0005-initial-query-budgets.md) | Source reader, Runtime usage/lifecycle |
-| Result/OID/encoding | `result_encoding.py`, result/query corner tests, [ADR 0025](../../decisions/0025-static-non-rls-first-launch.md) | Metadata revision과 [verified result](../../verified-queries.md) hash consumer |
+| SQL validation | 이 문서, `guarded_query/sql_validation.py`, parser/security tests, [ADR 0001](../../decisions/0001-postgresql-ast-validation.md) | Metadata relation ceiling과 Delivery error projection |
+| Query 실행·limit | `guarded_query/query.py`, `test_query.py`, [query-limit 문서](../../query-cost-control.md), [ADR 0005](../../decisions/0005-initial-query-budgets.md) | Source reader, Runtime usage/lifecycle |
+| Result/OID/encoding | `guarded_query/result_encoding.py`, result/query corner tests, [ADR 0025](../../decisions/0025-static-non-rls-first-launch.md) | Metadata revision과 [verified result](../../verified-queries.md) hash consumer |
 | Cancel/drain/invalidate | Executor Protocol, query/load/server tests | Runtime composition·shutdown consumer |
 | Application result/error | `QueryService`, errors와 direct consumer tests, [ADR 0002](../../decisions/0002-guarded-query-contract.md) | HTTP/MCP rendering은 Delivery 문서/test |
-| Reader/resolved object | Source Catalog interface, `reader_policy.py`, [ADR 0003](../../decisions/0003-reader-and-resolved-object-policy.md) | Actual transaction/pool integration path |
+| Reader/resolved object | Source Catalog interface, `source_catalog/reader_policy.py`, [ADR 0003](../../decisions/0003-reader-and-resolved-object-policy.md) | Actual transaction/pool integration path |
 | RLS 또는 result 확대 | Current ADR과 future-work research | 정확한 요구·승인 전에는 구현 범위로 읽지 않음 |
 
 Control DB persistence, metadata relevance algorithm과 parked proposal body는 현재 interface나 승인된 launch

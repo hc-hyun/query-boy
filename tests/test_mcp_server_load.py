@@ -12,7 +12,7 @@ from mcp.types import CallToolResult
 from psycopg import AsyncConnection
 from psycopg.conninfo import make_conninfo
 
-from query_man.sql_validation import SQL_POLICY_REVISION
+from query_man.guarded_query.sql_validation import SQL_POLICY_REVISION
 from tests.test_mcp_server import (
     McpServerSettings,
     _mcp_client,

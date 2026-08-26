@@ -15,6 +15,7 @@ from psycopg import AsyncConnection, Error
 from psycopg.errors import RaiseException
 
 import query_man.managed.source_store as source_store_module
+from query_man.assurance.verified import ExpectedResult, VerifiedQuery, create_result_hash
 from query_man.managed.metadata_store import PostgresMetadataStore
 from query_man.managed.secrets import SourceSecretCipher
 from query_man.managed.source_store import (
@@ -38,15 +39,14 @@ from query_man.managed.source_store import (
     _ReplicaSourceObservationWrite,
     _ResourceObservationWrite,
 )
-from query_man.models import PreparedMetadata
-from query_man.registry import (
+from query_man.metadata.models import PreparedMetadata
+from query_man.metadata.revision import create_metadata_revision
+from query_man.source_catalog.registry import (
     POSTGRES_IDENTIFIER_MAX_LENGTH,
     ValidatedSourceManifest,
     load_budget_profiles,
     validate_source_manifest,
 )
-from query_man.revision import create_metadata_revision
-from query_man.verified import ExpectedResult, VerifiedQuery, create_result_hash
 from tests.helpers import ROOT_DIRECTORY, minimal_development_snapshot
 
 

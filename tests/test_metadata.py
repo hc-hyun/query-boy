@@ -7,26 +7,26 @@ from dataclasses import replace
 
 import pytest
 
-from query_man.catalog import _CatalogValidationError
 from query_man.errors import MetadataUnavailableError
-from query_man.metadata import MetadataService, _to_relation_response
-from query_man.models import (
-    CatalogForeignKey,
-    CatalogIndex,
-    CatalogSnapshot,
-    PreparedMetadata,
-    SourceProfile,
-)
-from query_man.operations import operations
-from query_man.registry import SourceRegistry
-from query_man.relevance import RankedRelation, SelectionReason
-from query_man.revision import create_metadata_revision
-from query_man.sql_validation import (
+from query_man.guarded_query.sql_validation import (
     DEFAULT_ALLOWED_FUNCTIONS,
     DEFAULT_ALLOWED_TYPES,
     DEFAULT_ALLOWED_UNQUALIFIED_TYPES,
     SQL_POLICY_REVISION,
 )
+from query_man.metadata.catalog import _CatalogValidationError
+from query_man.metadata.models import (
+    CatalogForeignKey,
+    CatalogIndex,
+    CatalogSnapshot,
+    PreparedMetadata,
+)
+from query_man.metadata.relevance import RankedRelation, SelectionReason
+from query_man.metadata.revision import create_metadata_revision
+from query_man.metadata.service import MetadataService, _to_relation_response
+from query_man.runtime.operations import operations
+from query_man.source_catalog.models import SourceProfile
+from query_man.source_catalog.registry import SourceRegistry
 from tests.helpers import column, load_test_registry, minimal_development_snapshot
 
 

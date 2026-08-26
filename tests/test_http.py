@@ -10,21 +10,21 @@ from pathlib import Path
 import httpx
 import pytest
 
-from query_man.access import AccessPolicy
-from query_man.app import build_app
+from query_man.delivery.access import AccessPolicy
+from query_man.delivery.mcp_server import MCP_PROTOCOL_VERSION
 from query_man.errors import QueryInvalidError, QueryUnavailableError
-from query_man.mcp_server import MCP_PROTOCOL_VERSION
-from query_man.models import (
+from query_man.guarded_query.query import DeliveryQueryExecutor
+from query_man.guarded_query.sql_validation import SQL_POLICY_REVISION, ValidatedSql
+from query_man.metadata.models import (
     CatalogProvider,
     CatalogSnapshot,
     ResourceObservation,
-    SourceProfile,
 )
-from query_man.operations import operations
-from query_man.query import DeliveryQueryExecutor
-from query_man.registry import SourceRegistry
-from query_man.runtime_config import RuntimeConfig
-from query_man.sql_validation import SQL_POLICY_REVISION, ValidatedSql
+from query_man.runtime.composition import build_app
+from query_man.runtime.config import RuntimeConfig
+from query_man.runtime.operations import operations
+from query_man.source_catalog.models import SourceProfile
+from query_man.source_catalog.registry import SourceRegistry
 from tests.helpers import ROOT_DIRECTORY, load_test_registry, minimal_development_snapshot
 
 

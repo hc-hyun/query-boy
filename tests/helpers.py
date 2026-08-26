@@ -4,8 +4,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 
-from query_man.models import CatalogColumn, CatalogRelation, CatalogSnapshot
-from query_man.registry import SourceRegistry
+from query_man.metadata.models import CatalogColumn, CatalogRelation, CatalogSnapshot
+from query_man.source_catalog.registry import SourceRegistry
 
 ROOT_DIRECTORY = Path(__file__).resolve().parents[1]
 DUMMY_ENVIRONMENT = {

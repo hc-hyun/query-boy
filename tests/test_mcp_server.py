@@ -19,10 +19,10 @@ from mcp.client import Client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.types import CallToolResult
 
-from query_man.mcp_server import MCP_PROTOCOL_VERSION
-from query_man.quality import QualityEvaluation
-from query_man.sql_validation import SQL_POLICY_REVISION
-from query_man.verified import VerifiedQuery, VerifiedQueryRegistry, create_result_hash
+from query_man.assurance.quality import QualityEvaluation
+from query_man.assurance.verified import VerifiedQuery, VerifiedQueryRegistry, create_result_hash
+from query_man.delivery.mcp_server import MCP_PROTOCOL_VERSION
+from query_man.guarded_query.sql_validation import SQL_POLICY_REVISION
 from tests.helpers import ROOT_DIRECTORY
 
 pytestmark = [pytest.mark.mcp_server, pytest.mark.asyncio]

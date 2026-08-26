@@ -25,13 +25,14 @@ Reference: [Ponytail](https://github.com/DietrichGebert/ponytail)
 
 ## Module-Scoped Development
 
-Query Man은 하나의 repository와 deployable process를 유지하는 modular monolith다. 비활성 managed
-기능은 repository 분리를 준비하는 same-repository package로 격리한다. 논리 module의 owner, 현재
-파일 mapping, 허용 dependency와 module interface는 [module index](modules/README.md)를 유일한
-시작점으로 사용한다. 물리 package 상태는 module index와 각 owner README에 적힌 현재 사실을 따른다.
+Query Man은 하나의 repository, wheel과 deployable process를 유지하는 modular monolith다. Static
+core는 owner별 여섯 physical package, 비활성 managed 기능은 같은 repository의 `query_man.managed`
+package에 둔다. 논리 module의 owner, 현재 leaf-file mapping, 허용 dependency와 module interface는
+[module index](modules/README.md)를 유일한 시작점으로 사용한다.
 
 - 작업 시작 시 repository 전체를 선행 학습하지 않는다. Root router, module index, primary module의
-  `README.md`, 그 문서가 지정한 code/test와 관련 ADR을 먼저 읽는다.
+  `README.md`, 그 문서가 지정한 package leaf·root test와 관련 ADR을 먼저 읽는다. Marker-only
+  `__init__.py`에서 interface re-export를 찾거나 old flat import를 만들지 않는다.
 - “관련 실행 흐름과 trust boundary를 끝까지 읽는다”는 repository 전체가 아니라 변경이 영향을
   주는 완전한 end-to-end slice를 뜻한다. Public producer/entry부터 변경 지점, 직접 consumer,
   persistence/transaction/cleanup 경계, 실패 경로와 runnable test까지 확인한다.

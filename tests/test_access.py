@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from query_man.access import AccessPolicy, AccessPolicyConfigurationError, CallerContext
+from query_man.delivery.access import AccessPolicy, AccessPolicyConfigurationError, CallerContext
 
 
 def _write_policy(path: Path, body: str) -> Path:

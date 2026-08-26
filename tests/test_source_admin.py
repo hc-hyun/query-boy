@@ -10,6 +10,7 @@ from typing import Any, get_type_hints
 import pytest
 import yaml
 
+from query_man.assurance.verified import ExpectedResult, VerifiedQuery, create_result_hash
 from query_man.errors import (
     MetadataRevisionMismatchError,
     QueryInvalidError,
@@ -21,6 +22,8 @@ from query_man.errors import (
 from query_man.errors import (
     MutationIdempotencyConflictError as MutationIdempotencyConflictAppError,
 )
+from query_man.guarded_query.query import QueryService
+from query_man.guarded_query.sql_validation import ValidatedSql
 from query_man.managed.secrets import EncryptedSecret, SourceSecretCipher
 from query_man.managed.source_admin import (
     CONTROL_SEQUENCE_MAX,
@@ -63,25 +66,22 @@ from query_man.managed.source_store import (
     StoredSourceNotFoundError,
     _ReplicaSourceObservationWrite,
 )
-from query_man.metadata import MetadataService
-from query_man.models import (
+from query_man.metadata.models import (
     CatalogSnapshot,
     PreparedMetadata,
     ResourceObservation,
-    SourceProfile,
 )
-from query_man.operations import operations
-from query_man.query import QueryService
-from query_man.reader_policy import ReaderSessionPolicyError
-from query_man.registry import (
+from query_man.metadata.service import MetadataService
+from query_man.runtime.operations import operations
+from query_man.source_catalog.models import SourceProfile
+from query_man.source_catalog.reader_policy import ReaderSessionPolicyError
+from query_man.source_catalog.registry import (
     RegistryConfigurationError,
     SourceProjectionWriter,
     SourceRegistry,
     load_budget_profiles,
     validate_source_manifest,
 )
-from query_man.sql_validation import ValidatedSql
-from query_man.verified import ExpectedResult, VerifiedQuery, create_result_hash
 from tests.helpers import ROOT_DIRECTORY, minimal_development_snapshot
 
 

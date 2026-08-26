@@ -244,8 +244,10 @@ docker compose down
 
 Query Man은 한 프로그램으로 배포하지만 내부 책임을 일곱 module로 나눈 구조, 즉 modular
 monolith입니다.
-현재 Python 파일은 아직 `src/query_man` 아래에 평면적으로 놓여 있고, module 문서는 개발 경계와
-공개 interface를 먼저 정한 것입니다.
+Static core의 여섯 책임은 `src/query_man` 아래 `source_catalog`, `metadata`, `guarded_query`,
+`delivery`, `runtime`, `assurance` package로 나뉘고 managed 구현은 `managed` package에 있습니다.
+이 구분은 별도 repository나 service가 아닙니다. 모두 같은 wheel과 하나의 Query Man process로
+배포되며, package `__init__.py`는 re-export 없는 marker라 필요한 leaf module을 직접 import합니다.
 
 | Module | 비유 | 맡은 일 |
 |---|---|---|

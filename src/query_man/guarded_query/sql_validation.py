@@ -10,11 +10,11 @@ from typing import Any
 from pglast import ast, parse_sql
 from pglast.parser import ParseError, fingerprint
 
-from query_man.reader_policy import READER_CLIENT_ENCODING
-from query_man.result_encoding import (
+from query_man.guarded_query.result_encoding import (
     CANONICAL_TIME_POLICY_MATERIAL,
     RESULT_OID_POLICY_MATERIAL,
 )
+from query_man.source_catalog.reader_policy import READER_CLIENT_ENCODING
 
 DEFAULT_ALLOWED_FUNCTIONS = frozenset(
     {

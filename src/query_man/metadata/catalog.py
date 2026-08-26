@@ -10,7 +10,7 @@ from psycopg import AsyncConnection
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
-from query_man.models import (
+from query_man.metadata.models import (
     CatalogColumn,
     CatalogForeignKey,
     CatalogIndex,
@@ -18,9 +18,9 @@ from query_man.models import (
     CatalogRelationKind,
     CatalogSnapshot,
     ResourceObservation,
-    SourceProfile,
 )
-from query_man.reader_policy import (
+from query_man.source_catalog.models import SourceProfile
+from query_man.source_catalog.reader_policy import (
     READER_CLIENT_ENCODING,
     READER_SESSION_BUDGET_SETTERS,
     READER_SESSION_TIMEZONE_SETTER,

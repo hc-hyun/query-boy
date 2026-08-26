@@ -12,15 +12,15 @@ from datetime import UTC, datetime
 
 from fastapi import FastAPI
 
-from query_man.access import AccessPolicy
-from query_man.app import (
-    _build_delivery_app,
-    _probe_registered_sources,
-    _require_launch_inventory,
-    _require_runtime_capabilities,
+from query_man.delivery.access import AccessPolicy
+from query_man.delivery.app import build_http_app
+from query_man.delivery.gateway import GatewayService
+from query_man.guarded_query.query import (
+    GatewayUsageOutcome,
+    PostgresQueryExecutor,
+    QueryService,
+    RuntimeQueryExecutor,
 )
-from query_man.catalog import PostgresCatalog
-from query_man.gateway import GatewayService
 from query_man.managed.metadata_store import PostgresMetadataStore
 from query_man.managed.secrets import SourceSecretCipher
 from query_man.managed.source_admin import (
@@ -41,18 +41,19 @@ from query_man.managed.source_admin import (
 )
 from query_man.managed.source_admin_routes import register_source_admin_routes
 from query_man.managed.source_store import PostgresSourceStore
-from query_man.metadata import MetadataService
-from query_man.models import ResourceObservation, RuntimeCatalogProvider, SourceProfile
-from query_man.operations import operations
-from query_man.query import (
-    GatewayUsageOutcome,
-    PostgresQueryExecutor,
-    QueryService,
-    RuntimeQueryExecutor,
+from query_man.metadata.catalog import PostgresCatalog
+from query_man.metadata.models import ResourceObservation, RuntimeCatalogProvider
+from query_man.metadata.service import MetadataService
+from query_man.runtime.composition import (
+    _probe_registered_sources,
+    _require_launch_inventory,
+    _require_runtime_capabilities,
 )
-from query_man.reader_policy import ReaderSessionPolicyError
-from query_man.registry import SourceReader, SourceRegistry, load_budget_profiles
-from query_man.runtime_config import RuntimeConfig
+from query_man.runtime.config import RuntimeConfig
+from query_man.runtime.operations import operations
+from query_man.source_catalog.models import SourceProfile
+from query_man.source_catalog.reader_policy import ReaderSessionPolicyError
+from query_man.source_catalog.registry import SourceReader, SourceRegistry, load_budget_profiles
 
 logger = logging.getLogger("query_man")
 _GATEWAY_USAGE_REPORT_INTERVAL_SECONDS = 60.0
@@ -498,8 +499,10 @@ def build_app(
                 await cleanup_failed_startup()
             raise
 
-    return _build_delivery_app(
-        runtime_config,
+    return build_http_app(
+        host=runtime_config.host,
+        mcp_allowed_hosts=runtime_config.mcp_allowed_hosts,
+        mcp_allowed_origins=runtime_config.mcp_allowed_origins,
         registry=registry,
         catalog=catalog,
         metadata=metadata,
