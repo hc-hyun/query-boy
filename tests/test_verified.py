@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from query_man.errors import QueryRejectedError
+from query_man.errors import QueryUnavailableError
 from query_man.models import PreparedMetadata
 from query_man.query import QueryService
 from query_man.registry import SourceRegistry
@@ -84,10 +84,10 @@ async def test_offline_verification_supplies_no_tenant_and_rls_fails_closed() ->
         ]
     )
 
-    with pytest.raises(QueryRejectedError) as captured:
+    with pytest.raises(QueryUnavailableError) as captured:
         await verified.verify_all(metadata, service)  # type: ignore[arg-type]
 
-    assert captured.value.details == {"reason_code": "TENANT_CONTEXT_REQUIRED"}
+    assert captured.value.details is None
     assert not executor.called
 
 

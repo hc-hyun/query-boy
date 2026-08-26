@@ -17,7 +17,7 @@ from psycopg import AsyncConnection, errors, sql
 from psycopg.conninfo import make_conninfo
 from psycopg.pq import TransactionStatus
 
-from query_man.catalog import PostgresCatalog
+from query_man.catalog import PostgresCatalog, _CatalogValidationError
 from query_man.errors import (
     MetadataRevisionMismatchError,
     MetadataUnavailableError,
@@ -49,10 +49,6 @@ _DATABASE_NAME = re.compile(rf"^{_DATABASE_PREFIX}[0-9a-f]{{32}}$")
 _READER_NAME = re.compile(rf"^{_READER_PREFIX}[0-9a-f]{{32}}$")
 _VIEW_OWNER_NAME = re.compile(rf"^{_VIEW_OWNER_PREFIX}[0-9a-f]{{32}}$")
 _READER_TIMEZONES = ("UTC", "Asia/Seoul", "America/New_York")
-
-
-class _RlsIsolationViolationError(AssertionError):
-    pass
 
 
 _BUDGET = BudgetProfile(
@@ -489,6 +485,12 @@ def _assert_canonical_result(
     assert plan["node_count"] >= 1
 
 
+async def _assert_query_unavailable(operation: Awaitable[object]) -> None:
+    with pytest.raises(QueryUnavailableError) as unavailable:
+        await operation
+    assert unavailable.value.details is None
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_wide_curated_view_bounds_context_and_denies_sensitive_base_table() -> None:
@@ -761,81 +763,57 @@ async def test_temporal_results_are_canonical_across_reader_timezones(
                   AND observed_at < '2024-11-04 00:00:00+00'
                 ORDER BY event_id
             """
+            await _assert_query_unavailable(
+                query.query(
+                    source.source_id,
+                    query_sql,
+                    published.revision,
+                    SQL_POLICY_REVISION,
+                )
+            )
+
+            supported_query_sql = """
+                SELECT event_id, observed_at, local_date, optional_note
+                FROM analytics.temporal_records
+                WHERE observed_at >= '2024-03-10 06:59:59+00'
+                  AND observed_at < '2024-11-04 00:00:00+00'
+                ORDER BY event_id
+            """
             result = await query.query(
                 source.source_id,
-                query_sql,
+                supported_query_sql,
                 published.revision,
                 SQL_POLICY_REVISION,
             )
             columns = [
                 "event_id",
                 "observed_at",
-                "local_timestamp",
                 "local_date",
-                "local_time",
-                "local_clock",
-                "elapsed",
-                "host",
-                "network",
-                "tags",
-                "score",
                 "optional_note",
             ]
             expected_rows: list[dict[str, object]] = [
                 {
                     "event_id": 1,
                     "observed_at": "2024-03-10T06:59:59+00:00",
-                    "local_timestamp": "2024-03-10T01:59:59.123456",
                     "local_date": "2024-03-10",
-                    "local_time": "01:59:59.123456",
-                    "local_clock": "01:59:59-05:00",
-                    "elapsed": "1 day, 2:03:04.500000",
-                    "host": "192.0.2.10/24",
-                    "network": "192.0.2.0/24",
-                    "tags": ["spring", "before"],
-                    "score": "NaN",
                     "optional_note": None,
                 },
                 {
                     "event_id": 2,
                     "observed_at": "2024-03-10T07:00:00+00:00",
-                    "local_timestamp": "2024-03-10T03:00:00",
                     "local_date": "2024-03-10",
-                    "local_time": "03:00:00",
-                    "local_clock": "03:00:00-04:00",
-                    "elapsed": "0:00:01",
-                    "host": "2001:db8::10/64",
-                    "network": "2001:db8::/64",
-                    "tags": ["spring", "after"],
-                    "score": "Infinity",
                     "optional_note": "after jump",
                 },
                 {
                     "event_id": 3,
                     "observed_at": "2024-11-03T05:30:00+00:00",
-                    "local_timestamp": "2024-11-03T01:30:00",
                     "local_date": "2024-11-03",
-                    "local_time": "01:30:00",
-                    "local_clock": "01:30:00-04:00",
-                    "elapsed": "0:00:00",
-                    "host": "198.51.100.7",
-                    "network": "198.51.100.0/24",
-                    "tags": ["fall", "first"],
-                    "score": "-Infinity",
                     "optional_note": None,
                 },
                 {
                     "event_id": 4,
                     "observed_at": "2024-11-03T06:30:00+00:00",
-                    "local_timestamp": "2024-11-03T01:30:00",
                     "local_date": "2024-11-03",
-                    "local_time": "01:30:00",
-                    "local_clock": "01:30:00-05:00",
-                    "elapsed": "2 days, 0:00:00",
-                    "host": "203.0.113.9/28",
-                    "network": "203.0.113.0/28",
-                    "tags": ["fall", "second"],
-                    "score": None,
                     "optional_note": None,
                 },
             ]
@@ -846,7 +824,7 @@ async def test_temporal_results_are_canonical_across_reader_timezones(
                 expected_rows,
             )
             assert create_result_hash(tuple(columns), expected_rows) == (
-                "sha256:20c9ca4c43400d44c101727ec987b0ae379e086146db1f092da13ac737676549"
+                "sha256:40bd6b93b7e0f1876c8d8bf1c80ab79d08d0fe961b8134e27202a097ad60c2a3"
             )
             await _assert_pool_restored_reader_timezone(
                 catalog,
@@ -1475,34 +1453,37 @@ async def test_enc_01_characterizes_json_duplicate_key_loss() -> None:
                 ("collapsed_binary_payload", "jsonb"),
             ]
 
-            decoded_results = []
+            raw = await AsyncConnection.connect(database.admin_dsn, autocommit=True)
+            try:
+                raw_cursor = await raw.execute(
+                    "SELECT duplicate_payload, collapsed_payload, "
+                    "duplicate_binary_payload, collapsed_binary_payload "
+                    "FROM analytics.json_edges"
+                )
+                collapsed = {"outer": {"amount": 2}}
+                assert await raw_cursor.fetchone() == (
+                    collapsed,
+                    collapsed,
+                    collapsed,
+                    collapsed,
+                )
+            finally:
+                await raw.close()
+
             for column in (
                 "duplicate_payload",
                 "collapsed_payload",
                 "duplicate_binary_payload",
                 "collapsed_binary_payload",
             ):
-                decoded_results.append(
-                    await query.query(
+                await _assert_query_unavailable(
+                    query.query(
                         source.source_id,
                         f"SELECT {column} AS value FROM analytics.json_edges",
                         published.revision,
                         SQL_POLICY_REVISION,
                     )
                 )
-
-            # ponytail: defect characterization; the current JSON loader keeps only
-            # the last duplicate object key. JSONB is the database-normalized control.
-            assert all(
-                result["rows"] == [{"value": {"outer": {"amount": 2}}}]
-                for result in decoded_results
-            )
-            assert {
-                create_result_hash(("value",), result["rows"])
-                for result in decoded_results
-            } == {
-                "sha256:638b941219f3f2bbbd3a92acaf57a2cc5f14e026d386e161fd8b3d24afa32b43"
-            }
 
             json_text_results = []
             for column in ("duplicate_payload", "collapsed_payload"):
@@ -1597,31 +1578,25 @@ async def test_enc_01_characterizes_postgresql_end_of_day_time() -> None:
                 ("midnight", "time without time zone"),
             ]
 
-            with pytest.raises(QueryUnavailableError) as unavailable:
-                await query.query(
-                    source.source_id,
-                    "SELECT end_of_day AS value FROM analytics.time_edges",
-                    published.revision,
-                    SQL_POLICY_REVISION,
+            raw = await AsyncConnection.connect(database.admin_dsn, autocommit=True)
+            try:
+                raw_cursor = await raw.execute(
+                    "SELECT end_of_day FROM analytics.time_edges"
                 )
-            assert unavailable.value.details is None
-            assert isinstance(unavailable.value.__cause__, errors.DataError)
+                with pytest.raises(errors.DataError):
+                    await raw_cursor.fetchone()
+            finally:
+                await raw.close()
 
-            midnight = await query.query(
-                source.source_id,
-                "SELECT midnight AS value FROM analytics.time_edges",
-                published.revision,
-                SQL_POLICY_REVISION,
-            )
-            _assert_canonical_result(
-                midnight,
-                published.revision,
-                ["value"],
-                [{"value": "00:00:00"}],
-            )
-            assert create_result_hash(("value",), midnight["rows"]) == (
-                "sha256:fecfa06c6d3ff0ca592b5c095d9b63d5cf794dee3234a1a0c595bd2fc1057c50"
-            )
+            for column in ("end_of_day", "midnight"):
+                await _assert_query_unavailable(
+                    query.query(
+                        source.source_id,
+                        f"SELECT {column} AS value FROM analytics.time_edges",
+                        published.revision,
+                        SQL_POLICY_REVISION,
+                    )
+                )
 
             text_result = await query.query(
                 source.source_id,
@@ -1814,7 +1789,7 @@ async def test_enc_01_characterizes_hidden_view_collation_dependency_gap() -> No
                 ]
                 c_result = await query.query(
                     source.source_id,
-                    "SELECT folded_matches "
+                    "SELECT folded_matches::text AS folded_matches "
                     "FROM analytics.hidden_collation_projection",
                     c_published.revision,
                     SQL_POLICY_REVISION,
@@ -1823,12 +1798,12 @@ async def test_enc_01_characterizes_hidden_view_collation_dependency_gap() -> No
                     c_result,
                     c_published.revision,
                     ["folded_matches"],
-                    [{"folded_matches": False}],
+                    [{"folded_matches": "false"}],
                 )
                 assert create_result_hash(
                     ("folded_matches",), c_result["rows"]
                 ) == (
-                    "sha256:24a658e9869ee578b8189b9e41242fe1521c1843bf2e4bae7ff64cca6c9c396f"
+                    "sha256:ff24d1881e132a960f07491fe26ce93c641c5ce835a0a324fa299d9e6138cb1b"
                 )
 
                 await admin.execute(
@@ -1856,7 +1831,7 @@ async def test_enc_01_characterizes_hidden_view_collation_dependency_gap() -> No
                 assert unicode_published.snapshot == c_published.snapshot
                 unicode_result = await query.query(
                     source.source_id,
-                    "SELECT folded_matches "
+                    "SELECT folded_matches::text AS folded_matches "
                     "FROM analytics.hidden_collation_projection",
                     unicode_published.revision,
                     SQL_POLICY_REVISION,
@@ -1867,12 +1842,12 @@ async def test_enc_01_characterizes_hidden_view_collation_dependency_gap() -> No
                     unicode_result,
                     unicode_published.revision,
                     ["folded_matches"],
-                    [{"folded_matches": True}],
+                    [{"folded_matches": "true"}],
                 )
                 assert create_result_hash(
                     ("folded_matches",), unicode_result["rows"]
                 ) == (
-                    "sha256:a6e1781ce2c45d140ae02f09454591e2ce6dcbd16eb2d3ca699f1f86a10b678a"
+                    "sha256:341fe91a3f6211d8f262bc31dfe252c5f8997b824166d08c7360a75c58eb247a"
                 )
             finally:
                 active_error = sys.exception()
@@ -2147,7 +2122,7 @@ async def test_enc_01_characterizes_custom_function_body_revision_gap() -> None:
                 ] == ["analytics.function_semantics"]
                 disabled_result = await query.query(
                     source.source_id,
-                    "SELECT enabled FROM analytics.function_semantics",
+                    "SELECT enabled::text AS enabled FROM analytics.function_semantics",
                     disabled.revision,
                     SQL_POLICY_REVISION,
                 )
@@ -2155,12 +2130,12 @@ async def test_enc_01_characterizes_custom_function_body_revision_gap() -> None:
                     disabled_result,
                     disabled.revision,
                     ["enabled"],
-                    [{"enabled": False}],
+                    [{"enabled": "false"}],
                 )
                 assert create_result_hash(
                     ("enabled",), disabled_result["rows"]
                 ) == (
-                    "sha256:2c3bdb6d969f6176565315abeacf08d1aac846b2bb003fbc887a55519d10376c"
+                    "sha256:d574cb7decfed2df702121d27698ce4d7b432be43b6042d4dcaa9635292e7f88"
                 )
 
                 await admin.execute(
@@ -2192,7 +2167,7 @@ async def test_enc_01_characterizes_custom_function_body_revision_gap() -> None:
                 assert enabled.snapshot == disabled.snapshot
                 enabled_result = await query.query(
                     source.source_id,
-                    "SELECT enabled FROM analytics.function_semantics",
+                    "SELECT enabled::text AS enabled FROM analytics.function_semantics",
                     enabled.revision,
                     SQL_POLICY_REVISION,
                 )
@@ -2202,12 +2177,12 @@ async def test_enc_01_characterizes_custom_function_body_revision_gap() -> None:
                     enabled_result,
                     enabled.revision,
                     ["enabled"],
-                    [{"enabled": True}],
+                    [{"enabled": "true"}],
                 )
                 assert create_result_hash(
                     ("enabled",), enabled_result["rows"]
                 ) == (
-                    "sha256:630788e0d75c2d80b58158c7b0bb7ba7bb9af9ab8acfa21ae90433896ce1c42b"
+                    "sha256:4612b5fe7853e6c5ed815a49746a4af148fac869e47a7d82ed305d4069db980a"
                 )
             finally:
                 active_error = sys.exception()
@@ -2424,7 +2399,7 @@ async def test_enc_01_characterizes_custom_operator_binding_revision_gap() -> No
                 )
                 disabled_result = await query.query(
                     source.source_id,
-                    "SELECT enabled FROM analytics.operator_semantics",
+                    "SELECT enabled::text AS enabled FROM analytics.operator_semantics",
                     disabled.revision,
                     SQL_POLICY_REVISION,
                 )
@@ -2432,12 +2407,12 @@ async def test_enc_01_characterizes_custom_operator_binding_revision_gap() -> No
                     disabled_result,
                     disabled.revision,
                     ["enabled"],
-                    [{"enabled": False}],
+                    [{"enabled": "false"}],
                 )
                 assert create_result_hash(
                     ("enabled",), disabled_result["rows"]
                 ) == (
-                    "sha256:2c3bdb6d969f6176565315abeacf08d1aac846b2bb003fbc887a55519d10376c"
+                    "sha256:d574cb7decfed2df702121d27698ce4d7b432be43b6042d4dcaa9635292e7f88"
                 )
 
                 await admin.execute("DROP VIEW analytics.operator_semantics")
@@ -2531,7 +2506,7 @@ async def test_enc_01_characterizes_custom_operator_binding_revision_gap() -> No
                 assert enabled.snapshot == disabled.snapshot
                 enabled_result = await query.query(
                     source.source_id,
-                    "SELECT enabled FROM analytics.operator_semantics",
+                    "SELECT enabled::text AS enabled FROM analytics.operator_semantics",
                     enabled.revision,
                     SQL_POLICY_REVISION,
                 )
@@ -2539,12 +2514,12 @@ async def test_enc_01_characterizes_custom_operator_binding_revision_gap() -> No
                     enabled_result,
                     enabled.revision,
                     ["enabled"],
-                    [{"enabled": True}],
+                    [{"enabled": "true"}],
                 )
                 assert create_result_hash(
                     ("enabled",), enabled_result["rows"]
                 ) == (
-                    "sha256:630788e0d75c2d80b58158c7b0bb7ba7bb9af9ab8acfa21ae90433896ce1c42b"
+                    "sha256:4612b5fe7853e6c5ed815a49746a4af148fac869e47a7d82ed305d4069db980a"
                 )
             finally:
                 active_error = sys.exception()
@@ -2595,11 +2570,6 @@ async def test_enc_01_characterizes_custom_operator_binding_revision_gap() -> No
             id="disabled-rls",
         ),
     ),
-)
-@pytest.mark.xfail(
-    strict=True,
-    raises=_RlsIsolationViolationError,
-    reason="RLS base-policy attestation requires an approved fail-closed contract",
 )
 async def test_rls_source_requires_base_policy_drift_to_preserve_isolation(
     drift_sql: str,
@@ -2656,38 +2626,41 @@ async def test_rls_source_requires_base_policy_drift_to_preserve_isolation(
                 _source_profile(database, "rls-policy-drift", ("view",)),
                 tenant_isolation="rls",
             )
-            catalog, executor, metadata, query = _open_services(
+            catalog, executor, _metadata, query = _open_services(
                 source,
                 cache_ttl_ms=0,
             )
             try:
-                baseline = await metadata.get_published(source.source_id)
-                assert [
-                    (
-                        relation.qualified_name,
-                        relation.security_invoker,
-                    )
-                    for relation in baseline.snapshot.relations
-                ] == [("analytics.tenant_records", True)]
-                acme_only = await query.query(
-                    source.source_id,
+                statement = (
                     "SELECT record_id FROM analytics.tenant_records "
-                    "ORDER BY record_id",
-                    baseline.revision,
-                    SQL_POLICY_REVISION,
-                    tenant_id="acme",
+                    "ORDER BY record_id"
                 )
-                _assert_canonical_result(
-                    acme_only,
-                    baseline.revision,
-                    ["record_id"],
-                    [{"record_id": 1}],
+                validated = validate_sql(
+                    statement,
+                    allowed_relations=("analytics.tenant_records",),
                 )
-                assert create_result_hash(
-                    ("record_id",), acme_only["rows"]
-                ) == (
-                    "sha256:e31870f73f15d65fbe67fa0b6e57f9b36d130e8dba5340c0fd2e3cad1b455270"
-                )
+
+                for tenant_id in (None, "acme"):
+                    await _assert_query_unavailable(
+                        query.query(
+                            source.source_id,
+                            statement,
+                            "unobserved-rls-revision",
+                            "unobserved-rls-policy",
+                            tenant_id=tenant_id,
+                        )
+                    )
+                    await _assert_query_unavailable(
+                        executor.execute(
+                            source,
+                            statement,
+                            "unobserved-rls-revision",
+                            validated,
+                            tenant_id=tenant_id,
+                        )
+                    )
+                assert not catalog._pools
+                assert not executor._pools
 
                 await admin.execute(drift_sql)
                 rls_state_cursor = await admin.execute(
@@ -2701,47 +2674,28 @@ async def test_rls_source_requires_base_policy_drift_to_preserve_isolation(
                     """
                 )
                 assert await rls_state_cursor.fetchone() == (expected_rls_enabled,)
-                metadata.invalidate(source.source_id)
-                drifted_policy = await metadata.get_published(source.source_id)
-                # ponytail: unresolved security regression; the exact fail-closed
-                # provider/error contract requires approval, but cross-tenant rows
-                # may never become a successful result.
-                assert drifted_policy.revision == baseline.revision
-                assert drifted_policy.snapshot == baseline.snapshot
-                drifted_result = await query.query(
-                    source.source_id,
-                    "SELECT record_id FROM analytics.tenant_records "
-                    "ORDER BY record_id",
-                    drifted_policy.revision,
-                    SQL_POLICY_REVISION,
-                    tenant_id="acme",
-                )
-                if drifted_result["rows"] != [{"record_id": 1}]:
-                    assert drifted_result["columns"] == ["record_id"]
-                    assert drifted_result["rows"] == [
-                        {"record_id": 1},
-                        {"record_id": 2},
-                    ]
-                    assert create_result_hash(
-                        ("record_id",), drifted_result["rows"]
-                    ) == (
-                        "sha256:6432f5ac9d37fc70b8d0b5caa12a95340df62491a9e5b994cb36d16014b17f70"
+
+                for tenant_id in (None, "acme"):
+                    await _assert_query_unavailable(
+                        query.query(
+                            source.source_id,
+                            statement,
+                            "unobserved-rls-revision",
+                            "unobserved-rls-policy",
+                            tenant_id=tenant_id,
+                        )
                     )
-                    raise _RlsIsolationViolationError(
-                        "authenticated tenant query returned a cross-tenant row"
+                    await _assert_query_unavailable(
+                        executor.execute(
+                            source,
+                            statement,
+                            "unobserved-rls-revision",
+                            validated,
+                            tenant_id=tenant_id,
+                        )
                     )
-                _assert_canonical_result(
-                    drifted_result,
-                    drifted_policy.revision,
-                    ["record_id"],
-                    [{"record_id": 1}],
-                )
-                assert create_result_hash(
-                    ("record_id",), drifted_result["rows"]
-                ) == (
-                    "sha256:e31870f73f15d65fbe67fa0b6e57f9b36d130e8dba5340c0fd2e3cad1b455270"
-                )
-                await _assert_pool_restored_reader_timezone(executor, source, "UTC")
+                assert not catalog._pools
+                assert not executor._pools
             finally:
                 active_error = sys.exception()
                 cleanup_errors = await _attempt_cleanup_steps(
@@ -2863,51 +2817,74 @@ async def test_enc_01_characterizes_extreme_scalar_driver_boundaries() -> None:
                 "sample_bits",
             ]
 
-            interval_results = []
+            raw = await AsyncConnection.connect(database.admin_dsn, autocommit=True)
+            try:
+                raw_interval_values = []
+                for column in (
+                    "zero_interval",
+                    "positive_infinity_interval",
+                    "negative_infinity_interval",
+                ):
+                    raw_cursor = await raw.execute(
+                        f"SELECT {column} FROM analytics.driver_extremes"
+                    )
+                    raw_row = await raw_cursor.fetchone()
+                    assert raw_row is not None
+                    raw_interval_values.append(str(raw_row[0]))
+                # psycopg's default loader collapses both interval infinities to zero.
+                assert raw_interval_values == ["0:00:00", "0:00:00", "0:00:00"]
+
+                for column in (
+                    "bc_date",
+                    "far_date",
+                    "bc_timestamp",
+                    "far_timestamp",
+                ):
+                    raw_cursor = await raw.execute(
+                        f"SELECT {column} FROM analytics.driver_extremes"
+                    )
+                    with pytest.raises(errors.DataError):
+                        await raw_cursor.fetchone()
+
+                raw_json_cursor = await raw.execute(
+                    "SELECT json_4300 FROM analytics.driver_extremes"
+                )
+                raw_json_row = await raw_json_cursor.fetchone()
+                assert raw_json_row == ({"n": int("9" * 4300)},)
+                raw_json_overflow_cursor = await raw.execute(
+                    "SELECT json_4301 FROM analytics.driver_extremes"
+                )
+                with pytest.raises(ValueError):
+                    await raw_json_overflow_cursor.fetchone()
+
+                raw_bits_cursor = await raw.execute(
+                    "SELECT empty_bits, sample_bits FROM analytics.driver_extremes"
+                )
+                assert await raw_bits_cursor.fetchone() == ("", "101")
+            finally:
+                await raw.close()
+
             for column in (
                 "zero_interval",
                 "positive_infinity_interval",
                 "negative_infinity_interval",
-            ):
-                interval_results.append(
-                    await query.query(
-                        source.source_id,
-                        f"SELECT {column} AS value FROM analytics.driver_extremes",
-                        published.revision,
-                        SQL_POLICY_REVISION,
-                    )
-                )
-            # ponytail: defect characterization; psycopg's default interval
-            # loader collapses both infinities to the same timedelta as zero.
-            for result in interval_results:
-                _assert_canonical_result(
-                    result,
-                    published.revision,
-                    ["value"],
-                    [{"value": "0:00:00"}],
-                )
-            assert {
-                create_result_hash(("value",), result["rows"])
-                for result in interval_results
-            } == {
-                "sha256:265de8ffe863aa833be5993c281f86ae00468a34e51345ab53e537622c071b48"
-            }
-
-            for column in (
                 "bc_date",
                 "far_date",
                 "bc_timestamp",
                 "far_timestamp",
+                "json_4300",
+                "json_4301",
+                "empty_bits",
+                "sample_bits",
             ):
-                with pytest.raises(QueryUnavailableError) as unavailable:
-                    await query.query(
+                await _assert_query_unavailable(
+                    query.query(
                         source.source_id,
                         f"SELECT {column} AS value FROM analytics.driver_extremes",
                         published.revision,
                         SQL_POLICY_REVISION,
                     )
-                assert unavailable.value.details is None
-                assert isinstance(unavailable.value.__cause__, errors.DataError)
+                )
 
                 recovered = await query.query(
                     source.source_id,
@@ -2921,51 +2898,6 @@ async def test_enc_01_characterizes_extreme_scalar_driver_boundaries() -> None:
                     ["record_id"],
                     [{"record_id": 1}],
                 )
-
-            exact_integer = int("9" * 4300)
-            json_boundary = await query.query(
-                source.source_id,
-                "SELECT json_4300 AS value FROM analytics.driver_extremes",
-                published.revision,
-                SQL_POLICY_REVISION,
-            )
-            _assert_canonical_result(
-                json_boundary,
-                published.revision,
-                ["value"],
-                [{"value": {"n": exact_integer}}],
-            )
-            assert create_result_hash(("value",), json_boundary["rows"]) == (
-                "sha256:f5990467cfa9498375afc2cab1363623590acfe5305370bf35dfc437c42704c8"
-            )
-
-            with pytest.raises(QueryUnavailableError) as json_overflow:
-                await query.query(
-                    source.source_id,
-                    "SELECT json_4301 AS value FROM analytics.driver_extremes",
-                    published.revision,
-                    SQL_POLICY_REVISION,
-                )
-            assert json_overflow.value.details is None
-            assert isinstance(json_overflow.value.__cause__, ValueError)
-
-            bits = await query.query(
-                source.source_id,
-                "SELECT empty_bits, sample_bits FROM analytics.driver_extremes",
-                published.revision,
-                SQL_POLICY_REVISION,
-            )
-            _assert_canonical_result(
-                bits,
-                published.revision,
-                ["empty_bits", "sample_bits"],
-                [{"empty_bits": "", "sample_bits": "101"}],
-            )
-            assert create_result_hash(
-                ("empty_bits", "sample_bits"), bits["rows"]
-            ) == (
-                "sha256:675a9688aa730d64927d9a124cec8825eb6f87abf0da494410bb26576f9fc5a1"
-            )
             await _assert_pool_restored_reader_timezone(executor, source, "UTC")
         finally:
             active_error = sys.exception()
@@ -3140,6 +3072,10 @@ async def test_enc_01_characterizes_domain_and_enum_row_description_oids() -> No
                 "CREATE TYPE analytics.mood AS ENUM ('ok', 'bad')"
             )
             await admin.execute(
+                "CREATE VIEW analytics.domain_projection AS "
+                "SELECT 1::analytics.positive_integer AS value"
+            )
+            await admin.execute(
                 sql.SQL("GRANT USAGE ON SCHEMA analytics TO {}").format(
                     sql.Identifier(database.reader_name)
                 )
@@ -3149,6 +3085,11 @@ async def test_enc_01_characterizes_domain_and_enum_row_description_oids() -> No
                     "GRANT USAGE ON TYPE analytics.positive_integer, "
                     "analytics.integer_list, analytics.mood TO {}"
                 ).format(sql.Identifier(database.reader_name))
+            )
+            await admin.execute(
+                sql.SQL("GRANT SELECT ON analytics.domain_projection TO {}").format(
+                    sql.Identifier(database.reader_name)
+                )
             )
             cursor = await admin.execute(
                 "SELECT 'integer'::regtype::oid, 'integer[]'::regtype::oid, "
@@ -3221,6 +3162,23 @@ async def test_enc_01_characterizes_domain_and_enum_row_description_oids() -> No
                 raise BaseExceptionGroup(
                     "Domain and enum probe cleanup failed", cleanup_errors
                 )
+
+        source = _source_profile(database, "domain-output", ("view",))
+        managed_catalog = PostgresCatalog()
+        launch_catalog = PostgresCatalog(reject_domain_columns=True)
+        metadata = MetadataService(SourceRegistry([source]), launch_catalog)
+        try:
+            managed_snapshot = await managed_catalog.load(source)
+            assert managed_snapshot.relations[0].columns[0].data_type == (
+                "analytics.positive_integer"
+            )
+            with pytest.raises(MetadataUnavailableError) as unavailable:
+                await metadata.get_published(source.source_id)
+            assert unavailable.value.details is None
+            assert isinstance(unavailable.value.__cause__, _CatalogValidationError)
+        finally:
+            await managed_catalog.close()
+            await launch_catalog.close()
 
 
 @pytest.mark.integration
@@ -3335,11 +3293,12 @@ async def test_enc_01_characterizes_public_query_semantic_guc_drift() -> None:
                     ),
                     (
                         "null_comparison",
-                        "SELECT NULL = NULL AS value FROM analytics.semantic_edges",
+                        "SELECT (NULL = NULL)::text AS value "
+                        "FROM analytics.semantic_edges",
                     ),
                     (
                         "array",
-                        "SELECT '{NULL}'::text[] AS value "
+                        "SELECT ('{NULL}'::text[])[1] AS value "
                         "FROM analytics.semantic_edges",
                     ),
                     (
@@ -3355,7 +3314,8 @@ async def test_enc_01_characterizes_public_query_semantic_guc_drift() -> None:
                     ),
                     (
                         "default_text_search",
-                        "SELECT matches AS value FROM analytics.search_semantics",
+                        "SELECT matches::text AS value "
+                        "FROM analytics.search_semantics",
                     ),
                 ):
                     result = await query.query(
@@ -3409,12 +3369,12 @@ async def test_enc_01_characterizes_public_query_semantic_guc_drift() -> None:
                 "sha256:e96b206dd05fac4069d74fcd73661a9c762e52ca2ce7d1e197589b5a5d1ffe9e",
             ),
             "null_comparison": (
-                True,
-                "sha256:f3b63060353a6de843bdab60cff00570124850083597cbb3ebc09406ddf3af16",
+                "true",
+                "sha256:bf9c5710bc24a6df1444468e900bf03e502d68f363f5b889f424587ed8844f0f",
             ),
             "array": (
-                ["NULL"],
-                "sha256:58c554cec2ac89ee75e8ff731df9f8b83ab3511cb79db36e8abda29935e640b0",
+                "NULL",
+                "sha256:b7ec53d0cdcb6e36cbb6d6c23b54b7795cac5ec6e699e45240b62f19351cadf5",
             ),
             "timezone_abbreviation": (
                 "2024-01-01T02:30:00+00:00",
@@ -3425,8 +3385,8 @@ async def test_enc_01_characterizes_public_query_semantic_guc_drift() -> None:
                 "sha256:be10c695747100145649abc3d972028963c4cb6dd3fbf2ca34bee276516e7c61",
             ),
             "default_text_search": (
-                False,
-                "sha256:650abf959c971b3fd503ca4db961b5e37d917207abde3500214ad23d64833b56",
+                "false",
+                "sha256:ed4e7fdaf202d9bb063a8a1a8d07d8f2ed828580310df98a7776bb6537da59dc",
             ),
         }
 
@@ -3451,8 +3411,8 @@ async def test_enc_01_characterizes_public_query_semantic_guc_drift() -> None:
                 "sha256:465ac580f981f85b5e0107198603949c8746915297554f1718aacc0e3fc73bee",
             ),
             "array": (
-                [None],
-                "sha256:2ceeafc6cdd6acffce2907fafba6a2490f69e992d58c4516cc7ec548e0383242",
+                None,
+                "sha256:465ac580f981f85b5e0107198603949c8746915297554f1718aacc0e3fc73bee",
             ),
             "timezone_abbreviation": (
                 "2024-01-01T18:00:00+00:00",
@@ -3463,8 +3423,8 @@ async def test_enc_01_characterizes_public_query_semantic_guc_drift() -> None:
                 "sha256:07714fda947fb9e09a2b6217b0fe0c4e53eb3d7032cce257e157acf1eb64b553",
             ),
             "default_text_search": (
-                True,
-                "sha256:f3b63060353a6de843bdab60cff00570124850083597cbb3ebc09406ddf3af16",
+                "true",
+                "sha256:bf9c5710bc24a6df1444468e900bf03e502d68f363f5b889f424587ed8844f0f",
             ),
         }
 
@@ -3540,13 +3500,13 @@ async def test_enc_01_characterizes_planner_order_sensitive_aggregates() -> None
                     for label, statement in (
                         (
                             "float_sum",
-                            "SELECT pg_catalog.sum(float_value) AS value "
+                            "SELECT pg_catalog.sum(float_value)::text AS value "
                             "FROM analytics.aggregate_edges WHERE record_id > 0",
                         ),
                         (
                             "jsonb_object",
                             "SELECT pg_catalog.jsonb_object_agg("
-                            "object_key, object_value) AS value "
+                            "object_key, object_value)::text AS value "
                             "FROM analytics.aggregate_edges WHERE record_id > 0",
                         ),
                     ):
@@ -3593,12 +3553,12 @@ async def test_enc_01_characterizes_planner_order_sensitive_aggregates() -> None
             sequence_revision, sequence_results = await read_public_results()
             assert sequence_results == {
                 "float_sum": (
-                    0.0,
-                    "sha256:0e281397bb078de6414ccdef1ed9350c948a57b45765001261da4b51de253c88",
+                    "0",
+                    "sha256:30893917f19ba0f320b46aebc7ef612e0d6878ac6ba87fda0f0ad0c284bf95a4",
                 ),
                 "jsonb_object": (
-                    {"x": 2},
-                    "sha256:dbf3df0bd59c886d21f44a6b339b2fdada8aff45599fc34394518469afef7d08",
+                    '{"x": 2}',
+                    "sha256:8398a9c5b28c08ff8f0dcea079a70197014b3172fc5e5e5295eb7f809ba45ea6",
                 ),
             }
 
@@ -3613,12 +3573,12 @@ async def test_enc_01_characterizes_planner_order_sensitive_aggregates() -> None
             assert index_revision == sequence_revision
             assert index_results == {
                 "float_sum": (
-                    1.0,
-                    "sha256:bc865c9c470c0a06cf4e957928f26fc1c3dc7d6ae1cfaebe271f53ace90b793a",
+                    "1",
+                    "sha256:d804351f65a08a798228ed914d917a813db1c00f87d35a8815dd99d191448f51",
                 ),
                 "jsonb_object": (
-                    {"x": 3},
-                    "sha256:50d6676ae9c55a3167bd4b59b6f3c31f3798157f8937cb8968219a7ca754f375",
+                    '{"x": 3}',
+                    "sha256:35fd53c89a0166af0f2d163198858773311781cb872ecac9795545357a57d2ce",
                 ),
             }
         finally:
@@ -3703,61 +3663,25 @@ async def test_enc_01_characterizes_empty_multirange_and_unsupported_recovery() 
                 ("forever", "date"),
             ]
 
-            empty_results = []
-            for column in ("empty_spans", "empty_range_array", "empty_numbers"):
-                empty_results.append(
-                    await query.query(
-                        source.source_id,
-                        f"SELECT {column} AS value FROM analytics.driver_edges",
-                        published.revision,
-                        SQL_POLICY_REVISION,
-                    )
-                )
-            # ponytail: defect characterization; unsupported empty collections follow ENC-01.
-            assert all(result["rows"] == [{"value": []}] for result in empty_results)
-            empty_hashes = {
-                create_result_hash(("value",), result["rows"])
-                for result in empty_results
-            }
-            assert empty_hashes == {
-                "sha256:77f588e368495248abbd8eb87354efadbd31afa38d0ca675154506624470f06a"
-            }
-
-            array_results = []
-            for column in ("shifted_numbers", "ordinary_numbers"):
-                array_results.append(
-                    await query.query(
-                        source.source_id,
-                        f"SELECT {column} AS value FROM analytics.driver_edges",
-                        published.revision,
-                        SQL_POLICY_REVISION,
-                    )
-                )
-            assert all(
-                result["rows"] == [{"value": [10, 20]}]
-                for result in array_results
-            )
-            assert {
-                create_result_hash(("value",), result["rows"])
-                for result in array_results
-            } == {
-                "sha256:0a4513b560854f795950856ddcddcc1a5f8fac4b0341fce951944bbc8ba066dd"
-            }
-
-            for unsupported_sql in (
-                "SELECT active_span FROM analytics.driver_edges",
-                "SELECT active_spans FROM analytics.driver_edges",
-                "SELECT active_range_array FROM analytics.driver_edges",
-                "SELECT forever FROM analytics.driver_edges",
+            for column in (
+                "active_span",
+                "active_spans",
+                "empty_spans",
+                "active_range_array",
+                "empty_range_array",
+                "empty_numbers",
+                "shifted_numbers",
+                "ordinary_numbers",
+                "forever",
             ):
-                with pytest.raises(QueryUnavailableError) as unavailable:
-                    await query.query(
+                await _assert_query_unavailable(
+                    query.query(
                         source.source_id,
-                        unsupported_sql,
+                        f"SELECT {column} AS value FROM analytics.driver_edges",
                         published.revision,
                         SQL_POLICY_REVISION,
                     )
-                assert unavailable.value.details is None
+                )
 
                 recovered = await query.query(
                     source.source_id,
@@ -3880,48 +3804,33 @@ async def test_enc_01_characterizes_record_and_unknown_oid_passthrough() -> None
                 ("details_text", "text"),
             ]
 
-            for unsupported_column, supported_column, expected, expected_hash in (
-                ("cash", "cash_text", None, None),
-                ("location", "location_text", None, None),
-                ("payload", "payload_text", None, None),
-                (
-                    "object_id",
-                    "integer_id",
-                    42,
-                    "sha256:2384dae5eba946d6aa6abfe5fae28f91bbe382ec0e4463d79324295faa7ab8c5",
-                ),
-                (
-                    "object_ids",
-                    "integer_ids",
-                    [42],
-                    "sha256:43663c93efe60cf5380f065a12e4de4e3b41247c2ae8c1f6c3c1ed3f0a7f83c0",
-                ),
-                (
-                    "internal_name",
-                    "ordinary_name",
-                    "edge",
-                    "sha256:c84c5f563750fb3e1638ffc51e30cb66428ba29f3ee0fd16515e61b0e72ed422",
-                ),
-                (
-                    "internal_names",
-                    "ordinary_names",
-                    ["edge"],
-                    "sha256:645242b412f8b101d1b8ac61008eb3caffe05240e80f1025a10ea01fb5991f2a",
-                ),
-                (
-                    "details",
-                    "details_text",
-                    "(1,x)",
-                    "sha256:fa729036d81fc0c620774ba3d568783eb25f4e214af3df943bf6e620cb1902bf",
-                ),
+            for unsupported_column in (
+                "cash",
+                "location",
+                "payload",
+                "object_id",
+                "object_ids",
+                "integer_ids",
+                "internal_name",
+                "internal_names",
+                "ordinary_names",
+                "details",
             ):
-                unsupported_result = await query.query(
-                    source.source_id,
-                    f"SELECT {unsupported_column} AS value "
-                    "FROM analytics.exotic_edges",
-                    published.revision,
-                    SQL_POLICY_REVISION,
+                await _assert_query_unavailable(
+                    query.query(
+                        source.source_id,
+                        f"SELECT {unsupported_column} AS value "
+                        "FROM analytics.exotic_edges",
+                        published.revision,
+                        SQL_POLICY_REVISION,
+                    )
                 )
+
+            for supported_column, expected in (
+                ("integer_id", 42),
+                ("ordinary_name", "edge"),
+                ("details_text", "(1,x)"),
+            ):
                 supported_result = await query.query(
                     source.source_id,
                     f"SELECT {supported_column} AS value "
@@ -3929,28 +3838,45 @@ async def test_enc_01_characterizes_record_and_unknown_oid_passthrough() -> None
                     published.revision,
                     SQL_POLICY_REVISION,
                 )
-                # ponytail: defect characterization; Python runtime values hide
-                # string-, integer- and list-valued unsupported SQL type OIDs.
-                assert unsupported_result["rows"] == supported_result["rows"]
-                result_hash = create_result_hash(
-                    ("value",), unsupported_result["rows"]
+                _assert_canonical_result(
+                    supported_result,
+                    published.revision,
+                    ["value"],
+                    [{"value": expected}],
                 )
-                assert result_hash == create_result_hash(
-                    ("value",), supported_result["rows"]
-                )
-                if expected is not None:
-                    assert unsupported_result["rows"] == [{"value": expected}]
-                    assert result_hash == expected_hash
 
-            record_results = []
+            for supported_text_column in (
+                "cash_text",
+                "location_text",
+                "payload_text",
+            ):
+                supported_result = await query.query(
+                    source.source_id,
+                    f"SELECT {supported_text_column} AS value "
+                    "FROM analytics.exotic_edges",
+                    published.revision,
+                    SQL_POLICY_REVISION,
+                )
+                rows = supported_result["rows"]
+                assert isinstance(rows, list)
+                assert len(rows) == 1
+                value = rows[0]["value"]
+                assert isinstance(value, str)
+                _assert_canonical_result(
+                    supported_result,
+                    published.revision,
+                    ["value"],
+                    [{"value": value}],
+                )
+
             for expression in (
                 "ROW()",
                 "ROW(NULL::integer)",
                 "ROW(1::integer)",
                 "ROW('1'::text)",
             ):
-                record_results.append(
-                    await query.query(
+                await _assert_query_unavailable(
+                    query.query(
                         source.source_id,
                         f"SELECT {expression} AS value FROM analytics.exotic_edges",
                         published.revision,
@@ -3958,22 +3884,19 @@ async def test_enc_01_characterizes_record_and_unknown_oid_passthrough() -> None
                     )
                 )
 
-            assert record_results[0]["rows"] == record_results[1]["rows"] == [
-                {"value": []}
-            ]
-            assert record_results[2]["rows"] == record_results[3]["rows"] == [
-                {"value": ["1"]}
-            ]
-            assert create_result_hash(
-                ("value",), record_results[0]["rows"]
-            ) == create_result_hash(("value",), record_results[1]["rows"]) == (
-                "sha256:77f588e368495248abbd8eb87354efadbd31afa38d0ca675154506624470f06a"
+            recovered = await query.query(
+                source.source_id,
+                "SELECT record_id FROM analytics.exotic_edges",
+                published.revision,
+                SQL_POLICY_REVISION,
             )
-            assert create_result_hash(
-                ("value",), record_results[2]["rows"]
-            ) == create_result_hash(("value",), record_results[3]["rows"]) == (
-                "sha256:dadd5b0c8d9a51f5db4a5117d804c30dcbcc7f4cfa417a4df154de40d63de4f3"
+            _assert_canonical_result(
+                recovered,
+                published.revision,
+                ["record_id"],
+                [{"record_id": 1}],
             )
+            await _assert_pool_restored_reader_timezone(executor, source, "UTC")
         finally:
             active_error = sys.exception()
             cleanup_errors = await _attempt_cleanup_steps(

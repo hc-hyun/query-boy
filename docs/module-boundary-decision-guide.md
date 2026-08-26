@@ -1,8 +1,11 @@
 # 모듈 경계 강화 결정 가이드
 
-Status: Accepted choices — implementation complete
+Status: Completed decision record — frozen; not an active development entrypoint
 
 Last reviewed: 2026-08-26
+
+현재 개발 시작점은 [module index](modules/README.md)와 [ADR 0018](decisions/0018-module-ownership-and-contract-governance.md)이다.
+이 문서는 D0~D5 선택과 완료 근거를 보존하며 새 작업의 current boundary를 정의하지 않는다.
 
 Approved: 2026-08-24 — `D0-A`, `D1-A`, `D2-A`, `D3-A`, `D4-A`, `D5-A`와
 [모든 권장 선택에 공통으로 유지할 불변조건](#모든-권장-선택에-공통으로-유지할-불변조건)

@@ -1,121 +1,106 @@
 # Assurance Module
 
-Status: Logical boundary; physical package split pending
+Status: Logical boundary; physical package split pending; `LAUNCH-01-A` repository acceptance in progress;
+protected execution separately gated
 
 ## 목적
 
-Assurance는 “metadata가 실제 질문에 유용한가”와 “검증된 SQL 결과가 그대로인가”를 versioned
-case로 확인한다. 쉽게 말하면 runtime 요청을 처리하는 module이 아니라 Source/Metadata/Query의
-interface, policy와 result format이 함께 작동한다는 실행 가능한 품질 증거를 소유한다.
+Assurance는 Source Catalog, Metadata와 Guarded Query가 함께 지켜야 하는 품질·안전 기준을
+실행 가능한 case로 검증한다. Metadata retrieval quality와 verified SQL의 revision, relation,
+column, row count 및 result hash를 확인하고, offline CLI와 repository acceptance를 조립한다.
 
-현재 L0/L1/L2 publish 판정 구현은 publish lifecycle과 함께
-[Metadata](../metadata/README.md)가 소유한다. Assurance는 그 판정에 필요한 verified revision
-membership과 offline 품질 증거를 제공하고 동일 기준을 회귀 검증한다.
+Assurance는 runtime 요청 처리나 protected environment 배포를 대신하지 않는다. 현재 launch
+authority는 [ADR 0025](../../decisions/0025-static-non-rls-first-launch.md)의 static non-RLS
+two-source profile이며, 아래 항목은 완료 주장 대신 이 baseline이 통과해야 할 acceptance를 기록한다.
 
 ## 소유 책임
 
-- Versioned metadata retrieval quality case와 accuracy/answerability/context-byte gate
-- Versioned verified query, exact metadata revision/relation/result expectation schema
-- Verified query registry와 source별 verified revision membership
-- Guarded Query를 통한 live verification 순서와 mismatch reporting
-- Ordered columns와 canonical rows를 묶는 verified result hash와 별도 exact row-count 비교
-- `query-man-evaluate`와 `query-man-verify` command의 external exit/result semantics
-- Bootstrap/acceptance quality 및 verified configuration
-- CTRL-08 resource/gateway projection의 migration, state, cutoff, redaction과 기존 surface 회귀 증거
-- CTRL-09 isolated cross-service Control archive, key/LOGIN, logical retention, zero-bootstrap와
-  multi-replica recovery fixture acceptance
-- Source onboarding Skill의 독립 trigger/adversarial evaluation과 repository/DB/admin 무변경 증거
-- UUID별 disposable source DB의 wide/untrusted metadata, temporal/scalar, live drift, catalog hard
-  limit, unsupported driver recovery, multibyte, partition/materialized/empty result integration
-  acceptance와 leak-free cleanup 증거
+- Versioned metadata quality case와 accuracy, answerability, context-byte gate
+- Versioned verified-query artifact, exact revision/relation/result expectation과 source별 membership
+- Guarded Query를 거치는 live verification 순서와 bounded mismatch reporting
+- Ordered columns와 canonical rows를 묶는 result hash 및 별도 exact row-count 비교
+- `query-man-evaluate`와 `query-man-verify`의 offline composition 및 external command semantics
+- Cross-module integration, HTTP/MCP parity, container와 database-corner acceptance 조립
+- Repository gate와 immutable verification evidence의 범위·provenance 관리
+- Managed/Control recovery와 onboarding acceptance fixture의 역사 보존
+
+Metadata의 L0/L1/L2 publish 판정 구현은 [Metadata](../metadata/README.md)가 소유한다. Assurance는
+그 판정에 필요한 verified revision membership과 실행 증거를 제공할 뿐 production 판정 코드를
+복제하지 않는다.
 
 ## 소유하지 않는 책임
 
-- 일반 HTTP/MCP runtime request 처리와 authorization
-- Physical catalog/context algorithm, metadata revision과 L0/L1/L2 publish 판정 자체
-- SQL AST policy, query execution이나 result scalar encoding
-- Control DB table, verified persistence transaction과 active pointer
-- Expected result의 자동 생성·승인 또는 business data 전체 정확성 보증
-- Service latency/SLO, provider billing과 production metric 집계
+- HTTP/MCP runtime request 처리, authentication과 authorization
+- Physical catalog/context algorithm, metadata revision이나 L0/L1/L2 판정 구현
+- SQL AST policy, reader connection verifier, query execution이나 result scalar encoding
+- Control DB table, verified persistence transaction과 active source pointer
+- Source manifest, runtime topology, image build 또는 protected cutover 실행
+- Expected result의 자동 생성·승인이나 business data 전체 정확성 보증
+- Service SLO, provider billing, production metric과 alert 집계
+
+RLS attestation, broader lossless encoding, cost attribution과 trace 설계는 첫 launch 범위 밖의
+parked research다. 해당 연구 문서가 있다는 사실만으로 Assurance acceptance나 provider 의미가
+추가되지 않는다.
 
 ## 현재 코드 위치
 
-- [`quality.py`](../../../src/query_man/quality.py): `QualityEvaluation`, cases, gates와 report core
-- [`verified.py`](../../../src/query_man/verified.py): `VerifiedQuery`, `ExpectedResult`, registry,
-  verification과 `create_result_hash` core
-- [`assurance_cli.py`](../../../src/query_man/assurance_cli.py): `query-man-evaluate`와
-  `query-man-verify`의 유일한 offline concrete composition root와 entrypoint
+- [`quality.py`](../../../src/query_man/quality.py): quality case, gate와 report core
+- [`verified.py`](../../../src/query_man/verified.py): verified DTO, registry, comparison과 hash core
+- [`assurance_cli.py`](../../../src/query_man/assurance_cli.py): 두 offline command의 유일한 concrete
+  composition root
 - [`quality-evaluation.yaml`](../../../config/quality-evaluation.yaml): versioned retrieval quality cases
-- [`verified-queries.yaml`](../../../config/verified-queries.yaml): bootstrap-only verified-query dataset;
-  managed authority가 읽거나 병합하지 않음
-- [`security-evaluation.yaml`](../../../config/security-evaluation.yaml): parser/query safety
-  allow/deny regression corpus
-- `config/onboarding/*-verified-query.yaml`: Assurance-owned verified expectations. 같은 directory의
-  base/`*-l2.yaml` manifest는 Source Catalog/Control staging input이다.
-- [`ci.yml`](../../../.github/workflows/ci.yml),
-  [`mcp-soak.yml`](../../../.github/workflows/mcp-soak.yml): repository gate와 scheduled/manual
-  execution evidence
-- [`apply-db.sh`](../../../scripts/apply-db.sh): Source fixture와 Control Plane migration을
-  조립하는 Assurance-owned shared transition script
-- `docker/postgres/init/00-bootstrap.sql`, `01-source-bootstrap.sh`와 source fixture SQL
-  `10`~`90`: production authority가 아닌 acceptance infrastructure.
-  `05-control-plane.sh`와 `control-migrations/`는 Control Plane 소유라 이 범위에 포함하지 않음
-- Focused tests: [`test_quality.py`](../../../tests/test_quality.py),
+- [`verified-queries.yaml`](../../../config/verified-queries.yaml): static launch의 two-source, 9-query dataset
+- [`security-evaluation.yaml`](../../../config/security-evaluation.yaml): parser/query safety corpus
+- [`ci.yml`](../../../.github/workflows/ci.yml)과
+  [`mcp-soak.yml`](../../../.github/workflows/mcp-soak.yml): repository gate orchestration
+- [`verify-container.sh`](../../../scripts/verify-container.sh): Runtime container와 Delivery surface acceptance
+- [`test_quality.py`](../../../tests/test_quality.py),
   [`test_verified.py`](../../../tests/test_verified.py),
-  [`test_assurance_cli.py`](../../../tests/test_assurance_cli.py),
-  [`test_quality_level.py`](../../../tests/test_quality_level.py),
+  [`test_assurance_cli.py`](../../../tests/test_assurance_cli.py): Assurance focused tests
+- [`test_reader_policy.py`](../../../tests/test_reader_policy.py),
   [`test_result_encoding.py`](../../../tests/test_result_encoding.py),
-  [`test_control_recovery.py`](../../../tests/test_control_recovery.py),
-  [`test_onboarding_skill.py`](../../../tests/test_onboarding_skill.py),
-  [`test_text_to_sql_skill.py`](../../../tests/test_text_to_sql_skill.py),
-  [`test_source_database_corners.py`](../../../tests/test_source_database_corners.py)
-- [`source onboarding Skill acceptance`](../../verification/2026-08-25-source-onboarding-skill.md):
-  fresh-context forward evaluation, spy admin endpoint와 deterministic zero-mutation evidence
-- [`source database corner acceptance`](../../verification/2026-08-25-source-database-corners.md):
-  test별 disposable PostgreSQL 18 source와 metadata/query fix, encoding/source-semantics gap,
-  zero-residue evidence
+  [`test_integration.py`](../../../tests/test_integration.py),
+  [`test_source_database_corners.py`](../../../tests/test_source_database_corners.py): launch policy와
+  cross-module acceptance
+- [`verification index`](../../verification/README.md): 실행 시점별 immutable evidence 색인
 
-[`quality_level.py`](../../../src/query_man/quality_level.py)는 Metadata owner이고 Assurance가 검증하는
-module interface다. `verified.py`의 DTO는 Control Plane이 직접 소비하는 module interface이고 hash는
-별도 compatibility identity이며
-Delivery는 이를 import하지 않는다. CLI 내부 정리라는 이유로 shape나 hash 의미를 바꾸지 않는다.
-
-`assurance_cli.py`만 offline acceptance에 한정된 bounded composition root다. Concrete
-`SourceRegistry`, Metadata, Catalog와 Query adapter를 생성할 수 있지만 registry local/application
-reference는 `SourceReader`로 좁힌다. `quality.py`와 `verified.py` core는 concrete adapter를 조립하지
-않는다. Production HTTP/MCP runtime wiring이나 domain policy를 Assurance로 옮기지 않는다.
+`docker/postgres/init/00-bootstrap.sql`, `01-source-bootstrap.sh`와 source fixture SQL은 acceptance
+infrastructure이며 production source schema authority가 아니다. Control migration과 persistence는
+Control Plane 소유다.
 
 ## 제공 인터페이스와 소유 경계
 
-이 절은 다른 module에 공개한 Python interface와 함께 Assurance가 소유하는 verified artifact
-schema, hash identity, CLI surface 및 acceptance evidence를 기록한다. 각 subsection 제목이 실제 변경
-범주이며, 이 절 전체를 하나의 module interface로 해석하지 않는다.
+이 절은 서로 다른 변경 범주를 구분한다. Python shape만 official module interface이고, artifact
+schema, hash 재료, CLI, acceptance와 evidence를 모두 interface라고 부르지 않는다.
+
+### Official module interfaces
+
+- `ExpectedResult`와 `VerifiedQuery`: Control Plane이 verified artifact를 저장·검증할 때 소비하는
+  immutable DTO
+- `VerifiedQueryRegistry.revision_map()`: Metadata와 Runtime composition이 소비하는
+  `source_id -> frozenset[metadata revision]` membership
+- `create_result_hash(columns, rows) -> str`: Control Plane과 acceptance가 소비하는 hash capability
+
+위 symbol의 Python shape와 호출 단위 오류 의미가 module interface다. Hash payload와 canonical
+encoding의 의미는 별도 policy/compatibility identity이며, DTO를 저장하는 Control DB row는 별도
+persisted format이다.
 
 ### Verified-query artifact schema
 
-Bootstrap filesystem의 strict version 1 schema는 한 file 안에서 globally unique한 `query_id`와
-다음 내용을 고정한다.
+Static filesystem artifact는 strict version 1이며 한 file 안의 globally unique `query_id`와 다음
+필드를 고정한다.
 
 ```text
-unique query_id
-source_id and human question
-deterministic read-only SQL
-exact metadata_revision
-exact referenced relation set
-exact ordered columns
-exact row_count
-canonical result_hash
+source_id, question, deterministic read-only SQL
+exact metadata_revision and referenced relation set
+exact ordered columns, row_count and canonical result_hash
 ```
 
-Managed Control DB의 immutable artifact identity는
-`(source_id, query_id, metadata_revision)`다. 따라서 bootstrap file의 `query_id` global uniqueness와
-managed persistence의 composite identity를 서로 같은 규칙으로 해석하지 않는다.
+Managed Control DB의 immutable identity `(source_id, query_id, metadata_revision)`와 filesystem의
+global `query_id` 규칙을 합치지 않는다. Static mode는 filesystem dataset만 읽고, managed mode는
+Control DB projection만 사용한다. Import, fallback이나 두 authority의 merge는 없다.
 
-Verification은 current published metadata revision 확인, SQL AST validation, 실제 relation set 확인,
-현재 `QueryService` 실행, `truncated=false`, exact columns/row count/hash 비교 순서로 수행한다.
-Guarded Query의 safety path를 우회하지 않는다.
-
-### Result hash algorithm and identity
+### Result hash policy identity
 
 ```text
 {"columns": ordered columns, "rows": canonical encoded rows}
@@ -123,89 +108,60 @@ Guarded Query의 safety path를 우회하지 않는다.
 -> SHA-256 with "sha256:" prefix
 ```
 
-Rows는 Guarded Query의 canonical result encoding을 거친 값이어야 한다. Numeric, binary,
-date/time, mapping 또는 non-finite value encoding이 바뀌면 같은 SQL의 verified hash도 바뀐다.
-Aware datetime은 UTC `+00:00`이고 naive datetime/date/time/timetz는 기존 ISO 표현이다. Canonical-time
-policy나 metadata revision이 바뀌면 값이 같은 verified case도 새 exact revision에서 다시 실행한다.
-Month-bearing/infinity interval, time 24시, temporal year overflow, fractional/duplicate-key/숫자 길이 경계
-JSON, SQL_ASCII, collation, empty unsupported collection, array lower-bound, record/unknown result OID
-collision과 reader semantic/format default drift는
-[DB corner audit](../../verification/2026-08-25-source-database-corners.md)의 open lossless/stability
-gap이며 일반 무손실 evidence로 취급하지 않는다.
+Rows는 Guarded Query가 성공적으로 반환한 canonical values다. Verification은 published metadata
+revision, validated relation set, Guarded Query 실행, `truncated=false`, exact columns, row count와
+hash 순서로 비교한다. Expected output을 live result에서 자동 갱신하지 않는다.
 
-`DBEDGE-04`는 public output이 boolean뿐인 view에서 hidden base text collation을
-`C`→`pg_c_utf8`로 바꾸어도 current snapshot/revision이 같고 result/hash만 바뀌는 것을
-disposable PostgreSQL 18 DB로 고정한다. Same-definition custom domain의 direct `pg_type`
-dependency와 `typcollation` drift, base OID로 domain identity가 지워지는 것도 raw catalog/driver
-sentinel로 고정한다. Same-OID custom function body가 view definition/snapshot/revision 없이 public
-value/hash를 바꾸는 residual도 public companion case로 고정한다. ADR 0020 exact A가 승인되면 Assurance는 visible binding뿐 아니라
-recursive view dependency fingerprint, declared/custom domain pre-erasure rejection, result OID/cursor loader, v1/v2/v3 codec,
-current/rollback full verified reissue와 rollback을 cross-module acceptance로 검증한다. 승인 전에는
-이 characterization을 새 production encoding/policy의 완료 evidence로 해석하지 않는다.
+[Verified-query baseline](../../verified-queries.md)의 9개 metadata revision, columns, row counts와
+result hashes는 SQL policy v3 전환에서도 그대로 유지한다. Canonical bytes나 metadata revision
+algorithm을 바꾸는 결정이 아니며, 9개 전부를 새 policy token으로 다시 실행하는 것이 acceptance다.
 
-`DBEDGE-05`는 view rule의 direct dependency가 custom operator에서 끝나고 실제 function은 두 번째
-`pg_depend` edge에 있는 것을 고정한다. 같은 operator spelling/signature를 다른 immutable function에
-다시 연결하면 view definition, definition hash, snapshot과 revision은 같은데 boolean result/hash가
-뒤집힌다. 별도 public corpus는 interval infinity의 zero collision, Python 범위 밖 date/timestamp와
-JSON integer digit-limit 실패·pool 복구, 4,300자리 JSON 및 varbit positive shape, `bytea::text`와
-implicit text-search config drift, planner order에 민감한 float/JSONB aggregate를 고정한다. 이는 ADR
-0020의 residual·verification requirement를 실행 가능하게 만든 것이며 새 encoding/fingerprint/SQL
-policy나 format을 구현한 것은 아니다.
+### Offline CLI surface and composition boundary
 
-[RLS policy drift finding](../../verification/2026-08-26-rls-policy-drift.md)은 다른 tenant 행을
-통과 golden으로 보존하지 않는다. `test_rls_source_requires_base_policy_drift_to_preserve_isolation`은
-approved ADR 0014의 no-cross-tenant invariant를 strict xfail로 나타낸다.
-[Proposed ADR 0024](../../decisions/0024-rls-policy-drift-attestation.md)의 `RLS-01-A`가 승인되면
-Assurance는 snapshot-before-lock old-catalog/new-policy race, lock-first DDL ordering, nested
-owner-rights/security-definer leak, role inheritance, FORCE RLS, custom function/operator, strict policy
-grammar/bound, exact policy `pg_depend`/database-scoped `pg_shdepend`, UTF8 libc/ICU/builtin positive,
-SQL_ASCII/non-UTF8 server/client와 same-Python-name/different-relation negative, startup/checkout/live
-connection policy, str-only graph, cache/reload 및 v1/v2 cutover/rollback을 cross-module로 검증한다.
-Stable zero-root/root-count deterministic public marker 대 root-list add/drop/rename 및 다른 transient error,
-private history decode 대 public current-serving gate,
-RLS v1/old-policy v2 cold-start rejection과 pool/cache-before-registry apply order/partial failure도 검증한다.
-Pre-fence candidate failure의 current route 불변, post-fence/pre-commit failure의 old/new route 0과
-post-commit bookkeeping/probe failure의 only-new/removed projection과 health/apply-status unavailable/failed,
-external probe cancellation의 same projection/fabricated failure-status 0/재전파를 서로 다른 event-order case로 고정한다.
-Post-fence failure는 failed-adapter tombstone과 earlier pending-next가 섞여도 route 0인지 확인한다.
-Hidden canary가 marker/codec cause-context와 ordinary log에 없는지, candidate transient 503/cancellation
-재전파, second-read 직후 old query·detached semaphore waiter·checked-out query·Catalog refresh/resource
-observation의 active checked-out connection race 및 disable failure가 exact-profile fence를 우회하지
-않는지도 event barrier로 검증한다. 각 최대 1초인 fixed transition cleanup phase의 timeout과 successful invalidation 뒤
-old Query/Catalog checked-out connection 0도 확인한다.
-Query terminal result gate와 transition fence의 양쪽 event order를 검증해 fence-first old result 0과
-result-first completion-before-transition을 구분한다. Query/observation external 대 transition cancellation도 같은
-lifecycle lock의 first-recorded reason이 승리하고 later reason이 error/report를 덮어쓰지 않는지 검증한다.
-Marker/codec error는 rendered suppression뿐 아니라 direct `__cause__`/`__context__`가 모두 `None`인지
-검사한다. Password canary도 fence mismatch, drain failure, tombstone retry의 error/log/metric/audit에 없어야 한다.
-Candidate/active/query 각각의 no-SQL connection invariant mismatch, common reader-session identity/policy
-mismatch와 fixed-setting SQLSTATE `22023`/`42501`이 400 validation, `METADATA_UNAVAILABLE`,
-`QUERY_UNAVAILABLE`로 갈리는지 확인하고 resource observation에서는 exact `RESOURCE_READ_FAILED`인지
-별도로 검증한다. `ReaderSessionPolicyError`는 direct cause/context None이어야 한다. Marker로 감싸지 않는
-timeout/transport/other-driver는 candidate `SOURCE_CONTROL_UNAVAILABLE`, active Metadata
-`METADATA_UNAVAILABLE`, query timeout `QUERY_TIMEOUT`, query transport/other-driver
-`QUERY_UNAVAILABLE`, resource observation `RESOURCE_READ_FAILED`로 각각 갈리고 external cancellation은
-재전파되는 corpus를 검증한다. Non-RLS current mapping 회귀도 고정한다. Ordinary active RLS observation
-connection/read failure도 success 0/exact `RESOURCE_READ_FAILED`여야 한다.
-각 marker-free transient corpus에 hidden relation/policy/driver-message canary를 넣어 provider/helper log 0,
-candidate/active Metadata/query safe outer의 direct cause/context None, HTTP/MCP ordinary log/metric/audit canary
-0을 확인한다. Resource observation은 exception/`exc_info` 0/fixed reason만, external cancellation은
-log/wrapping/failure-report 0으로 재전파되어야 한다.
-Resource observation cleanup은 pre-BEGIN invariant mismatch에서 rollback 0/close-discard, transaction
-setting/probe/read failure에서 rollback-reset 및 recovery 실패/broken connection만 close-discard인지 확인한다.
-같은 transition corpus는 non-RLS managed source에서도 active query가 details 없는 unavailable로 끝나고
-RLS-only connection verifier의 invocation 0이며 UTF8/graph/v2 admission이 실행되지 않는지 함께 검증한다.
-Transition-cancelled resource observation의 success 0/exact `RESOURCE_READ_FAILED`와 external observation
-cancellation의 repropagation/failure-report 0도 구분한다.
-Startup UTF8에 따른 value/hash/rejection도 current/rollback verified 전량과 비교한다. `RLS-02` 구현 전에는
-strict xfail을 passing regression으로 바꾸거나 현재 target을 완료로 기록하지 않는다.
-Acceptance에는 dynamic leak fixture뿐 아니라 disposable managed RLS source의 existing-schema
-tenant별 operator identity, current/rollback verified reissue, two-replica convergence, standalone v2와
-repository policy migration forward/rollback artifact checksum 및 disposable SQL_ASCII reject/stop/fresh
-UTF8 re-onboarding path도 포함한다. Protected source별 UTF8 data migration/rollback artifact와 실행은
-별도 승인된 `RLS-03` environment evidence다. Combined direct-v3와 v3 rollback은
-ADR 0020 `ENC-01` exact 승인 및 `ENC-02` cumulative provider baseline 뒤 `RLS-03`/`TIME-03` acceptance로
-활성화한다. RLS-02에는 미승인 v3 skip/xfail placeholder를 만들지 않는다.
+`query-man-evaluate`와 `query-man-verify`의 console-script target은 각각
+`query_man.assurance_cli:evaluate_main`과 `query_man.assurance_cli:verify_main`이다. Command 이름,
+`--root`와 기본값, JSON stdout 및 exit 의미는 existing external CLI surface다.
+
+`assurance_cli.py`만 offline acceptance에 필요한 concrete Source Registry, Catalog, Metadata와 Query
+adapter를 조립한다. 두 command는 지정한 root의 static filesystem configuration만 읽으며 Runtime
+authority selector나 Control DB를 사용하지 않는다. Static RLS manifest는 registry load에서 먼저
+거부되고 CLI는 tenant ID를 추가하지 않는다. Verify의 accepted SQL은 `QueryService`를 통과한다.
+Production server 조립이나 Control candidate staging을 이 entrypoint로 옮기지 않는다.
+
+### Current `LAUNCH-01-A` acceptance
+
+| 범위 | 현재 필요한 acceptance |
+|---|---|
+| Static dataset | `development-issues`, `market-voc`와 9개 verified query가 SQL policy v3에서 기존 metadata revision/result hash 그대로 통과 |
+| Reader compatibility | PostgreSQL 18 + server/client UTF-8 positive, PG17/19·SQL_ASCII·non-UTF8 client/codec negative; no-SQL, pre-BEGIN, mismatch discard와 no-stale |
+| Final result | OID `20, 21, 23, 25, 1082, 1184, 1700` 각각의 nonempty/zero-row positive; bool, JSON, bytea, float, array, record와 그 밖의 final OID는 first fetch 전 negative; base-OID로 평탄화되는 scalar domain은 bootstrap/offline Catalog publication 전 negative이고 managed default 보존도 확인 |
+| RLS | Bootstrap manifest는 `RegistryConfigurationError`, injected registry는 composition 실패, managed publish/rotate는 `400 SOURCE_VALIDATION_FAILED`, cold record는 `RUNTIME_VALIDATION_REJECTED`, direct QueryService/executor 우회는 details 없는 `503 QUERY_UNAVAILABLE`; serving success case 없음 |
+| External parity | Unsupported result와 RLS quarantine가 details 없는 `503 QUERY_UNAVAILABLE`로 HTTP/MCP에서 동일하고 sensitive driver/source detail을 노출하지 않음 |
+| Artifact/container | Compose health가 exact `{"status":"ready"}`, upstream image tag+digest pin과 application VCS revision label을 검증 |
+
+SQL policy v3 identity는 ADR 0025의 exact seven-OID와 reader compatibility material이다. 기존 policy
+token 거부, duplicate-column 우선순위, no-fetch/rollback/pool recovery도 provider test와 cross-module
+acceptance를 함께 통과해야 한다.
+
+Assurance `query-man-evaluate`와 `query-man-verify`는 static-launch Catalog guard를 명시적으로
+조립한다. Domain `type_kind`는 SQL policy material, metadata snapshot/revision이나 expected result
+hash에 넣지 않으며 v3 digest `sha256:2e94db36095f11f2e9cc4e804666598f79a2ee956002ffa60dbe26bc6ee81388`을
+보존한다.
+
+### Evidence and historical acceptance
+
+[`docs/verification`](../../verification/README.md)의 각 문서는 당시 commit, fixture와 command 범위만
+증명하는 immutable evidence다. 과거 record를 현재 의미에 맞춰 수정·삭제하지 않고 정정은 새
+provenance record로 append한다. `Complete`도 이후 commit이나 다른 환경을 자동으로 증명하지 않는다.
+
+Managed onboarding, CTRL-08 usage projection, CTRL-09 Control recovery, multi-replica soak와 RLS drift
+finding의 artifact는 역사적 acceptance/finding으로 보존한다. 이들은 static first launch에서
+Control Plane이나 multi-replica serving을 활성화하지 않으며, 현재 RLS success evidence도 아니다.
+
+Repository acceptance가 완료돼도 [LAUNCH-02](../../development-todo.md)의 protected inventory,
+TLS/secrets/backups, target access, route, stop condition과 change-record 실행은 증명하지 않는다.
+Protected action은 [operations runbook](../../operations.md)에 따라 별도 승인을 받은 후에만 실행하고
+그때 새 evidence를 append한다.
 
 ### Metadata quality evaluation criteria
 
@@ -213,190 +169,96 @@ ADR 0020 `ENC-01` exact 승인 및 `ENC-02` cumulative provider baseline 뒤 `RL
 - Optional answerability status는 exact value로 비교한다.
 - Context bytes는 compact UTF-8 JSON response 전체 크기다.
 - Relation accuracy, answerability recall과 maximum context bytes가 versioned gate를 만족해야 한다.
-- 실패하면 성공처럼 출력하지 않고 non-zero CLI exit와 bounded failure report를 제공한다.
+- 실패는 non-zero CLI exit와 bounded report이며 success로 출력하지 않는다.
 
-이 결과는 metadata retrieval 회귀 증거이지 production query correctness 전체나 latency SLO가 아니다.
-
-### Offline CLI surface and composition boundary
-
-`query-man-evaluate`와 `query-man-verify`의 console-script target은 각각
-`query_man.assurance_cli:evaluate_main`과 `query_man.assurance_cli:verify_main`이다. 외부 command 이름,
-`--root` 인자와 기본값, JSON stdout, exit 의미는 기존 CLI surface를 유지한다.
-
-두 entrypoint는 runtime authority selector나 Control DB를 사용하지 않고 지정한 root의 `.env`,
-`config/sources`, budget, quality와 verified file만 읽는 bootstrap-only workflow다. Evaluate는 catalog를,
-verify는 executor와 catalog를 기존 순서로 정리한다. Verify는 `VerifiedQueryRegistry.verify_all`에
-`QueryService`를 넘겨 모든 SQL이 Guarded Query validation/execution path를 지나게 하며 tenant ID를
-추가하지 않는다.
-
-### Verified-revision membership interface
-
-Assurance는 Metadata가 소유한 inbound shape인
-`source_id -> immutable metadata revision set`에 맞는 값을 제공한다. Runtime composition과
-Control Plane이 이를 L2 판단 입력으로 주입한다. Membership은 exact revision에 묶이며 다른
-revision으로 자동 승계하지 않는다. Bootstrap mode는 filesystem verified dataset만 load하고,
-managed mode는 empty map에서 시작해 Control DB verified projection만 반영한다. 두 authority를
-합치거나 managed failure 때 filesystem으로 fallback하지 않는다.
-Control Plane은 public administration input을 Assurance의 Verified DTO로 변환하고 그 DTO/hash를
-소비해 immutable verified-query artifact를 publish한다. Delivery는 Assurance DTO를 직접 만들지 않으며 Assurance
-core는 Control DB implementation을 import하지 않는다.
-Global revision 전환은 bootstrap fixture 전체와 managed current/rollback-preserved membership 전체를
-inventory해 재실행한다. 이전 revision membership을 삭제하거나 새 revision으로 자동 승계하지 않는다.
-
-### Usage projection acceptance scope (`CTRL-08`)
-
-Assurance는 Control Plane/Runtime/Delivery가 승인된 CTRL-08 interface/API/policy를 함께 만족하는지 검증하되 public
-status를 다시 계산하는 production helper나 별도 DTO를 소유하지 않는다. Acceptance는 migration 5
-upgrade/least privilege, current-generation success/failure fencing, fresh last-success 보존,
-`not_configured|pending|available|stale|unavailable`, exact freshness boundary, gateway live/current-cursor
-aggregate, inclusive 31일 cutoff와 최대 1,000행, missing-to-zero 금지와 response redaction을 포함한다.
-
-기존 admin/MCP/health response가 바뀌지 않는지와 code rollback이 migration ledger/table/data를
-보존하는지도 함께 확인한다. 이 evidence는 아래 CTRL-09 recovery fixture acceptance를 대신하지
-않는다.
-
-Lower-priority [proposed ADR 0021](../../decisions/0021-database-native-cost-attribution.md)의 COST
-acceptance가 승인·시작되면 Assurance는 sanitized source projection, reset/deallocation/lease/current-identity,
-bounded operator projection과 recovery의 cross-module acceptance만 소유한다. Collector status 계산,
-Control DTO/table과 monitoring credential lifecycle implementation은 Assurance 소유가 아니며 현재
-`TIME-03`/COST start gate 전에는 test fixture나 accepted baseline을 추가하지 않는다.
-
-별도 [proposed ADR 0023](../../decisions/0023-database-native-usage-spike-alert.md)의 COST-04 acceptance도
-base explicit-zero/accepted-sample/identity evidence와 exact approval 전에는 현재 acceptance scope가 아니다. 시작되면
-Assurance는 seven closed-bucket sample-count qualification과 whole-hour coverage를 주장하지 않는 한계,
-median/hysteresis/recovery/cooldown, multi-replica event dedup,
-migration 7/22-table recovery, 90일 pagination, operator-only polling과 no-notification/no-admission redaction을
-검증하되 alert evaluator/store/DTO를 복제하지 않는다.
-
-Lower-priority [proposed ADR 0022](../../decisions/0022-w3c-workflow-trace-context.md)의 TRACE
-acceptance도 exact approval과 provider baseline 전에는 현재 acceptance scope가 아니다. 시작되면 Assurance는 ASGI raw
-header occurrence/direct-ASGI whitespace corpus와 real Uvicorn/h11 wire OWS normalization parity,
-local anonymous/managed auth route, unknown-source trace absence, all-zero formatter omission,
-nested·parallel context isolation, multi-POST/revision retry, failed parallel MCP call→query mapping,
-cancel/disconnect와 실제 two-process/replica soak correlation을 cross-module로 검증한다. Production trace provider/parser/audit helper를 Assurance에 복제하지
-않고 shared test/fixture와 module 문서는 coordinating single-writer가 관리한다.
-
-### Control recovery acceptance scenario (`CTRL-09`)
-
-Assurance는 production schema나 Runtime 복구 의미를 다시 정의하지 않고 Control Plane과 Runtime의
-기존 persisted rules와 Runtime convergence semantics를 하나의 runnable scenario로 조립한다. 격리 PostgreSQL 18.4 Control DB의 custom archive를
-현재 18.6 fresh DB에 복원하고 migration runner를 두 번 적용한다. Restore 전후 비교 대상은
-migration ledger 1개, core authority 6개와 bounded operational projection 6개를 합친 13개 table의
-UTC/C canonical count와 SHA-256 fingerprint다.
-
-원래 key는 DB archive와 분리된 test input으로 재주입하고 모든 immutable generation decrypt,
-wrong-key 거부와 기존 mutation receipt exact replay를 확인한다. Source/verified directory가 없는
-managed mode에서 원래 stable replica ID 두 개가 새 incarnation으로 `available`, `drift=[]`에
-수렴하고 양쪽 metadata/guarded verified query가 같아야 한다. 31일 밖 under-cap rollup은 DB에
-남지만 `/usage`에는 보이지 않아야 한다. Test 전용 recovery service, archive, finite writer LOGIN,
-database와 connection은 성공·실패와 무관하게 정리한다.
-
-이 acceptance는 actual production backup age/RPO, archive storage access, secret-manager provider,
-TLS/IAM, source business DB recovery나 60분 RTO 측정이 아니다. 이를 test fixture 결과로 대체하지
-않는다. Key rotation/versioning, physical age deletion이나 supported PostgreSQL major 범위를 바꾸지
-않는다.
+이 결과는 retrieval regression evidence이지 production query correctness 전체나 latency SLO가 아니다.
 
 ## 소비 인터페이스와 전제
 
-- [Source Catalog](../source-catalog/README.md)의 `SourceReader`로 얻는 recursively immutable known
-  source와 semantic definition
-- [Metadata](../metadata/README.md)의 plain JSON context, immutable published snapshot/revision과
-  L0/L1/L2 gate semantics
-- [Guarded Query](../guarded-query/README.md)의 SQL policy, guarded execution과 canonical result encoding
+- [Source Catalog](../source-catalog/README.md)의 immutable `SourceReader`와 reader compatibility verifier
+- [Metadata](../metadata/README.md)의 published snapshot/revision, context와 quality-level semantics
+- [Guarded Query](../guarded-query/README.md)의 SQL policy descriptor, guarded execution, final-OID gate와
+  canonical result encoding
 
-Assurance는 Delivery transport나 Control DB concrete adapter를 통해 검증 규칙을 우회하지 않는다.
+Assurance offline CLI만 concrete adapters를 조립한다. Assurance core는 Delivery transport나 Control DB
+private implementation을 통해 validation, authorization 또는 Guarded Query safety path를 우회하지 않는다.
 
 ## 불변조건
 
-- Verified-query artifact는 exact metadata revision과 relation set에 묶인다.
-- Source/metadata Python collection representation 전환만으로 metadata revision, canonical result
-  encoding 또는 verified result hash를 바꾸지 않는다.
-- Truncated result, changed column order, row count 또는 hash는 verification 성공이 아니다.
-- Expected output을 live result에서 자동 갱신하거나 승인하지 않는다.
+- Verified artifact는 exact metadata revision과 exact relation set에 묶인다.
+- Truncated result, changed column order, row count 또는 hash는 verification success가 아니다.
+- Existing expected output, immutable record와 evidence를 자동 수정·삭제하지 않는다.
 - Quality/verified config의 unknown version/field/source와 duplicate ID를 fail-closed한다.
-- Verification SQL은 현재 Guarded Query policy, budget과 reader safety를 그대로 통과한다. Standalone
-  `query-man-verify`는 tenant ID를 공급하지 않으므로 RLS source를 fail-closed한다. Authenticated
-  operator tenant를 전달하는 Control verified-publish path와 지원 범위를 혼동하지 않는다.
-- Question, SQL과 expected business values를 일반 runtime log에 노출하지 않는다.
-- Quality fixture를 source별 production Python branch로 바꾸지 않는다.
-- Concrete source/catalog/metadata/query 조립을 `assurance_cli.py` 밖의 Assurance core로 되돌리지
-  않는다.
+- Static 9-query dataset과 managed verified projection을 merge하거나 서로 fallback하지 않는다.
+- Verification SQL은 현재 SQL policy, budget, reader compatibility와 final-OID gate를 그대로 통과한다.
+- RLS source와 unsupported final OID에는 successful verification path가 없다.
+- Question, SQL, expected business value와 driver/database detail을 일반 runtime log에 노출하지 않는다.
+- Concrete acceptance composition은 `assurance_cli.py`, Control candidate staging과 Runtime production
+  composition의 소유 경계를 침범하지 않는다.
+- Repository acceptance를 protected deployment evidence로 표현하지 않는다.
 
 ## 모듈 내부 변경
 
-다음은 config schema, 계산식과 pass/fail 결과를 보존할 때 독립적으로 변경할 수 있다.
+다음은 interface, artifact/CLI format, hash identity와 pass/fail 의미를 보존할 때 독립적으로 바꿀 수 있다.
 
 - Report formatting과 CLI orchestration 정리
 - 같은 comparison을 만드는 loop/helper 개선
 - 동일 membership을 만드는 registry lookup/data structure 개선
-- Hash input/serialization을 바꾸지 않는 hashing helper 정리
+- Hash input과 serialization을 바꾸지 않는 hashing helper 정리
+- Acceptance test 내부 fixture 정리와 중복 제거
 
 ## 사용자 승인이 필요한 경계 변경
 
-아래 목록에는 module interface, artifact/CLI format, compatibility identity와 acceptance policy가 함께
-있다. 승인 요청은 실제 변경 범주를 명시하며 목록 전체를 하나의 module interface로 취급하지
-않는다. 이 용어 정리는 기존 승인 범위를 줄이지 않는다.
+다음은 각 실제 범주를 명시해 별도 승인받는다. 목록 전체를 module interface 변경이라고 부르지 않는다.
 
-- Quality 또는 verified configuration schema/version/default 변경
-- Versioned quality/verified case를 추가·보강해 acceptance gate, expected result 또는
-  verified revision membership을 바꾸는 변경
-- Expected relation ordering, answerability, accuracy/recall/context-byte 계산이나 threshold 의미 변경
-- Verified query의 revision/relation/truncation/column/row-count matching 의미 변경
-- Result hash algorithm, payload, canonical JSON 또는 prefix 변경
-- Guarded Query result scalar encoding에 따른 existing hash migration
-- Verified revision membership 또는 bootstrap/managed authority의 mutual exclusion, filesystem
-  non-read/fallback 변경
-- L0/L1/L2 criteria 또는 publishable comparison 변경
-- Expected result 자동 생성/승인과 QueryService 우회 경로 추가
-- CLI success/failure exit와 report format 변경
+- `ExpectedResult`, `VerifiedQuery`, membership/hash capability의 Python shape나 오류 의미 변경
+- Quality/verified configuration schema, version, default와 managed persisted identity 변경
+- Expected relation, answerability, context-byte, revision, truncation, column/row/hash matching 의미 변경
+- Result hash payload, canonical JSON, scalar encoding, prefix 또는 SQL policy identity 변경
+- Static/managed authority의 mutual exclusion, filesystem non-read/fallback 의미 변경
+- L0/L1/L2 criteria, acceptance case/threshold 또는 verified membership 변경
+- CLI command, argument, JSON output나 success/failure exit 의미 변경
+- RLS serving, broader final OID, managed launch, multi-replica topology나 protected procedure 추가
 
-승인 요청에는 Metadata, Guarded Query와 Control Plane 영향, existing verified data migration 및
-acceptance evidence 갱신 계획을 포함한다.
+승인안은 provider/consumer와 external/persisted/policy/operational 영향을 분리하고 compatibility,
+migration, rollback, security와 검증 계획을 함께 제시한다. Protected environment의 실제 실행은
+repository 의미 승인과 별개의 operational authorization이다.
 
 ## 검증
 
-최소 focused gate:
+Assurance focused gate:
 
 ```text
-uv run pytest tests/test_registry.py tests/test_quality.py tests/test_verified.py \
-  tests/test_assurance_cli.py tests/test_quality_level.py tests/test_result_encoding.py \
-  tests/test_onboarding_skill.py tests/test_text_to_sql_skill.py
+uv run pytest tests/test_quality.py tests/test_verified.py tests/test_assurance_cli.py \
+  tests/test_reader_policy.py tests/test_result_encoding.py
 ```
 
-Control recovery fixture는 격리된 두 PostgreSQL service가 필요하므로 별도 integration gate로
-실행한다.
+Current launch cross-module gate:
 
 ```text
-uv run pytest -m integration tests/test_control_recovery.py
-uv run pytest -m integration tests/test_source_database_corners.py
-```
-
-Configured live sources가 필요한 acceptance는 별도로 실행한다.
-
-```text
+uv run pytest tests/test_registry.py tests/test_catalog.py tests/test_query.py \
+  tests/test_http.py tests/test_mcp.py tests/test_managed_mode.py
+uv run pytest -m integration tests/test_integration.py tests/test_source_database_corners.py
+docker compose config --quiet
+./scripts/verify-container.sh
 uv run query-man-evaluate
 uv run query-man-verify
 ```
 
-Control publish/L2 경계를 바꾸면 source-admin tests를, live database verification 경계를 바꾸면
-`uv run pytest -m integration`도 실행한다. 완료 전 root `AGENTS.md`의 전체 gate를 실행한다.
-Control public input에서 Verified DTO로 가는 mapping을 바꾸면 `tests/test_source_admin.py`도 함께
-실행한다.
+이는 실행해야 할 범위이며 이 문서 자체가 통과 evidence는 아니다. 완료 전 root `AGENTS.md`의
+`ruff`, `mypy`, full pytest와 DB integration gate를 실행하고, 실제 결과는 새 verification record에
+commit·fixture·command 범위와 함께 남긴다.
 
 ## 집중해서 읽을 범위
 
 Assurance 작업은 기본적으로 다음만 읽는다.
 
-1. 이 문서와 [module index](../README.md)
-2. 변경 대상 quality/verified core 또는 Assurance CLI composition code, config와 focused tests
-3. Metadata context/quality interface와 Guarded Query result format/hash identity
-4. [ADR 0006](../../decisions/0006-mcp-transport-and-workflow.md),
-   [ADR 0007](../../decisions/0007-immutable-metadata-publishing.md),
-   [ADR 0011](../../decisions/0011-metadata-quality-level-publish-gate.md)과
-   [ADR 0013](../../decisions/0013-control-plane-verified-query-publishing.md) 중 변경과 직접 관련된 결정
-5. Persistence를 바꾸거나 recovery acceptance를 조립하는 경우 Control Plane persisted rules와
-   Runtime lifecycle 및
-   [disaster recovery runbook](../../disaster-recovery.md)
+1. 이 문서와 [module index](../README.md), [ADR 0025](../../decisions/0025-static-non-rls-first-launch.md)
+2. 변경 대상 quality/verified core, offline CLI, versioned config와 focused tests
+3. Metadata revision/quality interface와 Guarded Query SQL policy, final-OID/hash identity
+4. Launch acceptance를 바꾸는 경우 Runtime container/Delivery external surface와 직접 관련된 tests
+5. Evidence를 추가할 때 [verification index](../../verification/README.md)와 대상 command의 실제 output
+6. Managed recovery fixture를 바꿀 때만 Control Plane persisted rules와 Runtime lifecycle
 
-HTTP/MCP middleware, source store transaction과 query pool 내부는 위 interface나 경계 의미를
-바꾸지 않는 한 읽을 필요가 없다.
+Provider implementation 내부, protected environment나 parked RLS/encoding/COST/TRACE research는 현재
+변경이 그 경계를 실제로 건드리지 않는 한 읽을 필요가 없다.

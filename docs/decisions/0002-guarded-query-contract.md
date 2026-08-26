@@ -1,8 +1,12 @@
 # ADR 0002: Guarded Query External Behavior And Safety
 
-Status: Accepted
+Status: Accepted; result success domain partially superseded by ADR 0025
 
 Date: 2026-08-22
+
+[ADR 0025](0025-static-non-rls-first-launch.md)는 첫 launch의 final result를 PostgreSQL 18의
+exact 7개 OID로 제한한다. 이 문서의 wire field, byte/hash 형식, limit, cancel/rollback과 error
+envelope는 유지되지만 그 밖의 scalar가 성공할 수 있다는 설명은 launch serving authority가 아니다.
 
 ## Context
 

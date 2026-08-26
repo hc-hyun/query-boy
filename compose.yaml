@@ -2,7 +2,7 @@ name: query-man
 
 services:
   postgres:
-    image: postgres:18.6-bookworm
+    image: postgres:18.6-bookworm@sha256:1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af
     container_name: query-man-postgres
     restart: unless-stopped
     environment:
@@ -36,7 +36,7 @@ services:
     stop_grace_period: 30s
 
   postgres-control-recovery-source:
-    image: postgres:18.4-bookworm
+    image: postgres:18.4-bookworm@sha256:882236b897e39051d2368c5ccc6cda944904723506b2dfc97f2a8f5bc9afa382
     profiles: [recovery]
     environment:
       POSTGRES_DB: postgres
@@ -91,8 +91,9 @@ services:
         - python
         - -c
         - >-
-          import urllib.request;
-          urllib.request.urlopen('http://127.0.0.1:3000/ready', timeout=2)
+          import sys, urllib.request;
+          payload = urllib.request.urlopen('http://127.0.0.1:3000/ready', timeout=2).read();
+          sys.exit(0 if payload == b'{"status":"ready"}' else 1)
       interval: 5s
       timeout: 3s
       retries: 12

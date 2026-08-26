@@ -6,6 +6,10 @@ Date: 2026-08-25
 
 Repository implementation: Complete — production cutover remains an environment-specific change
 
+[ADR 0025](0025-static-non-rls-first-launch.md)의 SQL policy v3는 이 문서의 v2와 canonical-time
+material을 그대로 보존하면서 reader compatibility와 result OID gate만 누적한다. Metadata revision과
+verified result hash는 ADR 0025에서 다시 바꾸지 않는다.
+
 ## Context
 
 PostgreSQL `timestamptz`는 같은 instant도 reader session `TimeZone`에 따라 다른 offset의

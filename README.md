@@ -2,6 +2,14 @@
 
 PostgreSQL 데이터 소스를 안전하게 조회하기 위한 Text-to-SQL gateway 프로젝트입니다.
 
+현재 운영 기준선은 [ADR 0025](docs/decisions/0025-static-non-rls-first-launch.md)의
+`LAUNCH-01-A`입니다. 첫 오픈은 repository가 검토한 `development-issues`, `market-voc` 두
+non-RLS source를 `bootstrap` authority와 단일 Query Man replica로 제공합니다. PostgreSQL 18,
+server/client UTF-8과 고정된 7개 final result OID만 허용합니다. RLS, 신규 database, managed hot
+onboarding, 두 번째 replica와 더 넓은 result type은 이 launch에 포함되지 않습니다. 실제 대상
+환경의 TLS, secret, backup, artifact digest와 route 전환은
+[operations](docs/operations.md)의 별도 승인 절차가 필요합니다.
+
 ## Local Compose Runtime
 
 로컬 runtime은 PostgreSQL 18.6과 Query Man HTTP/MCP application을 Compose로 함께
@@ -24,8 +32,9 @@ docker compose exec postgres \
 ```
 
 기본 Compose는 `QUERY_MAN_SOURCE_MODE=bootstrap`으로 repository source와 verified-query
-fixture를 읽습니다. 생성되는 database는 bootstrap source인 `development_issues`, `market_voc`와 no-deploy
-onboarding acceptance용 `support_tickets`, `commerce_edges`입니다. 각 source의 AI reader
+fixture를 읽습니다. Launch inventory는 `development_issues`, `market_voc` 두 database뿐입니다.
+Compose가 함께 만드는 `support_tickets`, `commerce_edges`는 onboarding/integration acceptance
+fixture이며 serving inventory가 아닙니다. 각 launch source의 AI reader
 접속 정보는 `.env`에 있고, reader는 해당 database의 `ai` schema view만 조회할 수 있습니다.
 
 PostgreSQL은 `127.0.0.1:${POSTGRES_PORT:-5432}`, Query Man은
@@ -47,8 +56,9 @@ docker compose down
 [docs/implementation-roadmap.md](docs/implementation-roadmap.md), 현재 우선순위 TODO는
 [docs/development-todo.md](docs/development-todo.md)를 참고합니다. Module 단위로 작업할 때는
 [module boundaries](docs/modules/README.md)에서 owner, interface·별도 경계와 집중해서 읽을 범위를 먼저 확인합니다.
-승인된 module boundary 강화 선택지와 아직 완료되지 않은 구현 상태는
-[module boundary decision guide](docs/module-boundary-decision-guide.md)와 active TODO에서 추적합니다.
+승인된 module boundary 선택의 완료 기록은
+[module boundary decision guide](docs/module-boundary-decision-guide.md), 아직 끝나지 않은 작업은 active
+TODO에서 추적합니다.
 과거 실행 증거는 [verification evidence index](docs/verification/README.md)에서 전체 목록을
 확인합니다. 각 기록은 적힌 scope의 실행 시점만 증명하며 현재 전체 상태를 자동으로 증명하지
 않습니다.
@@ -115,13 +125,14 @@ Admin capability가 있는 caller는 audit log에 기록된 실행 중 `query_id
 
 Client는 DSN, host, database 또는 role을 전달할 수 없습니다. Runtime은
 `QUERY_MAN_SOURCE_MODE=bootstrap|managed`로 source authority를 시작할 때 한 번만 선택합니다.
-기본값 `bootstrap`은 local/CI에서 [`config/sources`](config/sources)와 filesystem verified-query data를
-읽고 Control DB 설정을 거부합니다. `managed`는 `QUERY_MAN_CONTROL_DSN`,
+현재 static launch의 `bootstrap`은 [`config/sources`](config/sources)와 filesystem verified-query data를
+읽고 Control DB 설정을 거부합니다. Inventory 변경은 hot onboarding이 아니라 review와 재배포가
+필요합니다. 구현이 보존된 `managed` mode는 `QUERY_MAN_CONTROL_DSN`,
 `QUERY_MAN_SOURCE_ENCRYPTION_KEY`와 stable `QUERY_MAN_REPLICA_ID`를 모두 요구하며
 source/verified file을 열거나 합치지 않습니다.
 Budget profile과 access policy는 두 mode 모두 versioned deployment configuration에 남습니다.
 Mode 자동 선택, source별 혼합과 Control DB 장애 시 filesystem fallback은 없습니다.
-Production hot-added source의 authority와 관리 목표는
+향후 동적 source 운영을 별도로 승인할 때의 authority와 관리 목표는
 [`docs/source-management-plane.md`](docs/source-management-plane.md)를 따릅니다.
 Column, type과 database comment는 reader 권한으로 `pg_catalog`에서 자동 수집하고,
 grain, 한국어 alias, 승인된 join, 검증된 measure와 business predicate만 manifest의
@@ -134,7 +145,7 @@ source별 grant를 두지 않습니다. Policy는 caller/tenant ID, token 환경
 `operator` admin capability만 저장합니다. `allowed_sources`, `all_sources`와 version 1 policy는
 권한을 자동 확대하지 않고 startup에서 거부합니다.
 
-Production `managed` mode는 policy file에 최소 한 개의 non-admin query identity와 explicit
+별도로 활성화하는 `managed` mode는 policy file에 최소 한 개의 non-admin query identity와 explicit
 operator admin identity를 모두 요구합니다. 단일 API token과 anonymous local caller는 managed에서
 금지됩니다. `operator`는 query 권한에 admin API와 cancel 권한을 추가하는 boolean capability이며
 별도 viewer/approver 역할 계층은 없습니다. 형식은
@@ -207,7 +218,12 @@ uv run pytest -m soak -s
 [`docs/verified-queries.md`](docs/verified-queries.md)의 revision·relation·SQL·result baseline에 따라
 `uv run query-man-verify`로 검증합니다.
 
-Production managed runtime을 준비하려면 database owner/관리자용 표준 libpq 환경에서
+Final result는 PostgreSQL base OID `20` (`int8`), `21` (`int2`), `23` (`int4`), `25`
+(`text`), `1082` (`date`), `1184` (`timestamptz`), `1700` (`numeric`)만 성공합니다. Boolean은
+predicate나 중간 계산에는 쓸 수 있지만 final column으로 반환할 수 없습니다. 그 밖의 type은 첫
+row fetch 전에 details 없는 `503 QUERY_UNAVAILABLE`로 닫힙니다.
+
+Dynamic managed runtime을 별도로 활성화할 때는 database owner/관리자용 표준 libpq 환경에서
 `scripts/apply-control-schema.sh`를 실행하고, 별도로 생성한 최소 권한 LOGIN에
 `query_man_control_writer` membership을 부여합니다. `scripts/apply-db.sh`는 네 fixture
 database·role·seed를 만드는 local/CI bootstrap이며 production migration이 아닙니다. Runtime은

@@ -1,8 +1,8 @@
 # Source Management Plane
 
-Status: Baseline complete; deferred extensions
+Status: Managed capability preserved; outside ADR 0025 static first launch
 
-Last updated: 2026-08-25
+Last updated: 2026-08-26
 
 ## Purpose
 
@@ -15,6 +15,12 @@ DB가 늘어나도 운영자가 한곳에서 source 정의, 적용 상태, 담�
 [ADR 0017](decisions/0017-shared-source-access-and-resource-tier.md)이 초기 access와 resource
 tier를 정한다. 이 문서는 완료된 `CTRL-*` baseline과 명시적으로 미룬 확장을 구분하며 아직 없는
 API나 table을 현재 기능처럼 안내하지 않는다.
+
+[ADR 0025](decisions/0025-static-non-rls-first-launch.md)의 현재 launch는 Control DB, admin mutation,
+hot reload를 조립하지 않는다. Reviewed 두 source는 bootstrap authority로 고정한다. 이 문서는
+삭제되지 않은 managed capability의 후속 활성화·운영 reference이며 현재 serving topology를
+설명하는 문서가 아니다. RLS source는 managed publish/rotate에서 validation 실패하고 cold stored
+record도 runtime registry로 projection되지 않는다.
 
 ## Initial Operating Model
 
@@ -78,7 +84,7 @@ API나 table을 현재 기능처럼 안내하지 않는다.
 | Raw metrics/provider bill | External system when configured | Bounded rollup/provenance만 연결 |
 | Unified sanitized projection | Admin management API | 실제 authority를 대체하지 않음 |
 
-Production managed mode는 source별 repository file을 요구하지 않는다. Managed runtime은 모든
+Managed mode는 source별 repository file을 요구하지 않는다. Managed runtime은 모든
 source와 verified-query records를 Control DB에서만 읽으므로 lifecycle row가 없는 file source도
 absent다. Deactivate와 rollback을 포함한 Control DB state가 restart 뒤 그대로 복원되고 file은
 source를 다시 활성화하거나 L2 gate를 충족하지 못한다.
@@ -230,9 +236,10 @@ endpoint와 cancel에서 거부한다. Version 2 policy에는 source scope가 �
 token과 anonymous local identity를 거부한다. 새 role enum, role-binding table, source scope와
 bootstrap marker는 만들지 않는다.
 
-Source-native RLS가 필요한 source는 ADR 0014의 trusted `tenant_id`를 계속 사용한다. 이는 모든
-사용자가 같은 source를 보고 같은 resource tier를 쓴다는 결정과 독립된 row-isolation 경계다.
-Control Plane이 user/organization별 RLS policy를 관리한다는 뜻은 아니다.
+RLS source의 historical shape와 Control row는 보존하지만 현재 publish/rotate는
+`SOURCE_VALIDATION_FAILED`, cold stored record는 `RUNTIME_VALIDATION_REJECTED`로 끝나며 registry에
+projection하지 않는다. Control Plane이 user/organization별 RLS policy를 관리하지도, 작은 예외로
+serving을 다시 열지도 않는다.
 
 ## Current Management Operations
 

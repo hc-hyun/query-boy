@@ -29,8 +29,12 @@ Read only the additional material needed by the request:
 - [shared source access and tier decision](../../docs/decisions/0017-shared-source-access-and-resource-tier.md)
   when the request mentions users, organizations, grants, quota, or tier overrides.
 
-Repository source and onboarding YAML are bootstrap/acceptance fixtures, not production desired state.
-Do not offer to copy a production source into them.
+For the current static launch, `config/sources` is the reviewed authority for exactly
+`development-issues` and `market-voc`; `config/onboarding` remains an acceptance fixture. This plan-only
+Skill never edits either directory. A new source or database must stop at an inventory-review and redeploy
+proposal until the user approves that exact launch-scope change. Only a separately approved managed-mode
+activation may use the Control DB publish and hot-reload handoff; do not silently route a static request into
+that preserved workflow.
 
 ## Handle Inputs Safely
 
@@ -69,10 +73,16 @@ accepted as non-instructional business metadata.
    budget profile. Do not ask which individual user should receive access.
 7. Separate optional resource-observation targets from the query relation allowlist. Missing observability is
    an explicit choice, not a reason to run `COUNT(*)`.
-8. Hand off staged L0/L1/L2 review, admin publish, verification, receipt reconciliation, replica convergence,
-   and rollback as actions for authorized humans. Do not perform them.
+8. For the current static launch, hand off inventory review, explicit user approval, repository review,
+   traffic-off acceptance, redeploy and rollback planning. Only when managed-mode activation is already
+   separately approved may the handoff instead include staged L0/L1/L2 publish, receipt reconciliation and
+   replica convergence. Do not perform either path.
 9. Return every section in [plan format](references/plan-format.md), including `mutation_count: 0` and clear
    stop conditions.
+
+Any `tenant_isolation=rls` source or RLS-dependent view remains stopped on both paths. Inventory or managed-mode
+approval is not RLS-serving approval; that requires the separate RLS attestation, migration and cutover
+decision tracked by the current TODO.
 
 Never include credential values, complete DSNs, provider secret paths, arbitrary SQL text, raw database errors,
 or a statement that an unperformed check passed. Non-secret host/database/user identifiers may remain as

@@ -1,8 +1,12 @@
 # ADR 0016: Centralized Source Management Plane
 
-Status: Accepted
+Status: Accepted; static first-launch exception added by ADR 0025
 
 Date: 2026-08-23
+
+[ADR 0025](0025-static-non-rls-first-launch.md)는 reviewed 두 source의 단일-replica static launch에만
+bootstrap authority를 허용한다. 동적 source 추가, Control DB lifecycle, multi-replica convergence와
+managed production의 이 문서 의미는 바뀌지 않는다.
 
 ## Context
 

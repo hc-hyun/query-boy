@@ -1,5 +1,12 @@
 # Control-Plane Backup And Disaster Recovery
 
+Status: Managed recovery runbook; ADR 0025 static launch uses the operations rollback path
+
+현재 static launch는 Control DB를 authority로 사용하지 않는다. 두 reviewed source, pinned artifact와
+repository configuration의 stop/cutover/rollback은 [operations](operations.md)의
+`LAUNCH-01-A` 절차를 따른다. 이 문서는 구현이 보존된 managed mode를 별도로 활성화할 때만
+적용하며, local recovery fixture가 protected environment의 backup/TLS/route 증거를 대신하지 않는다.
+
 ## Scope And Targets
 
 Control plane의 migration ledger, source profile generations, encrypted credentials, metadata
@@ -7,7 +14,7 @@ snapshots, verified-query records, immutable mutation receipts, runtime replica 
 resource current/previous와 latest attempt/last-success, gateway usage rollup/cursor가 대상이다.
 Observation table은 source authority나 완전한 billing ledger가 아니라 bounded operational projection을
 복원한다. Source business database backup은 각 source owner의 별도 정책을 따른다. Repository
-source/verified file은 local/CI bootstrap fixture이며 managed production desired-state backup이나 recovery
+source/verified file은 static launch authority이며 managed desired-state backup이나 recovery
 authority가 아니다.
 
 - 목표 RPO: control schema backup 주기 이하, production 권장 24시간 이내

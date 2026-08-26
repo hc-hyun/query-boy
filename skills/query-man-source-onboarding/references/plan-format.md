@@ -38,17 +38,25 @@ DDL, arbitrary SQL text, role passwords, or secret-manager commands.
 
 ## 5. Query Man Admin Handoff
 
-Assign source-ID collision and endpoint-rebinding checks, strict manifest-v2 preparation, existing-profile
-selection, external credential transfer, staged publish, terminal receipt reconciliation, generation/state
-recording, replica convergence, and rollback readiness to an authorized administrator. Show a credential
-placeholder only; do not show or request a value. Production authority is the Control DB, not Git YAML.
+Name the authority path explicitly.
+
+- Current static launch: `config/sources` is the reviewed authority for exactly `development-issues` and
+  `market-voc`. A new source stops for inventory review, exact user approval, repository review, traffic-off
+  acceptance, redeploy and rollback planning. This Skill does not edit the manifest.
+- Separately approved managed mode: the Control DB, not Git YAML, is authority. Only this branch assigns
+  strict manifest-v2 preparation, staged publish, terminal receipt reconciliation, generation/state recording
+  and replica convergence to an authorized administrator.
+
+Both branches assign source-ID collision, endpoint-rebinding, existing-profile, external credential transfer
+and rollback-readiness checks. Show a credential placeholder only; do not show or request a value.
 
 ## 6. Verification
 
-Cover staging reader-policy checks, L0 catalog scope, L1 semantics when needed, L2 reviewed result invariants
-when required, representative queries through both HTTP and MCP, exact metadata/policy revisions, hard-limit
-behavior, shared visibility, query/admin credential separation, replica convergence, and rollback evidence.
-List these as pending checks unless the requester supplied authoritative evidence.
+Cover traffic-off reader-policy checks, L0 catalog scope, L1 semantics when needed, L2 reviewed result
+invariants when required, representative queries through both HTTP and MCP, exact metadata/policy revisions,
+hard-limit behavior, shared visibility and rollback evidence. Add admin credential separation, staged publish
+and replica convergence only for the separately approved managed branch. List checks as pending unless the
+requester supplied authoritative evidence.
 
 ## 7. Observability
 
@@ -65,5 +73,10 @@ At minimum stop for secret-bearing planning input, source-ID collision or endpoi
 migration provenance, unresolved grain/join/fanout, reader-policy or TLS/RLS failure, insufficient connection
 capacity, no approved existing budget-profile fit, validation/quality/verified-result failure, receipt/state
 ambiguity, replica drift, or a request for user-specific access or automated mutation.
+
+For the static branch, also stop when the exact inventory change and redeploy have not been approved. For the
+managed branch, stop unless managed-mode activation itself is already approved.
+On both branches, `tenant_isolation=rls` or an RLS-dependent view remains stopped until a separate RLS-serving
+attestation, migration and cutover decision is approved; inventory or managed-mode approval is insufficient.
 
 End by naming the human owner for every stop condition and repeat `mutation_count: 0`.

@@ -341,8 +341,8 @@ class _SourceFile(_StrictModel):
         allowed = {"table", "partitioned_table", "view", "materialized_view"}
         if any(kind not in allowed for kind in self.allowed_relation_kinds):
             raise ValueError("invalid relation kind")
-        if self.tenant_isolation == "rls" and self.allowed_relation_kinds != ["view"]:
-            raise ValueError("RLS sources must expose security-invoker views only")
+        if self.tenant_isolation == "rls":
+            raise ValueError("RLS sources are not supported")
         return self
 
 

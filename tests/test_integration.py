@@ -63,9 +63,10 @@ _SESSION_BUDGET_SELECT = """
       AS temp_file_limit_kb,
     pg_catalog.current_setting('max_parallel_workers_per_gather')::integer
       AS max_parallel_workers_per_gather,
-    pg_catalog.current_setting('jit')::boolean AS jit_enabled,
+    pg_catalog.current_setting('jit')::pg_catalog.text AS jit_enabled,
     pg_catalog.current_setting('transaction_isolation') AS transaction_isolation,
-    pg_catalog.current_setting('transaction_read_only')::boolean AS transaction_read_only
+    pg_catalog.current_setting('transaction_read_only')::pg_catalog.text
+      AS transaction_read_only
 """
 
 
@@ -337,119 +338,50 @@ async def test_live_verified_queries_match_revision_relations_and_results() -> N
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_rls_tenant_context_is_transaction_local_across_pool_reuse() -> None:
-    load_dotenv(ROOT_DIRECTORY / ".env")
-    if not os.environ.get("DEVELOPMENT_ISSUES_READER_PASSWORD"):
-        pytest.skip("local reader credentials are not configured")
-    registry = SourceRegistry.load(
-        ROOT_DIRECTORY / "config" / "sources",
-        ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
-    )
-    development = registry.get("development-issues")
-    assert development is not None
-    source = replace(
-        development,
-        source_id="rls-tenant-fixture",
-        allowed_schemas=["tenant_ai"],
-        allowed_relation_kinds=["view"],
-        tenant_isolation="rls",
-        budget=replace(
-            development.budget,
-            max_pool_size=1,
-            max_concurrent_queries=1,
-        ),
-    )
-    catalog = PostgresCatalog()
+async def test_rls_source_is_quarantined_for_every_tenant_before_pool_access() -> None:
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+    source = replace(source, tenant_isolation="rls")
     executor = PostgresQueryExecutor()
-    sql_text = "SELECT record_id, label FROM tenant_ai.record_overview ORDER BY label"
-    validated = validate_sql(
-        sql_text,
-        allowed_relations=["tenant_ai.record_overview"],
-    )
+
+    pool_calls = 0
+
+    async def unexpected_pool(_source: SourceProfile) -> object:
+        nonlocal pool_calls
+        pool_calls += 1
+        raise AssertionError("RLS quarantine must precede database access")
+
+    executor._get_pool = unexpected_pool  # type: ignore[method-assign]
     try:
-        snapshot = await catalog.load(source)
-        assert [relation.qualified_name for relation in snapshot.relations] == [
-            "tenant_ai.record_overview"
-        ]
-        assert snapshot.relations[0].security_invoker is True
+        for tenant_id in (None, "engineering", "quality"):
+            with pytest.raises(QueryUnavailableError) as unavailable:
+                await executor.execute(
+                    source,
+                    "SELECT 1",
+                    "rls-test-revision",
+                    ValidatedSql("pg_query:rls-quarantine", (), (), ()),
+                    tenant_id=tenant_id,
+                )
 
-        with pytest.raises(QueryRejectedError) as missing:
-            await executor.execute(source, sql_text, "rls-test-revision", validated)
-        assert missing.value.details == {"reason_code": "TENANT_CONTEXT_REQUIRED"}
-
-        engineering = await executor.execute(
-            source,
-            sql_text,
-            "rls-test-revision",
-            validated,
-            tenant_id="engineering",
-        )
-        assert [row["label"] for row in engineering["rows"]] == [
-            "engineering-alpha",
-            "engineering-beta",
-        ]
-
-        without_context = await executor.execute(
-            replace(source, tenant_isolation="none"),
-            sql_text,
-            "rls-test-revision",
-            validated,
-        )
-        assert without_context["rows"] == []
-
-        quality = await executor.execute(
-            source,
-            sql_text,
-            "rls-test-revision",
-            validated,
-            tenant_id="quality",
-        )
-        assert [row["label"] for row in quality["rows"]] == ["quality-alpha"]
+            assert unavailable.value.status_code == 503
+            assert unavailable.value.code == "QUERY_UNAVAILABLE"
+            assert unavailable.value.details is None
+            assert unavailable.value.__cause__ is None
+        assert pool_calls == 0
+        assert executor._pools == {}
+        assert executor._semaphores == {}
+        assert executor._inflight == set()
     finally:
         await executor.close()
-        await catalog.close()
 
 
 @pytest.mark.integration
-@pytest.mark.asyncio
-async def test_cached_rls_reader_privilege_drift_fails_closed_over_http() -> None:
-    load_dotenv(ROOT_DIRECTORY / ".env")
-    required = [
-        "POSTGRES_USER",
-        "POSTGRES_PASSWORD",
-        "DEVELOPMENT_ISSUES_READER_PASSWORD",
-        "MARKET_VOC_READER_PASSWORD",
-    ]
-    if any(not os.environ.get(name) for name in required):
-        pytest.skip("local PostgreSQL administrator credentials are not configured")
-
-    base_registry = load_test_registry(os.environ)
-    development = base_registry.get("development-issues")
-    market = base_registry.get("market-voc")
-    assert development is not None
-    assert market is not None
-    source = replace(
-        development,
-        source_id="rls-reader-policy-fixture",
-        allowed_schemas=["tenant_ai"],
-        allowed_relation_kinds=["view"],
-        tenant_isolation="rls",
-        semantic_overlay=replace(
-            development.semantic_overlay,
-            default_relation=None,
-            relations=[],
-            joins=[],
-            business_terms=[],
-            question_rules=[],
-            composition_hints=[],
-        ),
-        budget=replace(
-            development.budget,
-            max_pool_size=1,
-            max_concurrent_queries=1,
-        ),
-    )
-    registry = SourceRegistry([development, market, source])
+def test_injected_rls_registry_is_rejected_before_app_provider_composition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+    registry = SourceRegistry([replace(source, tenant_isolation="rls")])
     runtime = RuntimeConfig(
         host="127.0.0.1",
         port=0,
@@ -462,121 +394,23 @@ async def test_cached_rls_reader_privilege_drift_fails_closed_over_http() -> Non
         metadata_max_stale_ms=300_000,
         metadata_retry_delay_ms=5_000,
     )
-    query_app = build_app(runtime, registry=registry)
-    metadata_app = build_app(
-        replace(runtime, metadata_cache_ttl_ms=0),
-        registry=registry,
-    )
-    admin = await AsyncConnection.connect(
-        make_conninfo(
-            host="127.0.0.1",
-            port=os.environ.get("POSTGRES_PORT", "5432"),
-            dbname="development_issues",
-            user=os.environ["POSTGRES_USER"],
-            password=os.environ["POSTGRES_PASSWORD"],
-            sslmode="disable",
-        )
-    )
-    safe_role_sql = (
-        "ALTER ROLE development_issues_reader "
-        "NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT "
-        "NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 7"
-    )
-    grant_temp_limit_sql = (
-        "GRANT SET ON PARAMETER temp_file_limit TO development_issues_reader"
-    )
-    context_request = {
-        "source_id": source.source_id,
-        "question": "tenant records",
-    }
-    try:
-        await admin.execute(safe_role_sql)
-        await admin.execute(grant_temp_limit_sql)
-        await admin.commit()
-        async with (
-            _serve_test_app(query_app) as query_url,
-            _serve_test_app(metadata_app) as metadata_url,
-            httpx.AsyncClient(base_url=query_url) as query_client,
-            httpx.AsyncClient(base_url=metadata_url) as metadata_client,
-        ):
-            query_context = await query_client.post("/meta", json=context_request)
-            metadata_context = await metadata_client.post("/meta", json=context_request)
-            assert query_context.status_code == 200, query_context.text
-            assert metadata_context.status_code == 200, metadata_context.text
-            revision = query_context.json()["metadata_revision"]
-            assert metadata_context.json()["metadata_revision"] == revision
-            policy_revision = query_context.json()["sql_policy_revision"]
-            assert metadata_context.json()["sql_policy_revision"] == policy_revision
+    provider_calls = 0
 
-            query_request = {
-                "source_id": source.source_id,
-                "sql": (
-                    "SELECT record_id, label "
-                    "FROM tenant_ai.record_overview ORDER BY label"
-                ),
-                "metadata_revision": revision,
-                "sql_policy_revision": policy_revision,
-            }
-            warm = await query_client.post("/query", json=query_request)
-            assert warm.status_code == 200, warm.text
-            assert warm.json()["rows"] == []
+    def unexpected_provider(*_args: object, **_kwargs: object) -> object:
+        nonlocal provider_calls
+        provider_calls += 1
+        raise AssertionError("RLS launch rejection must precede provider composition")
 
-            for unsafe_role_sql, restore_sql in (
-                (
-                    "ALTER ROLE development_issues_reader BYPASSRLS",
-                    (safe_role_sql,),
-                ),
-                (
-                    "ALTER ROLE development_issues_reader SUPERUSER",
-                    (safe_role_sql,),
-                ),
-                (
-                    "REVOKE SET ON PARAMETER temp_file_limit "
-                    "FROM development_issues_reader",
-                    (safe_role_sql, grant_temp_limit_sql),
-                ),
-            ):
-                try:
-                    await admin.execute(unsafe_role_sql)
-                    await admin.commit()
+    monkeypatch.setattr("query_man.app.PostgresCatalog", unexpected_provider)
+    monkeypatch.setattr("query_man.app.PostgresQueryExecutor", unexpected_provider)
 
-                    query_failure = await query_client.post("/query", json=query_request)
-                    assert query_failure.status_code == 503, query_failure.text
-                    assert query_failure.json() == {
-                        "error": {
-                            "code": "QUERY_UNAVAILABLE",
-                            "message": "The query could not be completed.",
-                        }
-                    }
+    with pytest.raises(
+        ValueError,
+        match="Runtime launch inventory does not accept RLS sources",
+    ):
+        build_app(runtime, registry=registry)
 
-                    metadata_failure = await metadata_client.post(
-                        "/meta",
-                        json=context_request,
-                    )
-                    assert metadata_failure.status_code == 503, metadata_failure.text
-                    assert metadata_failure.json() == {
-                        "error": {
-                            "code": "METADATA_UNAVAILABLE",
-                            "message": (
-                                "Metadata is temporarily unavailable for the requested source."
-                            ),
-                        }
-                    }
-                finally:
-                    await admin.rollback()
-                    for statement in restore_sql:
-                        await admin.execute(statement)
-                    await admin.commit()
-
-                recovered = await metadata_client.post("/meta", json=context_request)
-                assert recovered.status_code == 200, recovered.text
-                assert recovered.json()["metadata_revision"] == revision
-    finally:
-        await admin.rollback()
-        await admin.execute(safe_role_sql)
-        await admin.execute(grant_temp_limit_sql)
-        await admin.commit()
-        await admin.close()
+    assert provider_calls == 0
 
 
 @pytest.mark.integration
@@ -602,17 +436,17 @@ async def test_catalog_and_query_enforce_versioned_session_budget(
         "max_parallel_workers_per_gather": (
             source.budget.max_parallel_workers_per_gather
         ),
-        "jit_enabled": source.budget.jit_enabled,
+        "jit_enabled": "on" if source.budget.jit_enabled else "off",
         "transaction_isolation": "repeatable read",
-        "transaction_read_only": True,
+        "transaction_read_only": "on",
     }
     unsafe_settings = {
         "work_mem_kb": 32_768,
         "temp_file_limit_kb": 131_072,
         "max_parallel_workers_per_gather": 2,
-        "jit_enabled": True,
+        "jit_enabled": "on",
         "transaction_isolation": "read committed",
-        "transaction_read_only": True,
+        "transaction_read_only": "on",
     }
     admin = await AsyncConnection.connect(
         make_conninfo(
@@ -1140,6 +974,13 @@ async def test_onboards_commerce_edges_across_authenticated_mcp_replicas(
             / "commerce-edges-verified-query.yaml"
         ).read_text(encoding="utf-8")
     )
+    verified_contract["sql"] = verified_contract["sql"].replace(
+        'orders."OrderID" AS order_id',
+        'orders."OrderID"::pg_catalog.text AS order_id',
+    ).replace(
+        'orders."Attributes" AS attributes',
+        'orders."Attributes"::pg_catalog.text AS attributes',
+    )
     credential = os.environ.get(
         "COMMERCE_EDGES_READER_PASSWORD",
         "commerce-edges-local-secret",
@@ -1151,7 +992,7 @@ async def test_onboards_commerce_edges_across_authenticated_mcp_replicas(
             "promised_on": "2026-08-05",
             "discount_amount": None,
             "net_amount": "100.00",
-            "attributes": {"campaign": "summer", "gift": False},
+            "attributes": '{"gift": false, "campaign": "summer"}',
             "line_count": 2,
             "returned_line_count": 1,
         },
@@ -1161,7 +1002,7 @@ async def test_onboards_commerce_edges_across_authenticated_mcp_replicas(
             "promised_on": None,
             "discount_amount": "5.50",
             "net_amount": "74.50",
-            "attributes": {"campaign": None, "gift": True},
+            "attributes": '{"gift": true, "campaign": null}',
             "line_count": 1,
             "returned_line_count": 1,
         },
@@ -1171,7 +1012,7 @@ async def test_onboards_commerce_edges_across_authenticated_mcp_replicas(
             "promised_on": "2026-08-03",
             "discount_amount": "0.00",
             "net_amount": "50.25",
-            "attributes": {"store": "서울"},
+            "attributes": '{"store": "서울"}',
             "line_count": 0,
             "returned_line_count": 0,
         },
@@ -1181,11 +1022,14 @@ async def test_onboards_commerce_edges_across_authenticated_mcp_replicas(
             "promised_on": "2026-08-10",
             "discount_amount": "20.00",
             "net_amount": "100.00",
-            "attributes": {"partner": "alpha", "tags": ["bulk", "priority"]},
+            "attributes": '{"tags": ["bulk", "priority"], "partner": "alpha"}',
             "line_count": 3,
             "returned_line_count": 0,
         },
     ]
+    verified_contract["expected"]["result_hash"] = (
+        "sha256:ea0e6ab0c5d498f960968b5e7dca5d164f7b6e0c4616d1ea89415808c527e3e7"
+    )
 
     replica_a = build_app(
         replace(runtime, replica_id="commerce-runtime-a"),
@@ -1898,7 +1742,7 @@ async def test_live_guarded_query_enforces_plan_and_result_limits() -> None:
             "development-issues",
             "WITH summary AS ("
             "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY comment_count) "
-            "AS median_comments FROM ai.issue_overview"
+            "::pg_catalog.numeric AS median_comments FROM ai.issue_overview"
             "), samples AS ("
             "SELECT issue_id, issue_no, status, severity, title, "
             "dense_rank() OVER (ORDER BY severity) AS severity_rank "
@@ -1906,8 +1750,9 @@ async def test_live_guarded_query_enforces_plan_and_result_limits() -> None:
             ") "
             "SELECT regexp_replace(title, '[0-9]+', '#', 'g') AS normalized_title, "
             "position('오류' IN title) AS error_position, "
-            "jsonb_build_object('no', issue_no, 'status', status) AS issue_json, "
-            "to_jsonb(issue_no) AS issue_no_json, severity_rank, median_comments "
+            "jsonb_build_object('no', issue_no, 'status', status)::pg_catalog.text "
+            "AS issue_json, to_jsonb(issue_no)::pg_catalog.text AS issue_no_json, "
+            "severity_rank, median_comments "
             "FROM samples CROSS JOIN summary ORDER BY issue_id",
             published.revision,
             SQL_POLICY_REVISION,
@@ -1920,9 +1765,10 @@ async def test_live_guarded_query_enforces_plan_and_result_limits() -> None:
             assert isinstance(row["normalized_title"], str)
             assert row["error_position"] >= 0
             assert row["severity_rank"] >= 1
-            assert isinstance(row["issue_json"], dict)
-            assert row["issue_no_json"] == row["issue_json"]["no"]
-            assert isinstance(row["median_comments"], int | float)
+            assert isinstance(row["issue_json"], str)
+            issue_json = json.loads(row["issue_json"])
+            assert json.loads(row["issue_no_json"]) == issue_json["no"]
+            assert isinstance(row["median_comments"], str)
 
         for invalid_sql, reason_code in [
             (
@@ -1942,11 +1788,11 @@ async def test_live_guarded_query_enforces_plan_and_result_limits() -> None:
             ),
             (
                 "SELECT percentile_cont(1.1) WITHIN GROUP (ORDER BY comment_count) "
-                "FROM ai.issue_overview",
+                "::pg_catalog.numeric FROM ai.issue_overview",
                 "QUERY_NUMERIC_VALUE_OUT_OF_RANGE",
             ),
             (
-                "SELECT jsonb_build_object(NULL, issue_no) "
+                "SELECT jsonb_build_object(NULL, issue_no)::pg_catalog.text "
                 "FROM ai.issue_overview LIMIT 1",
                 "QUERY_INVALID_FUNCTION_ARGUMENT",
             ),
@@ -1971,28 +1817,44 @@ async def test_live_guarded_query_enforces_plan_and_result_limits() -> None:
             assert "retry once" in invalid.value.message
             assert invalid_sql not in str(invalid.value)
 
-        exact_scalars = await service.query(
+        exact_numeric = await service.query(
             "development-issues",
             "SELECT 12345678901234567890.1234567890::pg_catalog.numeric "
-            "AS exact_numeric, '\\xff00'::pg_catalog.bytea AS binary_payload "
-            "FROM ai.issue_overview LIMIT 1",
+            "AS exact_numeric FROM ai.issue_overview LIMIT 1",
             published.revision,
             SQL_POLICY_REVISION,
         )
-        assert exact_scalars["rows"] == [
-            {
-                "exact_numeric": "12345678901234567890.1234567890",
-                "binary_payload": "base64:/wA=",
-            }
+        assert exact_numeric["rows"] == [
+            {"exact_numeric": "12345678901234567890.1234567890"}
         ]
-        assert exact_scalars["result_bytes"] == len(
+        assert exact_numeric["result_bytes"] == len(
             json.dumps(
-                exact_scalars["rows"],
+                exact_numeric["rows"],
                 ensure_ascii=False,
                 separators=(",", ":"),
                 allow_nan=False,
             ).encode("utf-8")
         )
+
+        for unsupported_sql in (
+            "SELECT jsonb_build_object('no', issue_no) AS unsupported_jsonb "
+            "FROM ai.issue_overview LIMIT 1",
+            "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY comment_count) "
+            "AS unsupported_float8 FROM ai.issue_overview",
+            "SELECT '\\xff00'::pg_catalog.bytea AS unsupported_bytea "
+            "FROM ai.issue_overview LIMIT 1",
+        ):
+            with pytest.raises(QueryUnavailableError) as unavailable:
+                await service.query(
+                    "development-issues",
+                    unsupported_sql,
+                    published.revision,
+                    SQL_POLICY_REVISION,
+                )
+            assert unavailable.value.status_code == 503
+            assert unavailable.value.code == "QUERY_UNAVAILABLE"
+            assert unavailable.value.message == "The query could not be completed."
+            assert unavailable.value.details is None
 
         limited = await service.query(
             "development-issues",

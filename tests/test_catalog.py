@@ -28,6 +28,7 @@ from query_man.models import (
     SourceProfile,
 )
 from query_man.reader_policy import (
+    READER_CLIENT_ENCODING,
     READER_SESSION_TIMEZONE_SETTER,
     ReaderSessionPolicyError,
     require_reader_session_policy,
@@ -81,6 +82,22 @@ def test_runtime_catalog_provider_protocol_has_exact_lifecycle_shape() -> None:
     assert get_type_hints(MetadataService.__init__)["catalog"] is CatalogProvider
 
 
+def test_static_launch_domain_guard_uses_declared_catalog_type_kind() -> None:
+    normalized_query = " ".join(catalog_module.CATALOG_QUERY.casefold().split())
+    assert "join pg_catalog.pg_type as type_row" in normalized_query
+    assert "type_row.typtype::text as type_kind" in normalized_query
+
+    catalog_module._require_supported_catalog_types([{"type_kind": "b"}])
+    with pytest.raises(
+        _CatalogValidationError,
+        match="Catalog contains an unsupported domain column",
+    ):
+        catalog_module._require_supported_catalog_types([{"type_kind": "d"}])
+
+    assert PostgresCatalog()._reject_domain_columns is False
+    assert PostgresCatalog(reject_domain_columns=True)._reject_domain_columns is True
+
+
 class _ResourceCursor:
     def __init__(self, row: dict[str, object] | None) -> None:
         self._row = row
@@ -103,6 +120,7 @@ class _ResourceConnection:
         self._settings_error = settings_error
         self._timezone_error = timezone_error
         self.executions: list[tuple[str, object | None]] = []
+        self.events: list[str] = []
         self.rolled_back = False
 
     async def execute(
@@ -111,6 +129,7 @@ class _ResourceConnection:
         parameters: object | None = None,
     ) -> object:
         self.executions.append((statement, parameters))
+        self.events.append(statement)
         if (
             statement == READER_SESSION_TIMEZONE_SETTER
             and self._timezone_error is not None
@@ -191,7 +210,13 @@ def _catalog_with_resource_connection(
         _connection: object,
         requested_source: SourceProfile,
     ) -> None:
+        assert _connection is connection
         assert requested_source is source
+        connection.events.append("session-policy")
+
+    def accept_connection_policy(_connection: object) -> None:
+        assert _connection is connection
+        connection.events.append("connection-policy")
 
     monkeypatch.setattr(catalog, "_get_pool", get_pool)
     monkeypatch.setattr(
@@ -199,7 +224,260 @@ def _catalog_with_resource_connection(
         "require_reader_session_policy",
         accept_reader_policy,
     )
+    monkeypatch.setattr(
+        catalog_module,
+        "require_reader_connection_policy",
+        accept_connection_policy,
+    )
     return catalog
+
+
+@pytest.mark.asyncio
+async def test_catalog_load_checks_connection_before_existing_transaction_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+    events: list[str] = []
+
+    class Cursor:
+        async def fetchall(self) -> list[dict[str, object]]:
+            return []
+
+    class Connection:
+        rolled_back = False
+
+        async def execute(
+            self,
+            statement: str,
+            _parameters: object | None = None,
+        ) -> object:
+            events.append(statement)
+            if statement in {
+                catalog_module.CATALOG_QUERY,
+                catalog_module.STRUCTURE_QUERY,
+            }:
+                return Cursor()
+            return object()
+
+        async def rollback(self) -> None:
+            self.rolled_back = True
+
+    connection = Connection()
+
+    class ConnectionContext:
+        async def __aenter__(self) -> Connection:
+            return connection
+
+        async def __aexit__(self, *_args: object) -> None:
+            pass
+
+    class Pool:
+        def connection(self) -> ConnectionContext:
+            return ConnectionContext()
+
+    async def get_pool(requested_source: SourceProfile) -> Pool:
+        assert requested_source is source
+        return Pool()
+
+    def accept_connection_policy(requested_connection: object) -> None:
+        assert requested_connection is connection
+        events.append("connection-policy")
+
+    async def accept_session_policy(
+        requested_connection: object,
+        requested_source: SourceProfile,
+    ) -> None:
+        assert requested_connection is connection
+        assert requested_source is source
+        events.append("session-policy")
+
+    catalog = PostgresCatalog()
+    monkeypatch.setattr(catalog, "_get_pool", get_pool)
+    monkeypatch.setattr(
+        catalog_module,
+        "require_reader_connection_policy",
+        accept_connection_policy,
+    )
+    monkeypatch.setattr(
+        catalog_module,
+        "require_reader_session_policy",
+        accept_session_policy,
+    )
+
+    snapshot = await catalog.load(source)
+
+    assert snapshot.relations == ()
+    assert events == [
+        "connection-policy",
+        "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+        READER_SESSION_TIMEZONE_SETTER,
+        catalog_module._CATALOG_SESSION_SETTINGS,
+        "session-policy",
+        catalog_module.CATALOG_QUERY,
+        catalog_module.STRUCTURE_QUERY,
+        "COMMIT",
+    ]
+    assert not connection.rolled_back
+
+
+@pytest.mark.parametrize("operation", ["load", "observe_resources"])
+@pytest.mark.parametrize("close_fails", [False, True])
+@pytest.mark.asyncio
+async def test_catalog_connection_policy_mismatch_closes_without_sql_or_rollback(
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+    close_fails: bool,
+) -> None:
+    source = _source_with_observability()
+    marker = ReaderSessionPolicyError("Source reader connection policy mismatch")
+
+    class Connection:
+        execute_calls = 0
+        rollback_calls = 0
+        close_calls = 0
+
+        async def execute(self, *_args: object, **_kwargs: object) -> object:
+            self.execute_calls += 1
+            return object()
+
+        async def rollback(self) -> None:
+            self.rollback_calls += 1
+
+        async def close(self) -> None:
+            self.close_calls += 1
+            if close_fails:
+                raise RuntimeError("private close failure")
+
+    connection = Connection()
+
+    class ConnectionContext:
+        async def __aenter__(self) -> Connection:
+            return connection
+
+        async def __aexit__(self, *_args: object) -> None:
+            pass
+
+    class Pool:
+        def connection(self) -> ConnectionContext:
+            return ConnectionContext()
+
+    async def get_pool(requested_source: SourceProfile) -> Pool:
+        assert requested_source is source
+        return Pool()
+
+    def reject_connection_policy(requested_connection: object) -> None:
+        assert requested_connection is connection
+        raise marker
+
+    catalog = PostgresCatalog()
+    monkeypatch.setattr(catalog, "_get_pool", get_pool)
+    monkeypatch.setattr(
+        catalog_module,
+        "require_reader_connection_policy",
+        reject_connection_policy,
+    )
+
+    with pytest.raises(ReaderSessionPolicyError) as captured:
+        if operation == "load":
+            await catalog.load(source)
+        else:
+            await catalog.observe_resources(source)
+
+    assert captured.value is marker
+    assert connection.close_calls == 1
+    assert connection.rollback_calls == 0
+    assert connection.execute_calls == 0
+
+
+@pytest.mark.parametrize("operation", ["load", "observe_resources"])
+@pytest.mark.asyncio
+async def test_catalog_connection_info_failure_preserves_transient_exception(
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    source = _source_with_observability()
+    failure = RuntimeError("private connection info failure")
+
+    class Connection:
+        execute_calls = 0
+        rollback_calls = 0
+        close_calls = 0
+
+        async def execute(self, *_args: object, **_kwargs: object) -> object:
+            self.execute_calls += 1
+            return object()
+
+        async def rollback(self) -> None:
+            self.rollback_calls += 1
+
+        async def close(self) -> None:
+            self.close_calls += 1
+
+    connection = Connection()
+
+    class ConnectionContext:
+        async def __aenter__(self) -> Connection:
+            return connection
+
+        async def __aexit__(self, *_args: object) -> None:
+            pass
+
+    class Pool:
+        def connection(self) -> ConnectionContext:
+            return ConnectionContext()
+
+    async def get_pool(requested_source: SourceProfile) -> Pool:
+        assert requested_source is source
+        return Pool()
+
+    def fail_connection_policy(requested_connection: object) -> None:
+        assert requested_connection is connection
+        raise failure
+
+    catalog = PostgresCatalog()
+    monkeypatch.setattr(catalog, "_get_pool", get_pool)
+    monkeypatch.setattr(
+        catalog_module,
+        "require_reader_connection_policy",
+        fail_connection_policy,
+    )
+
+    with pytest.raises(RuntimeError) as captured:
+        if operation == "load":
+            await catalog.load(source)
+        else:
+            await catalog.observe_resources(source)
+
+    assert captured.value is failure
+    assert connection.close_calls == 0
+    assert connection.rollback_calls == 0
+    assert connection.execute_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_catalog_pool_requests_approved_client_encoding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+    configuration: dict[str, object] = {}
+
+    class Pool:
+        def __init__(self, **values: object) -> None:
+            configuration.update(values)
+
+        async def open(self) -> None:
+            pass
+
+    monkeypatch.setattr(catalog_module, "AsyncConnectionPool", Pool)
+
+    catalog = PostgresCatalog()
+    await catalog._get_pool(source)
+
+    connection_kwargs = configuration["kwargs"]
+    assert isinstance(connection_kwargs, dict)
+    assert connection_kwargs["client_encoding"] == READER_CLIENT_ENCODING
 
 
 @pytest.mark.asyncio
@@ -253,6 +531,15 @@ async def test_resource_observation_uses_exact_bounded_catalog_query_without_new
     )
     assert connection.executions[4] == ("COMMIT", None)
     assert not connection.rolled_back
+    assert connection.events == [
+        "connection-policy",
+        "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
+        READER_SESSION_TIMEZONE_SETTER,
+        catalog_module._CATALOG_SESSION_SETTINGS,
+        "session-policy",
+        catalog_module.RESOURCE_OBSERVATION_QUERY,
+        "COMMIT",
+    ]
 
     normalized_query = " ".join(
         catalog_module.RESOURCE_OBSERVATION_QUERY.casefold().split()
@@ -327,7 +614,15 @@ async def test_catalog_limit_with_failed_rollback_never_serves_warm_stale(
         assert requested_connection is connection
         assert requested_source is source
 
+    def accept_connection_policy(requested_connection: object) -> None:
+        assert requested_connection is connection
+
     monkeypatch.setattr(catalog, "_get_pool", get_pool)
+    monkeypatch.setattr(
+        catalog_module,
+        "require_reader_connection_policy",
+        accept_connection_policy,
+    )
     monkeypatch.setattr(
         catalog_module,
         "_begin_catalog_transaction",

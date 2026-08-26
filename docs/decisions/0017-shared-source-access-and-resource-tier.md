@@ -1,5 +1,9 @@
 # ADR 0017: Shared Source Access And Source Resource Tier
 
+> [ADR 0025](0025-static-non-rls-first-launch.md) launch note: shared source visibility, query/admin
+> capability and `budget_profile` remain current. RLS tenant-result language below does not reopen RLS;
+> every RLS source is quarantined in the current launch profile.
+
 Status: Accepted
 
 Date: 2026-08-23

@@ -33,6 +33,7 @@ from query_man.metadata_store import PostgresMetadataStore
 from query_man.models import ResourceObservation, RuntimeCatalogProvider, SourceProfile
 from query_man.operations import operations
 from query_man.query import PostgresQueryExecutor, QueryService, RuntimeQueryExecutor
+from query_man.reader_policy import ReaderSessionPolicyError
 from query_man.registry import SourceReader, SourceRegistry, load_budget_profiles
 from query_man.runtime_config import RuntimeConfig
 from query_man.secrets import SourceSecretCipher
@@ -224,6 +225,13 @@ def _require_runtime_capabilities(
         )
 
 
+def _require_launch_inventory(registry: SourceReader) -> None:
+    for source_id in registry.source_ids():
+        source = registry.get(source_id)
+        if source is not None and source.tenant_isolation == "rls":
+            raise ValueError("Runtime launch inventory does not accept RLS sources")
+
+
 def build_app(
     runtime_config: RuntimeConfig,
     *,
@@ -239,8 +247,13 @@ def build_app(
         registry = SourceRegistry([])
     elif registry is None:
         registry = SourceRegistry.load(runtime_config.source_directory, runtime_config.budget_file)
+    _require_launch_inventory(registry)
     operations.reconcile_sources(registry.source_ids())
-    catalog = PostgresCatalog() if catalog is None else catalog
+    catalog = (
+        PostgresCatalog(reject_domain_columns=runtime_config.source_mode == "bootstrap")
+        if catalog is None
+        else catalog
+    )
     _require_runtime_capabilities(
         "catalog",
         catalog,
@@ -1040,14 +1053,23 @@ async def _collect_resource_observations(
                 prepared = await metadata.get_published(source.source_id)
         except asyncio.CancelledError:
             raise
-        except Exception:
-            await _report_resource_observation_failure(
-                writer,
-                source.source_id,
-                generation,
-                "METADATA_UNAVAILABLE",
-                write_lock,
-            )
+        except Exception as error:
+            if isinstance(error.__cause__, ReaderSessionPolicyError):
+                await _report_resource_observation_failure(
+                    writer,
+                    source.source_id,
+                    generation,
+                    "RESOURCE_READ_FAILED",
+                    write_lock,
+                )
+            else:
+                await _report_resource_observation_failure(
+                    writer,
+                    source.source_id,
+                    generation,
+                    "METADATA_UNAVAILABLE",
+                    write_lock,
+                )
             continue
         try:
             with operations.suppress_source_health_updates():

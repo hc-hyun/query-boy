@@ -1,11 +1,16 @@
 # Query Man MVP
 
-Status: Completed baseline; production architecture verified separately
+Status: ADR 0025 static two-source launch dataset
 
 ## Objective
 
 서로 다른 업무 의미와 schema를 가진 두 PostgreSQL source를 하나의 공통 gateway API와 실행 규칙으로
 조회할 수 있는지 검증한다.
+
+현재 제공 범위는 [ADR 0025](decisions/0025-static-non-rls-first-launch.md)의 단일 replica,
+PostgreSQL 18/server·client UTF-8, non-RLS launch profile이다. 이 문서의 두 source와 9개 golden
+question만 active launch inventory이며 Control Plane 확장과 추가 fixture는 과거 acceptance 또는
+후속 capability다.
 
 | Source ID | Database | Purpose |
 |---|---|---|
@@ -166,6 +171,11 @@ composition/fanout 경고를 포함한다. PostgreSQL view의 nullability는 cat
 - `work_mem=8MB`, `temp_file_limit=64MB`
 - parallel gather 비활성화, JIT 비활성화
 - 현재 two-replica acceptance capacity를 포함한 reader connection limit 7
+
+Pool은 `client_encoding=UTF8`을 요청하고 checkout 직후 SQL 없이 PostgreSQL 18,
+server/client UTF-8과 driver `utf-8` codec을 확인한다. User result는 final OID
+`20, 21, 23, 25, 1082, 1184, 1700`만 허용하며 RLS source와 그 밖의 final type은 serving하지
+않는다. 두 replica는 soak fixture일 뿐 현재 topology는 단일 replica다.
 
 이 기본값은 gateway의 AST 검증, `BEGIN READ ONLY`, 동시성 제한과 결과 byte 제한을
 대체하지 않는다. Connection 값은 replica 수가 바뀌면

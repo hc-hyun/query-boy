@@ -26,8 +26,10 @@ Operator는 question, SQL, expected relations, columns, row count와 canonical r
 delete를 금지한다. [ADR 0016](0016-centralized-source-management-plane.md)의 명시적 runtime mode가
 verified-query authority도 process 전체에서 한 번 선택한다.
 같은 query ID를 새 metadata revision에 재발행하면 새 immutable row가 생기며 이전 revision row는
-rollback evidence로 남는다. Global policy 전환 때는 변경된 hash의 query만이 아니라 current와
-rollback-preserved inventory 전체를 새 revision에서 재실행해 새 immutable records로 발행한다.
+rollback evidence로 남는다. Metadata revision 재료까지 바꾸는 global policy 전환 때는 변경된
+hash의 query만이 아니라 current와 rollback-preserved inventory 전체를 새 revision에서 재실행해
+새 immutable records로 발행한다. Metadata revision을 보존하는 application SQL-policy 전환은 기존
+record를 update/delete/reissue하지 않고 regression execution으로 호환성을 검증할 수 있다.
 
 - `bootstrap` mode는 filesystem verified-query dataset만 사용하고 Control DB 설정을 거부한다.
 - `managed` mode는 empty verified map으로 시작해 Control DB verified-query records만 load한다.

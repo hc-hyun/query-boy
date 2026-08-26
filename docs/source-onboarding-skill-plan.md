@@ -1,8 +1,12 @@
 # Source Onboarding Skill Plan
 
-Status: Complete; adopted plan-only workflow
+Status: Completed plan record — frozen; current workflow is `source-onboarding` Skill and runbook
 
 Last updated: 2026-08-25
+
+Static first launch는 새 Source를 받지 않는다. 현재 onboarding 판단은
+[source onboarding](source-onboarding.md)과 [ADR 0025](decisions/0025-static-non-rls-first-launch.md)를
+먼저 따르며, 이 문서는 V1 Skill을 만들 때의 선택 근거만 보존한다.
 
 ## Goal
 

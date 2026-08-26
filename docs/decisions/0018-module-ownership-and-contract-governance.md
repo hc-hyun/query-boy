@@ -1,5 +1,9 @@
 # ADR 0018: Module Ownership And Boundary Governance
 
+> [ADR 0025](0025-static-non-rls-first-launch.md) launch exception: 아래 no-deploy source 확장 결과는 managed mode를 별도로 활성화한
+> 경우의 capability다. 현재 static first launch의 새 source/database는 inventory review와 재배포가
+> 필요하다. Module interface와 승인 분류 결정은 그대로 유지된다.
+
 Status: Accepted
 
 Date: 2026-08-23

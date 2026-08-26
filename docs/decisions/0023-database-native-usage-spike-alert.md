@@ -1,8 +1,11 @@
 # ADR 0023: Database-Native Usage Spike Alert
 
-Status: Proposed read-only prework — base evidence and separate user approval required
+Status: Parked research — outside ADR 0025 first-launch scope
 
 Date: 2026-08-26
+
+이 문서는 조사 기록으로 보존한다. [ADR 0025](0025-static-non-rls-first-launch.md)의 구현과 별개이고,
+필수 COST base evidence와 별도 변경 승인이 생기기 전에는 active module baseline이 아니다.
 
 ## Priority And Base Boundary
 

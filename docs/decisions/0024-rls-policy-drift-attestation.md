@@ -1,10 +1,15 @@
 # ADR 0024: Recursive RLS Policy Attestation And Lock-First Query Admission
 
-Status: Proposed — exact user approval required before implementation
+Status: Deferred research — RLS serving quarantined by ADR 0025
 
 Date: 2026-08-26
 
 Decision ID: `RLS-01-A`
+
+[ADR 0025](0025-static-non-rls-first-launch.md)는 RLS attestation을 구현하는 대신 모든 RLS source의
+admission과 query를 fail-closed한다. 이 문서의 graph/snapshot v2와 lock-first 설계는 조사 기록으로
+보존하지만 current launch authority가 아니다. 특히 ADR 0020의 이전 SQL policy v3를 전제로 한
+combined-v3 절차는 새 policy baseline으로 재설계하기 전 실행할 수 없다.
 
 ## Context
 

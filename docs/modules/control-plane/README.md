@@ -11,6 +11,12 @@ Control Plane은 “어떤 source 정의와 metadata/verified revision이 현재
 쉽게 말하면 Source Catalog가 source 정의의 형식을 소유하고 Control Plane은 그 정의의 이력과
 현재 선택값을 소유한다.
 
+[ADR 0025](../../decisions/0025-static-non-rls-first-launch.md)의 static first launch에는 Control DB,
+admin mutation, hot onboarding과 `SourceReloader`가 참여하지 않는다. 아래 interface와 persisted
+lifecycle은 별도로 활성화할 managed mode의 현재 구현을 기록한 것이며, first-launch serving path를
+뜻하지 않는다. 이는 현재 ownership/composition boundary이며 managed interface나 stored schema를
+축소하지 않는다.
+
 ## 소유 책임
 
 - Numbered Control DB migration, immutable checksum ledger, schema, constraint, trigger, role와 grant
@@ -69,63 +75,21 @@ Control Plane은 “어떤 source 정의와 metadata/verified revision이 현재
 Control Plane은 PostgreSQL pool, SQL, lock과 transaction을 소유한다. 현재 shared file이라는 이유로
 다른 쪽 interface나 persisted format을 함께 바꾸지 않는다.
 
-[Proposed ADR 0024](../../decisions/0024-rls-policy-drift-attestation.md)의 `RLS-01-A`가 승인되더라도
-RLS v1/v2 snapshot document의 shape·validation·encoding은 Metadata 소유다. Control Plane은 기존
-JSONB transaction/immutable generation·pointer 생명주기로 encoded document를 저장하고 candidate
-failure, standalone RLS cutover의 current/rollback v2 재발행과 verified-query baseline 전량 재실행을 조율할
-뿐이다. PostgreSQL-version/UTF8, graph text 또는 policy normal/shared dependency가 invalid인 candidate는
-existing validation failure로 거부하며 Control payload/schema에 raw value를 추가하지 않는다. Control SQL
-schema를 추가하거나 v1 row를 update/delete/자동 변환하지 않는다. Protected verified tenant mapping은
-외부 change record의 unique `(source_id, query_id, old_metadata_revision)` key와 existing operator
-caller로 제공하고 누락/mismatch 시 중단한다. 이 v2 의미는 아직 현재 persisted format이 아니다.
-ADR 0020 exact A의 encoding snapshot은 RLS semantics/shape를 fresh live v3 attestation으로 누적하며,
-combined production cutover에서는 route하지 않을 v2 row를 만들지 않고 current/rollback v3만
-재발행한다.
+현재 RLS quarantine는 launch admission policy와 safety invariant이며 Control Plane module interface가
+아니다. 새 persisted format이나 lifecycle도 만들지 않는다.
 
-RLS target의 deterministic zero-root/root-count/graph/policy/text/bound 위반은 Metadata-owned public empty-args
-`RlsAttestationValidationError` cause로만 candidate validation failure와 구분한다. Private Metadata
-exception/message/hidden value를 import하거나 parse하지 않는다. Pre-discovery/authoritative root-list
-add/drop/rename race는 marker 없는 `SOURCE_CONTROL_UNAVAILABLE`이고 terminal rejection receipt를 쓰지
-않는다. RLS candidate의 no-SQL connection invariant mismatch, completed reader-session mismatch와
-fixed-setting SQLSTATE `22023`/`42501`의 safe `ReaderSessionPolicyError`만 validation이고 timeout/transport/
-other-driver failure는 control unavailable이다.
-Non-RLS candidate의 current reader-setting error mapping은 보존한다.
-Candidate transient는 raw exception을 log/public chain에 붙이지 않는다. `_stage`가 type/SQLSTATE/deadline으로
-분류하고 cleanup한 뒤 except block 밖에서 direct cause/context 없는 existing
-`SourceControlUnavailableError`만 raise하며 external cancellation은 log/wrapping 없이 재전파한다.
-Deterministic snapshot codec/Pydantic
-serving violation만 existing secret-free typed `StoredMetadataInvalidError`로 구분하되 message를 parse하거나
-공개하지 않는다. PostgreSQL I/O/transport/driver failure와 cancellation은 이 error로 바꾸지 않는다. MetadataStore의 public serving path가
-RLS v1/old-policy v2를 거부하므로 `SourceReloader.validate()`의 existing `get_revision()`도 cold start에서
-이를 우회하지 않는다. Generation/state/mode apply는 별도 token 대신 existing immutable `SourceProfile`
-exact equality를 execution identity로 쓴다. Proposed required port는
-`invalidate(source_id, *, next_source: SourceProfile | None)`이다. Query invalidator가 첫 in-memory action으로
-old/new admission을 fence하고 old active query를 cancel/rollback/bounded drain한다. Catalog invalidator도
-active load/resource observation을 cancel/rollback/discard해 old checked-out connection을 0으로 drain한 뒤
-Metadata cache/epoch, registry 순으로 전환해 마지막에 registry projection을 교체한다. 각 drain은 existing
-fixed `cancel_safe(1s)`, inflight wait 1초, pending cancel/wait 1초 phase를 재사용하며 남은 task/lease가
-있으면 실패하고 tombstone을 유지한다. Managed routed caller는 profile을 registry에서만 얻고 provider는
-registry를 직접 읽지 않는다. Pending next identity의 exact-profile fence 때문에 registry swap 전에는 new
-profile route가 열리지 않는다. Profile은 password를 포함하므로 repr/log/error/metric에 넣지 않는다.
-Query 또는 이후 invalidator/disable cleanup이 registry commit 전에 실패하면 fence를 다시 열거나
-registry를 교체하지 않고 old/new user route를 unavailable로 둔다. Retry가 validated replacement을 다시
-설치할 때만 진행한다. Existing process-local registry upsert/remove의 successful return이 단일 transition
-commit point다. Applied-generation/replica-status bookkeeping은 post-commit idempotent reconciliation이고,
-실패해도 new/removed projection과 fence를 되돌리지 않는다. 같은 desired projection의 retry는 transition
-drain 없이 bookkeeping/status만 복구한다. 그 뒤 bookkeeping 또는 metadata probe failure는 health/apply
-status만 unavailable/failed로 두며 old profile을 복구하지 않는다. Post-commit external probe cancellation도
-fabricated health/apply failure 없이 그대로 재전파하고 committed projection을 되돌리지 않는다. 이 공용 managed transition lifecycle은 non-RLS source에도 적용하며 그 active
-query도 transition 시 `QUERY_UNAVAILABLE`로 정리될 수 있다. PostgreSQL-18/UTF8, graph/snapshot v2는
-RLS-only다. 이 순서는 아직 승인된 현재 lifecycle이 아니라 ADR 0024의 target이다.
-Transition이 cancel한 resource observation은 existing generation-fenced reason
-`RESOURCE_READ_FAILED`만 best-effort report하며 success sample을 쓰지 않는다. External observation task
-cancellation은 failure report 없이 재전파한다.
-Query/Catalog active registration의 external 대 transition cancellation owner는 같은 lifecycle lock에서
-first-recorded reason으로 고정하고 later reason이 덮어쓰지 않는다.
-Stored/offline validation은 Query fence 전이므로 그 candidate failure는 current route/pool/fence를
-바꾸지 않는다.
-Post-fence/pre-commit failure에서 failed adapter는 tombstone, earlier successful adapter는 pending-next일 수
-있지만 old registry profile과 둘 다 불일치하므로 route는 닫힌다. 별도 compensating abort port는 없다.
+- Managed publish/credential rotate의 RLS manifest는 Source Catalog validation에서 기존
+  `SourceValidationError`로 끝난다. Delivery projection은 `400 SOURCE_VALIDATION_FAILED`이며 staging,
+  generation과 active pointer 변경이 없다.
+- Cold start에서 보존된 RLS row는 `SourceReloader.validate()`에서 거부되고 replica reason은
+  `RUNTIME_VALIDATION_REJECTED`다. 해당 source를 registry에 projection하지 않는다.
+- `TenantIsolation` type, RLS manifest shape와 historical Control row는 삭제·변환하지 않는다. Control
+  schema, stored metadata codec와 기존 non-RLS managed lifecycle도 바꾸지 않는다.
+- RLS serving 재개와 신규 database/dynamic onboarding은 first launch 뒤 별도 승인 대상이다.
+
+별도로 활성화한 non-RLS managed candidate의 PostgreSQL 18/UTF-8 mismatch와 deterministic reader-session
+policy mismatch는 기존 validation failure로 처리한다. Timeout, transport와 그 밖의 driver failure는
+control unavailable이며 raw connection value나 내부 오류를 public result에 넣지 않는다.
 
 `SourceAdminService._stage`는 candidate를 active runtime과 격리해 검증하려고 일시적인
 `SourceRegistry + MetadataService + RuntimeCatalogProvider`를 조립하고 registry application reference는
@@ -174,9 +138,10 @@ resume metadata publish -> current pinned metadata revision unpinned
 publish verified query -> immutable revision-bound expected result
 ```
 
-같은 query ID도 metadata revision이 다르면 별도 immutable verified-query row다. Global policy 전환은
-current와 rollback-preserved verified-query baseline 전체를 새 revision에서 재실행하고, 이전 snapshot/generation/
-verified row를 update/delete하지 않는다.
+같은 query ID도 metadata revision이 다르면 별도 immutable verified-query row다. Metadata revision
+재료까지 바꾸는 global transition은 current와 rollback-preserved verified-query baseline 전체를 새
+revision에서 재실행하고, 이전 snapshot/generation/verified row를 update/delete하지 않는다.
+Metadata revision을 보존하는 SQL-policy-only 전환은 이 persisted lifecycle을 만들지 않는다.
 
 Operation result status는 `published`, `deactivated`, `rolled_back`, `resumed`, `verified`다. 성공
 public response는 이를 담은 authoritative terminal receipt이며 actor/reason, request hash,
@@ -378,16 +343,9 @@ success marker와 mandatory/optional sample 또는 freshness가 서로 맞지 �
 `unavailable/OBSERVATION_INCOMPLETE`로 반환한다. Provider billing이 없으므로 monetary
 amount/currency/provenance는 public application result에 만들지 않는다.
 
-현재 `CTRL-08` projection에는 DB-native statement usage section이 없다. Lower-priority read-only
-prework인 [proposed ADR 0021](../../decisions/0021-database-native-cost-attribution.md)은 sanitized
-monitoring identity, reset/deallocation-aware target-reader-role aggregate와 sibling `database_native`
-section의 선택지만 기록한다. ENC final baseline 확정, `TIME-03` 완료 또는 명시적 defer와 정확한
-`COST-01-A|B|C` 승인 전에는 source monitoring role/function, Control schema/store나 `/usage` 의미를
-변경하지 않는다. A의 base collector/rollup 제안은 `COST-04`를 포함하지 않는다. 별도
-[proposed ADR 0023](../../decisions/0023-database-native-usage-spike-alert.md)의 base evidence gate와 exact
-approval 전에는 alert policy/state/event table, evaluator나 operator projection을 만들지 않는다. 승인될
-경우 Control Plane이 closed-bucket sample-count heuristic, policy/base epoch와 migration 7의 four-table
-authority 및 polling projection을 provider-first로 소유한다. 이 count는 continuous-hour coverage가 아니다.
+현재 `CTRL-08` projection에는 DB-native statement usage, monetary billing과 alert/workflow trace가 없다.
+관련 research는 first-launch baseline이 아니며 이 module 문서에 target schema나 algorithm을 복제하지
+않는다. 이를 추가하려면 interface, persisted format, policy와 운영 영향을 각각 정해 별도 승인받는다.
 
 Delivery는 이 application result만 소비하고 table/private DTO를 읽지 않는다. Unknown source는
 `SourceNotFoundError`, DB/decode/cardinality 오류는 `SourceControlUnavailableError`이며 stale 또는
@@ -405,8 +363,7 @@ new fleet에서 source별 L1→all verified→L2를 완료하고, replica conver
 Pool/cache adapter에는 Control Plane 소유의 작은 `SourcePoolInvalidator.invalidate(source_id)` port만
 요구한다. Runtime이 provider-owned composite lifecycle을 검증하고 catalog, query executor 순서로 두
 invalidator를 주입하며 Control Plane은 그 composite Protocol을 소유하거나 optional하게 탐색하지 않는다.
-이는 현재 accepted baseline이다. ADR 0024 `RLS-01-A`가 exact 승인되면 위 proposed required
-`invalidate(source_id, *, next_source)`와 Query-first fence/drain order가 이를 교체한다.
+이는 현재 managed baseline이다.
 
 Replica 적용 순서는 다음과 같다.
 
@@ -561,7 +518,8 @@ Control Plane 작업은 기본적으로 다음만 읽는다.
 1. 이 문서와 [module index](../README.md)
 2. 변경 대상 admin/reloader/store/secret code, numbered migration과 focused tests
 3. Source validator, MetadataStore/codec, verified/query의 소비 interface와 format
-4. [ADR 0012](../../decisions/0012-control-plane-source-revisions.md),
+4. [ADR 0025](../../decisions/0025-static-non-rls-first-launch.md)와
+   [ADR 0012](../../decisions/0012-control-plane-source-revisions.md),
    [ADR 0013](../../decisions/0013-control-plane-verified-query-publishing.md),
    [ADR 0016](../../decisions/0016-centralized-source-management-plane.md)과
    [ADR 0017](../../decisions/0017-shared-source-access-and-resource-tier.md) 중 변경과 직접 관련된 결정

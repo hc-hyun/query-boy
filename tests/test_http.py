@@ -15,6 +15,7 @@ from query_man.app import build_app
 from query_man.errors import (
     MutationNotFoundError,
     QueryInvalidError,
+    QueryUnavailableError,
     SourceControlUnavailableError,
     SourceNotFoundError,
 )
@@ -133,6 +134,22 @@ class RecordingQueryExecutor:
     async def cancel(self, query_id: str) -> bool:
         self.cancel_calls.append(query_id)
         return self.cancel_result
+
+
+class UnavailableQueryExecutor(RecordingQueryExecutor):
+    async def execute(
+        self,
+        _source: SourceProfile,
+        _sql: str,
+        _metadata_revision: str,
+        _validated: ValidatedSql,
+        *,
+        query_id: str | None = None,
+        tenant_id: str | None = None,
+    ) -> dict[str, object]:
+        raise QueryUnavailableError from RuntimeError(
+            "Unsupported PostgreSQL result type: private oid 3802"
+        )
 
 
 _QUERY_A_TOKEN = "query-a-token-value-with-at-least-32-characters"
@@ -2236,6 +2253,35 @@ async def test_executes_query_with_current_metadata_revision(
     assert "elapsed_ms=1 row_count=1 result_bytes=21" in caplog.text
     assert "plan_total_cost=10.0" in caplog.text
     assert "plan_max_rows=1 plan_node_count=2" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_unsupported_result_is_details_free_http_503() -> None:
+    catalog = ReturningCatalog(minimal_development_snapshot())
+    async with client(catalog, query_executor=UnavailableQueryExecutor()) as session:
+        context = await session.post(
+            "/meta",
+            json={"source_id": "development-issues", "question": "문제 수"},
+        )
+        response = await session.post(
+            "/query",
+            json={
+                "source_id": "development-issues",
+                "sql": "SELECT count(*) AS issue_count FROM ai.issue_overview",
+                "metadata_revision": context.json()["metadata_revision"],
+                "sql_policy_revision": context.json()["sql_policy_revision"],
+            },
+        )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "error": {
+            "code": "QUERY_UNAVAILABLE",
+            "message": "The query could not be completed.",
+        }
+    }
+    assert "3802" not in response.text
+    assert "Unsupported PostgreSQL" not in response.text
 
 
 @pytest.mark.asyncio

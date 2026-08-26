@@ -11,6 +11,11 @@ Delivery는 외부 caller를 안전한 application 호출로 바꾸고 결과를
 HTTP와 MCP parity는 모든 endpoint가 같다는 뜻이 아니다. 공통 data operation의 caller 권한,
 성공 결과, 오류 의미와 cancellation이 같다는 뜻이다.
 
+현재 [ADR 0025](../../decisions/0025-static-non-rls-first-launch.md) launch profile은
+`development-issues`, `market-voc` 두 static source를 단일 Query Man replica로 제공한다. Delivery의
+기존 data API를 그대로 사용하며 managed administration surface는 구현 상태로 보존하지만 이 static
+launch에는 참여하지 않는다.
+
 ## 소유 책임
 
 - Bearer policy 검증과 server-derived `CallerContext`
@@ -47,8 +52,8 @@ HTTP와 MCP parity는 모든 endpoint가 같다는 뜻이 아니다. 공통 data
   `SourceEnvironment`, `Identifier`, `StableSlug` type을 소비한다.
 - [`app.py`](../../../src/query_man/app.py): HTTP request DTO, parent auth middleware, routes, handlers와
   disconnect; composition/lifespan 부분은 Runtime 소유
-- [`errors.py`](../../../src/query_man/errors.py): public `AppError` envelope와 external rendering;
-  각 domain error의 업무 의미는 해당 producer module과 공동 소유
+- [`errors.py`](../../../src/query_man/errors.py): public `AppError` carrier와 external rendering;
+  각 domain error의 발생 조건과 업무 의미는 해당 producer module 소유
 - `config/access-policies*.yaml`: bootstrap/Compose caller identity와 capability input
 - [`skills/query-man-text-to-sql`](../../../skills/query-man-text-to-sql): MCP/context/query
   workflow를 설명하는 consumer Skill; 안전 enforcement boundary가 아님
@@ -64,13 +69,17 @@ HTTP와 MCP parity는 모든 endpoint가 같다는 뜻이 아니다. 공통 data
 
 ## 제공 인터페이스와 소유 경계
 
-이 절은 다른 module에 공개한 Python interface와 함께 Delivery가 소유하는 HTTP/MCP API, wire
-format, authorization policy 및 transport lifecycle rule을 기록한다. 각 subsection 제목이 실제
-변경 범주이며, 이 절 전체를 하나의 module interface로 해석하지 않는다.
+이 절의 `GatewayService` method와 `CallerContext` input/output/domain-error 의미는 official
+application module interface다. HTTP/MCP path, field, status와 envelope은 external API/wire format이고,
+인증·인가 순서와 disconnect cleanup은 safety/lifecycle invariant다. `/ready`를 container health로
+판정하는 방법과 launch topology는 Runtime operational boundary다. 이 범주를 서로 같은 interface로
+해석하지 않는다.
 
 ### GatewayService application interface
 
-HTTP와 MCP의 세 data operation은 동일한 `GatewayService`와 `CallerContext`를 사용한다.
+HTTP와 MCP의 세 data operation은 동일한 `GatewayService`와 server-derived `CallerContext`를
+사용한다. Delivery는 provider가 공개한 application result와 safe domain error만 전달하며 Metadata,
+Guarded Query 또는 Control Plane의 private implementation을 호출하지 않는다.
 
 | 기능 | HTTP | MCP |
 |---|---|---|
@@ -103,17 +112,10 @@ discovery/serialization은 의도적으로 다를 수 있다.
   identity를 모두 요구한다. Anonymous와 single API token, version 1/scope field는 startup에서
   fail-closed한다.
 
-현재 MCP correlation은 한 POST의 server-generated request ID, 그 아래 call ID와 query ID까지만
-연결한다. 여러 POST workflow용 client trace header/audit field는 아직 지원되는 API가 아니다. Lower-priority
-read-only prework인 [proposed ADR 0022](../../decisions/0022-w3c-workflow-trace-context.md)의
-`TRACE-01-A|B|C`와 우선순위를 사용자가 정확히 승인하기 전에는 header parsing, structured field,
-metric이나 propagation을 추가하지 않는다. Exact A가 승인되면 Delivery는 auth-after exact-route
-`traceparent` parser, immutable ASGI request-state bridge와 private nested MCP-call scope를 소유한다.
-Runtime provider를 사용해 scope를 finally-safe하게 복원하고 failed parallel MCP query도 existing
-request/call/query ID로 구분해 Gateway audit에 전달한다. Response header/tool field, persistence와
-outbound propagation은 여전히 만들지 않는다. Configured policy가 만든 bootstrap local anonymous caller도
-in-scope이며 parser는 ASGI-observable header만 보므로 Uvicorn/h11이 wire OWS를 제거한 뒤의 값과 direct-ASGI
-whitespace corpus를 구분해 검증한다.
+현재 correlation은 한 MCP POST의 server-generated request ID, 그 아래 call ID와 query ID까지만
+연결한다. 여러 POST workflow용 client trace header, response field, persistence와 outbound propagation은
+현재 API가 아니며 [ADR 0022](../../decisions/0022-w3c-workflow-trace-context.md)에 parked research로만
+남아 있다.
 
 ### Public error schema and mapping
 
@@ -121,43 +123,23 @@ HTTP 오류는 `{error: {code, message, details?}}` envelope을 사용하고 MCP
 structured tool result로 표현한다. 예상하지 못한 오류는 고정된 internal error로 축약하며 5xx
 detail, raw PostgreSQL error, SQL literal, credential과 token을 반사하지 않는다.
 
-[Proposed ADR 0024](../../decisions/0024-rls-policy-drift-attestation.md)의 `RLS-01-A`는 새 wire field나
-error code를 만들지 않는다. Candidate RLS violation은 existing `SOURCE_VALIDATION_FAILED`, active
-metadata violation은 `METADATA_UNAVAILABLE`, same-query lock/live drift는 details 없는
-`QUERY_UNAVAILABLE`, trusted tenant 누락은 existing HTTP 400 `QUERY_REJECTED`의 bounded
-`reason_code=TENANT_CONTEXT_REQUIRED`로 매핑하고 policy/role/hidden relation/RLS attestation
-fingerprint와 invalid source encoding/graph/dependency를 public detail이나 새 helper log로 공개하지 않는
-target이다. 기존 gateway trusted-tenant
-deny audit와 public SQL fingerprint audit/redaction rule은 유지한다. Exact 승인 전에는 현재 error producer나
-HTTP/MCP rendering을 바꾸지 않는다.
+현재 launch에서 존재하는 RLS source의 query는 request authentication/authorization과 source existence
+확인 뒤, tenant·revision·metadata·SQL validation·queue·database 접근 전에 차단된다. HTTP는 기존
+details 없는 `503 QUERY_UNAVAILABLE`, MCP는 같은 code/message의 details 없는 `isError` result를
+반환한다. `TENANT_CONTEXT_REQUIRED` 경로에는 도달하지 않는다.
 
-같은 proposed RLS target에서 candidate PostgreSQL-version/UTF8/driver-codec invariant 또는 common
-reader-session identity/policy mismatch,
-deterministic zero-root/root-count/graph marker와 secret-free snapshot codec type은
-`SOURCE_VALIDATION_FAILED`이다. Fixed-setting SQLSTATE `22023`/`42501`도 이 validation이고, candidate
-`55P03`/deadline/transport/other-driver operational failure는 existing
-`SOURCE_CONTROL_UNAVAILABLE`이다. Pre-discovery/authoritative root-list add/drop/rename race도 marker 없는
-`SOURCE_CONTROL_UNAVAILABLE`이다. Staging task cancellation은 fabricated 400/503 response로 바꾸지 않고
-재전파한다. 모든 managed source transition의 active query는 non-RLS를 포함해 details 없는 existing
-`QUERY_UNAVAILABLE`로 끝날 수 있지만 새 wire/error code는 없다.
-같은 no-SQL invariant/completed mismatch/fixed-setting SQLSTATE가 active Metadata에서 발생하면
-`METADATA_UNAVAILABLE`, query에서 발생하면 `QUERY_UNAVAILABLE`, resource observation에서 발생하면 exact
-`RESOURCE_READ_FAILED`이며 Delivery는 이 consumer별 결과를 candidate 400으로 재분류하지 않는다.
-Operational timeout/transport/driver도 candidate `SOURCE_CONTROL_UNAVAILABLE`, active Metadata
-`METADATA_UNAVAILABLE`, query timeout `QUERY_TIMEOUT`, query transport/driver `QUERY_UNAVAILABLE`, resource
-observation `RESOURCE_READ_FAILED`의 existing public 결과를 보존하고 external cancellation을 응답으로 만들지 않는다.
-RLS marker-free transient의 HTTP/MCP outer error는 direct cause/context 없는 existing safe AppError여야 한다.
-AppError/MCP ordinary logging에는 generic outer error만 남고 raw PostgreSQL/driver `str/repr/args/traceback`과
-hidden source canary가 없어야 한다. Resource observation reason에는 exception을 붙이지 않고 external
-cancellation은 log/response로 만들지 않는다.
-Non-RLS candidate reader-setting error mapping은 현재 의미를 유지한다.
+Guarded Query가 RowDescription에서 final result OID를 검사해 `int8`, `int2`, `int4`, `text`, `date`,
+`timestamptz`, `numeric` 외 type을 거부하면 Delivery는 같은 details 없는 `503 QUERY_UNAVAILABLE`을
+HTTP/MCP로 전달한다. 이 검사는 duplicate-column 거부 뒤, 첫 result fetch 전에 수행된다. RLS와
+unsupported final OID 모두 새 error code, field 또는 detail을 만들지 않으며 그 밖의 HTTP/MCP public
+schema, status와 error envelope도 바뀌지 않는다.
 
-[Proposed ADR 0020](../../decisions/0020-lossless-interval-and-json-numeric-encoding.md)의 `ENC-01-A`가
-승인되면 Delivery는 Guarded Query가 만든 lossless interval/time/JSON canonical row와 strict result-OID
-거부 결과를 그대로 HTTP/MCP에 전달하고 byte/truncation 계산 및 Assurance/Control verified result hash가
-같은 row 의미를 소비하게 한다. 새 loader/fingerprint를 Delivery에 복제하지 않는다. Duplicate JSON,
-unsupported OID와 non-1 array 등은 existing bounded error로 fail-closed하고 current/rollback v3 verified
-result를 전량 재발행한다. Exact 승인 전에는 현재 public row format/hash identity/error mapping을 바꾸지 않는다.
+PostgreSQL reader compatibility 실패도 Metadata/Guarded Query/Control Plane이 정한 기존 safe domain
+error를 그대로 rendering한다. Delivery가 실제 connection 정보나 lower-level exception을 재분류하거나
+공개하지 않는다. Broader result encoding과 RLS attestation 설계는 각각
+[ADR 0020](../../decisions/0020-lossless-interval-and-json-numeric-encoding.md)과
+[ADR 0024](../../decisions/0024-rls-policy-drift-attestation.md)의 non-current research이며 이 문서에
+미래 wire를 복제하지 않는다.
 
 MCP argument validation은 `INVALID_REQUEST`와 다음 exact bounded detail을 structured result로
 반환한다.
@@ -241,19 +223,9 @@ Credential/token/connection, observability relation/grain, replica/cursor identi
 question/SQL/fingerprint/query ID와 raw error는 response/audit에 포함하지 않는다. Existing admin
 list/detail/history/replica/mutation, `/admin/metrics`, query-facing HTTP와 MCP 세 tool은 바뀌지 않는다.
 
-Lower-priority read-only prework인
-[proposed ADR 0021](../../decisions/0021-database-native-cost-attribution.md)은 현재 Delivery API가 아니다.
-정확한 우선순위와 `COST-01-A`를 사용자가 승인하기 전에는 current `/usage` top-level shape,
-`database_native` section, monitoring admin route 또는 error를 추가하지 않는다. A가 승인되면 Delivery는
-operator-first auth/validation, exact monitoring GET/PUT/credential POST/DELETE/rollback POST wire와
-`/usage.database_native` serialization/error mapping을 소유하고 Control Plane의 공개 use case/projection만
-소비한다. Monitoring credential, source function, Control table/lease/baseline을 읽거나 구현하지 않는다.
-Direction-only B는 ID 선택만으로 이 owner 범위를 열지 않으며 별도 exact API 승인이 필요하다.
-`COST-04` threshold/alert의 operator wire와 delivery backend도 A base 승인에 포함되지 않는다. 별도
-[proposed ADR 0023](../../decisions/0023-database-native-usage-spike-alert.md)의 exact approval 전 route,
-notification 또는 metric label을 추가하지 않는다. 승인될 경우에도 Delivery는 operator polling GET과
-policy configure/disable/rollback validation/serialization만 소유하고 webhook/email/push를 만들지 않는다.
-기존 base rollup 31일과 proposed alert event 90일 logical visibility는 서로 다른 retention policy다.
+Database-native cost와 spike-alert wire는 현재 API가 아니다. Parked 설계는
+[ADR 0021](../../decisions/0021-database-native-cost-attribution.md)과
+[ADR 0023](../../decisions/0023-database-native-usage-spike-alert.md)에만 보존한다.
 
 ### MCP protocol surface
 
@@ -268,6 +240,13 @@ policy configure/disable/rollback validation/serialization만 소유하고 webho
 - MCP POST에 1 MiB body limit, single JSON Content-Type/protocol-version header, Host/Origin policy와
   DNS rebinding protection을 적용한다.
 
+### Readiness wire and launch acceptance
+
+`GET /ready`의 기존 `{"status": <state>}` response와 HTTP status 의미는 변경하지 않는다. 따라서
+`degraded`가 HTTP 200인 기존 wire도 유지된다. Runtime이 소유한 Compose healthcheck와 launch
+acceptance만 body가 정확히 `{"status":"ready"}`인 경우를 healthy로 판정하며, 이는 새 Delivery
+status나 field가 아니다.
+
 ### Child lifespan ownership and cleanup rule
 
 - Delivery가 제공하는 MCP child lifespan은 자신의 `enter` 도중 만든 partial resource를 정리할
@@ -279,13 +258,18 @@ policy configure/disable/rollback validation/serialization만 소유하고 webho
 
 ## 소비 인터페이스와 전제
 
+아래 Python type/use case는 각 provider가 공개한 official module interface다. Result OID, revision과
+reader compatibility는 provider의 policy/compatibility identity이며 Delivery는 그 의미를 다시
+정의하지 않고 public result/error만 rendering한다.
+
 - [Source Catalog](../source-catalog/README.md)의 `SourceReader` sanitized source summaries와 admin wire
   validation에 사용하는 `SourceEnvironment`, `Identifier`, `StableSlug`
 - [Metadata](../metadata/README.md)의 plain list/dict context application result. Internal immutable
   source/snapshot representation을 wire에 직접 serialize하지 않는다.
 - [Guarded Query](../guarded-query/README.md)의 query/cancel result와 safe domain errors
 - [Control Plane](../control-plane/README.md)의 management projection, mutation receipt/use cases와
-  conflict/error meaning 및 public sequence/verified-publish input
+  conflict/error meaning 및 public sequence/verified-publish input. 이 소비는 preserved managed admin
+  surface용이며 current static launch에는 참여하지 않는다.
 - [Runtime](../runtime/README.md)의 aggregate health/operations state와 lifecycle context
 
 Delivery는 domain module의 concrete PostgreSQL adapter나 Control DB table을 직접 호출하지 않는다.
@@ -301,7 +285,11 @@ Metadata/Source Catalog의 runtime tuple/read-only mapping 전환은 Delivery HT
 ## 불변조건
 
 - HTTP와 MCP는 공통 operation을 하나의 Gateway/application service path로 호출한다.
-- Authentication/authorization 뒤에만 source-specific work를 수행한다.
+- Request authentication과 해당 authorization 뒤에만 source-specific work를 수행하고 source existence를
+  먼저 확인한다. 존재하는 RLS source는 그 다음 단계에서 tenant/revision/metadata/SQL/queue/DB보다 먼저
+  details 없는 `QUERY_UNAVAILABLE`로 끝난다.
+- Unsupported final result OID는 첫 fetch 전에 같은 details 없는 `QUERY_UNAVAILABLE`로 끝나며
+  HTTP/MCP external schema를 확장하지 않는다.
 - Caller가 DSN, credential, database role 또는 tenant context를 선택할 수 없다.
 - Unknown source, SQL/question/token/credential과 내부 오류를 log/metric label로 새지 않는다.
 - Client disconnect는 실행 task cancellation을 통해 database cancel/rollback으로 전파된다.
@@ -311,10 +299,13 @@ Metadata/Source Catalog의 runtime tuple/read-only mapping 전환은 Delivery HT
   Control Plane management projection을 따른다.
 - Admin sequence/verified payload는 Control persistence나 Assurance DTO가 아니라 Control Plane
   public administration input을 통해 전달한다.
+- Static first launch는 두 reviewed source와 단일 replica만 사용한다. Managed admin route implementation은
+  보존하지만 이 launch의 source authority나 hot-onboarding 경로가 아니다.
 
 ## 모듈 내부 변경
 
-다음은 wire schema와 application 의미를 보존할 때 독립적으로 변경할 수 있다.
+다음은 official module interface, external wire, policy identity와 safety/lifecycle 의미를 보존할 때
+독립적으로 변경할 수 있다.
 
 - Middleware/route helper와 request parsing 내부 정리
 - 같은 caller를 만드는 token lookup/data structure 개선
@@ -324,14 +315,15 @@ Metadata/Source Catalog의 runtime tuple/read-only mapping 전환은 Delivery HT
 
 ## 사용자 승인이 필요한 경계 변경
 
-아래 목록에는 module interface, external API/wire format, authorization policy와 transport lifecycle
-rule이 함께 있다. 승인 요청은 실제 변경 범주를 명시하며 목록 전체를 하나의 module interface로
-취급하지 않는다. 이 용어 정리는 기존 승인 범위를 줄이지 않는다.
+아래 목록에는 module interface, external API/wire format, policy/compatibility identity,
+safety/lifecycle invariant와 operational boundary가 함께 있다. 승인 요청은 실제 변경 범주를 명시하며
+목록 전체를 하나의 module interface로 취급하지 않는다.
 
 - HTTP path/method, request/response field, status 또는 size/range/default 변경
 - MCP tool 이름/개수/schema/description, protocol version 또는 transport mode 변경
-- `GatewayService` method, authorization 순서와 HTTP/MCP parity 범위 변경
-- `CallerContext`, shared source visibility, tenant trust와 operator capability 의미 변경
+- `GatewayService` method input/output/domain-error 또는 `CallerContext` shape/semantics 변경
+- Authentication/authorization/source-existence 순서, shared source visibility, tenant trust와 operator
+  capability 의미 변경
 - Public error code/message/detail/envelope 또는 unknown-vs-unauthorized 처리 변경
 - Bearer/header, Host/Origin, body size와 unauthenticated endpoint 정책 변경
 - Source summary projection과 admin/cancel surface 변경
@@ -341,6 +333,9 @@ rule이 함께 있다. 승인 요청은 실제 변경 범주를 명시하며 목
 - Admin idempotency/expected-state header, query/path/body limit, validation issue 또는 receipt/catalog
   projection 변경
 - Transport audit에 기록 가능한 request/caller/source field 또는 disconnect/cancel 의미 변경
+- RLS quarantine 순서, unsupported-result external mapping 또는 details-free 5xx invariant 변경
+- `/ready` external wire 변경. Compose health 판정, static inventory, replica 수와 managed activation은
+  Runtime/protected operational 범주로 따로 승인한다.
 
 Delivery는 “무엇을 기록하면 안 되는지”와 audit event 의미를 소유한다. Runtime은
 `SafeJsonFormatter`, structured field allowlist와 방어적 문자열 redaction 구현을 소유하고 각 domain
@@ -382,7 +377,9 @@ Delivery 작업은 기본적으로 다음만 읽는다.
    [ADR 0006](../../decisions/0006-mcp-transport-and-workflow.md),
    [ADR 0015](../../decisions/0015-containerized-local-runtime.md)와
    [ADR 0017](../../decisions/0017-shared-source-access-and-resource-tier.md) 중 변경과 직접 관련된 결정
-5. `app.py` lifecycle을 건드릴 때 Runtime lifecycle rule
+5. Current launch behavior를 바꿀 때
+   [ADR 0025](../../decisions/0025-static-non-rls-first-launch.md)
+6. `app.py` lifecycle을 건드릴 때 Runtime lifecycle rule
 
 Catalog SQL, source persistence transaction과 query executor 내부는 위 interface나 경계 의미를
 바꾸지 않는 한 읽을 필요가 없다.

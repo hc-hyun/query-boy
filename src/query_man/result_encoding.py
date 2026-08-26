@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from enum import Enum
@@ -26,6 +26,38 @@ CANONICAL_TIME_POLICY_MATERIAL: Mapping[str, object] = MappingProxyType(
         "timetz": "preserve_isoformat",
     }
 )
+
+_RESULT_OID_PAIRS = (
+    ("int8", 20),
+    ("int2", 21),
+    ("int4", 23),
+    ("text", 25),
+    ("date", 1082),
+    ("timestamptz", 1184),
+    ("numeric", 1700),
+)
+
+RESULT_OID_POLICY_MATERIAL: Mapping[str, object] = MappingProxyType(
+    {
+        "version": 1,
+        "postgresql_major": 18,
+        "allowed_scalar_oids": _RESULT_OID_PAIRS,
+    }
+)
+
+_ALLOWED_RESULT_OIDS = frozenset(oid for _type_name, oid in _RESULT_OID_PAIRS)
+_RESULT_OID_POLICY_ERROR = "Unsupported PostgreSQL result type"
+
+
+def _require_supported_result_oids(oids: Iterable[object]) -> None:
+    try:
+        result_oids = tuple(oids)
+    except Exception:
+        raise ResultEncodingError(_RESULT_OID_POLICY_ERROR) from None
+    if not result_oids or any(
+        type(oid) is not int or oid not in _ALLOWED_RESULT_OIDS for oid in result_oids
+    ):
+        raise ResultEncodingError(_RESULT_OID_POLICY_ERROR)
 
 
 def encode_result_value(value: object) -> object:

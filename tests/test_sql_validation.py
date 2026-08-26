@@ -5,6 +5,8 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from pglast.parser import get_postgresql_version
 
+import query_man.sql_validation as sql_validation_module
+from query_man.reader_policy import READER_CLIENT_ENCODING
 from query_man.sql_validation import (
     DEFAULT_ALLOWED_FUNCTIONS,
     DEFAULT_ALLOWED_TYPES,
@@ -27,11 +29,28 @@ def test_parser_matches_postgresql_18_grammar() -> None:
 
 def test_sql_policy_revision_is_a_stable_digest() -> None:
     assert SQL_POLICY_REVISION == (
+        "sha256:2e94db36095f11f2e9cc4e804666598f79a2ee956002ffa60dbe26bc6ee81388"
+    )
+    assert SQL_POLICY_REVISION != (
         "sha256:6b68458319a21416e51bf4be059fc55c4e053b45e38e7219956c4ac3725637a6"
     )
     assert SQL_POLICY_REVISION != (
         "sha256:83729139d7ccedbe8e299b0c4a8bdefb97d42ca870d5fc3b9c227578c65855d9"
     )
+
+
+def test_sql_policy_v3_connection_material_is_exact_and_immutable() -> None:
+    material = sql_validation_module._READER_CONNECTION_POLICY_MATERIAL
+
+    assert dict(material) == {
+        "version": 1,
+        "postgresql_major": 18,
+        "server_encoding": READER_CLIENT_ENCODING,
+        "client_encoding": READER_CLIENT_ENCODING,
+        "driver_encoding": "utf-8",
+    }
+    with pytest.raises(TypeError):
+        material["version"] = 2  # type: ignore[index]
 
 
 def test_accepts_question_answering_select_and_extracts_dependencies() -> None:

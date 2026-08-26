@@ -721,16 +721,31 @@ def test_validates_control_plane_manifest_without_storing_secret(
     assert "port_env" not in validated.document["connection"]  # type: ignore[operator]
 
 
-def test_rls_manifest_requires_security_invoker_view_only_surface() -> None:
-    raw = yaml.safe_load(
-        (
-            ROOT_DIRECTORY / "config" / "onboarding" / "support-tickets.yaml"
-        ).read_text(encoding="utf-8")
-    )
+def test_bootstrap_registry_rejects_rls_source(tmp_path: Path) -> None:
+    raw = _development_manifest()
     raw["tenant_isolation"] = "rls"
-    raw["allowed_relation_kinds"] = ["table", "view"]
+    (tmp_path / "rls-source.yaml").write_text(
+        yaml.safe_dump(raw),
+        encoding="utf-8",
+    )
 
-    with pytest.raises(RegistryConfigurationError, match="security-invoker views only"):
+    with pytest.raises(RegistryConfigurationError, match="RLS sources are not supported"):
+        SourceRegistry.load(
+            tmp_path,
+            ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
+            DUMMY_ENVIRONMENT,
+        )
+
+
+@pytest.mark.parametrize("relation_kinds", [["view"], ["table", "view"]])
+def test_managed_manifest_validation_rejects_every_rls_source(
+    relation_kinds: list[str],
+) -> None:
+    raw = _development_manifest()
+    raw["tenant_isolation"] = "rls"
+    raw["allowed_relation_kinds"] = relation_kinds
+
+    with pytest.raises(RegistryConfigurationError, match="RLS sources are not supported"):
         validate_source_manifest(
             raw,
             load_budget_profiles(ROOT_DIRECTORY / "config" / "budget-profiles.yaml"),

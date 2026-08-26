@@ -1,10 +1,15 @@
 # ADR 0020: Lossless Scalar Encoding, Reader Formatting, And Result Types
 
-Status: Proposed — user approval required before implementation
+Status: Superseded research — not implementation-ready after ADR 0025
 
 Date: 2026-08-25
 
 Last expanded: 2026-08-26 (`DBEDGE-05` characterization and RLS-v2 UTF8 boundary coordination)
+
+[ADR 0025](0025-static-non-rls-first-launch.md)가 exact 7-OID SQL policy v3를 먼저 채택했다. 따라서
+이 문서의 24-OID result policy v2, SQL policy v3 digest, snapshot v3와 combined-v3 rollout은 현재
+구현 authority가 아니다. 조사 내용은 보존하지만 broader lossless encoding은 launch v3를 baseline으로
+SQL policy v4 이상에서 다시 제안해야 한다.
 
 Coordination: [Proposed ADR 0024](0024-rls-policy-drift-attestation.md)의 RLS attestation이 snapshot v2를
 먼저 사용하므로 이 ADR의 encoding/source-semantics snapshot은 cumulative v3다. 두 ADR 모두 아직

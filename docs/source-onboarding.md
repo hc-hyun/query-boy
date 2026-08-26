@@ -1,8 +1,18 @@
 # Source Onboarding
 
+Status: Managed onboarding runbook preserved; outside ADR 0025 static first launch
+
+현재 [ADR 0025](decisions/0025-static-non-rls-first-launch.md)의 launch inventory는
+`development-issues`, `market-voc` 두 non-RLS source로 동결돼 있다. 이 문서는 구현된 managed
+onboarding capability를 보존하는 후속 runbook이며 현재 launch에서 신규 database를 hot-add하는
+절차가 아니다. 새 source나 database는 [extension checklist](source-extension-checklist.md)에 따라
+별도 inventory·배포 승인을 먼저 받는다. 모든 RLS manifest는 현재 publish와 serving에서
+차단되므로 아래 역사적 RLS 준비 설명을 허용 절차로 해석하지 않는다.
+
 ## Boundary
 
-신규 PostgreSQL source 추가는 runtime 코드 변경 없이 끝나야 한다. 다음 두 종류의
+동적 source 운영을 별도로 활성화할 때 PostgreSQL source 추가는 runtime 코드 변경 없이 끝나야
+한다. 다음 두 종류의
 metadata를 분리한다.
 
 자동 수집:
@@ -36,7 +46,7 @@ Codex가 이 절차를 반복 가능하게 안내할 때는 repository의
 
 ## Source Authority And Artifacts
 
-Production hot-added source의 canonical manifest generation, active/deactivated state, metadata
+Managed hot-added source의 canonical manifest generation, active/deactivated state, metadata
 snapshot과 verified-query record는 Control DB가 authority다. Publish가 `config/sources` YAML, Git
 commit이나 PR을 만들지 않으며 Control DB와 repository를 양방향 동기화하지 않는다. 한곳에서
 ownership, state, history, size와 cost를 조회하는 management 목표와 범위는
@@ -57,8 +67,8 @@ ownership, state, history, size와 cost를 조회하는 management 목표와 범
 | Gateway usage/cost projection | Operator usage/lower-bound status implemented; provider monetary cost remains not configured |
 | Bootstrap and acceptance input | Repository YAML seed/fixture only |
 
-`config/sources/*.yaml`은 local/CI bootstrap seed이고 `config/onboarding/*.yaml`은 integration
-fixture다. Production managed mode의 desired-state backup이 아니다. Managed runtime은 source와
+`config/sources/*.yaml`은 static launch source이고 `config/onboarding/*.yaml`은 integration
+fixture다. Managed mode의 desired-state backup이 아니다. Managed runtime은 source와
 verified file을 열지 않으며 Control DB lifecycle이 없는 file source를 등록된 source로 간주하지
 않는다.
 
@@ -68,8 +78,8 @@ verified file을 열지 않으며 Control DB lifecycle이 없는 file source를 
 
 | Mode | Required/forbidden settings | Purpose |
 |---|---|---|
-| `bootstrap` (default) | Control DSN/key 금지; anonymous/query-only token 또는 v2 policy | Local/CI repository fixture |
-| `managed` | Control DSN/key, stable replica ID와 v2 access policy 필수; API token/anonymous 금지 | Production Control DB authority와 hot-add |
+| `bootstrap` (default) | Control DSN/key 금지; anonymous/query-only token 또는 v2 policy | ADR 0025 reviewed static source authority |
+| `managed` | Control DSN/key, stable replica ID와 v2 access policy 필수; API token/anonymous 금지 | 별도 활성화하는 Control DB authority와 hot-add |
 
 Managed mode에는 source별 file fallback이나 filesystem verified-query dataset과 Control DB record의 merge가 없다. Budget profile과 access
 policy는 계속 deployment configuration에서 읽는다. Source/verified directory는 없어도 되지만
@@ -289,7 +299,7 @@ catalog가 사라졌다는 뜻이 아니라 question context에서 일부 column
 이는 SQL column authorization 경계가 아니므로 민감 column은 curated view 자체에서
 제거해야 한다.
 
-Production managed mode에서는 target database/schema/control object owner 권한과
+Managed mode를 별도 활성화할 때는 target database/schema/control object owner 권한과
 `query_man_control_writer`를 create·alter하고 남은 membership을 회수할 cluster role 관리 권한을
 모두 가진 migration identity가 표준 libpq `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`,
 `PGPASSFILE`/managed-auth 환경을 설정하고 다음을 실행한다. Database owner 권한만으로는 충분하지
@@ -351,13 +361,15 @@ Observation 실패는 registry, query, readiness나 mutation receipt를 바꾸�
    Quality minimum은 revision hash 재료가 아니므로 2단계와 같은 revision이 L2 gate를 통과한다.
    반면 source profile의 execution budget과 revision-scoped policy 변경은 revision 재료이므로
    새 revision에서 verified query를 다시 실행·승인해야 한다.
-   Canonical-time/SQL policy처럼 모든 metadata revision이 바뀌는 전환은 current와 rollback-preserved
-   verified-query baseline 전체를 새 revision에서 재실행·재발행하며 이전 immutable row를 삭제하지 않는다.
+   Canonical-time material처럼 metadata revision 재료 자체가 바뀌는 전환은 current와
+   rollback-preserved verified-query baseline 전체를 새 revision에서 재실행·재발행하며 이전
+   immutable row를 삭제하지 않는다. Metadata revision을 보존하는 SQL-policy-only 전환은 기존
+   record를 재발행하지 않고 regression execution으로 호환성을 확인한다.
 6. `/meta`와 MCP `get_context`의 `quality_level=L2`, 실제 query 결과, `/sources` visibility를
    확인한다. Replica endpoint에서 다른 replica도 report cadence 뒤 같은 generation/state/metadata
    revision으로 `available`, `drift=[]`인지 확인한다.
 7. 문제가 있으면 마지막 정상 source generation으로 rollback한다. Rollback 대상의 encrypted
-   Rollback 대상의 encrypted credential, manifest, metadata와 그 대상 metadata revision에 대응하는
+   credential, manifest, metadata와 그 대상 metadata revision에 대응하는
    verified-query record가 먼저 재검증되므로 실패한 복구가
    active pointer를 바꾸지 않는다. 원인 점검과 현재 source 재검증을 마친 뒤에만
    `POST /admin/sources/{source_id}/metadata/resume`으로 automatic metadata publish를 재개한다.
@@ -388,16 +400,8 @@ relation/column의 `sql_name`을 사용해야 한다.
   Query relation은 항상 schema-qualified SQL name을 사용한다.
 - DB comment는 instruction이 아니라 길이가 제한된 description data로 취급한다.
 - Production connection은 TLS certificate 검증을 사용한다.
-- `tenant_isolation: rls` source는 `view`만 허용하고 모든 공개 view가
-  `security_invoker=true`여야 한다. Reader는 `NOBYPASSRLS`여야 하며 policy는 transaction-local
-  `query_man.tenant_id`를 사용한다.
-- 위 검사는 hidden base relation의 RLS flag/policy drift까지 증명하지 못한다. 현재
-  [RLS policy drift finding](verification/2026-08-26-rls-policy-drift.md)의 `RLS-01`~`RLS-03`이 열려
-  있으므로 RLS source의 production publish와 route activation은 보류한다. Non-RLS source onboarding은
-  이 보류 대상이 아니다.
-- [Proposed ADR 0024](decisions/0024-rls-policy-drift-attestation.md)의 `RLS-01-A` target은 RLS Catalog/
-  Query connection startup client UTF8과 PostgreSQL-18/server/client UTF8 admission도 요구한다. 이는
-  아직 승인·구현된 RLS onboarding/admission 정책이 아니므로 현재는 위 all-RLS publish/route hold만 유지한다.
-  A가 exact 승인되면 read-only inventory가 non-UTF8 RLS database를 stop condition으로 보고하고,
-  별도 권한과 승인을 받은 operator만 unroute/deactivate 또는 source별 DB-owner data migration/
-  re-onboarding plan과 rollback을 실행한다. Plan-only onboarding Skill은 mutation하지 않는다.
+- `tenant_isolation: rls` source는 현재 bootstrap manifest, managed publish/rotate, cold projection과
+  query path에서 모두 거부한다. Historical row/type은 삭제하지 않는다. 다시 지원하려면
+  [RLS drift finding](verification/2026-08-26-rls-policy-drift.md)과 parked
+  [ADR 0024 research](decisions/0024-rls-policy-drift-attestation.md)를 launch v3에 맞춰 새로 결정하고,
+  `RLS-01`~`RLS-03`의 attestation, migration, rollback과 protected acceptance를 정확히 승인받는다.

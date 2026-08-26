@@ -28,8 +28,10 @@ snapshot active pointer를 갱신하지 않는다. `POST /meta`와 MCP context�
 Bootstrap mode는 filesystem verified-query dataset을 startup에 strict schema로 load하고
 source별 revision set으로 MetadataService에 전달한다. Control-plane에서 복구하거나 rollback한 snapshot도 현재
 manifest와 verified revision에 대해 같은 gate를 다시 통과해야 한다.
-Global canonical-time/SQL policy가 바뀌면 모든 source metadata revision이 바뀌므로 값이 같아 보이는
-verified query도 새 exact revision에서 다시 실행해 새 record로 발행해야 L2가 된다.
+Canonical-time material처럼 metadata revision 재료가 바뀌는 global transition은 모든 source
+metadata revision을 바꾸므로 값이 같아 보이는 verified query도 새 exact revision에서 다시 실행해
+새 record로 발행해야 L2가 된다. Metadata revision 재료를 보존하는 SQL-policy-only 전환은 이
+문장만으로 metadata revision이나 verified record를 다시 발행하지 않는다.
 
 ## Consequences
 

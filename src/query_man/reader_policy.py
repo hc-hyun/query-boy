@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Final
 
 from psycopg import AsyncConnection
 
@@ -10,6 +10,8 @@ from query_man.models import SourceProfile
 class ReaderSessionPolicyError(RuntimeError):
     pass
 
+
+READER_CLIENT_ENCODING: Final = "UTF8"
 
 READER_SESSION_TIMEZONE_SETTER = (
     "SELECT pg_catalog.set_config('TimeZone', 'UTC', true)"
@@ -66,6 +68,19 @@ _READER_SESSION_POLICY_QUERY = """
   FROM pg_catalog.pg_roles AS role
   WHERE role.rolname = session_user
 """
+
+
+def require_reader_connection_policy(
+    connection: AsyncConnection[Any],
+) -> None:
+    info = connection.info
+    if (
+        not 180_000 <= info.server_version < 190_000
+        or info.parameter_status("server_encoding") != READER_CLIENT_ENCODING
+        or info.parameter_status("client_encoding") != READER_CLIENT_ENCODING
+        or info.encoding != "utf-8"
+    ):
+        raise ReaderSessionPolicyError("Source reader connection policy mismatch")
 
 
 def reader_session_budget_values(

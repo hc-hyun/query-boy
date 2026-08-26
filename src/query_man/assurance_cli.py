@@ -37,7 +37,7 @@ async def _run_evaluation(root: Path) -> None:
         root / "config" / "verified-queries.yaml",
         {source["source_id"] for source in registry.list()},
     )
-    catalog = PostgresCatalog()
+    catalog = PostgresCatalog(reject_domain_columns=True)
     metadata = MetadataService(
         registry,
         catalog,
@@ -71,7 +71,7 @@ async def _run_verification(root: Path) -> None:
         root / "config" / "verified-queries.yaml",
         {source["source_id"] for source in registry.list()},
     )
-    catalog = PostgresCatalog()
+    catalog = PostgresCatalog(reject_domain_columns=True)
     executor = PostgresQueryExecutor()
     metadata = MetadataService(registry, catalog)
     service = QueryService(registry, metadata, executor)

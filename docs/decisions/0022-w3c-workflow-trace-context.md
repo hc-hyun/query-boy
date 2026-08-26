@@ -1,8 +1,11 @@
 # ADR 0022: W3C Workflow Trace Context
 
-Status: Proposed read-only prework — priority gate and user approval required before implementation
+Status: Parked research — outside ADR 0025 first-launch scope
 
 Date: 2026-08-26
+
+이 문서는 조사 기록으로 보존한다. [ADR 0025](0025-static-non-rls-first-launch.md)의 구현과 별개이며
+TRACE interface, header, audit와 counter 변경은 새 우선순위·영향 승인 없이는 시작하지 않는다.
 
 ## Priority Boundary
 

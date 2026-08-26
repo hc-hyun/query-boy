@@ -21,10 +21,12 @@ from query_man.models import (
     SourceProfile,
 )
 from query_man.reader_policy import (
+    READER_CLIENT_ENCODING,
     READER_SESSION_BUDGET_SETTERS,
     READER_SESSION_TIMEZONE_SETTER,
     ReaderSessionPolicyError,
     reader_session_budget_values,
+    require_reader_connection_policy,
     require_reader_session_policy,
 )
 
@@ -76,11 +78,13 @@ CATALOG_QUERY = """
     attribute.attnum::integer AS ordinal,
     attribute.attname::text AS column_name,
     pg_catalog.format_type(attribute.atttypid, attribute.atttypmod) AS data_type,
+    type_row.typtype::text AS type_kind,
     attribute.attnotnull AS is_not_null,
     pg_catalog.left(pg_catalog.col_description(relation.relation_oid, attribute.attnum), 2000)
       AS column_comment
   FROM eligible_relations AS relation
   JOIN pg_catalog.pg_attribute AS attribute ON attribute.attrelid = relation.relation_oid
+  JOIN pg_catalog.pg_type AS type_row ON type_row.oid = attribute.atttypid
   WHERE attribute.attnum > 0
     AND NOT attribute.attisdropped
     AND pg_catalog.has_column_privilege(
@@ -326,14 +330,29 @@ async def _begin_catalog_transaction(
     await require_reader_session_policy(connection, source)
 
 
+async def _require_catalog_connection_policy(
+    connection: AsyncConnection[Any],
+) -> None:
+    try:
+        require_reader_connection_policy(connection)
+    except ReaderSessionPolicyError:
+        try:
+            await connection.close()
+        except Exception:
+            pass
+        raise
+
+
 class PostgresCatalog:
-    def __init__(self) -> None:
+    def __init__(self, *, reject_domain_columns: bool = False) -> None:
         self._pools: dict[str, AsyncConnectionPool[Any]] = {}
         self._pool_lock = asyncio.Lock()
+        self._reject_domain_columns = reject_domain_columns
 
     async def load(self, source: SourceProfile) -> CatalogSnapshot:
         pool = await self._get_pool(source)
         async with pool.connection() as connection:
+            await _require_catalog_connection_policy(connection)
             try:
                 await _begin_catalog_transaction(connection, source)
                 cursor = await connection.execute(
@@ -347,6 +366,8 @@ class PostgresCatalog:
                 rows = await cursor.fetchall()
                 if len(rows) > source.budget.max_metadata_columns:
                     raise _CatalogValidationError("Catalog column limit exceeded")
+                if self._reject_domain_columns:
+                    _require_supported_catalog_types(rows)
                 structure_cursor = await connection.execute(
                     STRUCTURE_QUERY,
                     (
@@ -404,6 +425,7 @@ class PostgresCatalog:
         representative_position = storage_relations.index(representative_relation) + 1
         pool = await self._get_pool(source)
         async with pool.connection() as connection:
+            await _require_catalog_connection_policy(connection)
             try:
                 await _begin_catalog_transaction(connection, source)
                 cursor = await connection.execute(
@@ -474,6 +496,7 @@ class PostgresCatalog:
                     "sslmode": "verify-full" if connection.ssl else "disable",
                     "application_name": f"query-man-meta:{source.source_id}",
                     "connect_timeout": 2,
+                    "client_encoding": READER_CLIENT_ENCODING,
                     # ponytail: explicit BEGIN must not be preceded by psycopg's implicit BEGIN.
                     "autocommit": True,
                     "row_factory": dict_row,
@@ -549,6 +572,11 @@ def _rows_to_relations(rows: list[dict[str, Any]]) -> list[_CatalogRelationBuild
             )
         )
     return sorted(relations.values(), key=lambda item: item.qualified_name)
+
+
+def _require_supported_catalog_types(rows: Sequence[dict[str, Any]]) -> None:
+    if any(row.get("type_kind") == "d" for row in rows):
+        raise _CatalogValidationError("Catalog contains an unsupported domain column")
 
 
 def _apply_structures(

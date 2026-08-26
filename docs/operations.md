@@ -1,5 +1,81 @@
 # Operations Guide
 
+## Static Non-RLS First Launch
+
+[ADR 0025](decisions/0025-static-non-rls-first-launch.md)의 static launch는 일반 production이나
+managed onboarding 절차가 아니다. 다음 exact profile만 대상으로 한다.
+
+- `development-issues`, `market-voc` 두 bootstrap source
+- PostgreSQL 18, server/client UTF-8, RLS source 0개
+- final result OID `20, 21, 23, 25, 1082, 1184, 1700`
+- SQL policy v3와 repository의 9개 verified query
+- 단일 Query Man replica, private Docker network와 loopback listener
+
+Repository 변경 승인은 실제 환경 실행 승인이 아니다. 실행 전 change record에는 target, operator
+access, TLS/secret/backup, source·DDL·role/settings inventory, approved Git commit, upstream/application
+image digest, route, stop/rollback condition과 책임자를 기록한다. 하나라도 확인할 수 없으면 시작하지
+않는다. 이 protected action은 active TODO의 `LAUNCH-02`이며 별도 사용자 승인 전에는 실행하지
+않는다.
+
+### Artifact preparation
+
+Working tree와 commit을 확인하고 approved 40-hex commit을 build argument로 명시한다. `unknown` label은
+local 개발용일 뿐 launch artifact로 허용하지 않는다.
+
+```bash
+git status --short
+git rev-parse HEAD
+export QUERY_MAN_VCS_REF=<approved-40-hex-git-commit>
+docker compose config --quiet
+docker compose build --build-arg QUERY_MAN_VCS_REF="$QUERY_MAN_VCS_REF" query-man
+docker image inspect query-man:local \
+  --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}'
+```
+
+Dockerfile과 Compose의 upstream reference는 readable tag와 immutable digest를 함께 가져야 한다.
+Built application image ID/digest와 revision label을 change record에 복사하고 approved commit과 다르면
+중단한다. `query-man-replica`의 `soak` profile은 시작하지 않는다.
+
+### Traffic-off acceptance
+
+Source manifest, budget/access policy, source DDL/view/function/operator/type/collation/extension, reader
+role/grant와 database/role/server semantic setting을 승인 inventory와 비교한다. Business DML은 freeze
+대상이 아니지만 schema/security/semantic drift는 설명 없이 수용하지 않는다. Runtime이 모든 privileged
+DBA drift를 fingerprint하지 않으므로 이 비교는 운영자 책임이다.
+
+```bash
+docker compose up -d --wait postgres query-man
+./scripts/verify-container.sh
+uv run query-man-verify
+```
+
+Acceptance는 다음을 모두 요구한다.
+
+- Compose의 `query-man` health가 exact `{"status":"ready"}` body를 확인한다.
+- Runtime source inventory가 두 ID와 일치하고 RLS manifest가 0개다.
+- Source connection preflight가 PostgreSQL 18, server/client UTF-8을 통과한다.
+- Metadata revision 두 개와 verified column/row/hash가 repository baseline과 같다.
+- 9/9 query가 SQL policy v3로 성공한다.
+- Exact seven-OID positive, bool/JSON/bytea/float/array/record negative와 scalar-domain Catalog
+  pre-publication rejection acceptance가 통과한다.
+- HTTP와 MCP가 같은 unsupported result를 details 없는 `QUERY_UNAVAILABLE`로 반환한다.
+- Application image revision/digest, PostgreSQL image digest와 deployed config가 change record와 같다.
+
+`degraded`, RLS/unsupported advertised type, hash 차이, old SQL policy process, inventory drift 또는
+rollback 미검증은 stop condition이다. Change record에는 실제 접속 비밀값, 질의 원문과 내부 DB 오류를
+넣지 않는다.
+
+### Cutover and rollback
+
+Old route를 닫고 신규 유입, active query와 source connection을 drain한다. SQL policy v2/v3 process가
+동시에 serving하지 않게 한 뒤 accepted single replica만 route한다. Route 뒤 exact ready, public error,
+query usage와 PostgreSQL connection 수를 다시 확인한다.
+
+Rollback은 route 차단→new replica drain→직전 image/config/SQL policy와 preserved source inventory
+복구→그 release의 ready/verified baseline 확인→route 순서다. New Git history, RLS/Control row와 실행
+기록은 삭제하지 않는다. 실제 cutover/rollback 결과만 새 immutable environment evidence로 남기며
+repository의 과거 verification 문서를 소급 수정하지 않는다.
+
 ## Logging Policy
 
 `query_man`과 MCP application/audit logger는 one-line JSON을 기록한다. 공통 필드는 UTC
@@ -365,8 +441,9 @@ label로 합산한다. Counter 차이로 rate를, `*_sum / *_count`로 구간 �
 
 `docker compose up -d --wait postgres`, `./scripts/apply-db.sh`,
 `docker compose up -d --build --wait query-man` 순서로 database 변경을 먼저 적용한 뒤
-application을 시작한다. `/ready`가 `ready` 또는 `degraded`를 반환하면 container는
-healthy지만 release smoke에서는 body가 `{"status":"ready"}`인지 별도로 확인한다.
+application을 시작한다. `/ready`가 `degraded`여도 HTTP 200 wire status는 유지하지만,
+Compose healthcheck는 body가 정확히 `{"status":"ready"}`일 때만 healthy다. 따라서
+`degraded` container는 launch acceptance를 통과하지 않는다.
 Application port는 container 내부 `3000`, host loopback의 `${QUERY_MAN_PORT:-3000}`이며
 PostgreSQL은 container network에서 `postgres:5432`다.
 

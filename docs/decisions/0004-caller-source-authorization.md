@@ -1,5 +1,10 @@
 # ADR 0004: Caller And Source Authorization
 
+> [ADR 0025](0025-static-non-rls-first-launch.md) launch note: caller authentication,
+> authorization and shared source visibility remain current, but every RLS source is quarantined before
+> tenant/revision/metadata/queue/database work. RLS trusted-context consequences below are historical
+> capability, not current launch serving behavior.
+
 Status: Accepted; source-scope model superseded by ADR 0017
 
 Date: 2026-08-22

@@ -1,5 +1,11 @@
 # ADR 0014: Trusted RLS Tenant Context
 
+> Launch status: implementation shape and historical records are preserved, but
+> [ADR 0025](0025-static-non-rls-first-launch.md) quarantines
+> every RLS source. Bootstrap/injected/managed admission fails and QueryService/direct executor returns
+> details-free `QUERY_UNAVAILABLE` before tenant/revision/metadata/queue/database work. The historical
+> `TENANT_CONTEXT_REQUIRED` path below is not reachable in the current launch profile.
+
 Status: Accepted
 
 Date: 2026-08-23

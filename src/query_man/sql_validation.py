@@ -4,12 +4,17 @@ import hashlib
 import json
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any
 
 from pglast import ast, parse_sql
 from pglast.parser import ParseError, fingerprint
 
-from query_man.result_encoding import CANONICAL_TIME_POLICY_MATERIAL
+from query_man.reader_policy import READER_CLIENT_ENCODING
+from query_man.result_encoding import (
+    CANONICAL_TIME_POLICY_MATERIAL,
+    RESULT_OID_POLICY_MATERIAL,
+)
 
 DEFAULT_ALLOWED_FUNCTIONS = frozenset(
     {
@@ -240,13 +245,25 @@ _ALLOWED_NODE_TAGS = frozenset(
     }
 )
 
-_SQL_POLICY_VERSION = 2
+_SQL_POLICY_VERSION = 3
+
+_READER_CONNECTION_POLICY_MATERIAL: Mapping[str, object] = MappingProxyType(
+    {
+        "version": 1,
+        "postgresql_major": 18,
+        "server_encoding": READER_CLIENT_ENCODING,
+        "client_encoding": READER_CLIENT_ENCODING,
+        "driver_encoding": "utf-8",
+    }
+)
 
 
 def _create_sql_policy_revision() -> str:
     policy = {
         "version": _SQL_POLICY_VERSION,
         "canonical_time_policy": dict(CANONICAL_TIME_POLICY_MATERIAL),
+        "reader_connection_policy": dict(_READER_CONNECTION_POLICY_MATERIAL),
+        "result_oid_policy": dict(RESULT_OID_POLICY_MATERIAL),
         "functions": sorted(DEFAULT_ALLOWED_FUNCTIONS),
         "operators": sorted(DEFAULT_ALLOWED_OPERATORS),
         "types": sorted(DEFAULT_ALLOWED_TYPES),

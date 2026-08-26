@@ -14,6 +14,7 @@ import pytest
 import query_man.app as app_module
 from query_man.access import AccessPolicy, AccessPolicyConfigurationError
 from query_man.catalog import PostgresCatalog
+from query_man.errors import MetadataUnavailableError
 from query_man.models import (
     CatalogSnapshot,
     PreparedMetadata,
@@ -23,6 +24,7 @@ from query_man.models import (
 )
 from query_man.operations import operations
 from query_man.query import PostgresQueryExecutor, RuntimeQueryExecutor
+from query_man.reader_policy import ReaderSessionPolicyError
 from query_man.registry import SourceRegistry
 from query_man.runtime_config import RuntimeConfig
 from query_man.source_admin import ReplicaSourceObservation, ResourceObservationSample
@@ -190,6 +192,7 @@ def test_managed_mode_starts_empty_without_loading_source_or_verified_files(
         app.state.catalog,
         app.state.query_executor,
     )
+    assert app.state.catalog._reject_domain_columns is False
 
 
 def test_managed_mode_keeps_all_control_writers_on_fixed_source_store(
@@ -348,6 +351,26 @@ def test_bootstrap_mode_preserves_an_explicit_empty_registry(
     assert app.state.registry is registry
     assert app.state.source_admin is None
     assert app.state.source_reloader is None
+    assert app.state.catalog._reject_domain_columns is True
+
+
+def test_bootstrap_mode_rejects_injected_rls_before_provider_composition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+    registry = SourceRegistry([replace(source, tenant_isolation="rls")])
+
+    monkeypatch.setattr(app_module, "PostgresCatalog", _unexpected_file_load)
+
+    with pytest.raises(
+        ValueError,
+        match="Runtime launch inventory does not accept RLS sources",
+    ):
+        app_module.build_app(
+            _runtime("bootstrap", ROOT_DIRECTORY / "config" / "sources"),
+            registry=registry,
+        )
 
 
 def test_bootstrap_mode_does_not_construct_control_plane_stores(
@@ -732,6 +755,13 @@ async def test_resource_failures_are_isolated_and_cancellation_propagates(
         async def get_published(self, _source_id: str) -> PreparedMetadata:
             raise RuntimeError("credential=private-metadata-secret")
 
+    class ReaderPolicyFailingMetadata:
+        async def get_published(self, _source_id: str) -> PreparedMetadata:
+            try:
+                raise ReaderSessionPolicyError("Source reader connection policy mismatch")
+            except ReaderSessionPolicyError as error:
+                raise MetadataUnavailableError from error
+
     class CancelledMetadata:
         async def get_published(self, _source_id: str) -> PreparedMetadata:
             raise asyncio.CancelledError
@@ -790,6 +820,12 @@ async def test_resource_failures_are_isolated_and_cancellation_propagates(
         )
         await app_module._collect_resource_observations(  # type: ignore[arg-type]
             (source,),
+            Catalog(),
+            ReaderPolicyFailingMetadata(),
+            writer,
+        )
+        await app_module._collect_resource_observations(  # type: ignore[arg-type]
+            (source,),
             FailingCatalog(),
             Metadata(),
             writer,
@@ -836,6 +872,7 @@ async def test_resource_failures_are_isolated_and_cancellation_propagates(
         assert writer.success_calls == 1
         assert writer.failure_calls == [
             (source.source_id, 1, "METADATA_UNAVAILABLE"),
+            (source.source_id, 1, "RESOURCE_READ_FAILED"),
             (source.source_id, 1, "RESOURCE_READ_FAILED"),
             (source.source_id, 1, "RESOURCE_READ_FAILED"),
             (source.source_id, 1, "RESOURCE_READ_FAILED"),

@@ -144,7 +144,7 @@ async def test_evaluation_cli_preserves_bootstrap_paths_output_exit_and_cleanup(
             or Verified()
         ),
     )
-    monkeypatch.setattr(assurance_cli, "PostgresCatalog", lambda: catalog)
+    monkeypatch.setattr(assurance_cli, "PostgresCatalog", _static_launch_catalog(catalog))
     monkeypatch.setattr(
         assurance_cli,
         "MetadataService",
@@ -260,7 +260,7 @@ async def test_verify_cli_composes_guarded_query_path_and_preserves_cleanup_orde
             or Verified()
         ),
     )
-    monkeypatch.setattr(assurance_cli, "PostgresCatalog", lambda: catalog)
+    monkeypatch.setattr(assurance_cli, "PostgresCatalog", _static_launch_catalog(catalog))
     monkeypatch.setattr(assurance_cli, "PostgresQueryExecutor", lambda: executor)
     monkeypatch.setattr(assurance_cli, "MetadataService", lambda _registry, _catalog: metadata)
     monkeypatch.setattr(assurance_cli, "QueryService", Service)
@@ -319,7 +319,7 @@ async def test_verify_cli_propagates_failure_without_success_output_and_still_cl
         "VerifiedQueryRegistry",
         SimpleNamespace(load=lambda _path, _known: Verified()),
     )
-    monkeypatch.setattr(assurance_cli, "PostgresCatalog", lambda: catalog)
+    monkeypatch.setattr(assurance_cli, "PostgresCatalog", _static_launch_catalog(catalog))
     monkeypatch.setattr(assurance_cli, "PostgresQueryExecutor", lambda: executor)
     monkeypatch.setattr(assurance_cli, "MetadataService", lambda *_args: object())
     monkeypatch.setattr(assurance_cli, "QueryService", lambda *_args: object())
@@ -387,6 +387,14 @@ def _recording_close(events: list[object], value: object) -> Any:
     return close
 
 
+def _static_launch_catalog(catalog: object) -> Any:
+    def factory(*, reject_domain_columns: bool) -> object:
+        assert reject_domain_columns is True
+        return catalog
+
+    return factory
+
+
 def _patch_evaluation_composition(
     monkeypatch: pytest.MonkeyPatch,
     evaluation: object,
@@ -411,5 +419,5 @@ def _patch_evaluation_composition(
         "VerifiedQueryRegistry",
         SimpleNamespace(load=lambda _path, _known: verified),
     )
-    monkeypatch.setattr(assurance_cli, "PostgresCatalog", lambda: catalog)
+    monkeypatch.setattr(assurance_cli, "PostgresCatalog", _static_launch_catalog(catalog))
     monkeypatch.setattr(assurance_cli, "MetadataService", lambda *_args, **_kwargs: object())

@@ -1,8 +1,14 @@
 # ADR 0003: Reader And Resolved Object Policy
 
-Status: Accepted
+Status: Accepted; connection compatibility extended and RLS launch branch superseded by ADR 0025
 
 Date: 2026-08-22
+
+[ADR 0025](0025-static-non-rls-first-launch.md)는 기존 transaction/session 검증 앞에 PostgreSQL 18과
+server/client UTF-8을 확인하는 no-SQL connection admission을 추가한다. 이 문서의 reader privilege,
+read-only transaction과 resolved-object 정책은 그대로다. 다만 현재 launch에서는 모든 RLS source가
+bootstrap/injected/managed admission에서 선행 차단되므로 아래 `security_invoker`/trusted-context
+등록 branch는 preserved historical capability이며 serving 가능한 현재 절차가 아니다.
 
 ## Context
 

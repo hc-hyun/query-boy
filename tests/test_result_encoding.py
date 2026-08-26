@@ -9,8 +9,10 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+import query_man.result_encoding as result_encoding
 from query_man.result_encoding import (
     CANONICAL_TIME_POLICY_MATERIAL,
+    RESULT_OID_POLICY_MATERIAL,
     ResultEncodingError,
     encode_result_value,
 )
@@ -117,6 +119,66 @@ def test_canonical_time_policy_material_is_exact_and_immutable() -> None:
     }
     with pytest.raises(TypeError):
         CANONICAL_TIME_POLICY_MATERIAL["version"] = 2  # type: ignore[index]
+
+
+def test_result_oid_policy_material_is_exact_and_recursively_immutable() -> None:
+    assert dict(RESULT_OID_POLICY_MATERIAL) == {
+        "version": 1,
+        "postgresql_major": 18,
+        "allowed_scalar_oids": (
+            ("int8", 20),
+            ("int2", 21),
+            ("int4", 23),
+            ("text", 25),
+            ("date", 1082),
+            ("timestamptz", 1184),
+            ("numeric", 1700),
+        ),
+    }
+    with pytest.raises(TypeError):
+        RESULT_OID_POLICY_MATERIAL["version"] = 2  # type: ignore[index]
+    with pytest.raises(TypeError):
+        RESULT_OID_POLICY_MATERIAL["allowed_scalar_oids"][0] = (  # type: ignore[index]
+            "bool",
+            16,
+        )
+
+
+@pytest.mark.parametrize("oid", [20, 21, 23, 25, 1082, 1184, 1700])
+def test_result_oid_gate_accepts_each_launch_scalar_oid(oid: int) -> None:
+    result_encoding._require_supported_result_oids((oid,))
+
+
+@pytest.mark.parametrize(
+    "oids",
+    [
+        pytest.param((16,), id="bool"),
+        pytest.param((3802,), id="jsonb"),
+        pytest.param((), id="empty"),
+        pytest.param(("20",), id="malformed"),
+        pytest.param((True,), id="bool-is-not-int-oid"),
+    ],
+)
+def test_result_oid_gate_rejects_with_one_bounded_error(
+    oids: tuple[object, ...],
+) -> None:
+    with pytest.raises(ResultEncodingError) as captured:
+        result_encoding._require_supported_result_oids(oids)
+
+    assert str(captured.value) == "Unsupported PostgreSQL result type"
+    assert not any(str(value) in str(captured.value) for value in oids)
+
+
+def test_result_oid_gate_bounds_malformed_iterators() -> None:
+    def malformed_oids() -> object:
+        yield 20
+        raise RuntimeError("private result description")
+
+    with pytest.raises(ResultEncodingError) as captured:
+        result_encoding._require_supported_result_oids(malformed_oids())
+
+    assert str(captured.value) == "Unsupported PostgreSQL result type"
+    assert captured.value.__cause__ is None
 
 
 def test_rejects_unsupported_values_and_non_string_object_keys() -> None:

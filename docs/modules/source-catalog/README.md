@@ -5,123 +5,83 @@ Status: Logical boundary; physical package split pending
 ## 목적
 
 Source Catalog는 Query Man이 사용할 PostgreSQL source의 정의와 process-local runtime
-projection을 소유한다. 다른 module은 `source_id`로 source를 조회하고, 검증된 profile에 들어
-있는 schema, budget, semantic overlay와 tenant policy를 소비한다.
+projection을 소유한다. 다른 module은 `source_id`로 검증된 source profile을 조회하고 schema,
+budget, semantic overlay와 tenant policy를 소비한다.
 
-이 module은 PostgreSQL physical catalog를 읽는 module이 아니다. `pg_catalog` introspection과
-metadata revision/context 생성은 [Metadata](../metadata/README.md)가 담당한다.
+PostgreSQL physical catalog introspection과 metadata revision/context 생성은
+[Metadata](../metadata/README.md)의 책임이다. 현재 첫 launch 범위는
+[ADR 0025](../../decisions/0025-static-non-rls-first-launch.md)의 `LAUNCH-01-A`다.
 
 ## 소유 책임
 
-- Source manifest v2와 budget profile의 strict schema 및 이전 version의 fail-closed cutover
-- `SourceProfile`, resolved connection, allowed schema/relation kind, tenant isolation과 provenance
-- Grain, measure, join, business term과 question rule을 포함한 semantic overlay definition
+- Source manifest v2와 budget profile의 strict validation
+- `SourceProfile`, connection, allowlist, tenant isolation, provenance와 semantic overlay 정의
 - Source-scoped credential environment naming과 host/port resolution 검증
-- Owner, environment와 source DB migration reference의 bounded provenance definition
-- Optional manifest v2 observability definition과 bounded physical resource targets
-- System schema 거부, overlay referential integrity와 source identity 검증
-- Runtime `SourceRegistry`의 논리적 read projection
-- 논리적으로 Control Plane만 사용하는 registry upsert/remove projection capability
-- Public source summary에서 credential과 internal state를 제거하는 규칙
-- Plan-only source onboarding Skill의 trigger, owner/admin handoff와 secret/mutation 금지 경계
+- Optional observability target의 bounded manifest definition
+- Runtime `SourceRegistry`의 read projection과 Control Plane용 projection writer capability
+- Published source graph의 immutability와 public summary의 credential/internal-state 제거
+- Metadata와 Guarded Query가 소비하는 공통 reader policy interface
+- Plan-only source onboarding Skill의 owner/admin handoff와 secret/mutation 금지 경계
 
 ## 소유하지 않는 책임
 
-- Source DB의 physical catalog introspection과 metadata cache/revision
-- SQL AST validation, execution, timeout, result limit과 cancellation
-- Source generation, encrypted credential, Control DB transaction과 rollback
-- Caller authentication/authorization와 HTTP/MCP serialization
-- PostgreSQL reader role/grant 자체의 생성이나 source DB migration
+- Source DB의 physical catalog, metadata cache와 revision
+- SQL AST validation, query execution, result encoding, timeout, cancel과 rollback
+- Control DB의 source generation, encrypted credential, transaction과 recovery
+- Caller authentication/authorization와 HTTP/MCP/CLI rendering
+- PostgreSQL reader role/grant 생성, source DB migration 또는 protected 배포 실행
 
 ## 현재 코드 위치
 
-- [`registry.py`](../../../src/query_man/registry.py): manifest/budget parser, validator와 runtime registry
-- [`models.py`](../../../src/query_man/models.py): budget, connection, semantic와 source profile types
+- [`registry.py`](../../../src/query_man/registry.py): manifest/budget parser, validator,
+  `SourceReader`, `SourceProjectionWriter`와 concrete registry
+- [`models.py`](../../../src/query_man/models.py): source/budget/semantic/provenance/observation types;
+  Metadata type도 포함된 shared transition file
 - [`reader_policy.py`](../../../src/query_man/reader_policy.py): Metadata와 Guarded Query가 공유하는
-  reader-session verifier interface와 safety policy
-- [`config/sources`](../../../config/sources): local/CI bootstrap source definitions; managed authority가 아님
-- [`config/budget-profiles.yaml`](../../../config/budget-profiles.yaml): versioned resource tier definitions
-- `config/onboarding/<source>.yaml`과 `config/onboarding/<source>-l2.yaml`: Control Plane
-  candidate staging이 소비하는 fixture source/semantic input; 같은 directory의
-  `<source>-verified-query.yaml`은 Assurance 소유
+  reader connection/session policy; shared transition file
+- [`config/sources`](../../../config/sources): `development-issues`, `market-voc` static launch inventory
+- [`config/budget-profiles.yaml`](../../../config/budget-profiles.yaml): versioned resource tiers
+- `config/onboarding/<source>.yaml`과 `config/onboarding/<source>-l2.yaml`: managed candidate staging
+  fixture이며 static launch inventory가 아님
 - [`query-man-source-onboarding`](../../../skills/query-man-source-onboarding/SKILL.md): production
-  authority가 아닌 plan-only DB-owner/administrator handoff workflow
+  authority가 아닌 plan-only owner/administrator handoff workflow
 - [`tests/test_registry.py`](../../../tests/test_registry.py),
+  [`tests/test_reader_policy.py`](../../../tests/test_reader_policy.py),
   [`tests/test_runtime_config.py`](../../../tests/test_runtime_config.py): focused tests
 
-`models.py`에는 Metadata type도 함께 있으므로 현재는 type별 소유권을 구분한다. Source 관련
-type 이동은 동작 변경과 섞지 않는 별도 mechanical refactoring으로 수행한다.
-
-`registry.py`는 read-only `SourceReader`와 이를 확장하는 `SourceProjectionWriter` Protocol을
-제공한다. Concrete `SourceRegistry`는 두 Protocol을 구조적으로 구현하고 기존 다섯 method와
-`load`를 그대로 제공한다. 이는 wrapper나 runtime sandbox가 아니라 일반 consumer의 annotation을
-좁혀 accidental mutation을 mypy와 review에서 찾는 개발 경계다. 승인 범위와 compatibility는
-[결정 가이드 D2](../../module-boundary-decision-guide.md#d2-source-조회와-수정-capability)와
-[ADR 0018](../../decisions/0018-module-ownership-and-contract-governance.md)에 기록한다.
+Source-related type 이동과 물리 package 분리는 동작 변경에 섞지 않는 별도 mechanical
+refactoring으로 수행한다.
 
 ## 제공 인터페이스와 소유 경계
 
-이 절은 다른 module이 소비하는 official interface와 Source Catalog가 소유하지만 interface가 아닌
-manifest format, policy 및 safety invariant를 함께 나열한다. 각 제목은 실제 범주를 명시한다.
+이 절에서 `interface`는 다른 logical module에 공개한 Python shape와 호출 의미만 뜻한다.
+Manifest format, launch policy, safety invariant와 protected operation은 별도 범주다.
 
-### Source profile interface and semantics
+### Source profile interfaces
 
-소비 module은 source profile의 다음 의미를 신뢰할 수 있다.
+`SourceProfile`은 process 내부의 검증된 source projection이다. 주요 소비 의미는 다음과 같다.
 
-- `source_id`는 opaque하고 process 안에서 unique하다.
-- Connection은 server-side에서 resolve되며 client input으로 받지 않는다.
-- `allowed_schemas`와 `allowed_relation_kinds`는 physical catalog/query의 최대 허용 범위다.
+- `source_id`는 process 안에서 unique한 opaque ID다.
+- Connection은 server-side에서 resolve하며 caller input으로 받지 않는다.
+- `allowed_schemas`와 `allowed_relation_kinds`는 catalog/query의 최대 허용 범위다.
 - `budget`은 Metadata와 Guarded Query가 함께 사용하는 source-wide hard limit다.
-- `semantic_overlay`는 source별 Python branch를 대신하는 versioned business semantics다.
-- `provenance`는 bounded owner, `production|staging|development|test` environment와 외부 source DB
-  migration reference다. 권한 principal이나 migration artifact 검증 결과가 아니다.
-- `minimum_quality_level`과 `tenant_isolation`은 publish/query gate의 입력이다.
-- `control_generation`과 `control_state_version`은 Control DB projection의 freshness/CAS identity다.
+- `semantic_overlay`는 source별 Python branch를 대신한다.
+- `minimum_quality_level`, `tenant_isolation`, `control_generation`과
+  `control_state_version`은 publish/query와 freshness 판단의 입력이다.
 
-### Resource observation definition interface and manifest format (`CTRL-07A`, implemented)
-
-Manifest v2의 optional `observability`는 `representative_records.grain`, 하나의
-`physical_relation`과 그 relation을 포함하는 1~16개의 distinct `storage_relations`를 가진다. Relation은
-system schema가 아닌 같은 database의 ordinary table 또는 materialized view여야 한다. 이는 DB
-owner가 승인한 관측 target일 뿐 `allowed_schemas`, `allowed_relation_kinds`나 query metadata에 추가되지
-않으며 public source summary에도 relation 이름을 노출하지 않는다.
-
-Validated `SourceProfile`은 이 definition을 immutable tuple/value로 제공한다. Definition 변경은
-source generation을 만들지만 `create_metadata_revision` 재료는 아니다. Missing object는 관측 미구성
-의미이고 기존 v2 manifest와 호환된다. Parser는 SQL, predicate, counter expression, provider account와
-arbitrary method를 받지 않는다.
-
-`SourceProfile`에는 resolved plaintext reader password가 들어 있으므로 process 내부의 sensitive
-object다. Profile 자체를 wire response, persisted JSON, log 또는 metric에 serialize하지 않는다.
-다른 module은 필요한 field만 memory 안에서 소비한다.
+Manifest v2의 optional `observability`는 대표 grain/physical relation과 이를 포함하는 1~16개의
+distinct storage relation을 정의한다. 이는 관측 target일 뿐 query relation allowlist나 metadata
+revision 재료가 아니며 public summary에 relation 이름을 추가하지 않는다.
 
 ### Published source interface immutability guarantee
 
-`SourceReader.get()`이 반환하는 `SourceProfile`과 도달 가능한 semantic graph는 재귀적으로
-immutable하다. Public sequence는 실제 tuple이고 `column_aliases`, `value_hints`와 join column
-pair는 원본 dict를 복사한 read-only mapping이며 mapping 안의 sequence도 tuple이다. Dataclass
-constructor와 YAML provider는 입력 collection을 복사해 published graph 밖의 mutable alias로
-내용을 바꿀 수 없게 한다. 따라서 registry는 같은 profile identity를 여러 reader에 안전하게
-공유할 수 있고 consumer는 in-place mutation 대신 새 검증 profile을 writer boundary에 전달한다.
-
-이 Python runtime representation은 Source manifest와 Control Plane의 stored manifest를 바꾸지
-않는다. YAML/JSON sequence와 object는 계속 array/list와 object/dict로 decode·serialize하며
-`SourceProfile` 자체는 여전히 wire나 persistence에 내보내지 않는다.
-
-### Shared source validation type interface
-
-Delivery의 admin path/query wire validation은 현재 Source Catalog가 정의한 다음 type을 소비한다.
-
-- `SourceEnvironment`: `production|staging|development|test`
-- `Identifier`: PostgreSQL identifier pattern과 최대 63자
-- `StableSlug`: lowercase alphanumeric hyphen slug pattern과 최대 80자
-
-이 type은 manifest validation과 admin wire acceptance가 공유하는 module interface다. Pattern,
-허용값 또는 길이를 바꾸면 Source Catalog와 Delivery 영향을 함께 검토한다.
+`SourceProfile`과 도달 가능한 semantic graph는 recursively immutable하다. Sequence는 tuple,
+nested mapping은 입력 alias를 복사한 read-only mapping이다. Profile에는 resolved plaintext reader
+password가 있으므로 wire, persisted JSON, log 또는 metric에 serialize하지 않는다.
 
 ### `SourceReader` interface
 
-Delivery, Metadata, Guarded Query와 Assurance application code는 다음 `SourceReader`만 소비한다.
+Delivery, Metadata, Guarded Query와 Assurance application code는 read-only `SourceReader`를 소비한다.
 
 ```text
 SourceReader:
@@ -130,13 +90,13 @@ SourceReader:
   source_ids() -> frozenset[str]
 ```
 
-`list()`는 `source_id` 순으로 정렬하며 위 세 field 외 connection, credential, provenance와
-internal control state를 반환하지 않는다. 이 소비자들은 registry를 직접 변경하지 않는다.
+`list()`는 `source_id` 순으로 정렬된 `source_id`, `name`, `description`만 반환한다.
+`SourceNotFoundError`의 domain 의미는 Source Catalog가 소유하고 external error rendering은 Delivery가
+소유한다.
 
 ### `SourceProjectionWriter` interface
 
-Control Plane의 runtime projector/reloader는 read interface를 확장한 다음
-`SourceProjectionWriter`를 소비한다.
+Control Plane runtime projector/reloader만 write capability를 추가한 interface를 소비한다.
 
 ```text
 SourceProjectionWriter extends SourceReader:
@@ -144,180 +104,149 @@ SourceProjectionWriter extends SourceReader:
   remove(source_id) -> None
 ```
 
-Managed mode에서는 이 projector만 검증된 state를 `upsert/remove`한다.
-Bootstrap mode는 process 시작 시 filesystem manifest로 initial registry를 만들며 두 authority를
-한 process에서 합치지 않는다. `state_version`은
-증가하지만 rollback은 과거 generation을 다시 활성화할 수 있으므로 generation 자체를 monotonic으로
-가정하지 않는다. 적용 순서와 pool/cache invalidation은
-[Control Plane](../control-plane/README.md)의 lifecycle rule이다.
+Concrete `SourceRegistry`는 두 Protocol을 구조적으로 구현한다. Managed mode에서는 검증된 projection만
+writer로 반영하고, bootstrap과 managed authority를 한 process에서 섞거나 fallback하지 않는다.
+Projection 적용 순서, pool/cache invalidation과 rollback lifecycle은
+[Control Plane](../control-plane/README.md)이 소유한다.
 
-### Reader-session verifier interface and safety policy
+### Shared validation type interfaces
 
-Metadata catalog와 Guarded Query executor는 같은 reader database/user, read-only isolation,
-role restriction, schema privilege, resource setting, search path, RLS와 tenant context 검사를
-사용한다. 한쪽만 완화하거나 별도 구현으로 복제하지 않는다.
-두 경로 모두 `BEGIN ... REPEATABLE READ READ ONLY` 다음 첫 settings statement로
-transaction-local `TimeZone=UTC`를 설정하고, 공통 probe가 UTC를 확인한 뒤에만 catalog 또는
-planning/query를 실행한다. Role/database default는 source 소유 값 그대로 두며 success,
-rollback, timeout과 cancel 뒤 pool 재사용에서 그 default가 복원돼야 한다.
+Delivery admin validation은 Source Catalog가 정의한 다음 type을 소비한다.
 
-현재 공통 policy는 `DateStyle`, `IntervalStyle`, `extra_float_digits`,
-`standard_conforming_strings`, `transform_null_equals`, `array_nulls`, `client_encoding`과
-`timezone_abbreviations`를 설정·검사하지 않고 server encoding과 effective database/column collation을
-snapshot/revision material로 admission하지 않는다. 실제
-PostgreSQL 18 characterization에서 이 default가 ambiguous date, backslash string, NULL 비교와 NULL
-array literal의 SQL 의미, interval availability, finite-float hash, timezone abbreviation instant와
-SQL text/binary identity를 흔들고 collation-only DDL은 same-revision result를 바꾸는 것이 확인됐다.
-Direct `bytea` loader/Base64는 `bytea_output=hex|escape`에서 같지만 허용된 `bytea::text` cast는
-setting별 text/hash가 달랐고, `default_text_search_config`도 hidden curated view의 같은 SQL 의미를
-바꿨다.
-[Proposed ADR 0020](../../decisions/0020-lossless-interval-and-json-numeric-encoding.md)의
-`ENC-01-A|B|C`가 정확히 승인되기 전에는 shared `reader_policy.py`나 metadata revision material을
-변경하지 않는다.
+- `SourceEnvironment`: `production|staging|development|test`
+- `Identifier`: PostgreSQL identifier pattern, 최대 63자
+- `StableSlug`: lowercase alphanumeric-hyphen pattern, 최대 80자
 
-Exact A 제안에서 Source Catalog의 추가 역할은 Catalog/Query pool startup의
-`client_encoding=UTF8`, UTC-first transaction-local setting과 PostgreSQL-18/UTF8 reader admission으로
-한정된다. Catalog semantics SQL, fingerprint material/hash와 snapshot codec/revision은 Metadata
-소유이며 Source Catalog에 복제하지 않는다. 이 경계도 exact A 승인 전에는 현재
-module interface가 아니다.
+허용값, pattern 또는 길이는 provider/consumer가 공유하는 interface 의미다.
 
-별도 [RLS policy drift security finding](../../verification/2026-08-26-rls-policy-drift.md)은 공통
-session probe가 정상이어도 hidden base table policy를 `USING (true)`로 바꾸거나 RLS를 disable하면
-같은 snapshot/revision 아래 cross-tenant row가 성공함을 재현했다. 이는 승인된 tenant-isolation
-policy가 아니라
-열린 보안 결함이다. [Proposed ADR 0024](../../decisions/0024-rls-policy-drift-attestation.md)의
-`RLS-01-A`는 Metadata의 strict structural admission을 통과한 relation별 fingerprint만 v2 snapshot으로
-발행하고 `BEGIN` 직후 relation lock 뒤에도 `TimeZone=UTC`를 첫 settings statement로 유지하는
-implementation-ready target이다. Source manifest hash field는 추가하지 않고 current manifest/
-`SourceProfile` interface를 보존한다. Common reader probe는
-`current_user=session_user=configured reader`도 fail-closed한다. Exact 승인 전에는 이 순서나 reader
-check를 구현하지 않는다. 새 timeout knob 없이
-`min(30_000, 8 * metadata_statement_timeout_ms)`인 Metadata phase outer deadline을 derive한다. Exact
-승인 전에는 이를 current budget 의미로 적용하지 않으며,
-production RLS source가 안전하다고 주장하지 않는다.
+### Reader connection interface (`LAUNCH-01-A`)
 
-같은 RLS-only target에서 no-SQL connection invariant mismatch, completed common reader probe mismatch와
-fixed setting SQLSTATE `22023`/`42501`만 cause/context-free safe `ReaderSessionPolicyError`다. 그 밖의
-setting/probe timeout, cancellation, connection/transport와 driver failure는 이 error로 감싸지 않아
-consumer의 transient/cancellation 분류를 보존한다. Candidate/active Metadata/query/resource observation은
-각각 validation 400/`METADATA_UNAVAILABLE`/`QUERY_UNAVAILABLE`/`RESOURCE_READ_FAILED`로 소비한다. Non-RLS
-Catalog의 current common setting/error classification은 바꾸지 않는다.
-Marker가 아닌 operational failure는 candidate `SOURCE_CONTROL_UNAVAILABLE`, active Metadata
-`METADATA_UNAVAILABLE`, query timeout `QUERY_TIMEOUT`, query transport/driver `QUERY_UNAVAILABLE`, resource
-observation `RESOURCE_READ_FAILED`이며 external cancellation은 재전파한다.
-Provider/helper는 marker-free raw operational exception을 `exc_info` 또는 값/args와 함께 기록하지 않고
-consumer가 분류할 때까지 내부로 전달한다. Public boundary의 cause/context-free safe outer mapping은 각
-consumer가 소유한다.
+Source Catalog는 승인된 additive interface를 제공한다.
 
-같은 proposal에서 Source Catalog은 RLS-only public `RLS_READER_CLIENT_ENCODING="UTF8"`과 SQL을
-실행하지 않는 `require_rls_reader_connection_policy`를 소유한다. Metadata Catalog와 Guarded Query
-pool은 RLS connection startup에 이 constant를 쓰고 checkout lease 직후 application `BEGIN`/SQL 전에 verifier로
-PostgreSQL 18, server/client UTF8과 psycopg UTF-8 codec을 확인한다. Attestation/query transaction은
-reader probe 뒤에도 재확인한다. Existing resource observation은 pre-BEGIN check만 소비하고 graph
-lock/attestation을 추가하지 않는다. Caller는 source mode를 먼저 확인해 non-RLS provider path에서 verifier를
-호출하지 않는다. Non-RLS pool, manifest와 common
-transaction setting은 바꾸지 않는다. Metadata는 exact policy `pg_depend`/`pg_shdepend`와 str-only
-graph admission을 소유한다. RLS startup pin 때문에 prior non-UTF8 client 대비 public value/hash가
-달라질 수 있으므로 current/rollback verified 전량을 재실행하지만 loader/response shape와 broader
-all-source/result semantics는 별도 ADR 0020 `ENC-01` 범위다.
+```python
+READER_CLIENT_ENCODING: Final = "UTF8"
 
-모든 managed source generation/state/disable transition은 별도 public token을 추가하지 않고 이 module의
-existing immutable `SourceProfile` exact equality를 Catalog/Query execution identity로 재사용한다. Profile은
-password를 포함하므로 비교/보관만 하고 repr, exception, log, audit와 metric에 넣지 않는다. 이 공용
-lifecycle이 PostgreSQL-18/UTF8, graph와 snapshot v2를 non-RLS source에 적용한다는 뜻은 아니다.
-Password canary는 fence mismatch, drain failure와 tombstone retry에서도 어떤 rendered/structured
-surface에도 나타나지 않아야 한다.
-Control-owned invalidator와 runtime fence 의미는 소비 module의 lifecycle rule이며 Source Catalog가 pool/drain lifecycle을
-구현하지 않는다.
+def require_reader_connection_policy(
+    connection: AsyncConnection[Any],
+) -> None: ...
+```
+
+Python shape와 호출 결과가 interface다. 다음 compatibility 조건과 호출 순서는 별도의
+policy/safety invariant다.
+
+- SQL을 실행하지 않고 connection info에서 PostgreSQL 18
+  (`180000 <= server_version < 190000`), server/client `UTF8`, driver `utf-8` codec을 요구한다.
+- Metadata와 Guarded Query는 pool checkout 직후, `BEGIN`과 application SQL 전에 호출하고 pool
+  startup parameter로 `client_encoding=UTF8`을 요청한다.
+- Deterministic mismatch는 실제 관측값을 포함하지 않는 고정 `ReaderSessionPolicyError` marker다.
+  Caller는 해당 connection을 close/discard한다.
+- Connection-info 자체의 driver/transport failure는 marker로 감싸지 않고 기존 transient 분류를
+  유지한다.
+
+기존 `require_reader_session_policy(...)` interface와 transaction-local UTC/budget/session 검사는
+계속 Metadata와 Guarded Query가 함께 소비한다. `LAUNCH-01-A`는 그 기존 session 의미, role/database
+default 또는 metadata revision 재료를 바꾸지 않는다.
+
+### Current launch policy and deferred paths
+
+- Static launch authority는 repository가 검토한 `development-issues`, `market-voc` 두 bootstrap
+  manifest뿐이다.
+- 모든 `tenant_isolation=rls` manifest는 bootstrap과 managed validation에서
+  `RegistryConfigurationError`로 거부한다. `TenantIsolation` type, 기존 implementation과 historical
+  Control row는 삭제하지 않는다.
+- Injected registry, managed cold-start와 query 우회까지 포함한 RLS quarantine 결과는
+  [ADR 0025](../../decisions/0025-static-non-rls-first-launch.md#2-rls-quarantine)가 정의하며 각
+  Runtime/Control Plane/Guarded Query module이 자기 경로를 강제한다.
+- Managed mode 구현은 보존하지만 static first launch에는 Control DB, admin mutation, hot onboarding과
+  reload가 참여하지 않는다.
+- 새 source ID/database, manifest, budget/access policy의 추가·교체는 별도 inventory review와
+  배포 승인이 필요하다.
+
+[ADR 0020](../../decisions/0020-lossless-interval-and-json-numeric-encoding.md)의 넓은 encoding과
+[ADR 0024](../../decisions/0024-rls-policy-drift-attestation.md)의 RLS attestation은 parked research다.
+현재 interface나 지원 동작으로 사용하지 않는다. 조사 당시 증거는
+[RLS drift record](../../verification/2026-08-26-rls-policy-drift.md)로 보존한다.
 
 ## 소비 인터페이스와 전제
 
-- Runtime configuration이 선택한 mutually exclusive `bootstrap|managed` authority, budget file과
-  bootstrap mode의 source directory/environment
-- Control Plane이 복호화하고 검증 대상으로 전달하는 credential과 stored manifest
-- Accepted source/reader/tenant ADR의 identity와 privilege 정책
-- Plan-only `query-man-source-onboarding` workflow에 한해 Control Plane public administration,
-  Delivery public admin transport와 Assurance onboarding acceptance 문서를 읽어 human handoff를
-  만든다. Python import, API 호출, concrete composition과 production mutation은 하지 않는다.
+- Runtime이 선택한 mutually exclusive `bootstrap|managed` authority와 bootstrap source/budget path
+- Control Plane이 검증 대상으로 전달하는 stored manifest와 복호화된 credential
+- Accepted source, reader와 tenant policy identity
+- Plan-only onboarding workflow가 읽는 Control Plane admin, Delivery admin transport와 Assurance
+  acceptance 문서
 
-Production Source Catalog code는 Control DB table이나 HTTP/MCP type을 직접 알지 않는다. 위
-plan-only 공개 문서 소비를 production dependency로 확대하지 않는다.
+Production Source Catalog code는 Control DB table, HTTP/MCP type 또는 다른 module의 private
+implementation을 직접 알지 않는다. Plan-only `query-man-source-onboarding` workflow의 공개 문서
+소비를 production dependency로 확대하지 않는다. 이는 Python import, API 호출, concrete
+composition 또는 protected mutation 권한이 아니다.
 
 ## 불변조건
 
-- `source_id`별 Python branch를 추가하지 않는다.
-- Source manifest와 public summary에 plaintext credential을 저장하거나 반환하지 않는다.
-- System schema, manifest v2가 아닌 입력과 알 수 없는 budget version은 자동 변환 없이
+- Static first launch inventory는 `development-issues`, `market-voc`이며 모든 RLS manifest는
   fail-closed한다.
-- `SourceRegistry.upsert` 자체는 generation 사이 connection identity를 검증하지 않는다. 같은
-  `source_id`의 host/port/database/user/TLS/environment 재지정 거부는 Control Plane과의 필수 cross-module
-  invariant이며 그 경로를 우회해 registry를 갱신하지 않는다.
-- Budget, overlay와 tenant policy 변경이 metadata revision에 미치는 영향을 숨기지 않는다.
-- Published source/semantic graph에 mutable collection이나 외부 mutable alias를 남기지 않는다.
-- Runtime projection writer는 하나다. Ordinary reader, isolated Control staging과 Assurance
-  `assurance_cli.py`의 application reference는 `SourceReader`로 좁히며 `upsert/remove`를 호출하지
-  않는다. Runtime composition은 같은 concrete instance를 reader consumer와 Control writer에
-  capability별로 주입할 수 있다.
+- `source_id`별 Python branch를 추가하지 않는다.
+- Source manifest/public summary에 plaintext credential을 저장하거나 반환하지 않는다.
+- System schema, manifest v2가 아닌 입력과 알 수 없는 budget version을 자동 변환하지 않는다.
+- Published source/semantic graph에 mutable collection이나 external mutable alias를 남기지 않는다.
+- `SourceRegistry.upsert`는 connection identity를 검증하지 않는다. 같은 `source_id`의
+  host/port/database/user/TLS/environment 재지정 거부는 Control Plane과의 lifecycle invariant이며
+  그 경로를 우회하지 않는다.
+- Ordinary consumer는 `SourceReader`로 좁히고 runtime projection writer는 하나만 둔다.
+- Reader compatibility verifier는 SQL을 실행하거나 실제 connection 값을 오류에 노출하지 않는다.
 
 ## 모듈 내부 변경
 
-다음은 제공 interface, serialized format과 policy 의미를 보존할 때 module 내부에서 독립적으로 변경할 수 있다.
+다음은 제공 interface와 별도 format/policy/invariant 의미를 보존할 때 독립적으로 바꿀 수 있다.
 
-- Manifest validator의 오류 처리와 중복 제거
-- Registry lookup/list 구현과 copy-on-write 내부 표현
+- Manifest validator 오류 처리와 중복 제거
+- Registry lookup/list와 copy-on-write 내부 표현
 - 같은 결과를 만드는 parser/helper 정리
-- 기존 schema 안에서 source configuration fixture 추가
+- Existing schema 안의 non-authoritative test fixture 변경
 - Public summary shape를 바꾸지 않는 정렬/조회 성능 개선
 
 ## 사용자 승인이 필요한 경계 변경
 
-아래 목록은 module interface뿐 아니라 manifest/persisted format, policy와 safety boundary도 포함한다.
-승인 요청에서 실제 변경 범주를 구분하며 이 목록 전체를 하나의 module interface로 보지 않는다.
-이 용어 정리는 기존 승인 범위를 줄이지 않는다.
+승인 요청은 실제 범주를 구분하고 관련 없는 항목을 하나의 “interface 변경”으로 묶지 않는다.
 
-- Source manifest v2, provenance, budget profile 또는 access-related source field의 shape/version 변경
-- Delivery가 소비하는 `SourceEnvironment`, `Identifier`, `StableSlug`의 허용값, pattern 또는 길이 변경
-- `SourceProfile` 필드 의미나 public source summary 변경
-- Published source/semantic collection의 tuple/read-only mapping 표현이나 alias-copy 보장 변경
-- Allowed schema/relation kind, tenant isolation 또는 reader policy의 완화/확대
-- Metadata revision에 참여하는 source/budget/overlay 의미 변경
-- `SourceReader` 또는 `SourceProjectionWriter` method, argument, return shape나 capability 관계 변경
-- Registry writer 권한이나 hot-reload state ordering 변경
-- 같은 source ID의 connection/environment identity 재지정 허용
-- Credential resolution, redaction 또는 storage trust boundary 변경
+- Module interface: `SourceProfile`, shared validation type, `SourceReader`,
+  `SourceProjectionWriter`, reader verifier의 shape 또는 호출 의미
+- Persisted/versioned format: manifest v2, provenance, budget/observability schema와 version
+- Policy/compatibility identity: schema/relation allowlist, tenant isolation, budget 또는 PG/encoding
+  reader compatibility의 의미
+- Safety/lifecycle invariant: RLS admission, credential/redaction, generation identity와 writer ordering
+- Ownership/composition boundary: bootstrap/managed authority, writer/composition 권한과 hot reload
+- Protected operational procedure: static source/database inventory 추가·교체, DDL/role/settings freeze와
+  실제 배포/cutover/rollback
 
-승인 요청은 영향받는 Metadata, Guarded Query, Control Plane, Delivery와 migration/compatibility를
-함께 설명한다.
+Source/budget/overlay가 metadata revision에 참여하는 의미, public summary나 credential trust boundary를
+바꾸면 Metadata, Guarded Query, Control Plane과 Delivery 영향을 함께 제시한다. Protected environment
+실행은 repository/procedure 승인과 별도의 대상·접근·중단 조건·change-record 승인이 필요하다.
 
 ## 검증
 
 최소 focused gate:
 
 ```text
-uv run pytest tests/test_registry.py tests/test_runtime_config.py tests/test_metadata.py \
-  tests/test_query.py tests/test_http.py tests/test_source_admin.py tests/test_quality.py \
-  tests/test_verified.py tests/test_managed_mode.py tests/test_onboarding_skill.py
+uv run pytest tests/test_registry.py tests/test_reader_policy.py tests/test_runtime_config.py
 ```
 
-Manifest, budget, tenant 또는 reader DB 경계를 바꾸면 관련 metadata/query tests와 reader
-policy를 검증하는 `uv run pytest -m integration`을 추가한다. Registry projection 또는 connection
-identity 경계를 바꾸면 `uv run pytest tests/test_source_admin.py`도 실행한다. 완료 전 root
-`AGENTS.md`의 전체 gate도 실행한다.
+Reader policy 또는 registry projection을 바꾸면 직접 consumer gate도 실행한다.
+
+```text
+uv run pytest tests/test_catalog.py tests/test_query.py tests/test_source_admin.py \
+  tests/test_managed_mode.py
+```
+
+Manifest, tenant 또는 reader DB 경계를 바꾸면 `uv run pytest -m integration`을 추가한다. 완료 전
+root `AGENTS.md`의 전체 gate는 coordinating agent가 실행한다.
 
 ## 집중해서 읽을 범위
 
-Source Catalog 작업은 기본적으로 다음만 읽는다.
-
 1. 이 문서와 [module index](../README.md)
-2. 변경 대상인 `registry.py`, source-related `models.py`, `reader_policy.py`
+2. 변경 대상 `registry.py`, source-related `models.py`, `reader_policy.py`
 3. 위 focused tests와 관련 config fixture
-4. [ADR 0003](../../decisions/0003-reader-and-resolved-object-policy.md),
-   [ADR 0005](../../decisions/0005-initial-query-budgets.md),
-   [ADR 0012](../../decisions/0012-control-plane-source-revisions.md),
-   [ADR 0014](../../decisions/0014-trusted-rls-tenant-context.md),
-   [ADR 0016](../../decisions/0016-centralized-source-management-plane.md)과
-   [ADR 0017](../../decisions/0017-shared-source-access-and-resource-tier.md) 중 변경과 직접 관련된 결정
-5. 변경이 닿는 제공/소비 interface와 별도 boundary 문서
+4. [ADR 0025](../../decisions/0025-static-non-rls-first-launch.md)와 변경에 직접 관련된 accepted ADR
+5. 변경이 닿는 provider/consumer interface, format, policy, lifecycle 또는 operational 문서와 test
 
-Physical metadata response, MCP SDK 내부와 query pool 구현은 interface와 별도 boundary 의미가 바뀌지 않는 한 읽을 필요가
-없다.
+Physical metadata response, MCP SDK 내부와 query pool private implementation은 Source Catalog가 제공하거나
+소비하는 경계 의미가 바뀌지 않는 한 읽을 필요가 없다.

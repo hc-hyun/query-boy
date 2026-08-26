@@ -2555,6 +2555,89 @@ async def test_deterministic_rejection_is_receipted_and_replayed_without_payload
 
 
 @pytest.mark.asyncio
+async def test_managed_publish_and_rotation_reject_rls_without_staging() -> None:
+    catalog_factory = SwitchingCatalogFactory()
+    admin, registry, store, _invalidator, _cipher, _reloader = _services(
+        catalog_factory
+    )
+    rls_manifest = _manifest()
+    rls_manifest["tenant_isolation"] = "rls"
+    publish_context = _mutation_context(10)
+
+    with pytest.raises(SourceValidationError):
+        await admin.publish(
+            "third-source",
+            rls_manifest,
+            "rls-publish-secret",
+            publish_context,
+        )
+
+    publish_receipt = store.mutations[publish_context.idempotency_key]
+    assert publish_receipt.http_status == 400
+    assert publish_receipt.error_code == "SOURCE_VALIDATION_FAILED"
+    assert publish_receipt.resulting_generation is None
+    assert store.active == {}
+    assert registry.get("third-source") is None
+    assert catalog_factory.calls == 0
+
+    await admin.publish("third-source", _manifest(), "first-secret")
+    current = store.active["third-source"]
+    stored_rls = replace(
+        current,
+        manifest={**current.manifest, "tenant_isolation": "rls"},
+    )
+    store.active["third-source"] = stored_rls
+    rotate_context = _mutation_context(
+        11,
+        expected_generation=current.generation,
+        expected_state_version=current.state_version,
+    )
+
+    with pytest.raises(SourceValidationError):
+        await admin.rotate_credential(
+            "third-source",
+            "rls-rotation-secret",
+            rotate_context,
+        )
+
+    rotate_receipt = store.mutations[rotate_context.idempotency_key]
+    assert rotate_receipt.http_status == 400
+    assert rotate_receipt.error_code == "SOURCE_VALIDATION_FAILED"
+    assert rotate_receipt.resulting_generation is None
+    assert store.active["third-source"] == stored_rls
+    assert catalog_factory.calls == 1
+    assert "rls-publish-secret" not in repr(store.mutations)
+    assert "rls-rotation-secret" not in repr(store.mutations)
+
+
+@pytest.mark.asyncio
+async def test_managed_cold_rls_record_is_rejected_without_registry_projection() -> None:
+    operations.reset()
+    try:
+        admin, registry, store, _invalidator, _cipher, reloader = _services()
+        await admin.publish("third-source", _manifest(), "first-secret")
+        current = store.active["third-source"]
+        store.active["third-source"] = replace(
+            current,
+            manifest={**current.manifest, "tenant_isolation": "rls"},
+            state_version=current.state_version + 1,
+        )
+        registry.remove("third-source")
+        reloader._applied.clear()
+        operations.reset()
+
+        await reloader.sync()
+
+        assert registry.get("third-source") is None
+        assert operations.snapshot()["components"] == {"source_reload": "unavailable"}
+        replica = operations.replica_runtime_snapshot().sources[0]
+        assert replica.reason_code == "RUNTIME_VALIDATION_REJECTED"
+        assert replica.applied_generation is None
+    finally:
+        operations.reset()
+
+
+@pytest.mark.asyncio
 async def test_transient_staging_failure_is_not_receipted_and_same_key_can_retry() -> None:
     unavailable = True
 

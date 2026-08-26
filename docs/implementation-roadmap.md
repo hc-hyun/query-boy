@@ -1,8 +1,10 @@
 # Query Man Implementation Roadmap
 
-Status: Baseline complete; RLS-enabled production serving blocked pending `RLS-*`
+Status: ADR 0025 `LAUNCH-01-A` repository implementation in progress; protected execution is `LAUNCH-02`
 
-이 문서는 Query Man의 최종 목적을 구현한 production baseline과 완료 이력을 보존한다.
+이 문서는 Query Man의 과거 baseline과 post-baseline 완료 이력을 보존한다. 현재 serving 결정은
+[ADR 0025](decisions/0025-static-non-rls-first-launch.md)의 더 좁은 static non-RLS profile이며,
+과거 managed/RLS/넓은 result acceptance를 현재 launch 보장으로 읽지 않는다.
 세부 설계 원칙은 [architecture.md](architecture.md), 현재 검증용 데이터와 baseline은
 [mvp.md](mvp.md), source 등록 규칙은 [source-onboarding.md](source-onboarding.md)를
 따른다. 전체 항목의 구현·검증 연결은
@@ -385,15 +387,12 @@ evidence가 해당 완료 작업의 상세 경계와 실행 증거를 보존한�
 | M14.5 Lossless Scalar, Reader And Result Types | `ENC-*` | Calendar interval, exact 24시 time, nested/duplicate JSON, UTF8 source/client, timezone abbreviation·collation semantics, array lower bound와 record/composite/known-loader OID identity 손실을 닫고 SQL 의미·decode를 PostgreSQL 18의 role/source default와 무관하게 고정한다. |
 | M15 Cost Attribution | `COST-*` | DB-native 사용량을 source/resource-tier time bucket으로 bounded 집계하고 운영 threshold를 고정한다. |
 | M16 Workflow Trace | `TRACE-*` | 여러 tool call과 retry를 bounded trace ID로 안전하게 연결한다. |
+| M17 Static Non-RLS First Launch | `LAUNCH-01`, `LAUNCH-02` | 두 reviewed source의 repository profile을 검증하고 protected environment 전환을 별도 승인·실행한다. |
 
-M1부터 M13, `TIME-01`~`TIME-02`와 별도 assurance `DBEDGE-01`~`DBEDGE-05`는 완료됐다.
-재현된 authorization gap인 M13.5 `RLS-*`가 최우선 active다. M14.5의 `ENC-*` 결정·구현과 M14
-production 전환 `TIME-03`도 active이며 M15와 M16은 각각 해당되는 모든 변경 범주와 영향을
-정확히 승인받아야 한다. M15/M16의
-[proposed ADR 0021](decisions/0021-database-native-cost-attribution.md), 별도 COST-04
-[proposed ADR 0023](decisions/0023-database-native-usage-spike-alert.md)과
-[proposed ADR 0022](decisions/0022-w3c-workflow-trace-context.md)는
-[disposable boundary prework](verification/2026-08-26-lower-track-contract-prework.md)까지 수행한
-read-only prework이며 priority/start
-gate나 change-set 승인이 아니다. 새로운 기능은 기존 완료 ID나 설명을 소급 변경하지 않고 별도
-roadmap 항목과 검증 가능한 exit condition을 추가한다.
+M1부터 M13, `TIME-01`~`TIME-02`와 별도 assurance `DBEDGE-01`~`DBEDGE-05`는 당시 범위에서
+완료됐다. 현재 M17의 `LAUNCH-01-A`가 authority이고 protected action `LAUNCH-02`만 active launch
+작업이다. `RLS-*`, `ENC-*`, `TIME-03`, `COST-*`, `TRACE-*`는 실제 요구와 정확한 새 변경 승인이
+생길 때까지 parked다. ADR 0020~0024와
+[lower-track prework](verification/2026-08-26-lower-track-contract-prework.md)는 연구 이력이지
+priority/start gate나 change-set 승인이 아니다. 새로운 기능은 기존 완료 ID나 설명을 소급 변경하지
+않고 별도 roadmap 항목과 검증 가능한 exit condition을 추가한다.

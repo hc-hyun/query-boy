@@ -2,87 +2,125 @@
 
 Status: Logical boundary; physical package split pending
 
+Current launch baseline: [ADR 0025](../../decisions/0025-static-non-rls-first-launch.md)
+`LAUNCH-01-A`
+
 ## 목적
 
-Runtime은 production server의 concrete implementation을 한 process로 조립하고, 안전하게
-시작·운영·종료한다.
-쉽게 말하면 업무 규칙을 만드는 곳이 아니라 이미 정해진 부품의 배선과 process lifecycle을
-책임지는 composition root다.
+Runtime은 production server의 concrete implementation을 하나의 process로 조립하고 안전하게
+시작·운영·종료한다. 쉽게 말하면 각 module이 만든 부품의 업무 규칙을 다시 만드는 곳이 아니라,
+검증된 부품을 연결하고 process lifecycle을 책임지는 composition root다.
 
-Query Man은 현재 하나의 deployable process인 modular monolith다. Runtime이 모든 module을
-알 수는 있지만 이 예외는 wiring과 lifecycle에만 사용하며 domain 업무 규칙을 이곳에 두지 않는다.
+Query Man은 하나의 deployable process인 modular monolith다. Runtime은 조립을 위해 모든 module을
+알 수 있지만, 이 예외는 wiring과 lifecycle에만 사용하며 다른 module의 private 업무 규칙을 이곳에
+옮기지 않는다.
 
 ## 소유 책임
 
-- Environment를 `RuntimeConfig`로 검증하고 안전한 기본값을 적용
-- Process 전체 source authority를 mutually exclusive `bootstrap|managed` mode로 선택
-- Registry, Metadata, Query, Control, Delivery와 Assurance dependency 조립
-- Application/MCP child lifespan, 정상 진입 뒤 cleanup과 child 진입 실패 시 parent cleanup
-- Initial Control DB sync, source inventory reconciliation과 bounded metadata probe
-- Background source reload polling task
-- Managed replica identity, fenced registration과 best-effort latest observation reporting
-- Shutdown admission close, task cancel, bounded drain과 resource close 순서
-- Uvicorn signal/graceful shutdown integration
-- Aggregate liveness/readiness, component/source health와 replica-local operational counters
-- Structured logging field allowlist, redaction과 process-level audit setup
+- Environment를 `RuntimeConfig`로 검증하고 process-level configuration을 선택
+- Production registry, Metadata, Guarded Query, Control Plane, Delivery와 MCP dependency 조립
+- `bootstrap|managed` source authority의 mutually exclusive 선택과 fallback 금지
+- Current launch inventory를 adapter 생성 전에 검사하고 RLS composition을 fail-closed
+- Application/MCP child lifespan, startup failure cleanup과 정상 shutdown drain/close 순서
+- Initial inventory reconcile, bounded metadata probe와 managed-mode reload/report task 조립
+- Aggregate liveness/readiness, component/source health와 replica-local operational state
+- Uvicorn signal/graceful shutdown integration, structured logging/redaction setup
+- Container topology, upstream image pin과 application revision label의 repository definition
 
 ## 소유하지 않는 책임
 
-- Source/manifest, metadata, SQL와 authorization 업무 규칙
-- HTTP/MCP request/response schema와 public error taxonomy
-- Control DB schema/persistence 또는 source DB query implementation
-- Source별 Python 분기와 미래 plugin/factory abstraction
-- Public health endpoint에서 credential이나 source inventory를 공개하는 일
+- Source manifest, reader compatibility, metadata, SQL와 result OID 업무 정책
+- Caller 인증·인가와 HTTP/MCP request/response/error schema
+- Control DB schema, source mutation transaction과 PostgreSQL query implementation
+- Verified query/hash의 작성·판정 또는 source별 Python branch
+- TLS termination, protected secret/backup, 실제 route/cutover와 environment change record 실행
+- RLS attestation, broader result encoding, cost attribution 또는 workflow trace의 미래 설계
 
 ## 현재 코드 위치
 
-- [`app.py`](../../../src/query_man/app.py): `build_app`, dependency composition, lifespan, reload loop와
-  startup probe, resource/gateway reporter; middleware/routes/DTO는 Delivery 소유
+- [`app.py`](../../../src/query_man/app.py): `build_app`, dependency composition, lifespan, startup probe와
+  managed reload/resource/usage reporter; middleware/routes/DTO symbol은 Delivery 소유
 - [`server.py`](../../../src/query_man/server.py): Uvicorn process와 shutdown signal ordering
 - [`runtime_config.py`](../../../src/query_man/runtime_config.py): environment model/validation과
   `RuntimeConfig`
-- [`operations.py`](../../../src/query_man/operations.py): `OperationalState`, safe formatter와 redaction
+- [`operations.py`](../../../src/query_man/operations.py): process-local operational state, safe formatter와
+  redaction
 - [`__init__.py`](../../../src/query_man/__init__.py): package identity/version
 - [`Dockerfile`](../../../Dockerfile), [`compose.yaml`](../../../compose.yaml),
-  [`.env.example`](../../../.env.example): image, process, network, secret/config와 health lifecycle
-- `compose.yaml`의 `recovery` profile: Assurance의 PostgreSQL 18.4→18.6 Control recovery에서만
-  사용하는 tmpfs source fixture; production Runtime topology가 아님
-- [`verify-container.sh`](../../../scripts/verify-container.sh): Assurance가 소유하고 Runtime
-  container surface를 소비하는 shared transition acceptance script
-- [`pyproject.toml`](../../../pyproject.toml), [`uv.lock`](../../../uv.lock): application
-  entrypoint/dependency와 locked build; offline command target과 test tooling 부분은 Assurance와 공유
+  [`.env.example`](../../../.env.example): image, process, network, configuration과 health lifecycle
+- `compose.yaml`의 `recovery` profile: Assurance의 Control recovery fixture이며 serving topology가 아님
+- `compose.yaml`의 `soak` profile: 두 번째 replica acceptance fixture이며 first-launch topology가 아님
+- [`verify-container.sh`](../../../scripts/verify-container.sh): Assurance 소유의 container acceptance
+  script; Runtime container surface를 소비하는 shared transition artifact
+- [`pyproject.toml`](../../../pyproject.toml), [`uv.lock`](../../../uv.lock): application entrypoint와
+  locked dependency; Assurance offline command와 test tooling 부분은 shared transition artifact
 - Focused tests: [`test_runtime_config.py`](../../../tests/test_runtime_config.py),
   [`test_operations.py`](../../../tests/test_operations.py),
   [`test_server.py`](../../../tests/test_server.py),
   [`test_http.py`](../../../tests/test_http.py),
-  [`test_assurance_cli.py`](../../../tests/test_assurance_cli.py),
+  [`test_managed_mode.py`](../../../tests/test_managed_mode.py),
   [`test_runtime_startup_cleanup.py`](../../../tests/test_runtime_startup_cleanup.py)
 
-`app.py`는 Delivery와 Runtime의 transition hot spot이다. Composition/lifespan symbol만 Runtime
-소유이며 route 또는 wire schema를 함께 정리하지 않는다. `operations.py`의 상태를 다른 module이
-기록할 수 있지만 상태 의미, metric label 허용 범위와 public projection은 Runtime 소유 경계다.
+현재 코드는 `src/query_man`의 평면 구조다. `app.py`는 Delivery와 Runtime의 transition hot spot이므로
+composition/lifespan symbol만 Runtime이 수정하고 route 또는 wire schema 정리를 같은 diff에 섞지 않는다.
 
 ## 제공 인터페이스와 소유 경계
 
-이 절은 다른 module에 공개한 Python lifecycle/reporting interface와 함께 Runtime이 소유하는
-composition boundary, startup/shutdown invariant, configuration 및 operational semantics를 기록한다.
-각 subsection 제목이 실제 변경 범주이며, 이 절 전체를 하나의 module interface로 해석하지 않는다.
+이 절은 공식 Python module interface와 composition ownership, policy, lifecycle invariant 및 protected
+operation을 구분한다. 같은 file에 있다는 이유로 이 의미들을 모두 module interface라고 부르지 않는다.
+
+### Official Python interfaces
+
+Runtime이 다른 logical module에 제공하는 공식 Python interface는 process-local operations sink와
+그 immutable reporting value다. 현재 직접 consumer는 Metadata, Guarded Query, Control Plane과
+Delivery다.
+
+- `operations.increment`, `operations.observe`, source/component health와 admission 기록 capability
+- `GatewayUsageOutcome`과 `operations.record_gateway_usage(...)`
+- `ReplicaRuntimeSnapshot`, `ReplicaSourceRuntimeState`와 replica observation snapshot capability
+- `operations.suppress_source_health_updates()` staging isolation capability
+
+Python shape와 각 호출의 input/output/domain-error 의미만 module interface다. Metric label, readiness
+판정, report cadence, failure 격리와 공개 projection은 각각 policy 또는 safety/operational 의미다.
+`RuntimeConfig`, `load_runtime_config()`와 `build_app()`은 현재 Runtime 내부 configuration/composition
+entry이며 다른 domain module에 공개한 업무 interface가 아니다.
 
 ### Production composition ownership
 
-- Production server의 concrete PostgreSQL adapters는 이 composition root에서 capability에 주입한다.
-- Runtime은 concrete `SourceRegistry`를 생성하고 같은 instance를 ordinary service/probe에는
-  `SourceReader`, Control reloader에는 `SourceProjectionWriter` capability로 주입한다.
-- Query와 catalog adapter는 각각 provider가 소유한 `RuntimeQueryExecutor`와
-  `RuntimeCatalogProvider`를 만족해야 한다. Runtime은 default 또는 주입된 adapter를 선택한 직후
-  required method 전체가 callable인지 검사하고 누락되면 app composition에서 `TypeError`로
-  fail-closed한다. Sync/async signature는 provider Protocol, mypy와 interface test가 고정한다.
-- Delivery는 Gateway/application service만 받고 persistence/executor internals를 직접 받지 않는다.
-- Metadata와 Guarded Query는 Control DB implementation을 직접 import하지 않는다.
-- Runtime-only dependency edge는 wiring/lifecycle 외의 업무 호출을 허용하지 않는다.
-- Control Plane의 isolated candidate staging과 Assurance의 `assurance_cli.py`도 bounded composition
-  root지만 production HTTP/MCP wiring을 소유하지 않는다. Shared `pyproject.toml`은 두 offline command의
-  외부 이름을 유지하고 내부 target만 이 Assurance-owned entrypoint로 연결한다.
+- Production server의 concrete PostgreSQL adapter 조립은 Runtime만 수행한다. Control Plane candidate
+  staging과 Assurance offline CLI는 각 bounded workflow에서만 별도 composition root가 될 수 있다.
+- Runtime은 concrete `SourceRegistry`를 만들고 ordinary consumer에는 `SourceReader`, managed reloader에는
+  `SourceProjectionWriter` capability로 같은 instance를 주입한다.
+- Catalog와 query adapter는 provider가 공개한 `RuntimeCatalogProvider`와 `RuntimeQueryExecutor`를
+  만족해야 한다. Runtime은 adapter 선택 직후 required method가 callable인지 검사하고 누락되면
+  ready 전에 `TypeError`로 fail-closed한다.
+- Standard bootstrap composition은 scalar-domain OID erasure를 막는 static Catalog guard를
+  활성화한다. Managed composition과 Control staging의 기본 Catalog는 이를 활성화하지 않으며 현재
+  launch serving에는 참여하지 않는다.
+- Delivery에는 Gateway/application service만 전달하며 persistence, catalog와 executor internals를
+  직접 주입하지 않는다. Metadata와 Guarded Query도 Control DB implementation을 직접 알지 않는다.
+- Runtime-only dependency edge는 wiring/lifecycle 외의 업무 호출이나 provider private API 사용을
+  허용하지 않는다.
+
+### Current launch composition and RLS quarantine
+
+Current first launch는 repository가 검토한 `development-issues`, `market-voc` 두 source의 static
+`bootstrap` authority와 단일 serving replica다.
+
+- Bootstrap manifest의 RLS는 Source Catalog validation에서 listener 생성 전에 실패한다.
+- 주입된 bootstrap registry도 Runtime inventory guard를 adapter/provider 생성 전에 검사하며 RLS가
+  하나라도 있으면 composition에 실패한다.
+- Managed mode 구현은 보존하지만 first launch에는 Control DB, admin mutation, hot onboarding,
+  runtime reload와 observation task가 참여하지 않는다.
+- Managed cold record의 RLS는 validator에서 `RUNTIME_VALIDATION_REJECTED`로 남고 registry에
+  projection하지 않는다. Managed publish/rotate도 기존 `SOURCE_VALIDATION_FAILED`로 끝난다.
+- Bootstrap과 managed authority를 한 process에서 합치거나 실패 시 서로 fallback하지 않는다.
+- `query-man-replica`는 `soak` acceptance profile일 뿐 동시에 serving하는 두 번째 replica가 아니다.
+
+RLS type, code, Control history와 managed implementation은 물리적으로 삭제하지 않는다. 위 결과는
+module interface가 아니라 [ADR 0025의 RLS quarantine](../../decisions/0025-static-non-rls-first-launch.md#2-rls-quarantine)과
+composition/lifecycle invariant다. RLS serving 재개와 managed launch 활성화는 현재 baseline을 기준으로
+별도 영향·migration·rollback을 승인해야 한다.
 
 ### Startup sequence and failure cleanup
 
@@ -90,34 +128,23 @@ composition boundary, startup/shutdown invariant, configuration 및 operational 
 
 ```text
 environment/configuration validate -> logging configure -> operations reset
--> source registry authority 선택
-   bootstrap: filesystem source registry; managed: empty registry
--> catalog adapter 선택 + required Runtime capability validate
--> verified membership authority 선택
-   bootstrap: filesystem verified dataset; managed: empty map
--> metadata store/service와 query adapter/service compose
-   query adapter 선택 직후 required Runtime capability validate
--> access/gateway compose
--> managed Control stores/reloader compose
--> managed Control reloader initial sync
--> active inventory reconcile
--> source별 bounded metadata probe
--> managed background reload polling start
--> MCP child lifespan start
+-> source authority 선택
+   bootstrap: filesystem source/verified dataset
+   managed: empty registry/verified map, no filesystem fallback
+-> RLS launch inventory guard
+-> catalog/query adapter 선택과 required Runtime capability validate
+-> metadata/query/access/gateway compose
+-> managed only: Control stores/reloader compose
+-> MCP compose/lifespan configure
+-> managed only: Control reloader initial sync
+-> active inventory reconcile -> source별 bounded metadata probe
+-> managed only: reload/report background task start
+-> MCP child lifespan enter -> ready/degraded serving state
 ```
 
-Bootstrap과 managed source/verified authority를 한 process에서 합치거나 서로 fallback하지 않는다.
-Managed cold-start scan이 실패하면 empty inventory로 unavailable이며 filesystem source를 읽어 복구하지
-않는다. Bootstrap은 Control DSN/encryption key를 거부하고 managed는 둘과 version 2 access policy를
-요구한다.
-
-SQL policy와 모든 metadata revision을 함께 바꾸는 release는 mixed serving fleet를 허용하지 않는다.
-Startup 자체가 old/new interface/format을 번역하지 않으며, 운영자는 old fleet drain과 source connection 0,
-route 밖 new fleet의 L1→verified→L2 및 replica convergence를 먼저 증명해야 한다.
-
-필수 configuration 또는 dependency 초기화가 실패하면 ready로 전환하지 않는다. Control
-sync/probe와 reload task 생성 뒤 MCP child lifespan `enter` 자체가 실패하면 Runtime은 진입 전에
-parent가 만든 resource를 다음 고정 순서로 정리한다.
+필수 configuration, source inventory 또는 dependency 초기화가 실패하면 ready로 전환하지 않는다.
+Managed sync/probe와 background task 생성 뒤 MCP child lifespan `enter` 자체가 실패하면 Runtime은 진입
+전에 parent가 소유한 resource를 다음 고정 순서로 정리한다.
 
 ```text
 reload task cancel/await
@@ -127,257 +154,163 @@ reload task cancel/await
 -> source store close
 ```
 
-진입하지 못한 child에는 `exit`를 호출하지 않는다. Child가 `enter` 도중 만든 partial resource의
-정리는 child lifespan 구현의 책임이고, Runtime은 parent가 소유한 위 최상위 resource만 같은
-identity당 정확히 한 번 close/cancel을 시도한다. 한 단계가 실패해도 나머지 정리를 계속하고
-고정된 step 이름만 경고로 남긴 뒤 최초 startup exception을 그대로 다시 발생시킨다. Startup은
-아직 ready가 아니므로 configured graceful drain을 기다리지 않으며 production query executor의
-immediate close가 `stop_accepting`과 `drain(0)`을 수행한다. 정상 startup/shutdown 순서는 바뀌지
-않는다.
+진입하지 못한 child에는 `exit`를 호출하지 않는다. Child가 `enter` 도중 만든 partial resource는 child
+lifespan이 정리하고 Runtime은 parent 최상위 resource만 같은 identity당 정확히 한 번 close/cancel을
+시도한다. 한 단계가 실패해도 나머지를 계속 정리하고 고정 step 이름만 경고로 남긴 뒤 최초 startup
+exception을 그대로 다시 발생시킨다.
 
 ### Shutdown sequence and drain rules
 
 ```text
 signal/request shutdown
--> readiness와 query admission close
--> listener의 graceful request handling
--> reload task cancel
+-> readiness와 새 query admission close
+-> listener graceful request handling
+-> managed reload/report task cancel
 -> executor bounded drain
--> executor/catalog/metadata/store resources close
+-> executor/catalog/metadata/store resource close
 ```
 
-Grace 안에 끝나지 않은 queued/active query는 cancel되고 PostgreSQL rollback으로 끝나야 한다.
-HTTP와 MCP disconnect도 같은 task-cancel 경로를 사용한다. Shutdown 중 새 non-health request는
-service-shutting-down 의미로 거부한다.
+Grace 안에 끝나지 않은 queued/active query는 cancel되고 PostgreSQL rollback으로 끝나야 한다. HTTP와
+MCP disconnect도 같은 task-cancel 경로를 사용한다. 정상 shutdown은
+`RuntimeQueryExecutor.drain(configured grace)`를 직접 호출하고 optional lifecycle method 탐색으로
+skip하지 않는다.
 
-Runtime은 정상 shutdown에서 optional method 탐색 없이 `RuntimeQueryExecutor.drain(configured grace)`를
-직접 호출한 뒤 query executor와 catalog를 기존 순서로 close한다. Managed reloader에는 검증된
-catalog와 query executor를 같은 순서의 두 `SourcePoolInvalidator`로 빠짐없이 주입한다. Capability
-검사용 `getattr`는 required method의 callable 존재 확인일 뿐 optional lifecycle skip이 아니다.
-Transaction-local UTC는 commit, rollback과 shutdown cancel 뒤 pool에 남지 않는다. Canonical-time
-rollback은 R2를 같은 순서로 drain한 뒤 보존된 R1 binary/generation/revision/L2를 복구하고 route한다.
+SQL policy나 metadata revision이 바뀌는 release는 Runtime이 old/new 값을 번역하지 않는다. Mixed
+serving fleet를 만들지 않고 old process와 source connection을 drain한 뒤 route 밖에서 새 baseline을
+검증하는 절차가 필요하다.
 
-[Proposed ADR 0024](../../decisions/0024-rls-policy-drift-attestation.md)의 `RLS-01-A` target에서 Runtime은
-RLS fingerprint/codec을 소유하지 않고 old fleet와 source connection을 0까지 drain한 뒤 route 밖 v2
-fleet, verified current/rollback counterpart와 replica convergence를 조립한다. V1/V2 serving fleet를
-섞지 않고 safe functional rollback은 verified v2로만 수행하며 old binary rollback은 RLS source를
-deactivate/unroute한 채 non-RLS만 제공한다. V2는 RLS pool startup client UTF8과 PostgreSQL-18/UTF8
-source admission을 요구한다. Non-UTF8 RLS source는 자동 migration하지 않고 unroute/deactivate하며
-source별 DB-owner data migration/re-onboarding을 별도 승인받는다. Startup 변경에 따른 public
-value/hash/rejection은 current/rollback verified 전량에서 비교하고 설명되지 않은 차이면 route하지
-않는다. Runtime은 proposed exact-profile transition에서 Guarded Query invalidator를 첫 adapter로, Catalog를
-두 번째로 조립한다. Query와 Catalog active lease를 각 최대 1초인 fixed three-phase cleanup으로 drain한 뒤 cache와
-registry를 바꾼다. Managed routed profile은 registry에서만 얻고 provider fence는 exact profile을
-요구하므로 post-fence/pre-commit partial failure/disable에서는 해당 managed source의 old/new route가 모두
-닫힌다. Non-RLS/all-source lossless
-encoding 전환은 아래 ADR 0020 v3 path에 속한다. 다만 공용 exact-profile lifecycle 자체는 모든 managed
-source transition에 적용되며 non-RLS active query도 transition 때 unavailable로 정리될 수 있다.
-Pre-fence candidate validation failure는 current route를 유지한다. Registry upsert/remove의 successful
-return이 단일 commit point이고 applied-generation/status bookkeeping은 post-commit reconciliation이다.
-Commit 뒤 bookkeeping 또는 metadata probe failure는 only-new/removed projection을 유지하고 old profile로
-되돌리지 않으며 health/apply status를 unavailable/failed로 기록한다. External probe cancellation도
-projection을 되돌리지 않지만 fabricated health/apply failure 없이 재전파한다.
-Transition이 cancel한 resource observation은 success sample 없이 current generation-fenced
-`RESOURCE_READ_FAILED`만 best-effort report하고 external observation task cancellation은 failure report 없이
-재전파한다.
-동시에 발생하면 Query/Catalog lifecycle lock에 first-recorded된 external 또는 transition cancellation reason이
-승리하며 later reason은 public result/report를 덮어쓰지 않는다.
-Ordinary active RLS observation의 PostgreSQL-version/UTF8/driver-codec invariant, completed common reader
-mismatch, fixed-setting SQLSTATE `22023`/`42501` 또는 operational setting/probe/read failure도 같은 exact
-`RESOURCE_READ_FAILED`이고 raw error를 report하지 않는다.
-Resource observation raw exception은 `exc_info`, metric 또는 audit에 넣지 않고 fixed reason만 report한다.
+### Health, topology and artifact semantics
 
-ADR 0020 exact A도 아직 승인 대기 제안이다. Encoding/source-semantics release는 RLS v2의 field
-shape/semantics를 누적한 v3를 사용하되 RLS attestation은 current live graph에서 새로 계산하고 source별 pre-ENC v1/v2
-baseline을 보존한다. Combined direct-v3 cutover는 route하지 않을 production v2 row를 만들지 않고
-verified v3 rollback generation을 준비한다. V3→v2 RLS rollback은 별도로 실제 배포·검증해 captured한
-counterpart가 있을 때만 허용하고 v3→v1 binary rollback은 위 RLS deactivate 규칙을 따른다. 이 모든
-순서는 exact A 승인 전에는 현재 Runtime lifecycle이 아니다.
+- `/health`는 process liveness만, `/ready`는 source ID 없는 aggregate 상태만 공개한다.
+- API `/ready`는 기존처럼 `ready|degraded`에 HTTP 200을 반환한다. Compose launch healthcheck는 이보다
+  엄격하게 body가 정확히 `{"status":"ready"}`일 때만 healthy다.
+- Source/component detail과 metric은 operator surface에만 제공하며 credential state를 public health에
+  노출하지 않는다. Counter와 health는 replica-local이고 restart 후 초기화된다.
+- First-launch serving topology는 `query-man` 단일 replica다. `soak`/`recovery` profile은 acceptance
+  fixture이며 serving topology가 아니다.
+- Serving PostgreSQL 18.6, recovery fixture PostgreSQL 18.4, Python 3.14 slim과 uv 0.9.18 upstream image는
+  tag와 OCI digest를 함께 고정한다.
 
-### Health and operations semantics
-
-- `/health`는 process liveness만 나타낸다.
-- `/ready`는 source ID 없는 aggregate 상태만 공개한다.
-- 상세 source/component health와 metric은 operator surface에서만 제공한다.
-- 하나 이상의 usable source가 있는 degraded 상태는 service 가능으로 볼 수 있지만 initializing,
-  unavailable과 shutting down은 ready가 아니다.
-- Persisted metadata 복원은 readiness 근거가 될 수 있으나 source query connection의 실시간
-  liveness 보장은 아니다.
-- Counter/health는 replica-local이고 restart 후 초기화된다. Control DB authority로 사용하지 않는다.
-
-현재 Runtime operations에는 workflow trace context/scope/counter가 없다. Lower-priority read-only
-prework인 [proposed ADR 0022](../../decisions/0022-w3c-workflow-trace-context.md)의 우선순위와
-`TRACE-01-A|B|C`가 정확히 승인되기 전에는 ContextVar, structured-log field나 counter를 추가하지 않는다.
-승인될 경우에도 Runtime이 최소 process-local provider를 먼저 소유하고 Delivery가 인증 뒤 set/reset하며
-MCP/Guarded Query가 소비한다. Proposed exact A의 provider 경계는 frozen+slots validated context,
-nested/finally-safe scope, exact trace field allowlist와 네 source-less replica-local disposition counter뿐이며,
-header route parsing, MCP-call scope와 Delivery route/MCP/Gateway audit event 선택은 Delivery가 소유한다.
-Guarded Query execution event 선택은 계속 Guarded Query owner 경계다.
-
-현재 Runtime background task에는 source DB-native statement collector도 없다. Lower-priority
-[proposed ADR 0021](../../decisions/0021-database-native-cost-attribution.md)은 Runtime collector/composition
-선택지를 기록할 뿐, ENC/TIME start gate와 정확한 `COST-01-A|B|C` 승인 전에는 task, source credential,
-Control writer나 operations field를 추가하지 않는다.
-Base A는 `COST-04`를 포함하지 않는다. 별도
-[proposed ADR 0023](../../decisions/0023-database-native-usage-spike-alert.md)의 exact approval과 base
-explicit-zero/accepted-sample/identity evidence 전에는 background evaluator나 notification task를 만들지
-않는다. A가 승인돼도 Runtime은 모든 fenced committed monitoring attempt 뒤 usage transaction과 분리된
-bounded evaluator 호출 순서만 소유하며
-push worker는 만들지 않는다. 기존 base rollup 31일 window는 proposed alert event 90일 visibility와 다르다.
-
-### Managed replica reporting lifecycle (`CTRL-06`)
-
-- Managed mode는 `QUERY_MAN_REPLICA_ID`를 필수로 요구한다. 값은 1~80자의 lowercase stable
-  slug(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)다. Bootstrap mode는 이 환경변수가 있어도 읽거나 검증하지
-  않으므로 잘못된 값이 bootstrap startup을 막지 않는다.
-- Existing reload task가 시작 직후 observation writer에 한 번 registration하고 incarnation을
-  보관한다. Report 실패나 fencing 뒤 다시 registration하지 않으며 정상 shutdown에도
-  deregistration하지 않는다.
-- 실제 report cadence는 `max(source_reload_interval_ms, 5_000)`ms다. Control Plane에는 같은 값을
-  heartbeat interval로 등록하고 Runtime timestamp를 보내지 않는다.
-- Initial managed sync, inventory reconcile과 bounded metadata probe의 기존 startup 순서는 유지한다.
-  Registration/first report와 이후 report는 reload task 안의 best-effort work이며 실패해도 startup,
-  data plane, readiness, component/source health, mutation receipt 또는 shutdown 순서를 바꾸지 않는다.
-  Cancellation은 삼키지 않는다.
-- Report payload는 operations의 별도 internal snapshot에서 만든다. Existing public
-  `operations.snapshot()`, `/health`, `/ready`, `/admin/metrics`, source list/detail와 MCP projection에는
-  field나 status를 추가하지 않는다.
-- Successful Control scan만으로는 source별 apply/probe failure를 지우지 않는다. 이미 적용된 exact
-  record로 재수렴하면 obsolete validation/apply failure만 지우며 metadata probe failure는 실제
-  metadata 성공 전까지 보존한다. Enabled apply는 old metadata observation을 먼저 지운 뒤 새
-  generation/state/enabled를 기록한다. Disabled apply는 applied generation/state/enabled=false만
-  유지하고 metadata revision과 source health는 null로 보고한다.
-- Candidate staging처럼 `suppress_source_health_updates()`가 활성화된 흐름은 production replica의
-  observation도 갱신하지 않는다. 실제 metadata cache publish/restore 성공만 applied metadata
-  revision을 기록하고, invalidate는 이를 제거한다.
-
-Runtime이 공개 `ReplicaObservationWriter`와 `ReplicaSourceObservation`을 소비하는 것까지가 허용된
-Control Plane dependency다. `source_store.py`, observation table 또는 persistence-private type을
-직접 import하지 않는다.
-
-### Resource and gateway reporting interfaces and operational lifecycle (`CTRL-07A`, implemented)
-
-Managed Runtime은 source가 성공적으로 apply된 뒤 bounded catalog resource sample을 한 번 시도하고
-이후 24시간 cadence로 갱신한다. 같은 UTC day의 여러 replica report는 Control Plane에서 한 current
-sample로 합쳐진다. 수집은 기존 catalog pool의 max-one connection 경계를 재사용하고 새 monitoring
-identity나 query pool connection을 만들지 않는다. Candidate staging은 target을 검증할 수 있지만
-production observation을 publish하지 않는다.
-
-Gateway query의 trusted active `SourceProfile.budget.name`과 published metadata revision은 terminal
-event 시점에 Runtime-owned recorder로 전달한다. Recorder는 caller/tenant/query/SQL/fingerprint 없이
-UTC hourly delta를 만들고 최대 1,000 group만 보관한다. Reporter는 CTRL-06 heartbeat payload를
-확장하지 않는 별도 60초 best-effort loop이며 트래픽이 없어도 empty payload를 보내 cursor
-freshness를 갱신한다. 한 report에는 최대 100 delta를 보내며 overflow는 가장 오래된 pending
-group을 버리므로 값은 lower bound다.
-
-Reporter는 existing stable replica ID/incarnation과 process-local monotonic sequence를 사용한다.
-Control success 뒤에만 pending delta를 제거하고 실패 시 같은 sequence/payload를 재시도한다.
-Resource와 gateway Control write는 하나의 process-local lock으로 직렬화해 기존 source store의
-max-two pool을 동시에 점유하지 않는다. Metadata max-two와 합친 process당 Control connection 최대
-4는 바뀌지 않으며 새 Control/source reader pool이나 identity를 만들지 않는다.
-Reporting/resource collection failure는 startup, readiness, query admission/result, source health,
-replica heartbeat, mutation receipt와 shutdown 성공을 바꾸지 않으며 cancellation은 삼키지 않는다.
-Bootstrap mode에는 Control observation writer/task가 없다. Existing `operations.snapshot()`,
-`/admin/metrics`, health/readiness와 MCP output도 바뀌지 않는다.
-
-`CTRL-08`은 resource report에 current `SourceProfile.control_generation`을 추가하고 실패 capability를
-다음처럼 확정했다.
+현재 repository pin은 다음과 같다.
 
 ```text
-report_resource_observations(source_id, generation, metadata_revision, samples)
-report_resource_observation_failure(
-  source_id, generation, METADATA_UNAVAILABLE | RESOURCE_READ_FAILED
-)
+postgres:18.6-bookworm@sha256:1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af
+postgres:18.4-bookworm@sha256:882236b897e39051d2368c5ccc6cda944904723506b2dfc97f2a8f5bc9afa382
+python:3.14-slim-bookworm@sha256:416f0db2a2b561945630cef9877a7ea0581b27449eb9fd9df42f03e1b74b5b63
+ghcr.io/astral-sh/uv:0.9.18@sha256:5713fa8217f92b80223bc83aac7db36ec80a84437dbc0d04bbc659cae030d8c9
 ```
 
-Published metadata를 얻지 못하면 `METADATA_UNAVAILABLE`, catalog observation 또는 bounded sample
-assembly가 실패하면 `RESOURCE_READ_FAILED`만 best-effort report한다. Raw exception, relation/grain,
-credential과 source connection은 payload에 넣지 않는다. Control writer 호출 자체가 실패하면 같은
-unavailable Control DB에 실패를 억지로 기록하거나 다른 health/readiness 의미로 승격하지 않고
-sanitized warning만 남긴다. Success는 storage metric 세 개와 optional representative를 전달하며
-Control Plane이 generation/active metadata를 fence한다.
+Release image build는 `QUERY_MAN_VCS_REF`에 approved Git revision을 전달하고
+`org.opencontainers.image.revision` OCI label로 보존한다. Default `unknown` label이나 mutable tag만으로
+식별된 image는 release artifact가 아니다. 실제 built application image digest는 protected environment
+change record에서 기록해야 하며 repository 문서가 실행 evidence를 대신하지 않는다.
 
-Latest resource failure와 success report는 기존 process-local Control write lock 안에서 gateway write와
-계속 직렬화한다. 이 추가 report도 startup, data plane, source health, replica heartbeat, mutation
-receipt와 shutdown 성공을 바꾸지 않고 cancellation은 전파한다. Runtime은 CTRL-08 public status를
-계산하거나 Control table을 읽지 않으며 Delivery가 Control Plane projection을 소비한다.
+### Preserved managed runtime outside first launch
+
+Managed path는 구현된 상태로 보존한다. 별도 활성화 시 empty registry에서 시작하고 Control DB source와
+verified membership만 authority로 사용하며 filesystem source/verified dataset으로 복구하지 않는다.
+Version 2 shared access policy, stable replica ID, initial sync, inventory reconcile, metadata probe와 reload
+task를 요구한다.
+
+Runtime은 Control Plane의 공개 replica/resource/gateway writer만 소비한다. Reporting은 fixed Control
+pool과 process-local write lock을 재사용하고 startup, query result, readiness와 shutdown 성공을 바꾸지
+않는 best-effort work다. Raw exception, SQL, credential, tenant와 query ID는 report payload에 넣지 않는다.
+Generation/metadata fencing, cadence, reason code와 projection 의미의 authority는
+[Control Plane](../control-plane/README.md)에 두고 이 문서에 DDL이나 future transition 설계를 복제하지
+않는다.
 
 ### Runtime authentication configuration rules
 
-- Bootstrap loopback에서 token/access-policy 설정이 없으면 Delivery의 anonymous query-only local
+- Bootstrap loopback에서 token/access-policy가 없으면 Delivery의 anonymous query-only local
   compatibility caller를 사용한다.
-- Legacy single token과 access-policy file을 동시에 설정하지 않으며 non-loopback bind에서 둘 다
-  없으면 startup을 fail-closed한다.
-- Managed mode는 single API token/anonymous를 거부하고 version 2 access policy의 non-admin query와
+- Legacy token과 access-policy file을 동시에 설정하지 않으며 non-loopback bind에서 둘 다 없으면
+  startup을 fail-closed한다.
+- Managed mode는 legacy token/anonymous를 거부하고 version 2 access policy의 non-admin query identity와
   explicit operator identity를 모두 요구한다.
-- 모든 identity의 shared active-source visibility와 local/legacy query-only, operator admin/cancel
-  의미는 Delivery authorization policy이며 Runtime은 source mode와 configuration 선택만 소유한다.
+- Identity별 visibility/admin/cancel 의미는 Delivery가 소유하며 Runtime은 mode와 configuration 선택만
+  소유한다.
+
+### Protected operational boundary (`LAUNCH-02`)
+
+Repository는 static inventory와 image pin, exact-ready acceptance 및 freeze/rollback 절차만 정의한다.
+실제 protected TLS, secret 설치·회전, backup/restore 확인, target route, cutover와 rollback 실행은
+`LAUNCH-02`다. 대상·접근 권한·artifact digest·stop condition·change-record owner를 확인한 별도 실행
+승인과 실행 뒤 append-only evidence가 있어야 한다.
+
+Serving 중 source manifest/budget/access policy, verified dataset, source DDL/role/grant/settings와
+application/PostgreSQL artifact를 동결한다. 정상 business DML은 허용한다. 설명되지 않은 inventory
+drift, RLS source, exact-ready 실패 또는 artifact 식별 불가는 route stop condition이다. 상세 절차는
+[operations](../../operations.md)를 따른다.
 
 ## 소비 인터페이스와 전제
 
-- [Source Catalog](../source-catalog/README.md)의 concrete registry construction,
-  `SourceReader`와 `SourceProjectionWriter` configuration capability. 같은 registry instance가 공유하는
-  published profile graph는 recursively immutable하다.
+- [Source Catalog](../source-catalog/README.md)의 concrete registry construction capability,
+  `SourceReader`와 managed-only `SourceProjectionWriter`
 - [Metadata](../metadata/README.md)의 service/store, immutable catalog snapshot과
   `RuntimeCatalogProvider` lifecycle
 - [Guarded Query](../guarded-query/README.md)의 `RuntimeQueryExecutor`
   admission/drain/invalidate/close lifecycle
-- [Control Plane](../control-plane/README.md)의 stores, reloader와 convergence semantics
+- [Control Plane](../control-plane/README.md)의 managed-only stores, reloader와 public observation writers
 - [Delivery](../delivery/README.md)의 Gateway/routes/MCP factory, parent middleware와 transport lifespan
 - [Assurance](../assurance/README.md)의 bootstrap filesystem 또는 managed Control verified membership
-  interface
+  interface와 container acceptance
+
+Runtime은 provider의 public interface만 업무 호출에 사용한다. Concrete implementation을 조립할 권한이
+provider private table/type 접근 권한을 뜻하지 않는다.
 
 ## 불변조건
 
-- Production concrete dependency 조립은 Runtime에 두고 Control staging/Assurance
-  `assurance_cli.py` 예외를 해당 bounded workflow 밖으로 확대하지 않는다.
-- MCP child lifespan에 정상 진입한 뒤 shutdown은 resource/task/pool을 누출하지 않는다. Child
-  `enter` 실패 때는 child `exit`를 호출하지 않고 parent 최상위 resource를 고정 순서로 정확히 한 번씩
-  정리 시도하며, cleanup 실패와 무관하게 최초 startup error를 보존한다.
-- Shutdown에서는 readiness와 새 query admission을 먼저 닫고 active work를 bounded drain한다.
-- Source metadata probe/staging은 source budget/time limit을 우회하지 않는다. Control scan/poll
-  자체는 query budget이 아니라 configured reload interval과 Control DB pool 경계를 따른다.
-- Environment secret, bearer token, DSN/password와 SQL/question을 structured log에 넣지 않는다.
-- Public liveness/readiness에 source ID, internal component detail과 credential state를 노출하지 않는다.
-- Source별 동작 차이를 composition branch로 만들지 않는다.
-- Source authority mode를 source별로 섞거나 managed failure를 bootstrap file로 fallback하지 않는다.
-- Runtime composition은 shared source/profile/snapshot graph를 in-place 변경하지 않고 owner가 제공한
-  projection/invalidation capability만 호출한다.
+- Production concrete dependency 조립은 Runtime에 두고 Control staging/Assurance offline CLI 예외를
+  bounded workflow 밖으로 확대하지 않는다.
+- Current launch는 reviewed static two-source bootstrap, non-RLS와 단일 serving replica다.
+- Bootstrap/injected RLS source는 provider composition 전에 실패하고 managed cold RLS record는 registry에
+  projection하지 않는다.
+- Bootstrap과 managed authority를 섞거나 failure fallback하지 않는다.
+- Required adapter capability 누락과 startup 실패는 ready 전에 끝내고 parent resource를 정해진 순서로
+  누출 없이 정리한다.
+- Shutdown은 readiness/admission을 먼저 닫고 active work를 bounded drain한다.
+- Public liveness/readiness에 source ID, component detail과 credential state를 노출하지 않는다.
+- Environment secret, bearer token, DSN/password, SQL과 question을 structured log에 넣지 않는다.
+- Source별 동작 차이를 Runtime composition branch로 만들지 않는다.
+- Runtime은 shared source/profile/snapshot graph를 in-place 변경하지 않고 owner가 제공한 projection과
+  invalidation capability만 호출한다.
+- Release artifact는 pinned upstream과 approved VCS revision으로 식별하며 protected execution evidence를
+  repository 상태만으로 주장하지 않는다.
 
 ## 모듈 내부 변경
 
-다음은 configuration 이름/default, lifecycle 순서와 public health 의미를 보존할 때 독립적으로
+다음은 공식 interface와 별도 configuration/policy/lifecycle/operation 의미를 보존할 때 독립적으로
 변경할 수 있다.
 
 - Dependency construction helper와 local variable 정리
-- 동일한 cleanup을 만드는 lifespan context 정리
-- 같은 poll/probe 동작을 만드는 task bookkeeping 개선
-- Public state/label을 유지하는 operational counter 내부 개선
-- Uvicorn integration의 같은 grace/exit 의미를 유지하는 정리
+- 동일한 cleanup 결과를 만드는 lifespan context 정리
+- 같은 poll/probe/report 결과를 만드는 private task bookkeeping 개선
+- Public status/label/cardinality를 유지하는 process-local counter 내부 개선
+- 같은 grace/exit 의미를 유지하는 Uvicorn integration 정리
+- Pin과 revision-label 의미를 보존하는 Dockerfile layer/cache 개선
 
 ## 사용자 승인이 필요한 경계 변경
 
-아래 목록에는 module interface, composition/configuration boundary, operational semantics와
-safety/lifecycle invariant가 함께 있다. 승인 요청은 실제 변경 범주를 명시하며 목록 전체를 하나의
-module interface로 취급하지 않는다. 이 용어 정리는 기존 승인 범위를 줄이지 않는다.
+승인 요청은 실제 변경 범주를 구분하고 관련 없는 항목을 하나의 “Runtime interface 변경”으로 묶지
+않는다.
 
-- Module 의존 방향, concrete adapter wiring 위치 또는 composition root 분산
-- Environment variable, required/optional/default와 secure-mode validation 변경
-- Managed replica ID validation/ignore, registration 횟수, report cadence/failure 격리 또는
-  shutdown deregistration 의미 변경
-- Resource success generation/metadata fencing, bounded failure 분류, report cadence 또는
-  shared Control write serialization 변경
-- Bootstrap/managed authority, filesystem non-read/fallback와 access-policy requirement 변경
-- Startup, reloader sync/probe와 shutdown admission/drain/close 순서 변경
-- `RuntimeQueryExecutor`/`RuntimeCatalogProvider` required capability, callable validation 시점,
-  lifecycle hook 이름·의미 또는 disconnect propagation 변경
-- Readiness/health status, HTTP status와 public/operator disclosure 변경
-- Metric name/label/cardinality와 structured log/redaction allowlist 변경
-- Reload interval, authority/convergence와 failed-apply 동작 변경
-- Shutdown grace의 단위, timeout과 active/queued query 처리 변경
+- Module interface: operations sink/DTO의 Python shape와 호출 의미, 또는 Runtime이 소비하는 provider
+  lifecycle Protocol 변경
+- External API/wire: health/readiness status, HTTP code/body와 public/operator disclosure 변경
+- Policy/compatibility identity: source authority mode, RLS launch admission, artifact identity/pin과
+  exact-ready acceptance 의미 변경
+- Safety/lifecycle invariant: startup/reloader/probe, admission/drain/cancel/rollback/close 순서와 failure
+  cleanup 변경
+- Ownership/composition boundary: concrete adapter wiring 위치, bootstrap/managed authority, fallback,
+  reload/report ownership 또는 serving replica topology 변경
+- Protected operational procedure: source inventory, DDL/role/settings/artifact freeze, cutover, rollback과
+  stop condition 변경
 
-승인 요청에는 모든 affected module, in-flight request와 rolling process compatibility, failure cleanup 및
-운영 runbook/test 영향을 포함한다.
+Environment variable required/optional/default, managed replica identity/cadence/fencing, metric
+name/label/cardinality와 structured log/redaction allowlist 변경도 해당 interface·policy·invariant 영향을
+명시해 승인받는다. Protected environment의 실제 action은 repository/procedure 승인과 별도로 access,
+scope, target, stop condition과 change-record 책임을 확인한 실행 승인이 필요하다. 과거 evidence는
+현재 의미에 맞춰 수정·삭제하지 않는다.
 
 ## 검증
 
@@ -385,28 +318,36 @@ module interface로 취급하지 않는다. 이 용어 정리는 기존 승인 �
 
 ```text
 uv run pytest tests/test_registry.py tests/test_runtime_config.py tests/test_operations.py \
-  tests/test_server.py tests/test_http.py tests/test_managed_mode.py tests/test_assurance_cli.py \
+  tests/test_server.py tests/test_http.py tests/test_managed_mode.py \
   tests/test_runtime_startup_cleanup.py
 ```
 
-Lifecycle/disconnect 변경은 query/MCP/integration tests를, reload 변경은 source-admin tests를,
-managed startup/authority 변경은 `tests/test_control_startup.py` integration을, 실제 process signal이나
-container 경계는 container shutdown smoke를 추가한다. Control restore/startup 경계는
-`tests/test_control_recovery.py`에서 별도 key와 원래 두 stable slot의 zero-bootstrap 수렴을 함께
-확인한다. 완료 전 root `AGENTS.md`의 전체 gate를 실행한다.
+Lifecycle/disconnect 변경은 query/MCP/integration tests를, managed reload 변경은 source-admin과 Control
+startup tests를 추가한다. Container/artifact 경계는 다음 acceptance를 함께 실행한다.
+
+```text
+docker compose config --quiet
+docker build --build-arg QUERY_MAN_VCS_REF=<approved-commit> -t query-man:<approved-commit> .
+./scripts/verify-container.sh
+uv run query-man-verify
+```
+
+Built image의 OCI revision label과 digest를 검사하고 Compose health가 exact ready 이외 상태를
+healthy로 보지 않는지 확인한다. Protected deployment evidence는 별도 실행 승인 뒤에만 append한다.
+완료 전 root `AGENTS.md`의 전체 gate는 coordinating agent가 실행한다.
 
 ## 집중해서 읽을 범위
 
 Runtime 작업은 기본적으로 다음만 읽는다.
 
 1. 이 문서와 [module index](../README.md)
-2. 변경 대상 composition/config/operations/server code와 focused tests
-3. 조립하거나 lifecycle을 호출하는 module의 공개 interface
-4. [ADR 0006](../../decisions/0006-mcp-transport-and-workflow.md),
-   [ADR 0015](../../decisions/0015-containerized-local-runtime.md),
-   [ADR 0016](../../decisions/0016-centralized-source-management-plane.md)과
-   [ADR 0017](../../decisions/0017-shared-source-access-and-resource-tier.md) 중 변경과 직접 관련된 결정
-5. `app.py` route/middleware를 건드릴 때 Delivery external API
+2. 변경 대상 composition/configuration/operations/server/container code와 focused tests
+3. 조립하거나 lifecycle을 호출하는 provider의 공개 interface
+4. Current authority인 [ADR 0025](../../decisions/0025-static-non-rls-first-launch.md)와 변경에 직접
+   관련된 accepted ADR
+5. `app.py` route/middleware를 건드릴 때 Delivery external API와 test
+6. Protected procedure를 바꿀 때 [operations](../../operations.md); 실제 execution이면 별도 승인 범위와
+   append-only evidence schema
 
-Metadata ranking, SQL AST walker와 store transaction 내부는 lifecycle interface/rule을 바꾸지 않는
-한 읽을 필요가 없다.
+Metadata ranking, SQL AST walker, Control DB table과 parked RLS/encoding/cost/trace proposal body는
+Runtime이 소비하는 interface 또는 승인된 launch lifecycle을 바꾸지 않는 한 읽을 필요가 없다.

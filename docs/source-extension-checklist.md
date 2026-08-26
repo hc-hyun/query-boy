@@ -1,82 +1,75 @@
 # Source Extension Checklist
 
+Status: Static first-launch inventory frozen by ADR 0025
+
 ## 목적
 
-신규 PostgreSQL source를 추가할 때 애플리케이션 runtime 분기와 재배포를 늘리지 않고,
-보안·비용·MCP 결과 정합성을 유지하기 위한 운영 checklist다. Source별 차이는 curated
-view, versioned manifest, 기존 `budget_profile` resource tier와 verified query로 표현한다.
-Production onboarding은 `QUERY_MAN_SOURCE_MODE=managed`의 Control DB authority에서 수행한다.
-Repository source/verified file은 bootstrap/acceptance fixture이며 production publish 산출물이 아니다.
-Managed runtime은 source scope가 없는 version 2 access policy와 explicit query/admin identity를
-요구한다. Version 1과 legacy scope field는 자동 확대 없이 startup에서 거부한다.
+현재 launch inventory는 `development-issues`, `market-voc` 두 source뿐이다. 새 PostgreSQL
+database나 source ID 추가는 평상시 hot onboarding이 아니라 새 inventory review와 재배포다.
+[ADR 0025](decisions/0025-static-non-rls-first-launch.md)의 launch 범위를 바꾸므로 대상, 이유,
+영향과 rollback을 사용자에게 제시하고 정확히 승인받기 전에는 manifest, code, schema와 route를
+변경하지 않는다.
+
+구현된 managed onboarding은 삭제하지 않았지만 static first launch에는 참여하지 않는다. 동적
+source 운영이 실제로 필요해질 때 [source onboarding](source-onboarding.md)과
+[source management plane](source-management-plane.md)을 별도 운영 결정 아래 사용한다.
 
 ## 항상 필요한 작업
 
-- [ ] 질문에 필요한 column만 포함하고 grain이 하나인 curated `ai` relation을 만든다.
-- [ ] 전용 LOGIN reader를 만들고 `CONNECT`, 공개 schema `USAGE`, curated relation
-  `SELECT`만 부여한다. PUBLIC/TEMP/CREATE/base relation write와 불필요한 교차 DB 접근을
-  회수한다.
-- [ ] Reader를 `NOSUPERUSER`, `NOCREATEDB`, `NOCREATEROLE`, `NOINHERIT`,
-  `NOREPLICATION`, `NOBYPASSRLS`,
-  `replicas × (query pool + metadata pool) + staging`에 맞는 connection limit,
-  default read-only, statement/transaction/lock timeout과 temp/work memory 상한으로 고정한다.
-- [ ] 기존 workload에 맞는 `budget_profile` 하나를 resource tier로 선택하고 실제 대표
-  query의 plan cost, rows, node 수, 실행 시간과 결과 byte를 측정한다. 같은 source의 모든
-  query 사용자가 이 profile을 공유한다.
-- [ ] Source-scoped secret 이름과 strict v2 L0 manifest를 준비한다. 운영 팀 owner, source DB
-  environment와 실제 DB migration/change reference를 명시해 admin API에서 stage/publish하고
-  generation과 metadata revision을 기록한다. 같은 `source_id`는 host, port, database,
-  user, TLS mode 또는 environment가 다른 endpoint로 다시 묶지 않는다.
-- [ ] Resource observation을 구성할지 결정한다. 구성한다면 representative grain/physical relation과
-  이를 포함하는 1~16개 distinct storage relation이 같은 DB의 non-system ordinary
-  table/materialized view인지 DB owner가 검증한다. Query allowlist를 넓히거나 SQL expression을 넣지
-  않는다.
-- [ ] 활성화 시 모든 인증된 query 사용자가 source를 본다는 영향을 확인한다. 서로 다른 두
-  query identity가 같은 source 목록을 보고, caller override 없이 같은 source-resolved budget
-  정의가 적용되며, admin API는 모두 거부되는지 검증한다. Admin 기록에는 선택한
-  `budget_profile`과 published/active metadata revision을 남긴다.
-- [ ] Admin inventory/detail/history에서 owner/environment/migration reference, current generation,
-  resource tier와 metadata pointer가 의도와 일치하는지 확인한다. Credential, secret locator와
-  semantic/verified SQL 원문은 응답에 없어야 한다.
-- [ ] HTTP와 MCP 양쪽에서 `list_sources`, question-scoped context, exact revision query,
-  ordered columns/rows와 canonical result hash를 smoke test한다.
-- [ ] Source health, reject/timeout/queue/truncation metric, owner, credential rotation과 rollback
-  절차를 운영 기록에 연결한다.
+승인된 새 inventory 작업은 다음 end-to-end slice를 함께 검토한다.
+
+| 영역 | 확인할 내용 |
+|---|---|
+| Source database | PostgreSQL 18, server UTF-8, 최소 권한 `LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`, 유한 connection limit와 non-RLS curated view |
+| Source Catalog | Strict manifest, credential environment reference, 기존 budget profile, semantic overlay, static source projection과 exposed domain column 0개 |
+| Metadata | Pool checkout의 client UTF-8 요청, no-SQL PG18/server·client·driver UTF-8 검사, domain pre-publication rejection, bounded catalog와 revision publish |
+| Guarded Query | 실제·광고 final result OID가 `20, 21, 23, 25, 1082, 1184, 1700` 안인지, read-only transaction·limit·cancel·rollback |
+| Assurance | L0/L1/L2 quality, verified question/SQL/result invariant, unsupported OID와 drift negative corpus |
+| Runtime/Delivery | 단일 replica, query-only identity, exact ready, HTTP/MCP parity, pinned artifact와 stop/rollback 절차 |
+
+Manifest에는 host/port/database/user의 운영 locator와 password 환경 변수 이름만 둔다. Password,
+token과 실제 secret은 Git, metadata, HTTP/MCP와 log에 넣지 않는다. Client나 모델은 DSN, schema,
+role 또는 source credential을 선택할 수 없다.
 
 ## 조건에 따라 필요한 작업
 
-| 조건 | 추가 작업 |
-|---|---|
-| Production 품질을 L1/L2로 관리 | 모든 공개 relation의 description/grain/time 역할, approved join·business term과 현재 revision의 reviewed verified query를 등록한다. |
-| Join 또는 여러 grain 사용 | Cardinality/fanout guidance를 선언하고 각 grain 선집계 후 결합하는 query와 zero-child 데이터를 검증한다. |
-| RLS source | `FORCE ROW LEVEL SECURITY`, `security_invoker` view, trusted tenant context와 pool 재사용 격리를 검증한다. 이 검사만으로 hidden base-policy drift가 닫히지 않으므로 [RLS policy drift finding](verification/2026-08-26-rls-policy-drift.md)의 `RLS-01`~`RLS-03` 완료 전 production publish와 route activation은 보류한다. [Proposed ADR 0024](decisions/0024-rls-policy-drift-attestation.md)의 아직 미승인 target은 RLS pool startup client UTF8과 PostgreSQL-18/server/client UTF8도 요구한다. A가 exact 승인되면 inventory가 non-UTF8 RLS database를 stop condition으로 보고하고, 별도 권한·승인을 받은 operator만 unroute/deactivate 또는 source별 DB-owner migration/re-onboarding과 rollback을 실행한다. Plan-only onboarding Skill은 mutation하지 않는다. |
-| 기존 profile로 자원 상한을 만족하지 못함 | 별도 platform review 후 `budget_profile`을 변경한다. Source별 임의 숫자나 `cost_tier`를 추가하지 않는다. Budget 파일은 startup 설정이므로 현재는 restart가 필요하고, 새 metadata revision에서 L2 verified query를 다시 승인한다. |
-| Wide relation 또는 큰 결과 | 질문별 column disclosure, context/result byte, row limit과 truncation UX를 측정한다. |
-| Quoted PostgreSQL identifier | Manifest에는 `Identifier`/`schema.relation` 규칙을 만족하는 canonical 이름을 쓰고 metadata의 `sql_name`을 SQL에 그대로 사용한다. 공백·Unicode identifier는 curated view에서 안전한 이름으로 바꾼다. |
-| Production network | TLS certificate 검증, 방화벽/allowlist와 replica별 target DB connectivity를 확인한다. |
-| Resource observation 구성 | Reader의 기존 권한으로 exact target의 `reltuples`와 relation size 함수를 읽을 수 있는지 staging하고, 새 monitoring role이나 무제한 `COUNT(*)`를 만들지 않는다. |
+- 새 비즈니스 의미가 physical catalog로 충분하지 않을 때만 grain, alias, representative time,
+  approved join, measure와 predicate를 semantic overlay에 추가한다.
+- 복잡한 join/fanout을 안전하게 캡슐화해야 할 때만 source DB owner가 `ai` curated view를 만든다.
+- 현재 seven-OID 결과로 답할 수 없는 실제 질문이 있을 때는 source를 추가하지 않고 먼저
+  `ENC-01`의 새 result policy/revision/migration을 별도로 승인받는다.
+- RLS가 필요한 source는 현재 등록·publish·serving하지 않는다. `RLS-01`~`RLS-03`의 새
+  attestation, migration과 protected cutover가 승인·완료되기 전 작은 예외를 만들지 않는다.
+- Function/operator/type/collation/extension이나 reader semantic setting을 추가해야 하면 SQL policy와
+  metadata/result identity 영향을 별도로 검토한다.
+
+## 중단 조건
+
+다음 중 하나라도 있으면 publish나 route를 진행하지 않는다.
+
+- RLS source 또는 RLS 의존 view
+- PostgreSQL 18/server·client·driver UTF-8 불일치
+- 지원 밖 final result OID, exposed domain column 또는 설명할 수 없는 metadata/result drift
+- 9개 기존 invariant나 새 source의 승인된 verified result 실패
+- Reader privilege, DDL/settings inventory, image/config 또는 rollback이 불명확함
+- SQL policy v2/v3 process의 mixed serving
 
 ## 보통 필요하지 않은 작업
 
-- [ ] Python의 source ID 분기, 새 endpoint, registry factory 또는 dependency 추가
-- [ ] 기존 workload와 같은 경우 새 budget profile 추가
-- [ ] Table 전체를 application model로 복제하거나 database comment를 instruction으로 해석
-- [ ] L0 탐색만 필요한 source에 불필요한 semantic overlay 추가
+- Python의 `source_id`별 분기
+- Database별 HTTP/MCP tool이나 endpoint
+- 새 framework, plugin, factory 또는 wrapper
+- 새 budget tier나 caller별 source grant
+- Control DB schema 변경
 
-Repository의 fixture DB/role/seed와 `scripts/apply-db.sh` 변경은 재현 가능한 acceptance 환경을
-만들기 위한 작업이다. 실제 운영 DB가 이미 준비되어 있다면 이 fixture 변경은 production
-onboarding 절차에 포함되지 않는다.
+이 항목이 필요해 보이면 단순 source 추가가 아니라 module interface, external/persisted format,
+policy, safety/lifecycle, composition 또는 protected procedure 변경일 가능성이 높다. 해당 범주와
+provider/consumer 영향을 밝히고 먼저 승인받는다.
 
 ## MCP 정합성 경계
 
-Gateway가 강제하는 것은 authenticated shared source access, metadata revision, SQL AST와 resolved
-object policy, plan/시간/concurrency/result 상한, 중복 결과 column 거부와 bounded JSON
-응답이다. MCP도 같은 service와 오류 code를 사용하고 추가 입력 및 예상 밖 내부 오류를
-fail-closed한다.
-
-Canonical result에서 `numeric`은 scale을 보존한 문자열, `bytea`는 `base64:` 문자열이다.
-Fixture expected row와 hash도 HTTP framework의 임의 coercion이 아니라 이 canonical result encoding 규칙을 사용한다.
-
-질문에서 SQL을 생성하는 과정, `unsupported`/`needs_clarification`에서 멈추는 판단과 반환된
-context의 의미를 SQL이 올바르게 반영했는지는 client/Skill 책임이다. Production 회귀에서는
-reviewed verified query와 canonical result hash로 이 의미 경계를 별도로 증명한다.
+새 source가 승인되더라도 MCP tool은 `list_sources`, `get_context`, `query` 세 개를 유지한다.
+`get_context`가 반환한 exact `metadata_revision`과 `sql_policy_revision`을 같은 `query`에 전달하고,
+HTTP와 MCP에서 성공 결과와 details 없는 unavailable 오류가 같아야 한다. Client-side Skill은
+workflow를 설명할 뿐 authorization, SQL validation, reader privilege와 resource limit을 대신하지
+않는다.

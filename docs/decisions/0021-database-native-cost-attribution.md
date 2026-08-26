@@ -1,8 +1,11 @@
 # ADR 0021: Database-Native Cost Attribution
 
-Status: Proposed read-only prework — priority gate and user approval required before implementation
+Status: Parked research — outside ADR 0025 first-launch scope
 
 Date: 2026-08-26
+
+이 문서는 조사 기록으로 보존한다. [ADR 0025](0025-static-non-rls-first-launch.md)의 구현·acceptance가
+끝나도 COST 기능이 자동 승인되지는 않으며 active first-launch TODO나 module baseline이 아니다.
 
 ## Priority Boundary
 

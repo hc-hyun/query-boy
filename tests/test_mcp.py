@@ -10,7 +10,7 @@ from mcp.types import CallToolResult
 from pydantic import BaseModel, ValidationError
 
 from query_man.access import CallerContext
-from query_man.errors import QueryInvalidError
+from query_man.errors import QueryInvalidError, QueryUnavailableError
 from query_man.gateway import GatewayService
 from query_man.mcp_server import _invalid_tool_arguments_response, create_mcp_server
 from query_man.metadata import MetadataService
@@ -121,6 +121,20 @@ class InvalidQueryGateway(ExplodingGateway):
         _sql_policy_revision: str,
     ) -> dict[str, object]:
         raise QueryInvalidError("QUERY_UNDEFINED_COLUMN")
+
+
+class UnavailableQueryGateway(ExplodingGateway):
+    async def query(
+        self,
+        _caller: CallerContext,
+        _source_id: str,
+        _sql: str,
+        _metadata_revision: str,
+        _sql_policy_revision: str,
+    ) -> dict[str, object]:
+        raise QueryUnavailableError from RuntimeError(
+            "Unsupported PostgreSQL result type: private oid 3802"
+        )
 
 
 class _ManyRequiredArguments(BaseModel):
@@ -451,6 +465,36 @@ async def test_mcp_query_invalid_reports_only_bounded_correction_reason() -> Non
     }
     assert sensitive_sql not in str(result.content)
     assert len(str(result.content).encode()) < 512
+
+
+async def test_unsupported_result_is_details_free_mcp_error() -> None:
+    caller = CallerContext(
+        caller_id="test-analyst",
+        tenant_id="engineering",
+    )
+    server = create_mcp_server(UnavailableQueryGateway(), lambda: caller)  # type: ignore[arg-type]
+
+    async with Client(server) as client:  # type: ignore[arg-type]
+        result = await client.call_tool(
+            "query",
+            {
+                "source_id": "development-issues",
+                "sql": "SELECT count(*) AS issue_count FROM ai.issue_overview",
+                "metadata_revision": f"sha256:{'0' * 64}",
+                "sql_policy_revision": f"sha256:{'0' * 64}",
+            },
+        )
+
+    assert result.is_error is True
+    assert result.structured_content == {
+        "error": {
+            "code": "QUERY_UNAVAILABLE",
+            "message": "The query could not be completed.",
+        }
+    }
+    rendered = str(result.content)
+    assert "3802" not in rendered
+    assert "Unsupported PostgreSQL" not in rendered
 
 
 async def test_mcp_normalizes_strings_and_rejects_implicit_integer_coercion() -> None:

@@ -1,24 +1,19 @@
 # Query Man Architecture
 
-Status: Baseline complete; RLS-enabled production serving blocked pending `RLS-*`
+Status: ADR 0025 static non-RLS first-launch profile; protected execution pending `LAUNCH-02`
 
 ## Goal
 
-여러 PostgreSQL 데이터베이스를 하나의 Text-to-SQL gateway와 하나의 MCP endpoint로
-제공하고, 운영자는 하나의 management surface에서 source 정의, 상태, 이력, 규모와 비용
-신호를 관리한다. 신규 데이터베이스 추가 과정에서 애플리케이션 코드 변경과 배포가 발생하지
-않는 것을 최종 성공 기준으로 삼는다.
+장기 구조는 여러 PostgreSQL database를 하나의 Text-to-SQL gateway와 MCP endpoint로 제공하고,
+필요할 때 중앙 management surface로 source lifecycle을 운영하는 modular monolith다.
 
-완료된 query/data-plane과 중앙 management plane baseline 이력은 보존한다. 다만
-[RLS policy drift security finding](verification/2026-08-26-rls-policy-drift.md)에서 accepted tenant
-isolation을 위반하는 hidden base-policy drift가 재현됐으므로, `RLS-01`~`RLS-03`을 해결하고 protected
-inventory를 확인하기 전 RLS-enabled source의 production serving을 ready로 주장하지 않는다. 중앙
-management plane baseline은 source inventory/history, mutation receipt, replica convergence,
-내부 규모·gateway usage observation, public availability projection과 격리된 Control recovery
-fixture acceptance까지
-`CTRL-01`~`CTRL-09`로 구현됐다. Non-RLS baseline 완료와 RLS production readiness를 같은 상태로
-해석하지 않는다. DB-native/provider cost는
-[active development TODO](development-todo.md)의 후속 목표다.
+현재 serving 기준선은 [ADR 0025](decisions/0025-static-non-rls-first-launch.md)의
+`LAUNCH-01-A`다. Repository가 검토한 `development-issues`, `market-voc` 두 non-RLS source만
+static bootstrap authority와 단일 replica로 제공한다. PostgreSQL 18/UTF-8, exact seven result
+OID와 SQL policy v3를 강제한다. 모든 RLS source, 신규 database, managed hot onboarding, HA와
+broader result type은 첫 launch 밖이다. 구현된 Control Plane과 managed lifecycle은 보존하지만
+별도 운영 결정 전에는 launch composition에 참여하지 않는다. 실제 protected environment 전환은
+`LAUNCH-02`이며 repository acceptance와 같은 뜻이 아니다.
 
 완전한 무설정 자동화를 목표로 하지 않는다. 자동으로 알 수 없는 비즈니스 의미는
 희소한 선언형 metadata와 curated view로 제공한다.
@@ -52,11 +47,9 @@ Query Gateway + Source Registry <--- validated hot reload --- Control Plane
 PostgreSQL Reader / Analytics Replica
 ```
 
-Local/CI bootstrap은 `development_issues`와 `market_voc` 독립 source database를 사용한다.
-M6 release acceptance는 `support_tickets` database를 control plane으로 실행 중 등록한다. 이후
-M7 extension assurance는 quoted/rich-type `commerce_edges` database를 같은 runtime과 MCP
-경로로 검증한다. 이 네 database의 repository manifest와 seed는 production catalog가 아니라
-bootstrap/acceptance fixture다. 구체적인 grain, seed와 검증 범위는 [mvp.md](mvp.md)에 기록한다.
+Static launch는 `development_issues`와 `market_voc` 독립 source database를 사용한다.
+`support_tickets`, `commerce_edges`는 과거 Control Plane/onboarding/integration acceptance fixture이며
+serving inventory가 아니다. 구체적인 grain, seed와 검증 범위는 [mvp.md](mvp.md)에 기록한다.
 
 Local Compose는 PostgreSQL과 단일 `query-man` application container를 실행한다. 이 한
 process가 HTTP와 `/mcp`를 함께 제공해 registry, metadata cache, authorization과 query
@@ -142,11 +135,11 @@ Source profile에는 다음 운영 설정만 둔다.
 - plan admission을 포함한 중앙 `budget_profile` resource tier
 
 Runtime은 `QUERY_MAN_SOURCE_MODE=bootstrap|managed`로 process 전체 source authority를 시작할 때
-한 번 선택한다. 기본 bootstrap mode는 local/CI에서 `config/sources/*.yaml`과 filesystem
+한 번 선택한다. ADR 0025 static launch의 bootstrap mode는 `config/sources/*.yaml`과 filesystem
 verified-query data를 읽고 Control DSN/key를 거부한다. Credential 값은 manifest에 저장하지 않고 환경 변수
 이름만 참조한다.
 
-Production managed mode는 Control DSN/key와 stable replica ID를 모두 요구하고 empty
+별도로 활성화하는 managed mode는 Control DSN/key와 stable replica ID를 모두 요구하고 empty
 registry/verified map에서 Control DB의 source/verified lifecycle state만 load한다. Source/verified file을 열거나 합치지 않으므로 lifecycle row가
 없는 file source는 absent이고 restart 뒤 rollback/deactivate가 유지된다. Budget profile과 access
 policy는 versioned deployment configuration에 남는다. Source publish가 repository YAML이나 commit을
@@ -203,6 +196,12 @@ authorize
 -> stream results with row/byte limits
 -> commit or cancel and rollback
 ```
+
+Pool checkout 직후 SQL 없이 PostgreSQL 18, server/client UTF-8과 driver UTF-8 codec을 확인하고
+불일치 connection은 버린다. RLS source는 metadata, queue와 database access 전에 details 없는
+unavailable로 끝난다. User cursor의 duplicate column 검사 다음, 첫 fetch 전에 RowDescription의
+final result OID가 `20, 21, 23, 25, 1082, 1184, 1700` 중 하나인지 검사한다. Boolean을 포함한
+다른 final type은 unavailable이며 predicate와 중간 계산 사용은 유지한다.
 
 `EXPLAIN total_cost`는 시간이나 금액이 아니므로 단독 안전 기준으로 사용하지
 않는다. Timeout, concurrency, result size, temporary resource 제한과 query cancel을
@@ -278,6 +277,9 @@ Schema drift로 overlay가 깨지면 신규 revision 발행을 중단하고 마�
 
 ## Success Criteria
 
+아래 항목은 장기 system 목표다. ADR 0025 first launch의 완료 조건은 accepted 두 source, 단일
+replica와 해당 decision의 repository/protected gate로 더 좁다.
+
 - 신규 PostgreSQL source 추가에 애플리케이션 코드 변경이 없다.
 - Production source 추가가 repository source file이나 application deploy를 만들지 않는다.
 - `source_id`에 따른 runtime 분기문이 추가되지 않는다.
@@ -327,6 +329,8 @@ Schema drift로 overlay가 깨지면 신규 revision 발행을 중단하고 마�
   [ADR 0017](decisions/0017-shared-source-access-and-resource-tier.md)을 따른다.
 - Module owner, 집중 읽기 범위와 module interface/boundary 승인 절차는
   [ADR 0018](decisions/0018-module-ownership-and-contract-governance.md)을 따른다.
+- Static non-RLS first-launch source, reader compatibility, result OID, artifact와 rollout 경계는
+  [ADR 0025](decisions/0025-static-non-rls-first-launch.md)를 따른다.
 
 ## Completion Tracking
 

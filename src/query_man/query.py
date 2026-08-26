@@ -16,6 +16,7 @@ from psycopg_pool import AsyncConnectionPool, PoolTimeout
 from query_man.errors import (
     AppError,
     MetadataRevisionMismatchError,
+    MetadataUnavailableError,
     QueryInvalidError,
     QueryOverloadedError,
     QueryRejectedError,
@@ -27,13 +28,20 @@ from query_man.metadata import MetadataService
 from query_man.models import SourceProfile
 from query_man.operations import GatewayUsageOutcome, operations
 from query_man.reader_policy import (
+    READER_CLIENT_ENCODING,
     READER_SESSION_BUDGET_SETTERS,
     READER_SESSION_TIMEZONE_SETTER,
+    ReaderSessionPolicyError,
     reader_session_budget_values,
+    require_reader_connection_policy,
     require_reader_session_policy,
 )
 from query_man.registry import SourceReader
-from query_man.result_encoding import encode_result_value
+from query_man.result_encoding import (
+    ResultEncodingError,
+    _require_supported_result_oids,
+    encode_result_value,
+)
 from query_man.sql_validation import (
     SQL_POLICY_REVISION,
     SqlValidationError,
@@ -187,9 +195,14 @@ class QueryService:
         source = self._registry.get(source_id)
         if source is None:
             raise SourceNotFoundError
-        if source.tenant_isolation == "rls" and tenant_id is None:
-            raise QueryRejectedError("TENANT_CONTEXT_REQUIRED")
-        published = await self._metadata.get_published(source_id)
+        if source.tenant_isolation == "rls":
+            raise QueryUnavailableError
+        try:
+            published = await self._metadata.get_published(source_id)
+        except MetadataUnavailableError as error:
+            if isinstance(error.__cause__, ReaderSessionPolicyError):
+                raise QueryUnavailableError from None
+            raise
         if (
             metadata_revision != published.revision
             or sql_policy_revision != SQL_POLICY_REVISION
@@ -353,6 +366,8 @@ class PostgresQueryExecutor:
         query_id: str | None = None,
         tenant_id: str | None = None,
     ) -> dict[str, object]:
+        if source.tenant_isolation == "rls":
+            raise QueryUnavailableError
         task = asyncio.current_task()
         if task is None:
             raise QueryUnavailableError
@@ -431,8 +446,8 @@ class PostgresQueryExecutor:
         query_id: str,
         tenant_id: str | None,
     ) -> dict[str, object]:
-        if source.tenant_isolation == "rls" and tenant_id is None:
-            raise QueryRejectedError("TENANT_CONTEXT_REQUIRED")
+        if source.tenant_isolation == "rls":
+            raise QueryUnavailableError
         # ponytail: process-local limit; use a distributed limiter when replicas share a source quota.
         semaphore = self._semaphores.setdefault(
             source.source_id,
@@ -459,6 +474,14 @@ class PostgresQueryExecutor:
                     async with pool.connection(
                         timeout=source.budget.query_queue_timeout_ms / 1000
                     ) as connection:
+                        try:
+                            require_reader_connection_policy(connection)
+                        except ReaderSessionPolicyError:
+                            try:
+                                await connection.close()
+                            except Exception:
+                                pass
+                            raise
                         async with self._active_lock:
                             active_query = _ActiveQuery(
                                 source.source_id,
@@ -680,9 +703,23 @@ class PostgresQueryExecutor:
             cursor = connection.cursor(name=_RESULT_CURSOR_NAME, row_factory=dict_row)
             try:
                 await cursor.execute(sql)
-                columns = [column.name for column in cursor.description or ()]
+                description = cursor.description
+                try:
+                    result_columns = tuple(description or ())
+                    columns = [column.name for column in result_columns]
+                    if any(not isinstance(column, str) for column in columns):
+                        raise ResultEncodingError(
+                            "Unsupported PostgreSQL result type"
+                        )
+                except Exception:
+                    raise ResultEncodingError(
+                        "Unsupported PostgreSQL result type"
+                    ) from None
                 if len(columns) != len(set(columns)):
                     raise QueryRejectedError("QUERY_DUPLICATE_RESULT_COLUMN")
+                _require_supported_result_oids(
+                    column.type_code for column in result_columns
+                )
                 while not truncated:
                     remaining_with_sentinel = source.budget.max_result_rows - len(rows) + 1
                     batch = await cursor.fetchmany(
@@ -768,6 +805,7 @@ class PostgresQueryExecutor:
                     "sslmode": "verify-full" if connection.ssl else "disable",
                     "application_name": f"query-man-query:{source.source_id}",
                     "connect_timeout": 2,
+                    "client_encoding": READER_CLIENT_ENCODING,
                     # ponytail: explicit BEGIN must not be preceded by psycopg's implicit BEGIN.
                     "autocommit": True,
                     "row_factory": dict_row,
