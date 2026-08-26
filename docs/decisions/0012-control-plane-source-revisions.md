@@ -59,8 +59,8 @@ database TEMP와 공개 schema CREATE 금지를 검사한다. Fixture validation
 교차 DB 권한도 별도로 검사한다.
 
 Disabled source의 credential rotation은 거부한다. Rollback은 current source identity,
-credential, metadata와 verified-query record를 재검증한 뒤 이전 generation을 활성화하고 metadata
-automatic publish를 pin한다. 원인 점검 뒤 operator가 resume endpoint를 호출하기 전에는 새
+credential, metadata와 verified-query revision membership을 재검증한 뒤 이전 generation을
+활성화하고 metadata automatic publish를 pin한다. 원인 점검 뒤 operator가 resume endpoint를 호출하기 전에는 새
 source generation publish도 허용하지 않는다.
 
 ## Consequences

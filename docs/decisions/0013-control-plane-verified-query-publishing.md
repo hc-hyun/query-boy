@@ -26,8 +26,8 @@ Operator는 question, SQL, expected relations, columns, row count와 canonical r
 delete를 금지한다. [ADR 0016](0016-centralized-source-management-plane.md)의 명시적 runtime mode가
 verified-query authority도 process 전체에서 한 번 선택한다.
 같은 query ID를 새 metadata revision에 재발행하면 새 immutable row가 생기며 이전 revision row는
-rollback evidence로 남는다. Global policy 전환 때는 변경된 hash의 record만이 아니라 current와
-rollback-preserved inventory 전체를 새 revision에서 재실행한다.
+rollback evidence로 남는다. Global policy 전환 때는 변경된 hash의 query만이 아니라 current와
+rollback-preserved inventory 전체를 새 revision에서 재실행해 새 immutable records로 발행한다.
 
 - `bootstrap` mode는 filesystem verified-query dataset만 사용하고 Control DB 설정을 거부한다.
 - `managed` mode는 empty verified map으로 시작해 Control DB verified-query records만 load한다.
@@ -40,9 +40,9 @@ rollback-preserved inventory 전체를 새 revision에서 재실행한다.
 Bootstrap verified-query dataset을 이관할 때는 traffic 밖의 managed instance에서 source를 L0/L1로 먼저
 publish하고 기존 admin endpoint로 reviewed query와 expectation을 실행·저장한 뒤 L2 generation을 publish한다.
 `minimum_quality_level`만 L1에서 L2로 바꾸는 것은 metadata revision 재료가 아니므로 같은 exact
-revision record를 사용한다. Startup import, source별 marker, seed digest와 새 import endpoint는
-없다. 한 replica가 Control DB verified-query record와 L2 generation을 publish하면 다른 replica가 poll로 같은
-managed quality gate를 통과하는 no-deploy 특성은 유지한다.
+exact-revision verified-query records를 사용한다. Startup import, source별 marker, seed digest와 새 import endpoint는
+없다. 한 replica가 Control DB verified-query records와 L2 generation을 publish하면 다른 replica가
+poll로 같은 managed quality gate를 통과하는 no-deploy 특성은 유지한다.
 
 ## Consequences
 
@@ -53,10 +53,10 @@ managed quality gate를 통과하는 no-deploy 특성은 유지한다.
   올려 같은 revision을 재publish할 수 있다.
 - Record 폐기가 필요하면 기존 row를 수정하지 않고 새 metadata revision과 새 verified-query record를
   publish한다.
-- 이 verified-query publish 절차는 publish 시점의 execution gate다. Bootstrap `query-man-verify`는 filesystem dataset을
-  반복 실행하며, control-plane source의 주기적 data-invariant 재실행은 현재 운영 smoke/
+- 이 verified-query publish 절차는 publish 시점의 execution gate다. Bootstrap
+  `query-man-verify`는 filesystem verified-query dataset을 반복 실행하며, control-plane source의 주기적 data-invariant 재실행은 현재 운영 smoke/
   monitoring 절차로 수행한다.
-- Managed runtime은 filesystem verified-query dataset entry가 Control DB에 없다는 이유로 자동 import하거나 L2
-  evidence로 인정하지 않는다.
+- Managed runtime은 filesystem verified-query dataset entry를 자동 import하거나 L2 evidence로
+  인정하지 않는다.
 - Canonical-time migration의 protected inventory, L1→verified→L2 cutover와 보존형 rollback은
   [ADR 0019](0019-canonical-time-stability.md)를 따른다.
