@@ -126,7 +126,8 @@ class QueryExecutor(Protocol):
 
 ### RuntimeQueryExecutor lifecycle interface
 
-Runtime만 운영 lifecycle이 추가된 Protocol을 소비한다.
+Delivery 조립 경계에도 `DeliveryQueryExecutor`가 전달되지만, 운영 lifecycle method를 호출하고
+조율하는 책임은 Runtime에 있다. Managed Runtime은 `invalidate`까지 추가된 Protocol을 소비한다.
 
 ```python
 class DeliveryQueryExecutor(QueryExecutor, Protocol):
