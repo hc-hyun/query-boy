@@ -1,4 +1,5 @@
 .env
+.env.domain-lab
 .idea/
 .vscode/
 *.log

@@ -1,0 +1,144 @@
+version: 2
+
+source_id: parcel-logistics
+name: 택배 물류
+description: 운송장, 출발·도착 권역, 허브 추적 스캔, 배송 약속·지연·분실·파손
+provenance:
+  owner: query-man-domain-lab
+  environment: development
+  database_migration_ref: docker/postgres/domain-lab/parcel-logistics-schema.sql
+connection:
+  host: 127.0.0.1
+  host_env: QUERY_MAN_POSTGRES_HOST
+  port: 5432
+  port_env: POSTGRES_PORT
+  database: parcel_logistics
+  user: parcel_logistics_reader
+  password_env: PARCEL_LOGISTICS_READER_PASSWORD
+  ssl: false
+allowed_schemas: [ai]
+allowed_relation_kinds: [view]
+budget_profile: interactive
+minimum_quality_level: L1
+
+semantic_overlay:
+  default_relation: ai.shipment_overview
+  relations:
+    - relation: ai.shipment_overview
+      role: event
+      description: 운송장별 출발·도착 허브, 배송 약속, 완료, 지연 결과와 예외 조회
+      aliases: [택배 배송, 운송장, 발송 건, 배송 약속, 분실 택배, 파손 택배]
+      grain:
+        name: parcel_shipment
+        description: 운송장 1건
+        key_columns: [shipment_id]
+      default_time_column: shipped_at
+      use_for: [최근 발송, 권역별 배송, 약속 대비 지연, 분실 건, 파손 건, 스캔 없는 배송]
+      column_aliases:
+        tracking_no: [운송장 번호]
+        promised_at: [배송 약속 시각, 도착 예정]
+        delivered_at: [배송 완료 시각]
+        delivery_outcome: [약속 이행 결과, 배송 지연 상태]
+        tracking_event_count: [추적 스캔 수]
+        delivery_delay_minutes: [배송 지연 분]
+      value_hints:
+        service_level: [STANDARD, EXPRESS, SAME_DAY]
+        shipment_status: [CREATED, IN_TRANSIT, DELIVERED, EXCEPTION, LOST]
+        delivery_outcome: [PENDING, ON_TIME, LATE, NOT_APPLICABLE]
+        exception_type: [WEATHER, ADDRESS, DAMAGED, LOST, CUSTOMS]
+      measures:
+        - name: shipment_count
+          description: 선택된 운송장 행의 건수
+          aliases: [배송 건수, 운송장 수, 발송 건수]
+          aggregation: count_rows
+        - name: tracking_event_count
+          description: 운송장별 사전 집계 추적 이벤트 수의 합계
+          aliases: [추적 이벤트 수, 스캔 수]
+          aggregation: sum
+          column: tracking_event_count
+
+    - relation: ai.tracking_events
+      role: event
+      description: 운송장에 기록된 개별 허브 스캔과 물리 스캔·수집 시각 조회
+      aliases: [택배 스캔, 허브 스캔, 배송 추적 이벤트, 늦게 수집된 스캔]
+      grain:
+        name: parcel_tracking_event
+        description: 추적 이벤트 1건
+        key_columns: [tracking_event_id]
+      default_time_column: scanned_at
+      use_for: [허브별 스캔, 추적 경로, 이벤트 순서, 늦은 수집, 중복 표시 이벤트]
+      column_aliases:
+        event_sequence: [운송장 내 이벤트 순번]
+        scanned_at: [현장 스캔 시각]
+        recorded_at: [시스템 기록 시각, 수집 시각]
+        ingest_lag_minutes: [수집 지연 분]
+      value_hints:
+        event_code: [PICKED_UP, ARRIVED_HUB, DEPARTED_HUB, OUT_FOR_DELIVERY, DELIVERED, EXCEPTION]
+        event_status: [RECORDED, DUPLICATE, LATE_INGEST]
+      measures:
+        - name: tracking_event_count
+          description: 선택된 개별 추적 이벤트 행의 건수
+          aliases: [스캔 건수, 추적 이벤트 수]
+          aggregation: count_rows
+
+    - relation: ai.hub_overview
+      role: population
+      description: 활동이 없는 허브까지 포함한 허브 모집단과 출발·도착·스캔 활동 요약
+      aliases: [택배 허브, 물류 거점, 활동 없는 허브]
+      grain:
+        name: parcel_hub
+        description: 택배 허브 1곳
+        key_columns: [hub_id]
+      default_time_column: opened_on
+      use_for: [전체 허브 수, 허브별 출발 배송, 허브별 도착 배송, 스캔 없는 허브]
+      column_aliases:
+        origin_shipment_count: [출발 배송 수]
+        destination_shipment_count: [도착 배송 수]
+        tracking_event_count: [허브 스캔 수]
+        last_scanned_at: [마지막 스캔 시각]
+      value_hints:
+        region: [SEOUL, BUSAN, INCHEON, DAEJEON, DAEGU, GWANGJU]
+      measures:
+        - name: hub_count
+          description: 선택된 허브 모집단 행의 수
+          aliases: [허브 수, 거점 수]
+          aggregation: count_rows
+        - name: origin_shipment_count
+          description: 허브별 사전 집계 출발 배송 수의 합계
+          aliases: [출발 배송 수]
+          aggregation: sum
+          column: origin_shipment_count
+
+  business_terms:
+    - name: late_delivered_shipment
+      description: 실제 배송 완료 시각이 약속 시각보다 늦어 delivery_outcome이 LATE인 운송장
+      aliases: [완료 지연, 약속 초과 배송]
+      predicates:
+        - relation: ai.shipment_overview
+          column: delivery_outcome
+          operator: equal
+          values: [LATE]
+
+  question_rules:
+    - code: LOGISTICS_DELAY_DEFINITION_REQUIRED
+      status: needs_clarification
+      phrases: [배송 지연, 지연 건수, 지연율]
+      message: 완료된 배송의 약속 초과인지, 아직 미완료인 약속 경과인지, 스캔 수집 지연인지 정의해야 한다.
+      missing_concepts: [delay clock and population]
+      options: [delivery_outcome=LATE인 완료 배송, 현재 기준 약속이 지난 미완료 배송, recorded_at-scanned_at 수집 지연]
+    - code: LOGISTICS_MISSING_SCAN_INTERPRETATION_REQUIRED
+      status: needs_clarification
+      phrases: [스캔 누락, 추적 누락]
+      message: tracking_event_count=0인 운송장인지 예상 경로의 특정 이벤트가 없는 운송장인지 정의해야 한다.
+      missing_concepts: [expected scan sequence]
+      options: [스캔이 전혀 없는 운송장, 배송 완료 이벤트가 없는 운송장, 특정 허브 이벤트가 없는 운송장]
+
+  joins:
+    - left_relation: ai.shipment_overview
+      right_relation: ai.tracking_events
+      column_pairs:
+        - left: shipment_id
+          right: shipment_id
+      cardinality: one_to_many
+      fanout: true
+      guidance: 추적 이벤트를 shipment_id별로 먼저 집계한 뒤 결합해야 운송장 수와 package_value가 중복되지 않는다.

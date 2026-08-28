@@ -1,0 +1,184 @@
+version: 2
+
+source_id: clinical-operations
+name: 가상 임상 운영
+description: 완전 합성 환자 식별자 기반 진료 예약·취소·노쇼와 검사 결과 운영
+provenance:
+  owner: query-man-domain-lab
+  environment: development
+  database_migration_ref: docker/postgres/domain-lab/clinical-operations-schema.sql
+connection:
+  host: 127.0.0.1
+  host_env: QUERY_MAN_POSTGRES_HOST
+  port: 5432
+  port_env: POSTGRES_PORT
+  database: clinical_operations
+  user: clinical_operations_reader
+  password_env: CLINICAL_OPERATIONS_READER_PASSWORD
+  ssl: false
+allowed_schemas: [ai]
+allowed_relation_kinds: [view]
+budget_profile: interactive
+minimum_quality_level: L1
+
+semantic_overlay:
+  default_relation: ai.appointment_overview
+  relations:
+    - relation: ai.appointment_overview
+      role: event
+      description: 완전 합성 예약의 진료 방식, 제공자 전문과, 체크인, 완료, 취소와 노쇼 운영 조회
+      aliases: [가상 진료 예약, 합성 환자 예약, 진료 취소, 노쇼, 예약 대기]
+      grain:
+        name: synthetic_appointment
+        description: 완전 합성 진료 예약 1건
+        key_columns: [appointment_id]
+      default_time_column: scheduled_at
+      use_for: [예약 건수, 취소율, 노쇼율, 진료 방식별 예약, 전문과별 대기시간, 지역별 예약]
+      column_aliases:
+        patient_code: [합성 환자 코드]
+        provider_code: [합성 제공자 코드]
+        scheduled_at: [예약 시각]
+        appointment_status: [예약 상태]
+        cancellation_reason: [취소 사유]
+        wait_minutes: [대기 분]
+      value_hints:
+        encounter_type: [IN_PERSON, VIDEO, PHONE]
+        appointment_status: [SCHEDULED, CHECKED_IN, COMPLETED, CANCELED, NO_SHOW]
+        age_band: [0-17, 18-34, 35-49, 50-64, 65+]
+        facility_region: [SEOUL, BUSAN, JEJU, DAEJEON]
+        specialty: [GENERAL_MEDICINE, PEDIATRICS, CARDIOLOGY, LAB_MEDICINE, ENDOCRINOLOGY]
+      measures:
+        - name: appointment_count
+          description: 선택된 완전 합성 예약 행의 건수
+          aliases: [예약 수, 진료 예약 건수]
+          aggregation: count_rows
+        - name: wait_minutes
+          description: 값이 있는 예약의 운영 대기 분 합계
+          aliases: [대기 시간, 대기 분]
+          aggregation: sum
+          column: wait_minutes
+
+    - relation: ai.lab_results
+      role: event
+      description: 완전 합성 수치 검사 결과의 pending·final·corrected 상태, 기준 범위와 critical 표시 조회
+      aliases: [가상 검사 결과, 합성 검사값, pending 검사, corrected 검사, critical 검사]
+      grain:
+        name: synthetic_lab_result
+        description: 완전 합성 검사 결과 기록 1건
+        key_columns: [lab_result_id]
+      default_time_column: collected_at
+      use_for: [검사 상태별 건수, 검사 코드별 결과, pending 검사, 보정 검사, critical 검사, 기준 범위 이탈]
+      column_aliases:
+        test_code: [검사 코드]
+        result_numeric: [검사 수치]
+        reference_low: [기준 하한]
+        reference_high: [기준 상한]
+        correction_version: [보정 버전]
+        critical_status: [중대 결과 표시]
+      value_hints:
+        test_code: [CBC_HGB, GLUCOSE, LDL, ALT, CREATININE]
+        result_status: [PENDING, FINAL, CORRECTED]
+        interpretation: [LOW, NORMAL, HIGH, INDETERMINATE]
+        critical_status: ['YES', 'NO', UNKNOWN]
+      measures:
+        - name: lab_result_count
+          description: 선택된 완전 합성 검사 결과 행의 건수
+          aliases: [검사 건수, 결과 수]
+          aggregation: count_rows
+        - name: result_numeric
+          description: pending null을 제외한 검사 수치 합계이며 서로 다른 검사 코드·단위끼리는 합산하지 않는다
+          aliases: [검사 수치 합계]
+          aggregation: sum
+          column: result_numeric
+
+    - relation: ai.patient_overview
+      role: population
+      description: 예약·검사가 없는 코드까지 포함한 완전 합성 환자 모집단과 운영 활동 요약
+      aliases: [가상 환자, 합성 환자 모집단, 예약 없는 합성 환자]
+      grain:
+        name: synthetic_patient
+        description: 완전 합성 환자 코드 1개
+        key_columns: [patient_id]
+      default_time_column: enrolled_on
+      use_for: [합성 환자 수, 예약 없는 환자, 환자별 예약 수, 환자별 노쇼 수, 환자별 검사 수]
+      column_aliases:
+        patient_code: [합성 환자 코드]
+        appointment_count: [예약 수]
+        no_show_count: [노쇼 수]
+        pending_lab_count: [pending 검사 수]
+        critical_lab_count: [critical 검사 수]
+      value_hints:
+        age_band: [0-17, 18-34, 35-49, 50-64, 65+]
+        sex_at_birth: [FEMALE, MALE, OTHER, UNKNOWN]
+        home_region: [SEOUL, BUSAN, JEJU, RURAL_NORTH, RURAL_SOUTH]
+      measures:
+        - name: patient_count
+          description: 선택된 완전 합성 환자 모집단 행의 수
+          aliases: [합성 환자 수, 환자 수]
+          aggregation: count_rows
+        - name: appointment_count
+          description: 환자별 사전 집계 예약 수의 합계
+          aliases: [예약 수]
+          aggregation: sum
+          column: appointment_count
+        - name: no_show_count
+          description: 환자별 사전 집계 NO_SHOW 예약 수의 합계
+          aliases: [노쇼 수]
+          aggregation: sum
+          column: no_show_count
+
+  business_terms:
+    - name: appointment_no_show
+      description: 취소와 구분되어 appointment_status가 NO_SHOW인 완전 합성 예약
+      aliases: [노쇼, 예약 불참]
+      predicates:
+        - relation: ai.appointment_overview
+          column: appointment_status
+          operator: equal
+          values: [NO_SHOW]
+
+  question_rules:
+    - code: CLINICAL_NO_SHOW_DENOMINATOR_REQUIRED
+      status: needs_clarification
+      phrases: [노쇼율, 예약 불참률]
+      message: 노쇼율 분모에 취소 예약을 포함할지 제외할지 정의해야 한다.
+      missing_concepts: [no-show denominator]
+      options: [NO_SHOW / 전체 예약, NO_SHOW / 취소 제외 예약, NO_SHOW / 완료 예정 시각이 지난 예약]
+    - code: CLINICAL_SYNTHETIC_ONLY
+      status: unsupported
+      phrases: [실제 환자, 환자 이름, 전화번호, 이메일, 주민번호, 진단명, 처방]
+      message: 이 source는 완전 합성 운영 데이터만 포함하며 실제 환자 PII, 진단, 처방은 제공하지 않는다.
+      missing_concepts: [real patient identity or clinical diagnosis]
+      options: [합성 patient_code와 예약·검사 운영 지표로 질문 범위를 변경]
+    - code: CLINICAL_PENDING_VALUE_UNAVAILABLE
+      status: unsupported
+      phrases: [pending 검사 수치, 대기 중 검사 결과값]
+      message: PENDING 검사 결과는 의도적으로 result_numeric이 null이라 아직 수치를 조회할 수 없다.
+      missing_concepts: [result value before finalization]
+      options: [pending 검사 건수 조회, FINAL 또는 CORRECTED 결과만 조회]
+
+  joins:
+    - left_relation: ai.appointment_overview
+      right_relation: ai.lab_results
+      column_pairs:
+        - left: appointment_id
+          right: appointment_id
+      cardinality: one_to_many
+      fanout: true
+      guidance: 검사 결과를 appointment_id별로 먼저 집계하고 appointment_id가 null인 독립 검사도 별도로 보존해야 예약 수가 중복되지 않는다.
+    - left_relation: ai.patient_overview
+      right_relation: ai.appointment_overview
+      column_pairs:
+        - left: patient_code
+          right: patient_code
+      cardinality: one_to_many
+      fanout: true
+      guidance: 예약을 patient_code별로 먼저 집계한 뒤 합성 환자 모집단에 결합해야 예약 없는 환자가 유지된다.
+    - left_relation: ai.patient_overview
+      right_relation: ai.lab_results
+      column_pairs:
+        - left: patient_id
+          right: patient_id
+      cardinality: one_to_many
+      fanout: true
+      guidance: 검사 결과를 patient_id별로 먼저 집계해야 환자 수와 예약 사전 집계 값이 검사 행 수만큼 중복되지 않는다.

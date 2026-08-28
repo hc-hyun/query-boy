@@ -1,0 +1,183 @@
+version: 2
+
+source_id: retail-commerce
+name: 리테일 커머스
+description: 온라인·매장 주문, 주문 상품, 결제, 반품·환불과 고객 구매 이력
+provenance:
+  owner: query-man-domain-lab
+  environment: development
+  database_migration_ref: docker/postgres/domain-lab/retail-commerce-schema.sql
+connection:
+  host: 127.0.0.1
+  host_env: QUERY_MAN_POSTGRES_HOST
+  port: 5432
+  port_env: POSTGRES_PORT
+  database: retail_commerce
+  user: retail_commerce_reader
+  password_env: RETAIL_COMMERCE_READER_PASSWORD
+  ssl: false
+allowed_schemas: [ai]
+allowed_relation_kinds: [view]
+budget_profile: interactive
+minimum_quality_level: L1
+
+semantic_overlay:
+  default_relation: ai.order_overview
+  relations:
+    - relation: ai.order_overview
+      role: event
+      description: 통화별 주문 상태, 결제, 배송, 할인, 환불과 사전 집계 상품 수 조회. net_collected_amount는 PAID·PARTIALLY_REFUNDED·REFUNDED에서만 할인·환불 차감액이며 미정산 상태는 0
+      aliases: [리테일 주문, 구매 주문, 결제 주문, 매장 주문, 온라인 주문]
+      grain:
+        name: retail_order
+        description: 리테일 주문 1건
+        key_columns: [order_id]
+      default_time_column: ordered_at
+      use_for: [최근 주문, 채널별 주문, 지역별 취소, 주문별 환불, 통화별 매출, 배송 완료 주문]
+      column_aliases:
+        customer_code: [구매 고객, 고객 코드]
+        fulfillment_region: [배송 권역, 주문 지역]
+        gross_amount: [주문 총액, 할인 전 금액]
+        refunded_amount: [환불 금액]
+        net_collected_amount: [순수취액, 할인·환불 차감액]
+        line_count: [주문 상품 행 수]
+      value_hints:
+        channel: [ONLINE, STORE, MARKETPLACE]
+        payment_status: [PENDING, AUTHORIZED, PAID, PARTIALLY_REFUNDED, REFUNDED, FAILED]
+        order_status: [PLACED, PROCESSING, SHIPPED, DELIVERED, CANCELED]
+        currency: [KRW, USD, EUR, JPY]
+      measures:
+        - name: order_count
+          description: 선택된 주문 행의 건수
+          aliases: [주문 수, 주문 건수]
+          aggregation: count_rows
+        - name: gross_amount
+          description: 같은 currency 안에서만 합산하는 할인 전 주문 금액
+          aliases: [주문 총액, 총 주문액]
+          aggregation: sum
+          column: gross_amount
+        - name: refunded_amount
+          description: 같은 currency 안에서만 합산하는 주문 환불 금액
+          aliases: [환불액, 환불 금액]
+          aggregation: sum
+          column: refunded_amount
+
+    - relation: ai.order_lines
+      role: event
+      description: 주문 안의 개별 상품 행, 수량, 가격, 할인과 부분·전체 반품 조회
+      aliases: [주문 상품, 주문 라인, 상품 판매, 반품 상품]
+      grain:
+        name: retail_order_line
+        description: 주문 상품 행 1건
+        key_columns: [order_line_id]
+      default_time_column: ordered_at
+      use_for: [상품별 판매량, 카테고리별 주문 상품, 부분 반품, 전체 반품, 반품 요청]
+      column_aliases:
+        product_code: [상품 코드, SKU]
+        quantity: [구매 수량]
+        returned_quantity: [반품 수량]
+        return_status: [반품 상태]
+        line_net_before_refund: [환불 전 라인 순액]
+      value_hints:
+        return_status: [NONE, REQUESTED, PARTIAL, FULL, REJECTED]
+        channel: [ONLINE, STORE, MARKETPLACE]
+        currency: [KRW, USD, EUR, JPY]
+        category: [ELECTRONICS, HOME, BEAUTY, FOOD, SPORTS]
+      measures:
+        - name: order_line_count
+          description: 선택된 주문 상품 행의 건수
+          aliases: [주문 라인 수, 상품 행 수]
+          aggregation: count_rows
+        - name: item_quantity
+          description: 판매 상품 수량의 합계
+          aliases: [판매 수량, 구매 수량]
+          aggregation: sum
+          column: quantity
+        - name: returned_quantity
+          description: 반품된 상품 수량의 합계
+          aliases: [반품 수량]
+          aggregation: sum
+          column: returned_quantity
+
+    - relation: ai.customer_overview
+      role: population
+      description: 주문이 없는 고객까지 보존한 합성 고객 모집단과 고객별 주문 활동 요약
+      aliases: [리테일 고객, 구매 고객 모집단, 주문 없는 고객]
+      grain:
+        name: retail_customer
+        description: 합성 리테일 고객 1명
+        key_columns: [customer_id]
+      default_time_column: joined_on
+      use_for: [전체 고객 수, 주문 없는 고객, 고객별 주문 수, 고객별 취소 주문, 고객별 환불 주문]
+      column_aliases:
+        joined_on: [가입일]
+        order_count: [고객 주문 수]
+        canceled_order_count: [취소 주문 수]
+        refunded_order_count: [환불 발생 주문 수]
+      value_hints:
+        customer_segment: [CONSUMER, SMB, VIP, GUEST]
+        home_region: [SEOUL, BUSAN, DAEJEON, JEJU, TOKYO, BERLIN]
+      measures:
+        - name: customer_count
+          description: 선택된 고객 모집단 행의 수
+          aliases: [고객 수, 전체 고객 수]
+          aggregation: count_rows
+        - name: order_count
+          description: 고객별 사전 집계 주문 수의 합계
+          aliases: [주문 수]
+          aggregation: sum
+          column: order_count
+
+  business_terms:
+    - name: canceled_retail_order
+      description: 리테일 order_status가 CANCELED인 주문
+      aliases: [취소 주문, 주문 취소]
+      predicates:
+        - relation: ai.order_overview
+          column: order_status
+          operator: equal
+          values: [CANCELED]
+
+  question_rules:
+    - code: RETAIL_REFUND_RATE_DEFINITION_REQUIRED
+      status: needs_clarification
+      phrases: [환불률, 반품률]
+      message: 주문 기준, 상품 수량 기준, 금액 기준 중 어떤 환불률인지 정의해야 한다.
+      missing_concepts: [refund numerator and denominator]
+      options: [환불 발생 주문 수 / 전체 주문 수, 반품 수량 / 판매 수량, 환불 금액 / 순주문 금액]
+    - code: RETAIL_CANCEL_RATE_DENOMINATOR_REQUIRED
+      status: needs_clarification
+      phrases: [취소율, 지역별 취소율]
+      message: 취소율의 분모를 생성 주문 전체로 볼지 결제 승인 주문으로 볼지 정의해야 한다.
+      missing_concepts: [cancellation denominator]
+      options: [취소 주문 / 전체 주문, 취소 주문 / 결제 승인 이상 주문]
+    - code: RETAIL_NET_AMOUNT_DEFINITION_REQUIRED
+      status: needs_clarification
+      phrases: [순매출, 순매출액, 실제 매출]
+      message: 이 source는 회계 매출이 아니라 주문 순수취액과 상품 환불 전 순액만 제공한다.
+      missing_concepts: [accounting revenue definition]
+      options: [주문 총액-할인-환불인 순수취액, 상품 총액-라인 할인인 환불 전 순액]
+    - code: RETAIL_MIXED_CURRENCY_REQUIRED
+      status: needs_clarification
+      phrases: [전체 매출 합계, 전체 환불액]
+      message: 환율 정보가 없으므로 서로 다른 통화를 직접 합산할 수 없다.
+      missing_concepts: [target currency and exchange rate]
+      options: [currency별로 나눠 집계, 대상 통화와 환율 기준을 추가]
+
+  joins:
+    - left_relation: ai.order_overview
+      right_relation: ai.order_lines
+      column_pairs:
+        - left: order_id
+          right: order_id
+      cardinality: one_to_many
+      fanout: true
+      guidance: 주문 상품을 order_id별로 먼저 집계한 뒤 결합해야 주문 수와 주문 금액이 중복되지 않는다.
+    - left_relation: ai.customer_overview
+      right_relation: ai.order_overview
+      column_pairs:
+        - left: customer_code
+          right: customer_code
+      cardinality: one_to_many
+      fanout: true
+      guidance: 고객 모집단 비율은 주문을 고객별로 먼저 집계하고 주문 없는 고객을 유지해야 한다.

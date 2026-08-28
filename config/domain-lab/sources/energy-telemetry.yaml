@@ -1,0 +1,187 @@
+version: 2
+
+source_id: energy-telemetry
+name: 에너지 계측
+description: 스마트 계량기의 전력 사용·발전·역송전 시계열, 검침 품질과 정전
+provenance:
+  owner: query-man-domain-lab
+  environment: development
+  database_migration_ref: docker/postgres/domain-lab/energy-telemetry-schema.sql
+connection:
+  host: 127.0.0.1
+  host_env: QUERY_MAN_POSTGRES_HOST
+  port: 5432
+  port_env: POSTGRES_PORT
+  database: energy_telemetry
+  user: energy_telemetry_reader
+  password_env: ENERGY_TELEMETRY_READER_PASSWORD
+  ssl: false
+allowed_schemas: [ai]
+allowed_relation_kinds: [view]
+budget_profile: interactive
+minimum_quality_level: L1
+
+semantic_overlay:
+  default_relation: ai.meter_readings
+  relations:
+    - relation: ai.meter_readings
+      role: event
+      description: 스마트 계량기별 UTC 구간 전력 소비·발전·순사용량, 품질과 현지 시각 라벨 조회
+      aliases: [전력 검침, 계량기 시계열, 전력 소비, 태양광 발전, 역송전, 전력 사용량]
+      grain:
+        name: meter_interval_reading
+        description: 계량기 UTC 구간 검침 1건
+        key_columns: [reading_id]
+      default_time_column: interval_start
+      use_for: [시간대별 전력 사용, 발전량, 순사용량, 역송전, 누락 검침, 추정 검침, 계량기 reset]
+      column_aliases:
+        interval_start: [검침 구간 시작]
+        local_hour: [현지 시각, 로컬 시간]
+        utc_offset_minutes: [UTC 오프셋 분]
+        consumed_kwh: [소비 전력량]
+        generated_kwh: [발전 전력량]
+        net_kwh: [순사용량, 순전력량]
+        quality_status: [검침 품질]
+      value_hints:
+        quality_status: [ACTUAL, ESTIMATED, MISSING, CORRECTED]
+        meter_state: [NORMAL, OUTAGE, RESET]
+        meter_type: [CONSUMPTION, BIDIRECTIONAL, GENERATION]
+      measures:
+        - name: reading_count
+          description: 선택된 검침 구간 행의 건수
+          aliases: [검침 건수]
+          aggregation: count_rows
+        - name: consumed_kwh
+          description: null인 MISSING을 제외한 소비 전력량 합계
+          aliases: [소비량, 전력 사용량]
+          aggregation: sum
+          column: consumed_kwh
+        - name: generated_kwh
+          description: null인 MISSING을 제외한 발전 전력량 합계
+          aliases: [발전량]
+          aggregation: sum
+          column: generated_kwh
+        - name: net_kwh
+          description: 소비-발전 순전력량 합계이며 음수는 순역송전
+          aliases: [순사용량, 순전력량]
+          aggregation: sum
+          column: net_kwh
+
+    - relation: ai.outage_overview
+      role: event
+      description: 사이트 정전 시작·종료, 원인 유형, 상태, 영향 계량기 수와 기록 지속시간 조회
+      aliases: [전력 정전, 사이트 장애, 전력 공급 중단, 정전 구간]
+      grain:
+        name: site_outage
+        description: 사이트 정전 보고 1건
+        key_columns: [outage_id]
+      default_time_column: started_at
+      use_for: [최근 정전, 지역별 정전, 진행 중 정전, 정전 영향 계량기, 정전 지속시간]
+      column_aliases:
+        started_at: [정전 시작]
+        ended_at: [정전 종료]
+        affected_meter_count: [영향 계량기 수]
+        duration_minutes: [정전 지속 분]
+      value_hints:
+        outage_type: [GRID, PLANNED, WEATHER, EQUIPMENT]
+        outage_status: [RESOLVED, ONGOING]
+      measures:
+        - name: outage_count
+          description: 선택된 정전 보고 행의 건수
+          aliases: [정전 건수, 장애 건수]
+          aggregation: count_rows
+        - name: affected_meter_count
+          description: 정전 보고별 영향 계량기 수 합계로 겹친 정전에서는 고유 계량기 수가 아님
+          aliases: [영향 계량기 수]
+          aggregation: sum
+          column: affected_meter_count
+
+    - relation: ai.meter_overview
+      role: population
+      description: 검침이 없는 계량기까지 포함한 계량기 모집단과 검침 품질·순전력 요약
+      aliases: [스마트 계량기, 계량기 모집단, 검침 없는 계량기]
+      grain:
+        name: smart_meter
+        description: 스마트 계량기 1대
+        key_columns: [meter_id]
+      default_time_column: installed_on
+      use_for: [전체 계량기 수, 검침 없는 계량기, 계량기별 누락률, 사이트별 계량기, 계량기별 순전력]
+      column_aliases:
+        reading_count: [검침 수]
+        missing_reading_count: [누락 검침 수]
+        net_kwh_sum: [계량기 순전력 합계]
+        site_outage_count: [사이트 정전 수]
+      value_hints:
+        meter_type: [CONSUMPTION, BIDIRECTIONAL, GENERATION]
+        tariff: [STANDARD, TOU, INDUSTRIAL]
+        site_type: [RESIDENTIAL, COMMERCIAL, INDUSTRIAL, SOLAR]
+        region: [SEOUL, BUSAN, JEJU, TEXAS, BERLIN]
+      measures:
+        - name: meter_count
+          description: 선택된 계량기 모집단 행의 대수
+          aliases: [계량기 수]
+          aggregation: count_rows
+        - name: reading_count
+          description: 계량기별 사전 집계 검침 수의 합계
+          aliases: [검침 수]
+          aggregation: sum
+          column: reading_count
+        - name: missing_reading_count
+          description: 계량기별 사전 집계 누락 검침 수의 합계
+          aliases: [누락 검침 수]
+          aggregation: sum
+          column: missing_reading_count
+
+  business_terms:
+    - name: missing_meter_reading
+      description: 값이 0인 검침이 아니라 품질이 MISSING이고 에너지 값이 null인 구간
+      aliases: [누락 검침, 결측 검침]
+      predicates:
+        - relation: ai.meter_readings
+          column: quality_status
+          operator: equal
+          values: [MISSING]
+
+  question_rules:
+    - code: ENERGY_USAGE_DEFINITION_REQUIRED
+      status: needs_clarification
+      phrases: [사용량, 고객별 사용량, 전력량]
+      message: 소비량, 발전량, 소비-발전 순사용량 중 어떤 전력 지표인지 정의해야 한다.
+      missing_concepts: [energy flow definition]
+      options: [consumed_kwh 소비, generated_kwh 발전, net_kwh 소비-발전]
+    - code: ENERGY_EXPORT_SIGN_REQUIRED
+      status: needs_clarification
+      phrases: [역송전량, 순발전량]
+      message: net_kwh는 소비-발전이라 음수가 역송전이며 보고 시 부호를 유지할지 양의 역송전량으로 바꿀지 정해야 한다.
+      missing_concepts: [export sign convention]
+      options: [음수 net_kwh 유지, -net_kwh로 양의 역송전량 표시]
+    - code: ENERGY_DST_LOCAL_HOUR_REQUIRED
+      status: needs_clarification
+      phrases: [시간대별 사용량, 로컬 시간별 전력]
+      message: DST 반복 시간은 local_date와 local_hour만으로 구분되지 않으므로 UTC 오프셋 처리 기준이 필요하다.
+      missing_concepts: [DST repeated-hour policy]
+      options: [UTC interval_start로 집계, utc_offset_minutes별로 구분, 반복 시간을 합산]
+    - code: ENERGY_OUTAGE_OVERLAP_REQUIRED
+      status: needs_clarification
+      phrases: [총 정전 시간, 정전 지속시간 합계]
+      message: 같은 사이트의 정전 구간이 겹칠 수 있어 행별 duration_minutes 단순 합계는 중복 시간을 포함한다.
+      missing_concepts: [overlapping interval consolidation]
+      options: [보고 건별 지속시간 합계, 사이트별 겹친 구간을 병합한 실제 시간]
+
+  joins:
+    - left_relation: ai.meter_overview
+      right_relation: ai.meter_readings
+      column_pairs:
+        - left: meter_id
+          right: meter_id
+      cardinality: one_to_many
+      fanout: true
+      guidance: 검침을 meter_id별로 먼저 집계한 뒤 결합해야 계량기 모집단과 사이트 정전 수가 중복되지 않는다.
+    - left_relation: ai.meter_overview
+      right_relation: ai.outage_overview
+      column_pairs:
+        - left: site_code
+          right: site_code
+      cardinality: many_to_many
+      fanout: true
+      guidance: 사이트별로 계량기와 정전을 각각 집계한 뒤 site_code로 결합해야 meter와 outage가 상호 곱으로 늘지 않는다.

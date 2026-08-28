@@ -1,0 +1,206 @@
+version: 2
+
+source_id: saas-billing
+name: SaaS 구독·과금
+description: 기업 tenant의 요금제·구독·MRR·invoice 결제 상태와 제품 사용량
+provenance:
+  owner: query-man-domain-lab
+  environment: development
+  database_migration_ref: docker/postgres/domain-lab/saas-billing-schema.sql
+connection:
+  host: 127.0.0.1
+  host_env: QUERY_MAN_POSTGRES_HOST
+  port: 5432
+  port_env: POSTGRES_PORT
+  database: saas_billing
+  user: saas_billing_reader
+  password_env: SAAS_BILLING_READER_PASSWORD
+  ssl: false
+allowed_schemas: [ai]
+allowed_relation_kinds: [view]
+budget_profile: interactive
+minimum_quality_level: L1
+
+semantic_overlay:
+  default_relation: ai.subscription_overview
+  relations:
+    - relation: ai.subscription_overview
+      role: event
+      description: 기업 tenant의 요금제별 구독 수명주기, 좌석, MRR과 invoice·사용 활동 요약
+      aliases: [SaaS 구독, tenant 구독, 요금제, MRR, trial, pause, churn]
+      grain:
+        name: saas_subscription
+        description: 구독 수명주기 기록 1건
+        key_columns: [subscription_id]
+      default_time_column: started_on
+      use_for: [활성 구독, trial 구독, pause 구독, 취소 구독, 요금제별 MRR, tenant별 구독 이력]
+      column_aliases:
+        tenant_code: [tenant, 테넌트 코드, 기업 고객]
+        plan_code: [요금제 코드]
+        subscription_status: [구독 상태]
+        mrr: [월 반복 매출, MRR]
+        unsettled_invoice_count: [미정산 invoice 수]
+        usage_row_count: [사용량 기록 수]
+      value_hints:
+        subscription_status: [TRIAL, ACTIVE, PAUSED, CANCELED, EXPIRED]
+        billing_period: [MONTHLY, ANNUAL]
+        region: [KR, US, DE, JP, SG]
+        industry: [SOFTWARE, FINTECH, RETAIL, HEALTHCARE, MANUFACTURING, EDUCATION]
+        cancellation_reason: [PRICE, LOW_USAGE, SWITCHED_VENDOR, BUSINESS_CLOSED]
+      measures:
+        - name: subscription_count
+          description: 선택된 구독 수명주기 행의 건수
+          aliases: [구독 수, 구독 건수]
+          aggregation: count_rows
+        - name: mrr
+          description: 선택 시점·상태를 명시한 구독 record MRR 합계이며 인식 매출이 아님
+          aliases: [MRR, 월 반복 매출]
+          aggregation: sum
+          column: mrr
+        - name: seats
+          description: 선택된 구독 좌석 수 합계
+          aliases: [좌석 수]
+          aggregation: sum
+          column: seats
+
+    - relation: ai.invoice_overview
+      role: event
+      description: 기업 tenant와 요금제별 invoice 발행, 만기, 결제·부분결제·credit·미수 상태 조회
+      aliases: [SaaS invoice, 청구서, 미납 invoice, 부분 결제, credit invoice]
+      grain:
+        name: saas_invoice
+        description: invoice 1건
+        key_columns: [invoice_id]
+      default_time_column: issued_at
+      use_for: [최근 invoice, 미납 금액, 부분 결제, 연체 invoice, credit 처리, 요금제별 청구]
+      column_aliases:
+        invoice_no: [invoice 번호, 청구서 번호]
+        due_on: [결제 만기일]
+        invoice_status: [invoice 상태, 결제 상태]
+        billed_amount: [청구 금액]
+        paid_amount: [결제 금액]
+        credit_amount: [credit 금액]
+        outstanding_amount: [미수 금액]
+      value_hints:
+        invoice_status: [DRAFT, OPEN, PARTIALLY_PAID, PAID, OVERDUE, VOID, CREDITED]
+        currency: [KRW, USD, EUR]
+      measures:
+        - name: invoice_count
+          description: 선택된 invoice 행의 건수
+          aliases: [invoice 수, 청구서 수]
+          aggregation: count_rows
+        - name: billed_amount
+          description: 같은 currency 안에서만 합산하는 invoice 청구 금액
+          aliases: [청구액]
+          aggregation: sum
+          column: billed_amount
+        - name: outstanding_amount
+          description: 같은 currency 안에서만 합산하는 청구-결제-credit 잔액
+          aliases: [미수액, 미납 금액]
+          aggregation: sum
+          column: outstanding_amount
+
+    - relation: ai.usage_daily
+      role: event
+      description: tenant·선택적 구독·제품 영역·일자별 활성 사용자와 사용·포함·초과 단위 조회
+      aliases: [SaaS 제품 사용량, tenant 사용량, 일별 usage, overage, 활성 사용자]
+      grain:
+        name: saas_product_area_usage_day
+        description: tenant와 제품 영역의 일별 사용량 기록 1건
+        key_columns: [usage_id]
+      default_time_column: usage_date
+      use_for: [일별 제품 사용량, tenant별 활성 사용자, 제품 영역별 usage, 초과 사용량, 사용량 0인 날]
+      column_aliases:
+        active_users: [활성 사용자 수]
+        usage_units: [사용 단위, usage]
+        included_units: [포함 사용량]
+        overage_units: [초과 사용량]
+      value_hints:
+        product_area: [CORE, ANALYTICS, AUTOMATION, API, STORAGE]
+        subscription_status: [TRIAL, ACTIVE, PAUSED, CANCELED, EXPIRED]
+      measures:
+        - name: usage_row_count
+          description: 선택된 tenant·제품 영역·일자 행의 건수
+          aliases: [사용량 기록 수]
+          aggregation: count_rows
+        - name: active_users
+          description: 일자와 tenant 중복을 고려해서 합산해야 하는 활성 사용자 수
+          aliases: [활성 사용자 수]
+          aggregation: sum
+          column: active_users
+        - name: usage_units
+          description: 같은 product_area의 공통 단위 안에서만 합산하는 사용량
+          aliases: [사용량, usage]
+          aggregation: sum
+          column: usage_units
+        - name: overage_units
+          description: 같은 product_area 안에서만 합산하는 포함량 초과 사용량
+          aliases: [초과 사용량, overage]
+          aggregation: sum
+          column: overage_units
+
+  business_terms:
+    - name: active_saas_subscription
+      description: subscription_status가 ACTIVE인 구독 record
+      aliases: [활성 구독]
+      predicates:
+        - relation: ai.subscription_overview
+          column: subscription_status
+          operator: equal
+          values: [ACTIVE]
+
+  question_rules:
+    - code: SAAS_MRR_AS_OF_REQUIRED
+      status: needs_clarification
+      phrases: [MRR 추이, 현재 MRR, 월 반복 매출]
+      message: MRR은 구독 record 값이므로 기준일과 포함할 TRIAL·PAUSED 상태를 정의해야 한다.
+      missing_concepts: [MRR as-of date and included statuses]
+      options: [기준일의 ACTIVE만, ACTIVE와 PAUSED, 모든 비종료 구독]
+    - code: SAAS_CHURN_DEFINITION_REQUIRED
+      status: needs_clarification
+      phrases: [churn, 이탈률, 구독 취소율]
+      message: logo churn인지 구독 record churn인지, 코호트와 관측 기간을 어떻게 잡을지 정의해야 한다.
+      missing_concepts: [churn entity, cohort, and window]
+      options: [tenant logo churn, subscription record churn, MRR churn]
+    - code: SAAS_REACTIVATION_DEFINITION_REQUIRED
+      status: needs_clarification
+      phrases: [취소 후 다시 이용한 비율, 재활성화율, 재구독률]
+      message: 같은 tenant의 새 구독인지 같은 subscription의 상태 재개인지와 관측 기간을 정의해야 한다.
+      missing_concepts: [reactivation identity and window]
+      options: [취소 tenant의 새 subscription, PAUSED subscription의 ACTIVE 전환, 기간 내 usage 재발생]
+    - code: SAAS_PAYMENT_RECOVERY_UNSUPPORTED
+      status: unsupported
+      phrases: [결제 실패 후 회수율, payment retry, 결제 재시도, 회수 성공률]
+      message: payment attempt·retry·recovery 이력이 노출되지 않아 결제 실패 후 회수율을 계산할 수 없다.
+      missing_concepts: [payment attempt and recovery history]
+      options: [요금제별 PAID와 미정산 invoice 상태 비교, tenant별 paid_amount와 outstanding_amount 비교]
+    - code: SAAS_INVOICE_USAGE_BOUNDARY_REQUIRED
+      status: needs_clarification
+      phrases: [과금 대비 사용량, 사용량 매출, 초과 과금]
+      message: invoice 통화 금액과 제품 영역별 서로 다른 usage 단위 사이의 계산식을 정의해야 한다.
+      missing_concepts: [billing-to-usage allocation and common unit]
+      options: [invoice 상태만 분석, product_area별 usage만 분석, 별도 배부 규칙 제공]
+    - code: SAAS_MIXED_CURRENCY_REQUIRED
+      status: needs_clarification
+      phrases: [전체 청구액, 전체 미수액]
+      message: 환율 정보가 없으므로 invoice의 서로 다른 통화를 직접 합산할 수 없다.
+      missing_concepts: [target currency and exchange rate]
+      options: [currency별 집계, 대상 통화와 환율 기준 추가]
+
+  joins:
+    - left_relation: ai.subscription_overview
+      right_relation: ai.invoice_overview
+      column_pairs:
+        - left: subscription_id
+          right: subscription_id
+      cardinality: one_to_many
+      fanout: true
+      guidance: invoice를 subscription_id별·currency별로 먼저 집계한 뒤 결합해야 구독 수와 MRR가 중복되지 않는다. subscription_id가 null인 invoice도 별도로 보존한다.
+    - left_relation: ai.subscription_overview
+      right_relation: ai.usage_daily
+      column_pairs:
+        - left: subscription_id
+          right: subscription_id
+      cardinality: one_to_many
+      fanout: true
+      guidance: usage를 subscription_id와 product_area별로 먼저 집계해야 구독 수와 MRR가 일자 수만큼 중복되지 않는다. subscription_id가 null인 usage도 별도로 보존한다.
