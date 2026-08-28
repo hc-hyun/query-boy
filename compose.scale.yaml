@@ -1,0 +1,28 @@
+name: query-man-scale-fixture
+
+services:
+  postgres:
+    container_name: query-man-scale-fixture-postgres
+    environment:
+      QUERY_MAN_SCALE_FIXTURE: "1"
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - log_min_duration_statement=1000
+      - -c
+      - query_boy.scale_fixture=on
+    ports: !override
+      - "127.0.0.1:${QUERY_MAN_SCALE_POSTGRES_PORT:-55433}:5432"
+
+  query-man:
+    container_name: query-man-scale-fixture-app
+    environment:
+      QUERY_MAN_SCALE_FIXTURE: "1"
+    ports: !override
+      - "127.0.0.1:${QUERY_MAN_SCALE_PORT:-3100}:3000"
+
+volumes:
+  postgres_data:
+    name: query-man-scale-fixture-postgres-data
