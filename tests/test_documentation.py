@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -366,6 +369,51 @@ def test_container_inputs_are_immutable_and_revision_labeled() -> None:
         in workflow
     )
     assert 'test "$revision" = "$QUERY_MAN_VCS_REF"' in workflow
+
+
+def test_bounded_pytest_traceback_does_not_render_argument_secrets(
+    tmp_path: Path,
+) -> None:
+    secret = "synthetic-database-password-for-traceback-probe"
+    probe = tmp_path / "test_traceback_secret_probe.py"
+    probe.write_text(
+        """
+import os
+
+
+def fail_with_secret_argument(secret: str) -> None:
+    raise RuntimeError("bounded traceback probe")
+
+
+def test_traceback_probe() -> None:
+    fail_with_secret_argument(os.environ["QUERY_MAN_TRACEBACK_PROBE"])
+""".lstrip(),
+        encoding="utf-8",
+    )
+    environment = dict(os.environ)
+    environment["QUERY_MAN_TRACEBACK_PROBE"] = secret
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "--config-file",
+            str(ROOT_DIRECTORY / "pyproject.toml"),
+            "--quiet",
+            str(probe),
+        ],
+        check=False,
+        capture_output=True,
+        cwd=ROOT_DIRECTORY,
+        env=environment,
+        text=True,
+    )
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 1
+    assert "RuntimeError: bounded traceback probe" in output
+    assert secret not in output
 
 
 def test_managed_acceptance_compose_uses_an_isolated_project() -> None:

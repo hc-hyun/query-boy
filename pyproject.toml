@@ -40,7 +40,7 @@ build-backend = "hatchling.build"
 packages = ["src/query_man"]
 
 [tool.pytest.ini_options]
-addopts = "-ra -m 'not integration and not mcp_server'"
+addopts = "-ra --tb=short -m 'not integration and not mcp_server'"
 asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
