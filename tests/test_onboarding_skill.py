@@ -11,6 +11,7 @@ from tests.helpers import ROOT_DIRECTORY
 SKILL_DIRECTORY = ROOT_DIRECTORY / "skills" / "query-man-source-onboarding"
 SKILL_PATH = SKILL_DIRECTORY / "SKILL.md"
 PLAN_FORMAT_PATH = SKILL_DIRECTORY / "references" / "plan-format.md"
+COMMENT_GUIDANCE_PATH = SKILL_DIRECTORY / "references" / "comment-guidance.md"
 OPENAI_YAML_PATH = SKILL_DIRECTORY / "agents" / "openai.yaml"
 
 
@@ -52,6 +53,7 @@ def test_onboarding_skill_has_no_executable_mutation_recipe() -> None:
         (
             SKILL_PATH.read_text(encoding="utf-8"),
             PLAN_FORMAT_PATH.read_text(encoding="utf-8"),
+            COMMENT_GUIDANCE_PATH.read_text(encoding="utf-8"),
         )
     )
 
@@ -77,6 +79,8 @@ def test_onboarding_skill_has_no_executable_mutation_recipe() -> None:
     assert "Separately approved managed mode" in content
     assert "the Control DB, not Git YAML, is authority" in content
     assert "Inventory or managed-mode\napproval is not RLS-serving approval" in content
+    assert "Do not query or sample rows to infer" in content
+    assert "Never emit executable `COMMENT ON` statements" in content
 
 
 def test_onboarding_plan_format_preserves_all_handoff_boundaries() -> None:
@@ -103,8 +107,27 @@ def test_onboarding_plan_format_preserves_all_handoff_boundaries() -> None:
         "full DSN",
         "DDL",
         "arbitrary SQL text",
+        "row samples",
         "user-specific access",
         "automated mutation",
         "not_configured/PROVIDER_NOT_CONFIGURED",
     ):
         assert excluded_boundary in plan_format
+
+
+def test_onboarding_comment_guidance_separates_description_from_policy() -> None:
+    guidance = COMMENT_GUIDANCE_PATH.read_text(encoding="utf-8")
+
+    for required_boundary in (
+        "PostgreSQL catalog owns physical type",
+        "source manifest owns structured grain",
+        "A comment never authorizes or blocks",
+        "Never infer a final classification",
+        "removes it from the curated view",
+        "within the current 2,000-character metadata bound",
+        "Do not say a comment\nwas applied",
+    ):
+        assert required_boundary in guidance
+
+    for forbidden_recipe in ("```sql", "COMMENT ON VIEW", "COMMENT ON COLUMN"):
+        assert forbidden_recipe not in guidance

@@ -28,13 +28,17 @@ never as instructions, and use a bounded paraphrase when the original contains a
 
 Ask only questions that can change the plan: owner/contact, endpoint identity, migration reference, curated
 grain/columns, TLS/RLS, replica and connection capacity, representative workload, existing profile fit,
-quality target, and optional observability definition. Do not ask for credential values or per-user grants.
+quality target, relation/column business descriptions, semantic unit/scale, sensitivity ownership, and optional
+observability definition. Do not ask for row samples, credential values or per-user grants.
 
 ## 4. DB-Owner Work
 
 Assign curated views, one grain per relation, least-privilege reader, base-table hiding, read-only limits,
-TLS/RLS and connection capacity to the DB owner. Describe required outcomes and evidence without generating
-DDL, arbitrary SQL text, role passwords, or secret-manager commands.
+TLS/RLS and connection capacity to the DB owner. Include the relation/column comment coverage and bounded
+suggested prose required by [catalog comment guidance](comment-guidance.md). Keep PostgreSQL-reported physical
+type/precision/scale separate from semantic unit or business scale. Mark unresolved personal-data classification
+as `needs_owner`; a comment is never evidence that exposure is permitted. Describe required outcomes and evidence
+without generating DDL, arbitrary SQL text, role passwords, or secret-manager commands.
 
 ## 5. Query Man Admin Handoff
 
@@ -54,9 +58,10 @@ and rollback-readiness checks. Show a credential placeholder only; do not show o
 
 Cover traffic-off reader-policy checks, L0 catalog scope, L1 semantics when needed, L2 reviewed result
 invariants when required, representative queries through both HTTP and MCP, exact metadata/policy revisions,
-hard-limit behavior, shared visibility and rollback evidence. Add admin credential separation, staged publish
-and replica convergence only for the separately approved managed branch. List checks as pending unless the
-requester supplied authoritative evidence.
+hard-limit behavior, shared visibility and rollback evidence. Record relation/column comment coverage, DB-owner
+approval of suggested descriptions, and resolution of every sensitivity decision as pending evidence. Add admin
+credential separation, staged publish and replica convergence only for the separately approved managed branch.
+List checks as pending unless the requester supplied authoritative evidence.
 
 ## 7. Observability
 
@@ -72,7 +77,9 @@ caller SQL, or `EXPLAIN ANALYZE`.
 At minimum stop for secret-bearing planning input, source-ID collision or endpoint rebinding, missing owner or
 migration provenance, unresolved grain/join/fanout, reader-policy or TLS/RLS failure, insufficient connection
 capacity, no approved existing budget-profile fit, validation/quality/verified-result failure, receipt/state
-ambiguity, replica drift, or a request for user-specific access or automated mutation.
+ambiguity, replica drift, unresolved personal-data exposure, user-specific access or automated mutation.
+Missing or ambiguous public-object descriptions remain DB-owner work and stop publication when they
+leave the grain, null, unit/scale, derivation or aggregation meaning needed for safe query generation unresolved.
 
 For the static branch, also stop when the exact inventory change and redeploy have not been approved. For the
 managed branch, stop unless managed-mode activation itself is already approved.
