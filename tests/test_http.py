@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import time
 import uuid
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -22,6 +24,7 @@ from query_man.metadata.models import (
 )
 from query_man.runtime.composition import build_app
 from query_man.runtime.config import RuntimeConfig
+from query_man.runtime.diagnostic_capture import decrypt_diagnostic_records
 from query_man.runtime.operations import operations
 from query_man.source_catalog.models import SourceProfile
 from query_man.source_catalog.registry import SourceRegistry
@@ -143,6 +146,7 @@ class UnavailableQueryExecutor(RecordingQueryExecutor):
 _QUERY_A_TOKEN = "query-a-token-value-with-at-least-32-characters"
 _QUERY_B_TOKEN = "query-b-token-value-with-at-least-32-characters"
 _ADMIN_TOKEN = "admin-token-value-with-at-least-32-characters"
+_DIAGNOSTIC_KEY = base64.urlsafe_b64encode(b"http-diagnostic-capture-key-32b!").decode("ascii")
 
 
 def _shared_access_policy(tmp_path: Path) -> AccessPolicy:
@@ -834,12 +838,92 @@ async def test_executes_query_with_current_metadata_revision(
     assert response.json()["rows"] == [{"issue_count": 600}]
     assert executor.calls[0][0] == "development-issues"
     assert executor.calls[0][2] == "local-development"
-    assert "query_started query_id=" in caplog.text
-    assert "query_succeeded query_id=" in caplog.text
-    assert "fingerprint=pg_query:" in caplog.text
-    assert "elapsed_ms=1 row_count=1 result_bytes=21" in caplog.text
-    assert "plan_total_cost=10.0" in caplog.text
-    assert "plan_max_rows=1 plan_node_count=2" in caplog.text
+    records = {record.getMessage(): record for record in caplog.records}
+    assert uuid.UUID(records["query_started"].query_id).version == 4
+    succeeded = records["query_succeeded"]
+    assert succeeded.query_id == records["query_started"].query_id
+    assert succeeded.fingerprint.startswith("pg_query:")
+    assert (succeeded.elapsed_ms, succeeded.row_count, succeeded.result_bytes) == (1, 1, 21)
+    assert (
+        succeeded.plan_total_cost,
+        succeeded.plan_max_rows,
+        succeeded.plan_node_count,
+    ) == (10.0, 1, 2)
+
+
+@pytest.mark.asyncio
+async def test_consented_http_requests_use_encrypted_capture_and_pseudonymous_audit(
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+) -> None:
+    token = "consented-user-token-value-with-at-least-32-characters"
+    policy_path = tmp_path / "access.yaml"
+    expires_at = datetime.now(UTC) + timedelta(days=30)
+    policy_path.write_text(
+        f"""
+version: 2
+callers:
+  - caller_id: consented-user
+    tenant_id: engineering
+    token_env: CONSENTED_TOKEN
+    diagnostic_consent:
+      version: 1
+      receipt_id: consent-http-001
+      expires_at: {expires_at.isoformat()}
+""".strip(),
+        encoding="utf-8",
+    )
+    access_policy = AccessPolicy.load(policy_path, {"CONSENTED_TOKEN": token})
+    database = tmp_path / "capture.sqlite3"
+    config = replace(
+        runtime_config(),
+        diagnostic_capture_database=database,
+        diagnostic_capture_key=_DIAGNOSTIC_KEY,
+        diagnostic_capture_key_id="http-key-2026-08",
+    )
+    app = build_app(
+        config,
+        registry=load_test_registry(),
+        catalog=ReturningCatalog(minimal_development_snapshot()),
+        query_executor=RecordingQueryExecutor(),
+        access_policy=access_policy,
+    )
+    headers = {"authorization": f"Bearer {token}"}
+    caplog.set_level(logging.INFO, logger="query_man.audit")
+
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+            base_url="http://test",
+        ) as session:
+            context = await session.post(
+                "/meta",
+                headers=headers,
+                json={"source_id": "development-issues", "question": "고객 private-name 문제"},
+            )
+            response = await session.post(
+                "/query",
+                headers=headers,
+                json={
+                    "source_id": "development-issues",
+                    "sql": "SELECT 'private-literal' FROM ai.issue_overview",
+                    "metadata_revision": context.json()["metadata_revision"],
+                    "sql_policy_revision": context.json()["sql_policy_revision"],
+                },
+            )
+
+    assert response.status_code == 200
+    records = decrypt_diagnostic_records(database, _DIAGNOSTIC_KEY, "http-key-2026-08")
+    assert len(records) == 2
+    assert all(record["subject_id"] for record in records)
+    audit = {record.getMessage(): record for record in caplog.records}
+    assert audit["query_started"].subject_id == records[0]["subject_id"]
+    assert not hasattr(audit["query_started"], "caller_id")
+    assert not hasattr(audit["query_started"], "tenant_id")
+    assert "consented-user" not in caplog.text
+    assert "engineering" not in caplog.text
+    assert "private-name" not in caplog.text
+    assert "private-literal" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -907,8 +991,9 @@ async def test_query_rejects_stale_revision_without_echoing_sql(
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "METADATA_REVISION_MISMATCH"
     assert secret_literal not in response.text
-    assert "query_failed query_id=" in caplog.text
-    assert "error_code=METADATA_REVISION_MISMATCH" in caplog.text
+    records = {record.getMessage(): record for record in caplog.records}
+    assert records["query_failed"].query_id == records["query_started"].query_id
+    assert records["query_failed"].error_code == "METADATA_REVISION_MISMATCH"
     assert secret_literal not in caplog.text
 
 

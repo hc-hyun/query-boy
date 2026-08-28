@@ -50,6 +50,7 @@ Guarded Query는 **SQL 안전문**이다. 이미 인가된 source와 발행된 m
 | 위치 | 역할 | 함께 볼 test |
 |---|---|---|
 | [`guarded_query/sql_validation.py`](../../../src/query_man/guarded_query/sql_validation.py) | AST policy, `ValidatedSql`, `SQL_POLICY_REVISION` | [`test_sql_validation.py`](../../../tests/test_sql_validation.py), [`test_security_evaluation.py`](../../../tests/test_security_evaluation.py) |
+| [`guarded_query/diagnostics.py`](../../../src/query_man/guarded_query/diagnostics.py) | 동의 capture용 literal-free SELECT rendering; 실행·정책 판정 아님 | [`test_diagnostic_capture.py`](../../../tests/test_diagnostic_capture.py) |
 | [`guarded_query/query.py`](../../../src/query_man/guarded_query/query.py) | `QueryService`, executor Protocol과 PostgreSQL 실행/lifecycle | [`test_query.py`](../../../tests/test_query.py) |
 | [`guarded_query/result_encoding.py`](../../../src/query_man/guarded_query/result_encoding.py) | Canonical scalar encoding과 launch OID policy material | [`test_result_encoding.py`](../../../tests/test_result_encoding.py) |
 | [`errors.py`](../../../src/query_man/errors.py) | Query-domain error 발생 의미 | Delivery가 external envelope를 소유 |
@@ -84,10 +85,17 @@ def validate_sql(
     allowed_types: Iterable[str] = DEFAULT_ALLOWED_TYPES,
     max_sql_bytes: int = 100_000,
 ) -> ValidatedSql: ...
+
+def redact_sql_literals(sql: str, *, max_sql_bytes: int = 100_000) -> str | None: ...
 ```
 
 `SQL_POLICY_REVISION`은 현재 policy token이다. Immutable `CANONICAL_TIME_POLICY_MATERIAL`과
 `RESULT_OID_POLICY_MATERIAL`은 revision/hash 공유 입력이며 그 내용·digest는 별도 policy identity다.
+
+`redact_sql_literals`는 exact one `SelectStmt`의 모든 PostgreSQL `A_Const`를 `NULL`로 바꿔 deparse한다.
+Invalid, oversized, multi-statement와 non-SELECT는 `None`이다. 이 결과는 encrypted diagnostic payload일
+뿐 실행 가능한 SQL이나 AST acceptance 결과가 아니며 allowlist, fingerprint와 SQL policy revision을
+바꾸지 않는다. Delivery가 raw SQL을 log하지 않고 Runtime capture adapter만 이 helper를 소비한다.
 
 `QueryService`의 공개 호출 signature는 다음과 같다.
 
@@ -279,7 +287,7 @@ repository 변경과 별도로 target, access, stop condition과 change-record �
 
 ```text
 uv run pytest tests/test_registry.py tests/test_reader_policy.py \
-  tests/test_sql_validation.py tests/test_security_evaluation.py \
+  tests/test_sql_validation.py tests/test_diagnostic_capture.py tests/test_security_evaluation.py \
   tests/test_query.py tests/test_result_encoding.py
 ```
 
@@ -295,6 +303,7 @@ Focused gate는 root `ruff`, `mypy`, full pytest를 대신하지 않는다.
 | 작업 | 먼저 읽을 것 | 직접 경계가 바뀔 때만 추가 |
 |---|---|---|
 | SQL validation | 이 문서, `guarded_query/sql_validation.py`, parser/security tests, [ADR 0001](../../decisions/0001-postgresql-ast-validation.md) | Metadata relation ceiling과 Delivery error projection |
+| Diagnostic SQL rendering | `guarded_query/diagnostics.py`, `test_diagnostic_capture.py`, [ADR 0027](../../decisions/0027-consent-gated-diagnostic-capture.md) | Delivery capture timing과 Runtime encrypted sink |
 | Query 실행·limit | `guarded_query/query.py`, `test_query.py`, [query-limit 문서](../../query-cost-control.md), [ADR 0005](../../decisions/0005-initial-query-budgets.md) | Source reader, Runtime usage/lifecycle |
 | Result/OID/encoding | `guarded_query/result_encoding.py`, result/query corner tests, [ADR 0025](../../decisions/0025-static-non-rls-first-launch.md) | Metadata revision과 [verified result](../../verified-queries.md) hash consumer |
 | Cancel/drain/invalidate | Executor Protocol, query/load/server tests | Runtime composition·shutdown consumer |

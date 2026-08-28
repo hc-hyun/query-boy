@@ -81,6 +81,70 @@ def test_defaults_to_bootstrap_source_mode() -> None:
     assert loaded.control_dsn is None
     assert loaded.source_encryption_key is None
     assert loaded.replica_id is None
+    assert loaded.diagnostic_capture_database is None
+    assert loaded.diagnostic_capture_key is None
+    assert loaded.diagnostic_capture_key_id is None
+    assert loaded.diagnostic_capture_daily_bytes == 100 * 1024 * 1024
+
+
+def test_loads_complete_diagnostic_capture_configuration() -> None:
+    loaded = load_runtime_config(
+        {
+            "QUERY_MAN_DIAGNOSTIC_CAPTURE_DATABASE": "/captures/query-man.sqlite3",
+            "QUERY_MAN_DIAGNOSTIC_CAPTURE_KEY": _SOURCE_KEY,
+            "QUERY_MAN_DIAGNOSTIC_CAPTURE_KEY_ID": "capture-key-2026-08",
+            "QUERY_MAN_DIAGNOSTIC_CAPTURE_DAILY_BYTES": "1048576",
+        },
+        ROOT_DIRECTORY,
+    )
+
+    assert loaded.diagnostic_capture_database == Path("/captures/query-man.sqlite3")
+    assert loaded.diagnostic_capture_key == _SOURCE_KEY
+    assert loaded.diagnostic_capture_key_id == "capture-key-2026-08"
+    assert loaded.diagnostic_capture_daily_bytes == 1_048_576
+
+
+@pytest.mark.parametrize(
+    "environment",
+    [
+        {"QUERY_MAN_DIAGNOSTIC_CAPTURE_DATABASE": "/captures/query-man.sqlite3"},
+        {"QUERY_MAN_DIAGNOSTIC_CAPTURE_KEY": _SOURCE_KEY},
+        {"QUERY_MAN_DIAGNOSTIC_CAPTURE_KEY_ID": "capture-key-2026-08"},
+    ],
+)
+def test_rejects_partial_diagnostic_capture_configuration(
+    environment: dict[str, str],
+) -> None:
+    with pytest.raises(ValueError, match="must be configured together"):
+        load_runtime_config(environment, ROOT_DIRECTORY)
+
+
+def test_empty_diagnostic_capture_environment_values_disable_capture() -> None:
+    loaded = load_runtime_config(
+        {
+            "QUERY_MAN_DIAGNOSTIC_CAPTURE_DATABASE": "",
+            "QUERY_MAN_DIAGNOSTIC_CAPTURE_KEY": "",
+            "QUERY_MAN_DIAGNOSTIC_CAPTURE_KEY_ID": "",
+        },
+        ROOT_DIRECTORY,
+    )
+
+    assert loaded.diagnostic_capture_database is None
+
+
+def test_invalid_diagnostic_capture_key_is_not_disclosed() -> None:
+    secret = "too-short-private-capture-key"
+    with pytest.raises(ValueError) as captured:
+        load_runtime_config(
+            {
+                "QUERY_MAN_DIAGNOSTIC_CAPTURE_DATABASE": "/captures/query-man.sqlite3",
+                "QUERY_MAN_DIAGNOSTIC_CAPTURE_KEY": secret,
+                "QUERY_MAN_DIAGNOSTIC_CAPTURE_KEY_ID": "capture-key-2026-08",
+            },
+            ROOT_DIRECTORY,
+        )
+
+    assert secret not in str(captured.value)
 
 
 def _managed_environment(**overrides: str) -> dict[str, str]:

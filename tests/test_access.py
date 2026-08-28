@@ -1,8 +1,14 @@
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-from query_man.delivery.access import AccessPolicy, AccessPolicyConfigurationError, CallerContext
+from query_man.delivery.access import (
+    AccessPolicy,
+    AccessPolicyConfigurationError,
+    CallerContext,
+    caller_audit_fields,
+)
 
 
 def _write_policy(path: Path, body: str) -> Path:
@@ -221,3 +227,101 @@ def test_local_and_legacy_compatibility_callers_are_query_only() -> None:
     assert legacy == CallerContext("legacy-api-token", "default")
     assert local.operator is False
     assert legacy.operator is False
+
+
+def test_loads_expiring_diagnostic_consent_and_pseudonymous_subject(tmp_path: Path) -> None:
+    path = _write_policy(
+        tmp_path / "access.yaml",
+        """
+version: 2
+callers:
+  - caller_id: analyst
+    tenant_id: engineering
+    token_env: ANALYST_TOKEN
+    diagnostic_consent:
+      version: 1
+      receipt_id: consent-2026-001
+      expires_at: 2026-09-30T12:00:00+09:00
+""",
+    )
+    token = "analyst-token-value-with-at-least-32-characters"
+
+    policy = AccessPolicy.load(path, {"ANALYST_TOKEN": token})
+    policy = policy.with_subject_identifier(
+        lambda tenant_id, caller_id: f"subject-{len(tenant_id)}-{len(caller_id)}"
+    )
+    caller = policy.authenticate(token)
+
+    assert caller is not None
+    assert caller.subject_id == "subject-11-7"
+    assert caller_audit_fields(caller) == {"subject_id": "subject-11-7"}
+    assert caller.diagnostic_consent is not None
+    assert caller.diagnostic_consent.version == 1
+    assert caller.diagnostic_consent.receipt_id == "consent-2026-001"
+    assert caller.diagnostic_consent.expires_at == datetime(2026, 9, 30, 3, 0, tzinfo=UTC)
+    assert caller.diagnostic_consent.is_active(
+        caller.diagnostic_consent.expires_at - timedelta(seconds=1)
+    )
+    assert not caller.diagnostic_consent.is_active(caller.diagnostic_consent.expires_at)
+
+
+@pytest.mark.parametrize(
+    "consent",
+    [
+        "version: 2\n      receipt_id: consent-1\n      expires_at: 2026-09-30T00:00:00Z",
+        "version: 1\n      receipt_id: consent-1\n      expires_at: 2026-09-30T00:00:00",
+        "version: 1\n      receipt_id: consent-1\n      expires_at: 2026-09-30T00:00:00Z\n      extra: rejected",
+    ],
+)
+def test_rejects_invalid_diagnostic_consent(tmp_path: Path, consent: str) -> None:
+    path = _write_policy(
+        tmp_path / "access.yaml",
+        f"""
+version: 2
+callers:
+  - caller_id: analyst
+    tenant_id: engineering
+    token_env: ANALYST_TOKEN
+    diagnostic_consent:
+      {consent}
+""",
+    )
+
+    with pytest.raises(AccessPolicyConfigurationError):
+        AccessPolicy.load(
+            path,
+            {"ANALYST_TOKEN": "analyst-token-value-with-at-least-32-characters"},
+        )
+
+
+def test_rejects_diagnostic_consent_receipt_reuse(tmp_path: Path) -> None:
+    path = _write_policy(
+        tmp_path / "access.yaml",
+        """
+version: 2
+callers:
+  - caller_id: analyst-a
+    tenant_id: engineering
+    token_env: ANALYST_A_TOKEN
+    diagnostic_consent:
+      version: 1
+      receipt_id: consent-shared
+      expires_at: 2026-09-30T00:00:00Z
+  - caller_id: analyst-b
+    tenant_id: quality
+    token_env: ANALYST_B_TOKEN
+    diagnostic_consent:
+      version: 1
+      receipt_id: consent-shared
+      expires_at: 2026-09-30T00:00:00Z
+""",
+    )
+
+    with pytest.raises(AccessPolicyConfigurationError, match="receipt_id values must be unique"):
+        AccessPolicy.load(
+            path,
+            {
+                "ANALYST_A_TOKEN": "analyst-a-token-value-with-at-least-32-characters",
+                "ANALYST_B_TOKEN": "analyst-b-token-value-with-at-least-32-characters",
+            },
+        )

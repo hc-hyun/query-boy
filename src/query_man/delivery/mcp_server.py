@@ -16,7 +16,7 @@ from mcp.types import CallToolResult, InputRequiredResult, TextContent
 from pydantic import BaseModel, ConfigDict, Field, RootModel, StringConstraints, ValidationError
 from starlette.requests import Request
 
-from query_man.delivery.access import CallerContext
+from query_man.delivery.access import CallerContext, caller_audit_fields
 from query_man.delivery.gateway import GatewayService
 from query_man.errors import AppError
 from query_man.runtime.operations import operations
@@ -528,7 +528,7 @@ def _log_tool_completed(
     if request_id is not None:
         extra["mcp_http_request_id"] = request_id
     if caller is not None:
-        extra.update({"caller_id": caller.caller_id, "tenant_id": caller.tenant_id})
+        extra.update(caller_audit_fields(caller))
     for name, value in (
         ("source_id", authorized_source),
         ("query_id", query_id),

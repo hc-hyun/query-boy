@@ -45,6 +45,8 @@ accepted ADR이 기준이고, 이 문서는 개념을 쉽게 이해하기 위한
 | Revision mismatch | Context를 받은 뒤 metadata나 SQL 정책이 바뀌어, 낡은 정보로 만든 SQL을 실행할 수 없는 상태입니다. Context를 다시 받아야 합니다. |
 | Verified query | 대표 질문·SQL·예상 결과를 묶은 회귀 시험입니다. 사용자 query 허용 목록이 아닙니다. |
 | Fingerprint | SQL literal을 노출하지 않으면서 같은 형태의 query를 식별하는 지문입니다. |
+| Pseudonymous subject | 환경별 secret key로 caller·tenant를 HMAC해 일반 audit에서 직접 식별자를 대신하는 값입니다. 같은 key에서는 연결 가능하므로 익명 사용자를 뜻하지 않습니다. |
+| Diagnostic consent / capture | 만료 가능한 server-side 동의 receipt가 있을 때만 질문 원문과 literal-free SQL을 일반 log와 분리된 최대 7일 암호화 저장소에 남기는 진단 기능입니다. |
 | Canonical encoding | 같은 결과가 언제나 같은 byte 표현과 hash를 만들도록 값 표현을 고정하는 규칙입니다. |
 | Invariant | 구현이 바뀌어도 반드시 참이어야 하는 조건입니다. 예: 실패한 query가 rollback되고 secret이 응답에 나오지 않음. |
 | L0 / L1 / L2 | Source metadata 품질 단계입니다. L0는 기본 catalog, L1은 업무 설명·grain 보강, L2는 현재 revision의 verified query까지 통과한 상태입니다. |

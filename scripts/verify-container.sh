@@ -38,6 +38,9 @@ fi
 docker compose exec -T query-man sh -c \
   'test ! -e /app/.env && test ! -e /app/.git && test ! -e /app/tests'
 
+docker compose exec -T query-man qm \
+  --url http://127.0.0.1:3000 status metrics >/dev/null
+
 docker compose exec -T query-man python - <<'PY'
 from __future__ import annotations
 

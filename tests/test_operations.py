@@ -44,6 +44,7 @@ def test_safe_json_formatter_emits_bounded_audit_fields_as_top_level_json() -> N
         exc_info=None,
     )
     record.query_id = "query-1"
+    record.subject_id = "pseudonymous-subject-1"
     record.source_id = "development-issues"
     record.mcp_http_request_id = "mcp-http-request-1"
     record.mcp_call_id = "mcp-call-1"
@@ -60,6 +61,7 @@ def test_safe_json_formatter_emits_bounded_audit_fields_as_top_level_json() -> N
     payload = json.loads(formatter.format(record))
 
     assert payload["query_id"] == "query-1"
+    assert payload["subject_id"] == "pseudonymous-subject-1"
     assert payload["source_id"] == "development-issues"
     assert payload["mcp_http_request_id"] == "mcp-http-request-1"
     assert payload["mcp_call_id"] == "mcp-call-1"

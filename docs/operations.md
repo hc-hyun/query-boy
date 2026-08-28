@@ -9,6 +9,7 @@ Status: 현재 first-launch runbook + 구현됐지만 비활성인 managed 운�
 |---|---|---|
 | 실제 첫 오픈 준비·전환 | [Static Non-RLS First Launch](#static-non-rls-first-launch) | 예 |
 | 현재 log, core health·metric, query alert 조사 | [Logging](#logging-policy), [Health](#health-and-metrics), [Alert](#alert-policy) | 예 |
+| 초보자용 상태·log·diagnostic·managed 조회 | [Interactive Operator Shell](#interactive-operator-shell) | 상태/log/diag는 예; source mutation은 managed 활성화 후 |
 | 로컬 Compose와 MCP 확인 | [Local Container Operations](#local-container-operations) | 예 |
 | 안전한 process 종료 | [Graceful Shutdown](#graceful-shutdown) | 예 |
 | Replica/usage 관측과 generation 전환 alert | [Health](#health-and-metrics), [Alert](#alert-policy) | 아니요 — managed 활성화 후에만 |
@@ -94,6 +95,63 @@ Rollback은 route 차단→new replica drain→직전 image/config/SQL policy와
 기록은 삭제하지 않는다. 실제 cutover/rollback 결과만 새 immutable environment evidence로 남기며
 repository의 과거 verification 문서를 소급 수정하지 않는다.
 
+## Interactive Operator Shell
+
+Repository root에서 다음 명령을 실행하면 `qm>` prompt가 열린다. 아무 명령도 모르면 빈 줄이나 `help`를
+입력한다. Tab은 top-level/subcommand와 이미 조회한 source ID를 자동완성하며, 빈 줄은 이전 명령을
+재실행하지 않는다.
+
+```bash
+uv run qm
+```
+
+상태·일반 로그의 시작점은 다음 네 명령이다. 같은 명령을 `uv run qm status`처럼 one-shot으로도
+실행할 수 있다.
+
+```text
+qm> status
+qm> status metrics
+qm> logs
+qm> logs --event query_failed --since 2h
+```
+
+`logs`는 local `docker compose logs` provider이고 기본 최근 30분/50줄, 최대 31일/1,000줄이다. `-f`,
+`--level`, `--event`, `--qid`, `--subject`를 지원한다. Durable collector나 다른 host의 log를 검색하지
+않으며 SQL/question을 새로 기록하지 않는다.
+
+동의 기반 상세 capture는 짧은 `diag`를 쓴다. `list`는 content를 표시하지 않고 최대 7일/100건의 bounded
+summary만 읽는다. `show`는 question 원문이 terminal에 나타날 수 있어 reason과 exact confirmation이
+필수다. `purge`도 receipt 단위 reason과 복구 불가능 경고를 확인한다.
+
+```text
+qm> diag list
+qm> diag show <capture-id> --reason incident-123
+qm> diag purge <receipt-id> --reason privacy-123
+```
+
+Compose host에서는 CLI가 running `query-man` container 안의 같은 command로 private diagnostic volume을
+읽는다. Key/plaintext는 subprocess argument에 넣지 않는다. Decrypted 출력은 terminal scrollback,
+shell redirection, ticket 또는 일반 log collector에 복사하지 않는다. `--yes`는 승인된 automation에서만
+쓰며 protected 환경의 실제 조회·삭제 승인이나 change record를 대신하지 않는다.
+
+Managed source 조회는 `source`, `source show/usage/history/replicas/changes`를 사용한다. 변경 명령은
+기존 admin HTTP API를 호출하므로 server-side validation, staging, expected generation/state와 mutation
+receipt를 그대로 적용한다. Credential은 command line이 아닌 no-echo prompt로 입력하고, timeout이면
+새 요청을 만들지 말고 화면에 나온 `source receipt <uuid>`로 terminal result를 확인한다.
+
+```text
+qm> source
+qm> source show support-tickets
+qm> source apply support-tickets manifest.yaml --reason change-123
+qm> source disable support-tickets --reason incident-123
+```
+
+Base Compose의 `operator-local` token은 `.env`의 `QUERY_MAN_OPERATOR_TOKEN`에서 query caller와 별도로
+주입된다. 이 caller는 `/admin/health`와 `/admin/metrics`를 볼 수 있지만 base Runtime은 bootstrap mode라
+managed source route가 등록되지 않는다. Source mutation은 managed authority activation과 대상 환경
+승인을 별도로 마친 뒤에만 가능하다. Exact CLI/rollback 경계는
+[ADR 0028](decisions/0028-interactive-operator-shell.md)을 따른다.
+
 ## Logging Policy
 
 `query_man`과 MCP application/audit logger는 one-line JSON을 기록한다. 공통 필드는 UTC
@@ -105,6 +163,11 @@ password/credential/token/secret assignment와 quoted SQL literal을 `[REDACTED]
 SQL text와 request body는 application/audit log에 기록하지 않는다. Process는 stdout/stderr
 이후의 durable 보관을 제공하지 않으므로 production collector가 retention, access control과
 replica identity를 추가해야 한다.
+
+Diagnostic capture는 이 일반 log의 예외가 아니라 별도 encrypted store다. 세 Runtime setting과 caller의
+active consent receipt가 모두 있을 때만 authorized `get_context` question과 `query`의 literal-free SQL
+shape를 저장하며 stdout, audit collector와 `/admin/metrics` payload에는 content를 넣지 않는다. Capture가
+configured된 process의 일반 audit는 raw caller/tenant 대신 HMAC `subject_id`를 쓴다.
 
 Audit event는 다음 bounded field만 사용한다.
 
@@ -138,6 +201,68 @@ Executor는 PostgreSQL transaction-local `application_name=query-man:<query_id>`
 이는 실행 중 activity correlation이며 완료 뒤 장기 통계가 query ID를 보존한다는 뜻은 아니다.
 비싼 query 조사와 `pg_stat_statements` 경계는
 [query cost runbook](query-cost-control.md)을 따른다.
+
+### Consent-gated diagnostic capture
+
+Capture는 기본 disabled다. 다음 세 값을 함께 설정하며 source-generation encryption key와 다른 32-byte
+key를 사용한다. Daily byte setting은 optional이고 기본 100 MiB, 허용 범위 1 MiB~10 GiB다.
+
+```text
+QUERY_MAN_DIAGNOSTIC_CAPTURE_DATABASE=/var/lib/query-man/diagnostics/capture.sqlite3
+QUERY_MAN_DIAGNOSTIC_CAPTURE_KEY=<URL-safe Base64 32 bytes>
+QUERY_MAN_DIAGNOSTIC_CAPTURE_KEY_ID=<lowercase key slug>
+QUERY_MAN_DIAGNOSTIC_CAPTURE_DAILY_BYTES=104857600
+```
+
+Compose image는 `/var/lib/query-man/diagnostics`를 mode `0700`인 named volume에 두고 SQLite file은
+`0600`을 강제한다. 세 필드가 일부만 있거나 key/key ID/daily bound가 잘못되면 startup 전에 실패한다.
+Access policy의 exact caller에는 실제 동의 receipt를 다음처럼 추가한다. 이 field가 없거나 timezone이
+없는 expiry, version 불일치, 만료 equality 이후에는 capture하지 않는다.
+
+```yaml
+diagnostic_consent:
+  version: 1
+  receipt_id: consent-development-analyst-001
+  expires_at: 2026-09-30T00:00:00Z
+```
+
+Encrypted payload에는 pseudonymous subject/key ID, consent receipt/version/expiry, authorized source와 다음
+request field만 있다.
+
+- `get_context`: bounded question 원문
+- `query`: server query ID, input byte 수, parseable 여부와 exact single SELECT의 모든 constant를 `NULL`로
+  바꾼 PostgreSQL rendering
+
+Header, bearer, raw body, invalid/non-SELECT SQL 원문, result row와 database error는 저장하지 않는다.
+Record별 logical TTL은 최대 7일이고 consent expiry가 더 이르면 그 시각을 쓰며, offline read도 expired
+row를 반환하지 않는다. Worker는 write와 매시간
+sweep에서 expired row를 물리 삭제한다. Queue는 process당 64개이고 shutdown drain은 최대 2초다. Capture
+실패는 data response/readiness를 바꾸지 않으므로 collector는 다음 global counter를 경보해야 한다.
+
+```text
+diagnostic_capture_enqueued
+diagnostic_capture_stored
+diagnostic_capture_bytes_count/sum
+diagnostic_capture_dropped
+diagnostic_capture_queue_dropped
+diagnostic_capture_budget_dropped
+diagnostic_capture_submit_failed
+diagnostic_capture_storage_failed
+diagnostic_capture_shutdown_dropped
+```
+
+`diagnostic_capture_enqueued - stored - dropped`의 짧은 차이는 worker queue의 in-flight일 수 있다. 지속되는
+차이, storage failure 한 번 또는 drop 증가는 capture pipeline incident로 조사하되 query limit/source
+health를 바꾸지 않는다. Subject/caller/tenant/receipt는 metric label로 추가하지 않는다.
+
+Decrypt와 receipt purge는 `query_man.runtime.diagnostic_capture`의
+`decrypt_diagnostic_records`/`purge_diagnostic_consent` offline helper만 사용한다. 둘 다 database path,
+해당 key/key ID를 요구하며 반환된 plaintext는 일반 terminal, ticket, evidence나 검색 index에 복사하지
+않는다. Consent 철회는 traffic drain → access policy receipt 제거 → process 교체 → 이전 key ID까지 receipt
+purge 순서로 수행한다. 실제 decrypt/purge, key rotation과 protected volume 변경은 target, 실행자, 출력
+처리와 stop condition을 확인한 별도 operational approval가 필요하다. Capture DB는 immutable evidence가
+아니며 purge/TTL 삭제를 막지 않는다. 전체 format과 rollback은
+[ADR 0027](decisions/0027-consent-gated-diagnostic-capture.md)을 따른다.
 
 ## Control DB Migration And Environment Isolation
 
@@ -481,6 +606,8 @@ health를 변경하지 않는다.
   `mcp_http_response_bytes_count/sum`
 - MCP tool: `mcp_tool_started`, source별 `mcp_tool_completed`, `mcp_tool_failed`,
   `mcp_tool_cancelled`, `mcp_tool_duration_ms_count/sum`
+- Diagnostic capture: global `diagnostic_capture_enqueued/stored/dropped`,
+  `diagnostic_capture_bytes_count/sum`, queue/budget/submit/storage/shutdown drop counter
 - Startup/reload: `startup_metadata_probe_failed`, `source_reload_scan_failed`,
   `source_reload_apply_failed`, `source_reload_metadata_probe_failed`
 - Shutdown: `shutdown_started`, `shutdown_drained`, `shutdown_forced_cancel`
@@ -501,8 +628,9 @@ Application port는 container 내부 `3000`, host loopback의 `${QUERY_MAN_PORT:
 PostgreSQL은 container network에서 `postgres:5432`다.
 
 Compose는 `QUERY_MAN_SOURCE_MODE=bootstrap`이고 access policy는
-`QUERY_MAN_CODEX_MCP_TOKEN`을 모든 active bootstrap source를 보는 query-only caller로 만들고
-operator 권한을 주지 않는다. Token과 reader password는 `.env`에서 주입하지만
+`QUERY_MAN_CODEX_MCP_TOKEN`을 모든 active bootstrap source를 보는 query-only caller로 만들며,
+별도 `QUERY_MAN_OPERATOR_TOKEN`을 health/metric/cancel용 explicit operator로 만든다. Token과 reader
+password는 `.env`에서 주입하지만
 image build context와 Git에는 포함하지 않는다. Application container에는 PostgreSQL
 administrator password를 전달하지 않는다. 기본 Compose는 control-plane DSN/key를 주입하지 않고
 source admin route도 등록하지 않는다. Managed acceptance가 필요하면 별도 Compose overlay를

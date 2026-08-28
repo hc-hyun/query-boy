@@ -16,7 +16,7 @@ from mcp.types import UNSUPPORTED_PROTOCOL_VERSION
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from query_man.delivery.access import AccessPolicy, CallerContext
+from query_man.delivery.access import AccessPolicy, CallerContext, caller_audit_fields
 from query_man.delivery.gateway import GatewayService
 from query_man.delivery.http_validation import is_json_content_type
 from query_man.delivery.mcp_server import (
@@ -455,9 +455,8 @@ def _require_operator(request: Request) -> CallerContext:
     caller = _caller(request)
     if not caller.operator:
         audit_logger.warning(
-            "authorization_denied caller_id=%s tenant_id=%s operation=source_admin",
-            caller.caller_id,
-            caller.tenant_id,
+            "authorization_denied",
+            extra={**caller_audit_fields(caller), "operation": "source_admin"},
         )
         raise OperatorRequiredError
     return caller

@@ -37,6 +37,8 @@ ADR은 중요한 설계 선택과 그 이유를 보존하는 기록입니다. �
 | [0019](0019-canonical-time-stability.md) | 시간 표현 안정성 | Repository 구현 완료; 환경별 cutover는 별도 작업 |
 | [0025](0025-static-non-rls-first-launch.md) | Static non-RLS first launch | 현재 launch authority; protected 실행은 `LAUNCH-02` |
 | [0026](0026-physical-module-packages.md) | Owner별 physical Python package | 같은 repository/wheel/process의 path와 composition 경계; serving 의미는 ADR 0025 유지 |
+| [0027](0027-consent-gated-diagnostic-capture.md) | 동의 기반 진단 원문 수집 | 일반 log와 분리된 최대 7일 암호화 capture, 가명 subject와 fail-open 경계 |
+| [0028](0028-interactive-operator-shell.md) | 대화형 운영 Shell | `qm`의 자동완성·입력 안내와 bounded status/log/diag/source 운영 경계 |
 
 ## 보류된 연구
 

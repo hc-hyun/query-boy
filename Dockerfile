@@ -31,7 +31,8 @@ ENV PATH="/app/.venv/bin:$PATH" \
 
 RUN groupadd --gid 10001 queryman \
     && useradd --uid 10001 --gid queryman --no-create-home --home-dir /nonexistent \
-        --shell /usr/sbin/nologin queryman
+        --shell /usr/sbin/nologin queryman \
+    && install -d -o queryman -g queryman -m 0700 /var/lib/query-man/diagnostics
 
 WORKDIR /app
 

@@ -34,6 +34,8 @@ production 조립과 lifecycle 때문이며, 이 예외로 다른 module의 priv
 - Application/MCP child startup, 실패 cleanup, 정상 shutdown drain/close 순서
 - Initial inventory reconcile, bounded metadata probe와 managed-only reload/report task 조립
 - Process-local health, readiness, metric, structured logging과 redaction
+- Consent-gated encrypted diagnostic capture의 key, bounded queue, maximum 7-day TTL, byte budget와 fail-open worker
+- `qm` 대화형 operator shell, local Compose log provider와 bounded diagnostic offline composition
 - Uvicorn signal/graceful shutdown, container topology, upstream image pin과 application revision label
 
 ## 소유하지 않는 책임
@@ -54,11 +56,13 @@ production 조립과 lifecycle 때문이며, 이 예외로 다른 module의 priv
 | [`runtime/server.py`](../../../src/query_man/runtime/server.py) | 검증된 source mode별 composition-root 선택, Uvicorn process와 shutdown signal ordering |
 | [`runtime/config.py`](../../../src/query_man/runtime/config.py) | Environment model/validation과 `RuntimeConfig` |
 | [`runtime/operations.py`](../../../src/query_man/runtime/operations.py) | Process-local operations sink, health/metric state와 safe formatter/redaction |
+| [`runtime/diagnostic_capture.py`](../../../src/query_man/runtime/diagnostic_capture.py) | AES-GCM SQLite capture, HMAC subject/consent, retention와 offline decrypt/purge |
+| [`runtime/operator_shell.py`](../../../src/query_man/runtime/operator_shell.py) | `qm` interactive/one-shot command, HTTP·Compose log·diagnostic provider composition |
 | [`Dockerfile`](../../../Dockerfile), [`compose.yaml`](../../../compose.yaml), [`.env.example`](../../../.env.example) | Current two-source static image, process, network, config와 health lifecycle |
 | [`compose.acceptance.yaml`](../../../compose.acceptance.yaml) | 별도 project/container/volume의 Control/support/commerce managed acceptance overlay; base serving topology가 아님 |
 | [`verify-container.sh`](../../../scripts/verify-container.sh) | Assurance 소유의 container acceptance; Runtime surface를 소비하는 shared transition artifact |
 | [`pyproject.toml`](../../../pyproject.toml), [`uv.lock`](../../../uv.lock) | Entrypoint와 locked dependency; 여러 owner가 쓰는 shared transition artifact |
-| [`test_runtime_config.py`](../../../tests/test_runtime_config.py), [`test_server.py`](../../../tests/test_server.py), [`test_operations.py`](../../../tests/test_operations.py), [`test_http.py`](../../../tests/test_http.py) | Source authority, process/common operations와 static composition tests |
+| [`test_runtime_config.py`](../../../tests/test_runtime_config.py), [`test_server.py`](../../../tests/test_server.py), [`test_operations.py`](../../../tests/test_operations.py), [`test_diagnostic_capture.py`](../../../tests/test_diagnostic_capture.py), [`test_operator_shell.py`](../../../tests/test_operator_shell.py), [`test_http.py`](../../../tests/test_http.py) | Source authority, process/common operations, encrypted capture, operator shell과 static composition tests |
 | [`test_managed_mode.py`](../../../tests/test_managed_mode.py), [`test_managed_operations.py`](../../../tests/test_managed_operations.py), [`test_managed_runtime_startup_cleanup.py`](../../../tests/test_managed_runtime_startup_cleanup.py), [`test_managed_http.py`](../../../tests/test_managed_http.py) | Managed composition, observation, cleanup와 Delivery direct-consumer tests |
 
 Static Runtime은 `src/query_man/runtime` physical package, managed implementation은
@@ -132,6 +136,16 @@ boundary다. `RuntimeConfig`, `load_runtime_config()`와 `build_app()`은 Runtim
 configuration/composition entry이며 cross-module 업무 interface가 아니다. `operations.reset`, managed
 gateway report snapshot/ack와 logging helper도 Runtime 내부다.
 
+`EncryptedDiagnosticCapture`는 Delivery가 제공한 `DiagnosticCapture` port의 Runtime private adapter다.
+`decrypt_diagnostic_records`, bounded `query_diagnostic_records`와 `purge_diagnostic_consent`는 protected offline operator workflow helper이며
+serving module interface나 HTTP/MCP surface가 아니다. Local SQLite schema v1, TTL/key/budget 의미는
+[ADR 0027](../../decisions/0027-consent-gated-diagnostic-capture.md)의 persisted/operational boundary다.
+
+`qm`은 Runtime-owned external CLI/composition root다. Source 명령은 Delivery의 existing managed
+HTTP API만 소비하고 Control Plane implementation이나 Control DB에 직접 접근하지 않는다. `logs`는 local
+Compose stdout provider이고 `diag`는 위 protected helper를 최대 7일/100건으로 제한해 사용한다. Exact
+command, confirmation과 rollback 의미는 [ADR 0028](../../decisions/0028-interactive-operator-shell.md)을 따른다.
+
 ### Production composition ownership
 
 - Production server의 concrete PostgreSQL adapter는 Runtime만 조립한다. Control Plane candidate staging과
@@ -166,11 +180,11 @@ migration과 rollback 승인이 필요하다.
 ### Startup sequence and failure cleanup
 
 ```text
-config/logging validate -> operations reset -> source authority 하나 선택
+config/logging/capture key validate -> operations reset -> source authority 하나 선택
 -> RLS inventory guard -> catalog/query capability 검사
 -> metadata/query/access/gateway 조립
 -> managed only: managed package 지연 import, Control store/admin/reloader 조립과 initial sync
--> inventory reconcile -> source별 bounded metadata probe
+-> inventory reconcile -> source별 bounded metadata probe -> capture worker start
 -> managed only: reload/report task 시작
 -> MCP child lifespan enter -> ready/degraded serving
 ```
@@ -180,7 +194,7 @@ background task 생성 뒤 MCP child `enter`가 실패하면 Runtime은 자신�
 순서로 정리한다.
 
 ```text
-reload task cancel/await -> query executor immediate close -> catalog close
+reload task cancel/await -> capture bounded close -> query executor immediate close -> catalog close
 -> metadata close (소유한 store 포함) -> source store close
 ```
 
@@ -193,7 +207,8 @@ reload task cancel/await -> query executor immediate close -> catalog close
 
 ```text
 signal/request -> readiness와 새 admission close -> listener graceful handling
--> managed task cancel -> executor bounded drain -> executor/catalog/metadata/store close
+-> managed task cancel -> executor bounded drain -> capture 최대 2초 bounded close
+-> executor/catalog/metadata/store close
 ```
 
 Grace 안에 끝나지 않은 queued/active query는 cancel되고 PostgreSQL rollback으로 끝난다. HTTP/MCP
@@ -272,7 +287,9 @@ Concrete implementation을 조립할 권한은 provider의 private table/type을
   정리한다.
 - Shutdown은 readiness/admission을 먼저 닫고 active work를 bounded drain한다.
 - Public health에 source ID, component detail과 credential state를 노출하지 않는다.
-- Secret, token, DSN/password, SQL과 question을 structured log에 넣지 않는다.
+- Secret, token, DSN/password, SQL과 question을 일반 structured log에 넣지 않는다. Configured capture는
+  active consent, authorized source, AES-GCM, HMAC subject, maximum 7-day TTL과 bounded fail-open 규칙을 모두
+  만족할 때만 별도 SQLite에 저장한다.
 - Source별 차이를 Runtime composition branch로 만들거나 shared graph를 in-place 변경하지 않는다.
 - Release artifact는 pinned upstream과 approved VCS revision으로 식별하며 repository 상태를 실제 실행
   evidence로 주장하지 않는다.
@@ -328,7 +345,7 @@ Built image의 OCI revision label/digest와 Compose exact-ready를 확인한다.
 |---|---|
 | Environment/source authority | `runtime/config.py`, `test_runtime_config.py`, ADR 0025 |
 | Production composition/startup cleanup | Static은 `runtime/composition.py`, managed는 `managed/runtime.py`의 composition/lifespan symbol, `delivery/app.py` child interface, `test_managed_runtime_startup_cleanup.py`, `test_managed_mode.py` |
-| Health/logging/shutdown | `runtime/operations.py`, `runtime/server.py`, 직접 consumer와 static/common `test_operations.py`, managed `test_managed_operations.py`, `test_server.py` |
+| Health/logging/capture/operator shell/shutdown | `runtime/operations.py`, `runtime/diagnostic_capture.py`, `runtime/operator_shell.py`, `runtime/server.py`, 직접 consumer와 `test_operations.py`, `test_diagnostic_capture.py`, `test_operator_shell.py`, managed `test_managed_operations.py`, `test_server.py` |
 | Container/image/readiness | `Dockerfile`, base `compose.yaml`, managed fixture면 `compose.acceptance.yaml`, `verify-container.sh`, [Operations Guide](../../operations.md)와 관련 acceptance |
 | Preserved managed path | `managed/runtime.py`, [Control Plane](../control-plane/README.md), `test_managed_mode.py`, `test_managed_operations.py`, `test_managed_http.py`와 관련 Control test |
 | Protected procedure/execution | [Operations Guide](../../operations.md); 실제 실행이면 승인 범위와 append-only evidence schema |

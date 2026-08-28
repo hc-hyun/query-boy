@@ -1,5 +1,9 @@
 # ADR 0015: Containerized Local Runtime
 
+> Current exception: [ADR 0028](0028-interactive-operator-shell.md)은 기존 query-only caller를 유지하면서
+> local Compose에 health/metric과 operator CLI용 별도 `operator-local` caller를 추가한다. Source authority와
+> managed route 활성화 범위는 바뀌지 않는다.
+
 Status: Accepted
 
 Date: 2026-08-23

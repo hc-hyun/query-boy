@@ -50,6 +50,7 @@ from query_man.runtime.composition import (
     _require_runtime_capabilities,
 )
 from query_man.runtime.config import RuntimeConfig
+from query_man.runtime.diagnostic_capture import EncryptedDiagnosticCapture
 from query_man.runtime.operations import operations
 from query_man.source_catalog.models import SourceProfile
 from query_man.source_catalog.reader_policy import ReaderSessionPolicyError
@@ -341,6 +342,19 @@ def build_app(
     if registry is not None:
         raise ValueError("Managed source mode does not accept a bootstrap registry")
     operations.reset()
+    diagnostic_capture: EncryptedDiagnosticCapture | None = None
+    if runtime_config.diagnostic_capture_database is not None:
+        if (
+            runtime_config.diagnostic_capture_key is None
+            or runtime_config.diagnostic_capture_key_id is None
+        ):
+            raise ValueError("Diagnostic capture configuration is incomplete")
+        diagnostic_capture = EncryptedDiagnosticCapture.from_base64(
+            runtime_config.diagnostic_capture_database,
+            runtime_config.diagnostic_capture_key,
+            runtime_config.diagnostic_capture_key_id,
+            daily_byte_budget=runtime_config.diagnostic_capture_daily_bytes,
+        )
     registry = SourceRegistry([])
     _require_launch_inventory(registry)
     operations.reconcile_sources(registry.source_ids())
@@ -386,8 +400,15 @@ def build_app(
             access_policy = AccessPolicy.legacy(runtime_config.api_token)
         else:
             access_policy = AccessPolicy.local()
+    if diagnostic_capture is not None:
+        access_policy = access_policy.with_subject_identifier(diagnostic_capture.subject_id)
     access_policy.require_shared_access()
-    gateway = GatewayService(registry, metadata, query_service)
+    gateway = GatewayService(
+        registry,
+        metadata,
+        query_service,
+        diagnostic_capture=diagnostic_capture,
+    )
     source_store = PostgresSourceStore(control_dsn)
     replica_writer = ControlReplicaObservationWriter(source_store)
     resource_writer = ControlResourceObservationWriter(source_store)
@@ -420,6 +441,17 @@ def build_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         reload_task: asyncio.Task[None] | None = None
 
+        async def close_diagnostic_capture() -> None:
+            if diagnostic_capture is None:
+                return
+            try:
+                await diagnostic_capture.close(
+                    min(runtime_config.shutdown_grace_ms, 2_000)
+                )
+            except Exception:
+                operations.increment("diagnostic_capture_storage_failed")
+                logger.exception("diagnostic_capture_shutdown_failed")
+
         async def cleanup_step(
             step: str,
             cleanup: Callable[[], Awaitable[None]],
@@ -439,12 +471,21 @@ def build_app(
                         await task
 
                 await cleanup_step("reload_task", cancel_reload_task)
-            cleanup_steps: list[tuple[str, object, Callable[[], Awaitable[None]]]] = [
+            cleanup_steps: list[tuple[str, object, Callable[[], Awaitable[None]]]] = []
+            if diagnostic_capture is not None:
+                cleanup_steps.append(
+                    (
+                        "diagnostic_capture",
+                        diagnostic_capture,
+                        close_diagnostic_capture,
+                    )
+                )
+            cleanup_steps.extend([
                 ("query_executor", query_executor, query_executor.close),
                 ("catalog", catalog, catalog.close),
                 ("metadata", metadata, metadata.close),
                 ("source_store", source_store, source_store.close),
-            ]
+            ])
             attempted_resources: set[int] = set()
             for step, resource, cleanup in cleanup_steps:
                 resource_id = id(resource)
@@ -457,6 +498,8 @@ def build_app(
         await source_reloader.sync()
         operations.reconcile_sources(registry.source_ids())
         await _probe_registered_sources(registry, metadata)
+        if diagnostic_capture is not None:
+            diagnostic_capture.start()
         reload_task = asyncio.create_task(
             _reload_sources(
                 source_reloader,
@@ -485,15 +528,19 @@ def build_app(
                         await reload_task
                     await query_executor.drain(runtime_config.shutdown_grace_ms)
                     try:
-                        await query_executor.close()
+                        if diagnostic_capture is not None:
+                            await close_diagnostic_capture()
                     finally:
                         try:
-                            await catalog.close()
+                            await query_executor.close()
                         finally:
                             try:
-                                await metadata.close()
+                                await catalog.close()
                             finally:
-                                await source_store.close()
+                                try:
+                                    await metadata.close()
+                                finally:
+                                    await source_store.close()
         except BaseException:
             if not child_entered:
                 await cleanup_failed_startup()
@@ -516,6 +563,7 @@ def build_app(
             "source_admin": source_admin,
             "source_reloader": source_reloader,
             "gateway_usage_recorder": usage_recorder,
+            "diagnostic_capture": diagnostic_capture,
         },
     )
 

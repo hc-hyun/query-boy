@@ -17,10 +17,15 @@ _DEFAULT_MCP_ALLOWED_ORIGINS = (
     "http://[::1]:*",
 )
 _REPLICA_ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+_DEFAULT_DIAGNOSTIC_CAPTURE_DAILY_BYTES = 100 * 1024 * 1024
 
 
 class _Environment(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    model_config = ConfigDict(
+        extra="ignore",
+        populate_by_name=True,
+        hide_input_in_errors=True,
+    )
 
     host: str = Field("127.0.0.1", alias="QUERY_MAN_HOST", min_length=1)
     port: int = Field(3000, alias="QUERY_MAN_PORT", ge=1, le=65535)
@@ -47,6 +52,31 @@ class _Environment(BaseModel):
         alias="QUERY_MAN_SOURCE_ENCRYPTION_KEY",
         min_length=43,
         max_length=64,
+    )
+    diagnostic_capture_database: str | None = Field(
+        None,
+        alias="QUERY_MAN_DIAGNOSTIC_CAPTURE_DATABASE",
+        min_length=1,
+        max_length=2_048,
+    )
+    diagnostic_capture_key: SecretStr | None = Field(
+        None,
+        alias="QUERY_MAN_DIAGNOSTIC_CAPTURE_KEY",
+        min_length=43,
+        max_length=64,
+    )
+    diagnostic_capture_key_id: str | None = Field(
+        None,
+        alias="QUERY_MAN_DIAGNOSTIC_CAPTURE_KEY_ID",
+        min_length=1,
+        max_length=80,
+        pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$",
+    )
+    diagnostic_capture_daily_bytes: int = Field(
+        _DEFAULT_DIAGNOSTIC_CAPTURE_DAILY_BYTES,
+        alias="QUERY_MAN_DIAGNOSTIC_CAPTURE_DAILY_BYTES",
+        ge=1_048_576,
+        le=10_737_418_240,
     )
     replica_id: str | None = Field(None, alias="QUERY_MAN_REPLICA_ID")
     source_reload_interval_ms: int = Field(
@@ -111,8 +141,29 @@ class RuntimeConfig:
     shutdown_grace_ms: int = 10_000
     mcp_allowed_hosts: tuple[str, ...] = _DEFAULT_MCP_ALLOWED_HOSTS
     mcp_allowed_origins: tuple[str, ...] = _DEFAULT_MCP_ALLOWED_ORIGINS
+    diagnostic_capture_database: Path | None = None
+    diagnostic_capture_key: str | None = None
+    diagnostic_capture_key_id: str | None = None
+    diagnostic_capture_daily_bytes: int = _DEFAULT_DIAGNOSTIC_CAPTURE_DAILY_BYTES
 
     def __post_init__(self) -> None:
+        diagnostic_values = (
+            self.diagnostic_capture_database,
+            self.diagnostic_capture_key,
+            self.diagnostic_capture_key_id,
+        )
+        if any(value is not None for value in diagnostic_values) and any(
+            value is None for value in diagnostic_values
+        ):
+            raise ValueError(
+                "QUERY_MAN_DIAGNOSTIC_CAPTURE_DATABASE, "
+                "QUERY_MAN_DIAGNOSTIC_CAPTURE_KEY and "
+                "QUERY_MAN_DIAGNOSTIC_CAPTURE_KEY_ID must be configured together"
+            )
+        if not 1_048_576 <= self.diagnostic_capture_daily_bytes <= 10_737_418_240:
+            raise ValueError(
+                "QUERY_MAN_DIAGNOSTIC_CAPTURE_DAILY_BYTES must be between 1 MiB and 10 GiB"
+            )
         if self.source_mode == "bootstrap":
             if self.control_dsn is not None or self.source_encryption_key is not None:
                 raise ValueError(
@@ -147,8 +198,14 @@ def load_runtime_config(
     root_directory: Path | None = None,
 ) -> RuntimeConfig:
     values = dict(os.environ if environment is None else environment)
-    if values.get("QUERY_MAN_API_TOKEN") == "":
-        values.pop("QUERY_MAN_API_TOKEN")
+    for optional_name in (
+        "QUERY_MAN_API_TOKEN",
+        "QUERY_MAN_DIAGNOSTIC_CAPTURE_DATABASE",
+        "QUERY_MAN_DIAGNOSTIC_CAPTURE_KEY",
+        "QUERY_MAN_DIAGNOSTIC_CAPTURE_KEY_ID",
+    ):
+        if values.get(optional_name) == "":
+            values.pop(optional_name)
     try:
         parsed = _Environment.model_validate(values)
     except ValidationError as error:
@@ -190,6 +247,18 @@ def load_runtime_config(
         shutdown_grace_ms=parsed.shutdown_grace_ms,
         mcp_allowed_hosts=_split_allowlist(parsed.mcp_allowed_hosts),
         mcp_allowed_origins=_split_allowlist(parsed.mcp_allowed_origins),
+        diagnostic_capture_database=(
+            Path(parsed.diagnostic_capture_database)
+            if parsed.diagnostic_capture_database is not None
+            else None
+        ),
+        diagnostic_capture_key=(
+            parsed.diagnostic_capture_key.get_secret_value()
+            if parsed.diagnostic_capture_key is not None
+            else None
+        ),
+        diagnostic_capture_key_id=parsed.diagnostic_capture_key_id,
+        diagnostic_capture_daily_bytes=parsed.diagnostic_capture_daily_bytes,
     )
 
 

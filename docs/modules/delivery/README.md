@@ -50,6 +50,7 @@ HTTP와 MCP가 같다는 말은 endpoint가 모두 같다는 뜻이 아니다. �
 | 위치 | 역할 |
 |---|---|
 | [`delivery/access.py`](../../../src/query_man/delivery/access.py) | `CallerContext`, `AccessPolicy`와 token 확인 |
+| [`delivery/diagnostics.py`](../../../src/query_man/delivery/diagnostics.py) | 동의된 question/SQL capture를 Runtime sink에 전달하는 port |
 | [`delivery/gateway.py`](../../../src/query_man/delivery/gateway.py) | Transport-independent `GatewayService` |
 | [`delivery/mcp_server.py`](../../../src/query_man/delivery/mcp_server.py) | MCP server, schema, error와 disconnect |
 | [`delivery/http_validation.py`](../../../src/query_man/delivery/http_validation.py) | HTTP/MCP/admin 공통 JSON Content-Type 검사 |
@@ -76,10 +77,26 @@ Python application interface, HTTP/MCP external wire, 인증 정책과 lifecycle
 
 ```python
 @dataclass(frozen=True)
+class DiagnosticConsent:
+    version: Literal[1]
+    receipt_id: str
+    expires_at: datetime
+
+@dataclass(frozen=True)
 class CallerContext:
     caller_id: str
     tenant_id: str
     operator: bool = False
+    diagnostic_consent: DiagnosticConsent | None = None
+    subject_id: str | None = None
+
+class DiagnosticCapture(Protocol):
+    def capture_question(self, caller: CallerContext,
+        source_id: str, question: str) -> None: ...
+    def capture_sql(self, caller: CallerContext,
+        source_id: str, sql: str, query_id: str) -> None: ...
+
+def caller_audit_fields(caller: CallerContext) -> dict[str, str]: ...
 
 class GatewayService:
     def __init__(
@@ -87,6 +104,7 @@ class GatewayService:
         registry: SourceReader,
         metadata: MetadataService,
         queries: QueryService,
+        diagnostic_capture: DiagnosticCapture | None = None,
     ) -> None: ...
 
     def list_sources(self, _caller: CallerContext) -> dict[str, object]: ...
@@ -116,7 +134,11 @@ class GatewayService:
 ```
 
 `GatewayService`는 provider의 public application result와 safe domain error만 전달한다. `CallerContext`는
-server가 만들며 client request field가 아니다.
+server가 만들며 client request field가 아니다. `diagnostic_consent`와 `subject_id`도 access policy와
+Runtime key가 만든 trusted server state이고 HTTP/MCP request field가 아니다. Capture port는 submit/storage
+실패를 data operation에서 격리하며 concrete encryption/persistence는 Runtime이 소유한다.
+`AccessPolicy.with_subject_identifier(callable) -> AccessPolicy`는 authenticated caller graph를 그대로
+복사하면서 audit `subject_id`만 채우며 token digest, consent, operator와 tenant 의미를 바꾸지 않는다.
 
 ### 현재 data API
 
@@ -151,6 +173,24 @@ HTTP status와 MCP `isError`, validation issue 형식, discovery, health/admin/c
   version 2 policy의 explicit operator가 필요하다.
 - Managed mode는 version 2 policy, non-admin query identity와 explicit operator를 모두 요구한다.
   Anonymous, single API token, version 1과 source-scope field는 startup에서 거부한다.
+- Version 2 caller의 optional `diagnostic_consent`는 exact version 1, receipt ID와 timezone-aware expiry를
+  요구한다. Expiry equality부터 capture하지 않으며 client가 header/body/tool argument로 consent를 추가할
+  수 없다. Consent 제거는 access-policy 교체와 Runtime protected purge 절차를 함께 따른다.
+
+### Consent-gated diagnostic capture
+
+- 일반 application/audit/MCP log에는 계속 question, SQL와 body를 넣지 않는다.
+- Capture가 configured된 process는 일반 audit의 raw caller/tenant를 HMAC `subject_id`로 바꾼다. Subject는
+  authorization, source visibility, rate limit, metric label이나 workflow correlation key가 아니다.
+- Gateway가 caller 인증과 source 존재 확인을 끝낸 뒤 consent가 active인 `get_context` question과 `query`
+  SQL만 Runtime sink에 submit한다. Unknown source, 인증/인가 실패와 list/cancel/admin은 capture하지 않는다.
+- Question 원문은 encrypted payload에만 들어간다. SQL은 Guarded Query의 diagnostic renderer가 exact single
+  SELECT의 모든 constant를 `NULL`로 바꾼 결과만 들어가며 invalid/multi/non-SELECT raw text는 저장하지 않는다.
+- HTTP와 MCP wire는 바뀌지 않고 둘 다 같은 Gateway capture path를 쓴다. 서로 다른 request의
+  question→SQL workflow 연결은 제공하지 않으며 ADR 0022 trace를 암묵적으로 활성화하지 않는다.
+
+정확한 persisted envelope, TTL, key/budget와 purge는
+[ADR 0027](../../decisions/0027-consent-gated-diagnostic-capture.md)과 Runtime/Operations가 소유한다.
 
 ### Public error and validation boundary
 
@@ -260,7 +300,8 @@ validation type의 pattern/range를 바꾸면 admin wire compatibility도 함께
 - 인증·인가 뒤에만 source 작업을 하며 RLS와 unsupported final OID는 정해진 순서에서 detail 없는
   `QUERY_UNAVAILABLE`로 끝난다.
 - Caller는 DSN, credential, DB role이나 tenant context를 선택할 수 없다.
-- Unknown/unauthorized source, SQL, question, token, credential과 내부 오류를 log/metric에 노출하지 않는다.
+- Unknown/unauthorized source, SQL, question, token, credential과 내부 오류를 일반 log/metric에 노출하지
+  않는다. Active consent 뒤 authorized content만 ADR 0027의 별도 encrypted capture에 저장한다.
 - Disconnect는 task cancellation을 통해 database cancel/rollback으로 전달된다.
 - MCP SDK workaround가 protocol rule이나 domain policy를 대신하지 않는다.
 - Query-facing source 목록에는 connection과 internal control state가 없다.
@@ -295,7 +336,8 @@ Delivery는 audit event 의미와 기록 금지 대상을 소유하고 Runtime�
 ## 검증
 
 ```text
-uv run pytest tests/test_registry.py tests/test_access.py tests/test_http.py tests/test_mcp.py \
+uv run pytest tests/test_registry.py tests/test_access.py tests/test_diagnostic_capture.py \
+  tests/test_http.py tests/test_mcp.py \
   tests/test_text_to_sql_skill.py
 uv run pytest tests/test_managed_http.py tests/test_managed_runtime_startup_cleanup.py
 ```

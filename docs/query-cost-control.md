@@ -117,9 +117,17 @@ serialization을 포함한다. 이 값도 client 수신, decode, tool scheduling
 cluster에서는 배분 추정일 뿐 query별 정확한 원가가 아니므로 방법과 오차를 함께 표시한다.
 User/organization별 chargeback은 현재 제공하지 않는다.
 
+ADR 0027의 consent-gated diagnostic capture는 question/SQL 품질 조사용 별도 encrypted store다. 그
+`subject_id`, question 또는 literal-free SQL을 metric label, quota, billing이나 per-user chargeback에 쓰지
+않는다. Monetary cost와 usage alert의 deferred 상태도 바꾸지 않는다.
+
 ## Live Investigation
 
-1. 응답 또는 audit에서 `query_id`, source, fingerprint와 error/reject reason을 확보한다.
+1. `qm status metrics`로 현재 replica counter를 확인하고 응답 또는 audit에서 `query_id`,
+   source, fingerprint와 error/reject reason을 확보한다. `qm logs --qid <query-id>`는 local
+   Compose의 같은 query event를 모아 보여준다. Managed activation 뒤 source별 31일 lower-bound와
+   resource freshness는 `qm source usage <source-id>`로 본다. 어느 명령도 통화 비용을 계산하지
+   않는다.
 2. 실행 중 query만 monitoring identity로 확인한다. Application reader에 통계 전역 권한을
    추가하지 않는다.
 

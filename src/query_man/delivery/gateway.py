@@ -4,10 +4,12 @@ import asyncio
 import logging
 import uuid
 
-from query_man.delivery.access import CallerContext
+from query_man.delivery.access import CallerContext, caller_audit_fields
+from query_man.delivery.diagnostics import DiagnosticCapture
 from query_man.errors import AppError, OperatorRequiredError, QueryNotFoundError, SourceNotFoundError
 from query_man.guarded_query.query import QueryService
 from query_man.metadata.service import MetadataService
+from query_man.runtime.operations import operations
 from query_man.source_catalog.registry import SourceReader
 
 logger = logging.getLogger("query_man.audit")
@@ -19,10 +21,12 @@ class GatewayService:
         registry: SourceReader,
         metadata: MetadataService,
         queries: QueryService,
+        diagnostic_capture: DiagnosticCapture | None = None,
     ) -> None:
         self._registry = registry
         self._metadata = metadata
         self._queries = queries
+        self._diagnostic_capture = diagnostic_capture
 
     def list_sources(self, _caller: CallerContext) -> dict[str, object]:
         return {"sources": self._registry.list()}
@@ -35,6 +39,7 @@ class GatewayService:
         max_objects: int,
     ) -> dict[str, object]:
         self._require_source(caller, source_id, "get_context")
+        self._capture_question(caller, source_id, question)
         return await self._metadata.get_context(source_id, question, max_objects)
 
     async def query(
@@ -47,18 +52,14 @@ class GatewayService:
     ) -> dict[str, object]:
         self._require_source(caller, source_id, "query")
         query_id = str(uuid.uuid4())
+        self._capture_sql(caller, source_id, sql, query_id)
         logger.info(
-            "query_started query_id=%s caller_id=%s tenant_id=%s source_id=%s",
-            query_id,
-            caller.caller_id,
-            caller.tenant_id,
-            source_id,
-            extra={
-                "query_id": query_id,
-                "caller_id": caller.caller_id,
-                "tenant_id": caller.tenant_id,
-                "source_id": source_id,
-            },
+            "query_started",
+            extra=_audit_extra(
+                caller,
+                query_id=query_id,
+                source_id=source_id,
+            ),
         )
         try:
             result = await self._queries.query(
@@ -71,18 +72,13 @@ class GatewayService:
             )
         except asyncio.CancelledError:
             logger.info(
-                "query_interrupted query_id=%s caller_id=%s tenant_id=%s source_id=%s",
-                query_id,
-                caller.caller_id,
-                caller.tenant_id,
-                source_id,
-                extra={
-                    "query_id": query_id,
-                    "caller_id": caller.caller_id,
-                    "tenant_id": caller.tenant_id,
-                    "source_id": source_id,
-                    "cancel_reason": "interrupted",
-                },
+                "query_interrupted",
+                extra=_audit_extra(
+                    caller,
+                    query_id=query_id,
+                    source_id=source_id,
+                    cancel_reason="interrupted",
+                ),
             )
             raise
         except AppError as error:
@@ -92,39 +88,25 @@ class GatewayService:
                 else None
             )
             logger.info(
-                "query_failed query_id=%s caller_id=%s tenant_id=%s source_id=%s "
-                "error_code=%s reason_code=%s",
-                query_id,
-                caller.caller_id,
-                caller.tenant_id,
-                source_id,
-                error.code,
-                reason_code,
-                extra={
-                    "query_id": query_id,
-                    "caller_id": caller.caller_id,
-                    "tenant_id": caller.tenant_id,
-                    "source_id": source_id,
-                    "error_code": error.code,
-                    "reason_code": reason_code,
-                },
+                "query_failed",
+                extra=_audit_extra(
+                    caller,
+                    query_id=query_id,
+                    source_id=source_id,
+                    error_code=error.code,
+                    reason_code=reason_code,
+                ),
             )
             raise
         except Exception:
             logger.exception(
-                "query_failed query_id=%s caller_id=%s tenant_id=%s source_id=%s "
-                "error_code=INTERNAL_ERROR",
-                query_id,
-                caller.caller_id,
-                caller.tenant_id,
-                source_id,
-                extra={
-                    "query_id": query_id,
-                    "caller_id": caller.caller_id,
-                    "tenant_id": caller.tenant_id,
-                    "source_id": source_id,
-                    "error_code": "INTERNAL_ERROR",
-                },
+                "query_failed",
+                extra=_audit_extra(
+                    caller,
+                    query_id=query_id,
+                    source_id=source_id,
+                    error_code="INTERNAL_ERROR",
+                ),
             )
             raise
 
@@ -133,62 +115,41 @@ class GatewayService:
         max_rows = plan.get("max_rows") if isinstance(plan, dict) else None
         node_count = plan.get("node_count") if isinstance(plan, dict) else None
         logger.info(
-            "query_succeeded query_id=%s caller_id=%s tenant_id=%s source_id=%s "
-            "fingerprint=%s queue_ms=%s elapsed_ms=%s row_count=%s result_bytes=%s "
-            "truncated=%s plan_total_cost=%s plan_max_rows=%s plan_node_count=%s",
-            query_id,
-            caller.caller_id,
-            caller.tenant_id,
-            source_id,
-            result.get("fingerprint"),
-            result.get("queue_ms"),
-            result.get("elapsed_ms"),
-            result.get("row_count"),
-            result.get("result_bytes"),
-            result.get("truncated"),
-            total_cost,
-            max_rows,
-            node_count,
-            extra={
-                "query_id": query_id,
-                "caller_id": caller.caller_id,
-                "tenant_id": caller.tenant_id,
-                "source_id": source_id,
-                "fingerprint": result.get("fingerprint"),
-                "queue_ms": result.get("queue_ms"),
-                "elapsed_ms": result.get("elapsed_ms"),
-                "row_count": result.get("row_count"),
-                "result_bytes": result.get("result_bytes"),
-                "truncated": result.get("truncated"),
-                "plan_total_cost": total_cost,
-                "plan_max_rows": max_rows,
-                "plan_node_count": node_count,
-            },
+            "query_succeeded",
+            extra=_audit_extra(
+                caller,
+                query_id=query_id,
+                source_id=source_id,
+                fingerprint=result.get("fingerprint"),
+                queue_ms=result.get("queue_ms"),
+                elapsed_ms=result.get("elapsed_ms"),
+                row_count=result.get("row_count"),
+                result_bytes=result.get("result_bytes"),
+                truncated=result.get("truncated"),
+                plan_total_cost=total_cost,
+                plan_max_rows=max_rows,
+                plan_node_count=node_count,
+            ),
         )
         return result
 
     async def cancel_query(self, caller: CallerContext, query_id: str) -> dict[str, str]:
         if not caller.operator:
             logger.warning(
-                "authorization_denied caller_id=%s tenant_id=%s operation=cancel_query",
-                caller.caller_id,
-                caller.tenant_id,
+                "authorization_denied",
+                extra=_audit_extra(caller, operation="cancel_query"),
             )
             raise OperatorRequiredError
         cancelled = await self._queries.cancel(query_id)
         if not cancelled:
             raise QueryNotFoundError
         logger.info(
-            "query_cancel_requested query_id=%s caller_id=%s tenant_id=%s",
-            query_id,
-            caller.caller_id,
-            caller.tenant_id,
-            extra={
-                "query_id": query_id,
-                "caller_id": caller.caller_id,
-                "tenant_id": caller.tenant_id,
-                "cancel_reason": "operator",
-            },
+            "query_cancel_requested",
+            extra=_audit_extra(
+                caller,
+                query_id=query_id,
+                cancel_reason="operator",
+            ),
         )
         return {"status": "cancel_requested", "query_id": query_id}
 
@@ -201,9 +162,42 @@ class GatewayService:
         if self._registry.get(source_id) is not None:
             return
         logger.warning(
-            "authorization_denied caller_id=%s tenant_id=%s operation=%s",
-            caller.caller_id,
-            caller.tenant_id,
-            operation,
+            "authorization_denied",
+            extra=_audit_extra(caller, operation=operation),
         )
         raise SourceNotFoundError
+
+    def _capture_question(
+        self,
+        caller: CallerContext,
+        source_id: str,
+        question: str,
+    ) -> None:
+        if self._diagnostic_capture is None:
+            return
+        try:
+            self._diagnostic_capture.capture_question(caller, source_id, question)
+        except Exception:
+            operations.increment("diagnostic_capture_dropped")
+            operations.increment("diagnostic_capture_submit_failed")
+            logger.exception("diagnostic_capture_submit_failed")
+
+    def _capture_sql(
+        self,
+        caller: CallerContext,
+        source_id: str,
+        sql: str,
+        query_id: str,
+    ) -> None:
+        if self._diagnostic_capture is None:
+            return
+        try:
+            self._diagnostic_capture.capture_sql(caller, source_id, sql, query_id)
+        except Exception:
+            operations.increment("diagnostic_capture_dropped")
+            operations.increment("diagnostic_capture_submit_failed")
+            logger.exception("diagnostic_capture_submit_failed")
+
+
+def _audit_extra(caller: CallerContext, **fields: object) -> dict[str, object]:
+    return {**caller_audit_fields(caller), **fields}

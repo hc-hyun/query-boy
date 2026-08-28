@@ -106,10 +106,12 @@ Python 3.14 image를 사용합니다.
 ```bash
 test -f .env || cp .env.example .env
 openssl rand -hex 32
+openssl rand -hex 32
 ```
 
-두 번째 명령의 결과를 `.env`의 `QUERY_MAN_CODEX_MCP_TOKEN`에 넣습니다. 기본 Compose가 사용하는
-PostgreSQL과 current 두 reader의 `replace-with-...` 값도 각각 로컬 전용 password로 바꿉니다.
+두 난수 결과를 각각 `.env`의 `QUERY_MAN_CODEX_MCP_TOKEN`과 `QUERY_MAN_OPERATOR_TOKEN`에 넣습니다.
+두 token은 서로 달라야 합니다. 기본 Compose가 사용하는 PostgreSQL과 current 두 reader의
+`replace-with-...` 값도 각각 로컬 전용 password로 바꿉니다.
 Support/commerce 값은 managed acceptance overlay를 실행할 때만 필요합니다.
 
 - `.env`는 Git에서 제외됩니다. commit하지 마세요.
@@ -151,6 +153,18 @@ non-root와 read-only container 경계까지 확인합니다.
 ```bash
 docker compose logs -f query-man
 ```
+
+상태·로그·동의 기반 상세 진단을 안내와 Tab 자동완성이 있는 대화형 화면에서 보려면 repository root에서
+다음을 실행합니다. 빈 줄이나 `help`를 입력하면 예시가 나오며, `diag`는 민감 정보를 표시하기 전에
+조회 사유와 확인 문구를 요구합니다.
+
+```bash
+uv run qm
+```
+
+기본 Compose에는 query token과 별도의 `QUERY_MAN_OPERATOR_TOKEN`이 필요합니다. `.env.example`에서 새
+random token으로 바꾸고 application image를 다시 빌드해야 container의 access policy에도 반영됩니다.
+Managed source 변경 명령은 별도 managed 활성화 전에는 사용할 수 없습니다.
 
 ## HTTP로 한 번 조회해 보기
 

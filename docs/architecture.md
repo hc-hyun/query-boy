@@ -65,8 +65,10 @@ query 실행기를 사용하지 않습니다.
 2. `/meta` 또는 `get_context`가 질문에 필요한 view·column·grain과 두 revision을 반환합니다.
 3. AI나 client가 그 설명을 바탕으로 SQL을 만듭니다. Query Man이 SQL을 생성하는 것은 아닙니다.
 4. Delivery가 caller와 source 접근 권한을 확인합니다.
-5. Guarded Query가 SQL·revision·허용 객체를 검사하고 resource slot을 확보합니다.
-6. PostgreSQL read-only transaction에서 제한을 적용해 실행한 뒤 결과를 반환하거나 cancel·rollback합니다.
+5. 해당 caller에 만료되지 않은 diagnostic consent receipt와 encrypted capture 설정이 모두 있으면 질문
+   원문 또는 literal-free SQL shape를 별도 최대 7일 store에 non-blocking submit합니다. 일반 log에는 넣지 않습니다.
+6. Guarded Query가 SQL·revision·허용 객체를 검사하고 resource slot을 확보합니다.
+7. PostgreSQL read-only transaction에서 제한을 적용해 실행한 뒤 결과를 반환하거나 cancel·rollback합니다.
 
 실행 순서는 다음 안전 경계를 유지합니다.
 
@@ -112,7 +114,7 @@ metadata revision이 바뀌지는 않습니다.
 | Metadata | 지도 제작자 | DB 구조를 수집해 질문별 context와 revision으로 발행 |
 | Guarded Query | 보안 검색대 | SQL을 검사하고 제한 안에서 실행·취소·rollback |
 | Delivery | 현관 | 인증·인가 후 HTTP와 MCP로 같은 기능 제공 |
-| Runtime | 조립·운영 담당 | 실제 구현 연결, 설정, 시작, 상태와 종료 |
+| Runtime | 조립·운영 담당 | 실제 구현 연결, 설정, 시작, 상태·종료, encrypted capture와 `qm` operator shell |
 | Assurance | 검사소 | Metadata 품질과 verified query 결과 검증 |
 | Control Plane | 관리실 | Managed mode의 source·revision·이력 관리; 현재 launch에서는 비활성 |
 
@@ -139,8 +141,9 @@ module interface입니다. HTTP/MCP request·response, persisted DB/config 형�
 정책과 lifecycle invariant는 중요하지만 각각 별도 변경 경계입니다. 의미를 바꾸려면 정확한 영향과
 승인을 먼저 확인합니다.
 
-Production 구현 조립은 Runtime, candidate source의 격리 staging 조립은 Control Plane,
-offline acceptance 조립은 Assurance CLI만 수행합니다.
+Production 구현 조립과 operator CLI는 Runtime, candidate source의 격리 staging 조립은 Control Plane,
+offline acceptance 조립은 Assurance CLI만 수행합니다. Operator CLI의 source 명령은 Control Plane을
+직접 조립하지 않고 기존 managed HTTP API를 소비합니다.
 
 ## 현재 첫 오픈에서 사용하지 않는 구현
 

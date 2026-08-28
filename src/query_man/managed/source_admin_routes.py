@@ -9,7 +9,7 @@ from fastapi import APIRouter, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 
-from query_man.delivery.access import CallerContext
+from query_man.delivery.access import CallerContext, caller_audit_fields
 from query_man.delivery.http_validation import is_json_content_type
 from query_man.errors import OperatorRequiredError, SourceControlUnavailableError
 from query_man.managed.source_admin import (
@@ -324,9 +324,8 @@ def require_operator(request: Request) -> CallerContext:
     caller: CallerContext = request.state.caller
     if not caller.operator:
         audit_logger.warning(
-            "authorization_denied caller_id=%s tenant_id=%s operation=source_admin",
-            caller.caller_id,
-            caller.tenant_id,
+            "authorization_denied",
+            extra={**caller_audit_fields(caller), "operation": "source_admin"},
         )
         raise OperatorRequiredError
     return caller

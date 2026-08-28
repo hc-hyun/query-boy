@@ -18,6 +18,7 @@ dependencies = [
 
 [project.scripts]
 query-man = "query_man.runtime.server:main"
+qm = "query_man.runtime.operator_shell:main"
 query-man-evaluate = "query_man.assurance.cli:evaluate_main"
 query-man-verify = "query_man.assurance.cli:verify_main"
 

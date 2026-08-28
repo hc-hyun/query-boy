@@ -20,6 +20,7 @@ from query_man.metadata.catalog import PostgresCatalog
 from query_man.metadata.models import CatalogProvider
 from query_man.metadata.service import MetadataService
 from query_man.runtime.config import RuntimeConfig
+from query_man.runtime.diagnostic_capture import EncryptedDiagnosticCapture
 from query_man.runtime.operations import operations
 from query_man.source_catalog.registry import SourceReader, SourceRegistry
 
@@ -60,6 +61,19 @@ def build_app(
     if runtime_config.source_mode != "bootstrap":
         raise ValueError("Managed source mode must use query_man.managed.runtime")
     operations.reset()
+    diagnostic_capture: EncryptedDiagnosticCapture | None = None
+    if runtime_config.diagnostic_capture_database is not None:
+        if (
+            runtime_config.diagnostic_capture_key is None
+            or runtime_config.diagnostic_capture_key_id is None
+        ):
+            raise ValueError("Diagnostic capture configuration is incomplete")
+        diagnostic_capture = EncryptedDiagnosticCapture.from_base64(
+            runtime_config.diagnostic_capture_database,
+            runtime_config.diagnostic_capture_key,
+            runtime_config.diagnostic_capture_key_id,
+            daily_byte_budget=runtime_config.diagnostic_capture_daily_bytes,
+        )
     if registry is None:
         registry = SourceRegistry.load(runtime_config.source_directory, runtime_config.budget_file)
     _require_launch_inventory(registry)
@@ -96,10 +110,28 @@ def build_app(
             access_policy = AccessPolicy.legacy(runtime_config.api_token)
         else:
             access_policy = AccessPolicy.local()
-    gateway = GatewayService(registry, metadata, query_service)
+    if diagnostic_capture is not None:
+        access_policy = access_policy.with_subject_identifier(diagnostic_capture.subject_id)
+    gateway = GatewayService(
+        registry,
+        metadata,
+        query_service,
+        diagnostic_capture=diagnostic_capture,
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        async def close_diagnostic_capture() -> None:
+            if diagnostic_capture is None:
+                return
+            try:
+                await diagnostic_capture.close(
+                    min(runtime_config.shutdown_grace_ms, 2_000)
+                )
+            except Exception:
+                operations.increment("diagnostic_capture_storage_failed")
+                logger.exception("diagnostic_capture_shutdown_failed")
+
         async def cleanup_step(
             step: str,
             cleanup: Callable[[], Awaitable[None]],
@@ -110,11 +142,20 @@ def build_app(
                 logger.warning("startup_cleanup_step_failed step=%s", step)
 
         async def cleanup_failed_startup() -> None:
-            cleanup_steps: list[tuple[str, object, Callable[[], Awaitable[None]]]] = [
+            cleanup_steps: list[tuple[str, object, Callable[[], Awaitable[None]]]] = []
+            if diagnostic_capture is not None:
+                cleanup_steps.append(
+                    (
+                        "diagnostic_capture",
+                        diagnostic_capture,
+                        close_diagnostic_capture,
+                    )
+                )
+            cleanup_steps.extend([
                 ("query_executor", query_executor, query_executor.close),
                 ("catalog", catalog, catalog.close),
                 ("metadata", metadata, metadata.close),
-            ]
+            ])
             attempted_resources: set[int] = set()
             for step, resource, cleanup in cleanup_steps:
                 resource_id = id(resource)
@@ -125,6 +166,8 @@ def build_app(
 
         operations.reconcile_sources(registry.source_ids())
         await _probe_registered_sources(registry, metadata)
+        if diagnostic_capture is not None:
+            diagnostic_capture.start()
         child_entered = False
         try:
             mcp_app: FastAPI = app.state.mcp_app
@@ -136,12 +179,16 @@ def build_app(
                     operations.set_accepting(False)
                     await query_executor.drain(runtime_config.shutdown_grace_ms)
                     try:
-                        await query_executor.close()
+                        if diagnostic_capture is not None:
+                            await close_diagnostic_capture()
                     finally:
                         try:
-                            await catalog.close()
+                            await query_executor.close()
                         finally:
-                            await metadata.close()
+                            try:
+                                await catalog.close()
+                            finally:
+                                await metadata.close()
         except BaseException:
             if not child_entered:
                 await cleanup_failed_startup()
@@ -159,6 +206,7 @@ def build_app(
         access_policy=access_policy,
         gateway=gateway,
         lifespan=lifespan,
+        extra_state={"diagnostic_capture": diagnostic_capture},
     )
 
 

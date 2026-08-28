@@ -3,13 +3,14 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
-from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 Identifier = Annotated[str, Field(pattern=r"^[A-Za-z][A-Za-z0-9_-]{0,79}$")]
 EnvironmentName = Annotated[str, Field(pattern=r"^[A-Z][A-Z0-9_]{0,127}$")]
@@ -20,10 +21,25 @@ class AccessPolicyConfigurationError(Exception):
 
 
 @dataclass(frozen=True)
+class DiagnosticConsent:
+    version: Literal[1]
+    receipt_id: str
+    expires_at: datetime
+
+    def is_active(self, now: datetime | None = None) -> bool:
+        checked_at = datetime.now(UTC) if now is None else now
+        if checked_at.tzinfo is None or checked_at.utcoffset() is None:
+            raise ValueError("Consent comparison time must be timezone-aware")
+        return checked_at.astimezone(UTC) < self.expires_at
+
+
+@dataclass(frozen=True)
 class CallerContext:
     caller_id: str
     tenant_id: str
     operator: bool = False
+    diagnostic_consent: DiagnosticConsent | None = None
+    subject_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -36,11 +52,25 @@ class _StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
 
+class _DiagnosticConsent(_StrictModel):
+    version: Literal[1]
+    receipt_id: Identifier
+    expires_at: datetime
+
+    @field_validator("expires_at")
+    @classmethod
+    def valid_expiry(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("expires_at must include a timezone")
+        return value.astimezone(UTC)
+
+
 class _Caller(_StrictModel):
     caller_id: Identifier
     tenant_id: Identifier
     token_env: EnvironmentName
     operator: bool = False
+    diagnostic_consent: _DiagnosticConsent | None = None
 
 
 class _PolicyFile(_StrictModel):
@@ -53,10 +83,17 @@ class _PolicyFile(_StrictModel):
             raise ValueError("version must be 2")
         caller_ids = [caller.caller_id for caller in self.callers]
         token_envs = [caller.token_env for caller in self.callers]
+        receipt_ids = [
+            caller.diagnostic_consent.receipt_id
+            for caller in self.callers
+            if caller.diagnostic_consent is not None
+        ]
         if len(set(caller_ids)) != len(caller_ids):
             raise ValueError("caller_id values must be unique")
         if len(set(token_envs)) != len(token_envs):
             raise ValueError("token_env values must be unique")
+        if len(set(receipt_ids)) != len(receipt_ids):
+            raise ValueError("diagnostic consent receipt_id values must be unique")
         return self
 
 
@@ -74,15 +111,18 @@ class AccessPolicy:
     def local(cls) -> AccessPolicy:
         return cls(
             (),
-            anonymous=CallerContext(
+            anonymous=_caller_context(
                 caller_id="local-development",
                 tenant_id="local-development",
             ),
         )
 
     @classmethod
-    def legacy(cls, token: str) -> AccessPolicy:
-        caller = CallerContext(
+    def legacy(
+        cls,
+        token: str,
+    ) -> AccessPolicy:
+        caller = _caller_context(
             caller_id="legacy-api-token",
             tenant_id="default",
         )
@@ -116,10 +156,19 @@ class AccessPolicy:
             credentials.append(
                 _Credential(
                     digest,
-                    CallerContext(
+                    _caller_context(
                         caller_id=configured.caller_id,
                         tenant_id=configured.tenant_id,
                         operator=configured.operator,
+                        diagnostic_consent=(
+                            DiagnosticConsent(
+                                version=configured.diagnostic_consent.version,
+                                receipt_id=configured.diagnostic_consent.receipt_id,
+                                expires_at=configured.diagnostic_consent.expires_at,
+                            )
+                            if configured.diagnostic_consent is not None
+                            else None
+                        ),
                     ),
                 )
             )
@@ -136,6 +185,24 @@ class AccessPolicy:
             if hmac.compare_digest(received, credential.token_digest):
                 matched = credential.caller
         return matched
+
+    def with_subject_identifier(
+        self,
+        subject_identifier: Callable[[str, str], str],
+    ) -> AccessPolicy:
+        def identified(caller: CallerContext) -> CallerContext:
+            return replace(
+                caller,
+                subject_id=subject_identifier(caller.tenant_id, caller.caller_id),
+            )
+
+        return AccessPolicy(
+            (
+                _Credential(credential.token_digest, identified(credential.caller))
+                for credential in self._credentials
+            ),
+            anonymous=(identified(self._anonymous) if self._anonymous is not None else None),
+        )
 
     def require_shared_access(self) -> None:
         callers = [credential.caller for credential in self._credentials]
@@ -155,3 +222,24 @@ class AccessPolicy:
 
 def _digest(token: str) -> bytes:
     return hashlib.sha256(token.encode("utf-8")).digest()
+
+
+def caller_audit_fields(caller: CallerContext) -> dict[str, str]:
+    if caller.subject_id is not None:
+        return {"subject_id": caller.subject_id}
+    return {"caller_id": caller.caller_id, "tenant_id": caller.tenant_id}
+
+
+def _caller_context(
+    *,
+    caller_id: str,
+    tenant_id: str,
+    operator: bool = False,
+    diagnostic_consent: DiagnosticConsent | None = None,
+) -> CallerContext:
+    return CallerContext(
+        caller_id=caller_id,
+        tenant_id=tenant_id,
+        operator=operator,
+        diagnostic_consent=diagnostic_consent,
+    )
