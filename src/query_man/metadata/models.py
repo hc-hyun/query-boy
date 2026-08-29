@@ -75,24 +75,9 @@ class CatalogSnapshot:
 class PreparedMetadata:
     snapshot: CatalogSnapshot
     revision: str
-    freshness_age_ms: int | None = field(default=None, compare=False)
-
-
-@dataclass(frozen=True)
-class ResourceObservation:
-    representative_records: int | None
-    table_bytes: int
-    index_bytes: int
-    total_storage_bytes: int
 
 
 class CatalogProvider(Protocol):
     async def load(self, source: SourceProfile) -> CatalogSnapshot: ...
 
     async def close(self) -> None: ...
-
-
-class RuntimeCatalogProvider(CatalogProvider, Protocol):
-    async def invalidate(self, source_id: str) -> None: ...
-
-    async def observe_resources(self, source: SourceProfile) -> ResourceObservation: ...

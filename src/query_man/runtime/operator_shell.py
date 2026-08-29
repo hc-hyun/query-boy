@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import cmd
 import difflib
-import getpass
 import json
 import os
 import re
@@ -14,7 +13,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -23,9 +22,17 @@ from typing import Any, Protocol
 import yaml
 from dotenv import load_dotenv
 
+from query_man.assurance.verified import (
+    VerifiedQueryConfigurationError,
+    VerifiedQueryRegistry,
+)
 from query_man.runtime.diagnostic_capture import (
     purge_diagnostic_consent,
     query_diagnostic_records,
+)
+from query_man.source_catalog.registry import (
+    RegistryConfigurationError,
+    SourceRegistry,
 )
 
 _SOURCE_ID = re.compile(r"^[a-z][a-z0-9-]{0,99}$")
@@ -33,12 +40,13 @@ _REASON = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 _DURATION = re.compile(r"^(?P<amount>[1-9][0-9]*)(?P<unit>[smhdw])$")
 _MAX_DOCUMENT_BYTES = 1_048_576
 _INTERNAL_DIAG = "--internal-diag"
+_VALIDATION_SECRET = "query-man-yaml-validation-placeholder"
 
 _QUICK_GUIDE = """바로 사용할 수 있는 명령:
   status                 현재 상태 확인
   logs                   최근 로그 50줄
   diag                   상세 진단 조회 안내
-  source                 managed source 목록
+  source                 Git/YAML source 목록
   help                    전체 사용법
   exit                    종료
 """
@@ -118,20 +126,11 @@ class OperatorBackend(Protocol):
 
     def logs(self, query: LogQuery) -> Iterator[str]: ...
 
-    def admin_get(
-        self,
-        path: str,
-        parameters: Mapping[str, str | int] | None = None,
-    ) -> dict[str, object]: ...
+    def source_list(self) -> dict[str, object]: ...
 
-    def admin_mutate(
-        self,
-        method: str,
-        path: str,
-        *,
-        headers: Mapping[str, str],
-        body: dict[str, object] | None = None,
-    ) -> dict[str, object]: ...
+    def source_show(self, source_id: str) -> dict[str, object]: ...
+
+    def source_validate(self) -> dict[str, object]: ...
 
     def diagnostic_list(
         self,
@@ -221,24 +220,66 @@ class RealOperatorBackend:
                     process.kill()
                     process.wait()
 
-    def admin_get(
-        self,
-        path: str,
-        parameters: Mapping[str, str | int] | None = None,
-    ) -> dict[str, object]:
-        if parameters:
-            path = f"{path}?{urllib.parse.urlencode(parameters)}"
-        return self._http("GET", path)
+    def source_list(self) -> dict[str, object]:
+        registry, manifests = _load_yaml_sources(self._settings.root)
+        sources: list[dict[str, object]] = []
+        for source_id in sorted(registry.source_ids()):
+            source = registry.get(source_id)
+            if source is None:
+                raise OperatorShellError("YAML source 목록을 만들 수 없습니다.")
+            path, _document = manifests[source_id]
+            sources.append(
+                {
+                    "path": _root_relative(path, self._settings.root),
+                    "source_id": source.source_id,
+                    "name": source.name,
+                    "description": source.description,
+                    "owner": source.provenance.owner,
+                    "environment": source.provenance.environment,
+                    "budget_profile": source.budget.name,
+                    "minimum_quality_level": source.minimum_quality_level,
+                }
+            )
+        return {
+            "authority": "yaml",
+            "source_count": len(sources),
+            "sources": sources,
+        }
 
-    def admin_mutate(
-        self,
-        method: str,
-        path: str,
-        *,
-        headers: Mapping[str, str],
-        body: dict[str, object] | None = None,
-    ) -> dict[str, object]:
-        return self._http(method, path, headers=headers, body=body)
+    def source_show(self, source_id: str) -> dict[str, object]:
+        _registry, manifests = _load_yaml_sources(self._settings.root)
+        current = manifests.get(source_id)
+        if current is None:
+            raise OperatorShellError(f"YAML source를 찾을 수 없습니다: {source_id}")
+        path, document = current
+        return {
+            "authority": "yaml",
+            "path": _root_relative(path, self._settings.root),
+            "manifest": document,
+        }
+
+    def source_validate(self) -> dict[str, object]:
+        registry, _manifests = _load_yaml_sources(self._settings.root)
+        verified_path = self._settings.root / "config" / "verified-queries.yaml"
+        try:
+            VerifiedQueryRegistry.load(verified_path, set(registry.source_ids()))
+        except VerifiedQueryConfigurationError as error:
+            raise OperatorShellError(
+                "YAML verified query 설정 검증에 실패했습니다. "
+                "config/verified-queries.yaml을 확인하세요."
+            ) from error
+        source_ids = sorted(registry.source_ids())
+        return {
+            "status": "valid",
+            "authority": "yaml",
+            "source_directory": "config/sources",
+            "budget_file": "config/budget-profiles.yaml",
+            "verified_query_file": "config/verified-queries.yaml",
+            "source_count": len(source_ids),
+            "source_ids": source_ids,
+            "verified_query_document": "valid",
+            "live_database_checked": False,
+        }
 
     def diagnostic_list(
         self,
@@ -304,7 +345,7 @@ class RealOperatorBackend:
                 )
             elif error.code == 404 and code == "UNKNOWN_ERROR":
                 message = (
-                    "요청한 관리 기능이 없습니다. 서버가 managed mode인지 확인하세요."
+                    "요청한 운영 기능이 이 서버에 없습니다. 배포 버전과 설정을 확인하세요."
                 )
             raise OperatorRequestError(error.code, code, message) from error
         except (urllib.error.URLError, TimeoutError, OSError) as error:
@@ -401,12 +442,10 @@ class QueryManShell(cmd.Cmd):
         *,
         stdin: Any = None,
         stdout: Any = None,
-        secret_reader: Callable[[str], str] = getpass.getpass,
     ) -> None:
         super().__init__(stdin=stdin, stdout=stdout, completekey="tab")
         self.use_rawinput = stdin is None
         self._backend = backend
-        self._secret_reader = secret_reader
         self._source_ids: set[str] = set()
         self.last_error = False
 
@@ -415,7 +454,7 @@ class QueryManShell(cmd.Cmd):
         try:
             return super().onecmd(line)
         except KeyboardInterrupt:
-            self._write("\n작업을 중단했습니다. 서버 요청은 receipt로 상태를 확인하세요.")
+            self._write("\n작업을 중단했습니다. 원격 요청이었다면 서버 상태를 다시 확인하세요.")
             self.last_error = True
             return False
         except OperatorShellError as error:
@@ -454,27 +493,17 @@ class QueryManShell(cmd.Cmd):
   diag show <capture-id> --reason <ticket>
   diag purge <receipt-id> --reason <ticket>
 
-Managed source:
-  source                         source 목록
-  source show <source-id>        현재 설정 요약
-  source usage <source-id>       사용량과 비용 관측
-  source history <source-id>     generation 이력
-  source replicas <source-id>    replica 적용 상태
-  source changes <source-id>     변경 영수증 이력
-  source receipt <uuid>          timeout 뒤 mutation 결과 확인
-  source apply <id> <yaml> --reason <change-ref>
-  source secret <id> --reason <change-ref>
-  source verified <id> <yaml|json> --reason <change-ref>
-  source rollback <id> <generation> --reason <change-ref>
-  source resume <id> <metadata-revision> --reason <change-ref>
-  source disable <id> --reason <change-ref>
+Git/YAML source:
+  source                         YAML source 목록
+  source show <source-id>        Git에 저장된 manifest 조회
+  source validate                manifest, budget, verified 설정 검증
 
 기타:
   clear                          화면 정리
   exit                           종료
 
-Tab을 누르면 명령과 하위 명령을 자동완성합니다. 비밀번호는 명령행에 쓰지 않고
-필요할 때 별도 입력합니다. 입력이 부족하면 실행하지 않고 예시를 보여줍니다.
+Tab을 누르면 명령과 하위 명령을 자동완성합니다. Source 변경은 YAML을 수정해
+Git review로 반영합니다. 입력이 부족하면 실행하지 않고 예시를 보여줍니다.
 """.rstrip()
         )
 
@@ -663,7 +692,7 @@ Tab을 누르면 명령과 하위 명령을 자동완성합니다. 비밀번호�
         return _matches(text, ["--since", "--limit", "--reason", "--yes"])
 
     def do_source(self, argument: str) -> None:
-        """Managed source를 조회하거나 안전 확인 후 변경합니다."""
+        """Git으로 관리하는 YAML source 설정을 조회하고 검증합니다."""
 
         tokens = self._tokens(argument)
         if not tokens:
@@ -672,15 +701,14 @@ Tab을 누르면 명령과 하위 명령을 자동완성합니다. 비밀번호�
         if action == "list":
             self._source_list(rest)
             return
-        if action in {"show", "usage", "history", "replicas", "changes", "receipt"}:
-            self._source_read(action, rest)
+        if action == "show":
+            self._source_show(rest)
             return
-        if action in {"apply", "secret", "verified", "rollback", "resume", "disable"}:
-            self._source_mutation(action, rest)
+        if action == "validate":
+            self._source_validate(rest)
             return
         self._guide(
-            "사용법: source <list|show|usage|history|replicas|changes|receipt|"
-            "apply|secret|verified|rollback|resume|disable>",
+            "사용법: source <list|show|validate>",
             "예: source show example-source",
         )
 
@@ -692,29 +720,12 @@ Tab을 누르면 명령과 하위 명령을 자동완성합니다. 비밀번호�
         _endidx: int,
     ) -> list[str]:
         words_before_cursor = line[:begidx].split()
-        actions = [
-            "list",
-            "show",
-            "usage",
-            "history",
-            "replicas",
-            "changes",
-            "receipt",
-            "apply",
-            "secret",
-            "verified",
-            "rollback",
-            "resume",
-            "disable",
-        ]
+        actions = ["list", "show", "validate"]
         if len(words_before_cursor) <= 1:
             return _matches(text, actions)
-        if (
-            len(words_before_cursor) == 2
-            and words_before_cursor[1] not in {"list", "receipt"}
-        ):
+        if len(words_before_cursor) == 2 and words_before_cursor[1] == "show":
             return _matches(text, sorted(self._source_ids))
-        return _matches(text, ["--limit", "--reason", "--yes"])
+        return []
 
     def do_clear(self, _argument: str) -> None:
         """터미널 화면을 정리합니다."""
@@ -735,170 +746,31 @@ Tab을 누르면 명령과 하위 명령을 자동완성합니다. 비밀번호�
         return self.do_exit(argument)
 
     def _source_list(self, tokens: list[str]) -> None:
-        positional, options, flags = _options(
-            tokens,
-            {"-n": "limit", "--limit": "limit"},
-            {},
-        )
-        if positional or flags:
-            self._guide("사용법: source [list] [-n 50]")
+        if tokens:
+            self._guide("사용법: source [list]")
             return
-        limit = _bounded_int(options.get("limit", "50"), 1, 100, "source 개수")
-        document = self._backend.admin_get("/admin/sources", {"limit": limit})
+        document = self._backend.source_list()
         sources = document.get("sources")
         if isinstance(sources, list):
             for source in sources:
                 if isinstance(source, dict) and isinstance(source.get("source_id"), str):
                     self._source_ids.add(source["source_id"])
-        self._document("Managed source", document)
+        self._yaml_document(document)
 
-    def _source_read(self, action: str, tokens: list[str]) -> None:
-        positional, options, flags = _options(
-            tokens,
-            {"-n": "limit", "--limit": "limit"},
-            {},
-        )
-        if len(positional) != 1 or flags:
-            self._guide(f"사용법: source {action} <source-id>")
+    def _source_show(self, tokens: list[str]) -> None:
+        if len(tokens) != 1:
+            self._guide("사용법: source show <source-id>")
             return
-        identifier = positional[0]
-        if action == "receipt":
-            key = _uuid(identifier, "mutation receipt")
-            document = self._backend.admin_get(f"/admin/mutations/{key}")
-            self._document("Mutation receipt", document)
-            return
-        source_id = _source_id(identifier)
-        paths = {
-            "show": f"/admin/sources/{source_id}",
-            "usage": f"/admin/sources/{source_id}/usage",
-            "history": f"/admin/sources/{source_id}/history",
-            "replicas": f"/admin/sources/{source_id}/replicas",
-            "changes": f"/admin/sources/{source_id}/mutations",
-        }
-        parameters: dict[str, int] | None = None
-        if action in {"history", "replicas", "changes"}:
-            parameters = {
-                "limit": _bounded_int(options.get("limit", "50"), 1, 100, "조회 개수")
-            }
-        elif options:
-            self._guide(f"사용법: source {action} <source-id>")
-            return
-        document = self._backend.admin_get(paths[action], parameters)
+        source_id = _source_id(tokens[0])
+        document = self._backend.source_show(source_id)
         self._source_ids.add(source_id)
-        self._document(f"Source {action}", document)
+        self._yaml_document(document)
 
-    def _source_mutation(self, action: str, tokens: list[str]) -> None:
-        positional, options, flags = _options(
-            tokens,
-            {"--reason": "reason"},
-            {"--yes": "yes"},
-        )
-        expected_counts = {
-            "apply": 2,
-            "secret": 1,
-            "verified": 2,
-            "rollback": 2,
-            "resume": 2,
-            "disable": 1,
-        }
-        if len(positional) != expected_counts[action] or "reason" not in options:
-            examples = {
-                "apply": "source apply <id> <manifest.yaml> --reason change-123",
-                "secret": "source secret <id> --reason rotation-123",
-                "verified": "source verified <id> <query.yaml> --reason verify-123",
-                "rollback": "source rollback <id> <generation> --reason rollback-123",
-                "resume": "source resume <id> <metadata-revision> --reason incident-123",
-                "disable": "source disable <id> --reason incident-123",
-            }
-            self._guide(f"사용법: {examples[action]}")
+    def _source_validate(self, tokens: list[str]) -> None:
+        if tokens:
+            self._guide("사용법: source validate")
             return
-        source_id = _source_id(positional[0])
-        reason = _reason(options["reason"])
-        allow_missing = action == "apply"
-        generation, state_version = self._source_state(source_id, allow_missing=allow_missing)
-        body: dict[str, object] | None = None
-        method = "POST"
-        path: str
-        expected_revision: str | None = None
-        if action == "apply":
-            manifest = _load_document(Path(positional[1]))
-            credential = self._secret("Source reader credential: ")
-            method = "PUT"
-            path = f"/admin/sources/{source_id}"
-            body = {"manifest": manifest, "credential": credential}
-        elif action == "secret":
-            credential = self._secret("새 source reader credential: ")
-            path = f"/admin/sources/{source_id}/credential"
-            body = {"credential": credential}
-        elif action == "verified":
-            body = _load_document(Path(positional[1]))
-            path = f"/admin/sources/{source_id}/verified-queries"
-        elif action == "rollback":
-            target = _bounded_int(positional[1], 1, 9_223_372_036_854_775_807, "generation")
-            path = f"/admin/sources/{source_id}/rollback/{target}"
-        elif action == "resume":
-            expected_revision = positional[1]
-            if re.fullmatch(r"sha256:[a-f0-9]{64}", expected_revision) is None:
-                raise OperatorShellError("metadata revision은 `sha256:` 전체 값이어야 합니다.")
-            path = f"/admin/sources/{source_id}/metadata/resume"
-        else:
-            method = "DELETE"
-            path = f"/admin/sources/{source_id}"
-        phrase = f"{action.upper()} {source_id}"
-        if "yes" not in flags and not self._confirm(
-            phrase,
-            f"대상={source_id}, 현재 generation/state={generation}/{state_version}, 사유={reason}",
-        ):
-            return
-        receipt = str(uuid.uuid4())
-        headers = {
-            "Idempotency-Key": receipt,
-            "X-Query-Man-Reason": reason,
-            "X-Expected-Generation": str(generation),
-            "X-Expected-State-Version": str(state_version),
-        }
-        if expected_revision is not None:
-            headers["X-Expected-Metadata-Revision"] = expected_revision
-        try:
-            result = self._backend.admin_mutate(
-                method,
-                path,
-                headers=headers,
-                body=body,
-            )
-        except OperatorShellError:
-            self._write(
-                f"결과를 알 수 없으면 새 요청을 만들지 말고 `source receipt {receipt}`로 확인하세요."
-            )
-            raise
-        self._document("Mutation 결과", result)
-
-    def _source_state(self, source_id: str, *, allow_missing: bool) -> tuple[int, int]:
-        try:
-            document = self._backend.admin_get(f"/admin/sources/{source_id}")
-        except OperatorRequestError as error:
-            if allow_missing and error.status == 404 and error.code == "SOURCE_NOT_FOUND":
-                return 0, 0
-            raise
-        generation = document.get("generation")
-        state_version = document.get("state_version")
-        if (
-            isinstance(generation, bool)
-            or not isinstance(generation, int)
-            or isinstance(state_version, bool)
-            or not isinstance(state_version, int)
-        ):
-            raise OperatorShellError("source의 generation/state 응답이 올바르지 않습니다.")
-        return generation, state_version
-
-    def _secret(self, prompt: str) -> str:
-        try:
-            value = self._secret_reader(prompt)
-        except (EOFError, KeyboardInterrupt) as error:
-            raise OperatorShellError("비밀번호 입력을 취소했습니다.") from error
-        if not value or len(value) > 1_024:
-            raise OperatorShellError("credential은 1~1024자여야 합니다.")
-        return value
+        self._yaml_document(self._backend.source_validate())
 
     def _confirm(self, phrase: str, explanation: str) -> bool:
         self._write(explanation)
@@ -924,6 +796,15 @@ Tab을 누르면 명령과 하위 명령을 자동완성합니다. 비밀번호�
     def _document(self, title: str, document: object) -> None:
         self._write(f"\n[{title}]")
         self._write(json.dumps(document, ensure_ascii=False, indent=2, default=str))
+
+    def _yaml_document(self, document: object) -> None:
+        self._write(
+            yaml.safe_dump(
+                document,
+                allow_unicode=True,
+                sort_keys=False,
+            ).rstrip()
+        )
 
     def _write(self, value: str, *, end: str = "\n") -> None:
         self.stdout.write(f"{value}{end}")
@@ -1079,6 +960,70 @@ def _load_document(path: Path) -> dict[str, object]:
     if not isinstance(document, dict):
         raise OperatorShellError("입력 파일 최상위 값은 object여야 합니다.")
     return document
+
+
+def _load_yaml_sources(
+    root: Path,
+) -> tuple[SourceRegistry, dict[str, tuple[Path, dict[str, object]]]]:
+    root = root.resolve()
+    source_directory = root / "config" / "sources"
+    files = _source_yaml_files(source_directory)
+    documents = [(path, _load_document(path)) for path in files]
+    validation_environment: dict[str, str] = {}
+    for _path, document in documents:
+        source_id = document.get("source_id")
+        if isinstance(source_id, str) and _SOURCE_ID.fullmatch(source_id):
+            secret_name = f"{source_id.replace('-', '_').upper()}_READER_PASSWORD"
+            validation_environment[secret_name] = _VALIDATION_SECRET
+
+    try:
+        registry = SourceRegistry.load(
+            source_directory,
+            root / "config" / "budget-profiles.yaml",
+            validation_environment,
+        )
+    except RegistryConfigurationError as error:
+        raise OperatorShellError(
+            "YAML source 설정 검증에 실패했습니다. "
+            "config/sources와 config/budget-profiles.yaml을 확인하세요."
+        ) from error
+
+    current_files = _source_yaml_files(source_directory)
+    current_documents = [(path, _load_document(path)) for path in current_files]
+    if current_documents != documents:
+        raise OperatorShellError(
+            "YAML source 설정이 검증 중 변경되었습니다. 다시 시도하세요."
+        )
+
+    manifests: dict[str, tuple[Path, dict[str, object]]] = {}
+    for path, document in documents:
+        source_id = document.get("source_id")
+        if not isinstance(source_id, str):
+            raise OperatorShellError("검증된 YAML source ID를 읽을 수 없습니다.")
+        manifests[source_id] = (path, document)
+    if frozenset(manifests) != registry.source_ids():
+        raise OperatorShellError("검증된 YAML source 목록이 일치하지 않습니다.")
+    return registry, manifests
+
+
+def _source_yaml_files(source_directory: Path) -> list[Path]:
+    try:
+        return sorted(
+            path
+            for path in source_directory.iterdir()
+            if path.is_file() and path.suffix.lower() in {".yaml", ".yml"}
+        )
+    except OSError as error:
+        raise OperatorShellError(
+            "YAML source 설정을 읽을 수 없습니다. config/sources를 확인하세요."
+        ) from error
+
+
+def _root_relative(path: Path, root: Path) -> str:
+    try:
+        return path.relative_to(root.resolve()).as_posix()
+    except ValueError as error:
+        raise OperatorShellError("YAML source 경로가 repository root 밖에 있습니다.") from error
 
 
 def _log_record(line: str) -> dict[str, object] | None:

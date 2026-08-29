@@ -33,7 +33,6 @@ def test_root_package_keeps_only_shared_transition_files() -> None:
         "assurance",
         "delivery",
         "guarded_query",
-        "managed",
         "metadata",
         "runtime",
         "source_catalog",
@@ -62,24 +61,9 @@ def test_package_markers_do_not_eager_load_siblings(package: str) -> None:
     assert result.returncode == 0, result.stderr
 
 
-def test_static_runtime_composition_does_not_load_managed_package() -> None:
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            (
-                "import sys; import query_man.runtime.composition; "
-                "assert not any(name == 'query_man.managed' or "
-                "name.startswith('query_man.managed.') for name in sys.modules)"
-            ),
-        ],
-        check=False,
-        capture_output=True,
-        cwd=ROOT_DIRECTORY,
-        text=True,
-    )
-
-    assert result.returncode == 0, result.stderr
+def test_retired_source_authority_package_is_absent() -> None:
+    retired = ROOT_DIRECTORY / "src" / "query_man" / "managed"
+    assert not any(retired.glob("*.py"))
 
 
 def test_source_module_import_graph_is_acyclic() -> None:
@@ -100,49 +84,3 @@ def test_source_module_import_graph_is_acyclic() -> None:
                 )
 
     tuple(TopologicalSorter(graph).static_order())
-
-
-def test_non_managed_modules_only_lazy_import_managed_runtime_dispatch() -> None:
-    source_root = ROOT_DIRECTORY / "src" / "query_man"
-    managed_imports: list[tuple[str, str, tuple[str, ...], bool]] = []
-
-    for path in sorted(source_root.rglob("*.py")):
-        relative = path.relative_to(source_root)
-        if relative.parts[0] == "managed":
-            continue
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        parents = {
-            child: parent
-            for parent in ast.walk(tree)
-            for child in ast.iter_child_nodes(parent)
-        }
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.ImportFrom) or node.module is None:
-                continue
-            if not (
-                node.module == "query_man.managed"
-                or node.module.startswith("query_man.managed.")
-            ):
-                continue
-            ancestor: ast.AST = node
-            guarded = False
-            while ancestor in parents:
-                ancestor = parents[ancestor]
-                guarded = guarded or isinstance(ancestor, ast.If)
-            managed_imports.append(
-                (
-                    relative.as_posix(),
-                    node.module,
-                    tuple(alias.name for alias in node.names),
-                    guarded,
-                )
-            )
-
-    assert managed_imports == [
-        (
-            "runtime/server.py",
-            "query_man.managed.runtime",
-            ("build_app",),
-            True,
-        )
-    ]

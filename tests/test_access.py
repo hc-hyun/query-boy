@@ -41,7 +41,6 @@ callers:
             "OPERATOR_TOKEN": operator_token,
         },
     )
-    policy.require_shared_access()
 
     assert policy.authenticate(analyst_token) == CallerContext(
         caller_id="analyst",

@@ -153,7 +153,7 @@ async def _disposable_source_database(
         or _READER_NAME.fullmatch(reader_name) is None
         or _VIEW_OWNER_NAME.fullmatch(view_owner_name) is None
     ):
-        raise AssertionError("Generated source fixture identifiers are outside the managed prefix")
+        raise AssertionError("Generated source fixture identifiers are outside the reserved prefix")
     if max(map(len, (database_name, reader_name, view_owner_name))) > 63:
         raise AssertionError("Generated source fixture identifier exceeds PostgreSQL's limit")
 
@@ -3164,12 +3164,12 @@ async def test_enc_01_characterizes_domain_and_enum_row_description_oids() -> No
                 )
 
         source = _source_profile(database, "domain-output", ("view",))
-        managed_catalog = PostgresCatalog()
+        permissive_catalog = PostgresCatalog()
         launch_catalog = PostgresCatalog(reject_domain_columns=True)
         metadata = MetadataService(SourceRegistry([source]), launch_catalog)
         try:
-            managed_snapshot = await managed_catalog.load(source)
-            assert managed_snapshot.relations[0].columns[0].data_type == (
+            permissive_snapshot = await permissive_catalog.load(source)
+            assert permissive_snapshot.relations[0].columns[0].data_type == (
                 "analytics.positive_integer"
             )
             with pytest.raises(MetadataUnavailableError) as unavailable:
@@ -3177,7 +3177,7 @@ async def test_enc_01_characterizes_domain_and_enum_row_description_oids() -> No
             assert unavailable.value.details is None
             assert isinstance(unavailable.value.__cause__, _CatalogValidationError)
         finally:
-            await managed_catalog.close()
+            await permissive_catalog.close()
             await launch_catalog.close()
 
 

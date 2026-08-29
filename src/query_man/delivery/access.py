@@ -204,22 +204,6 @@ class AccessPolicy:
             anonymous=(identified(self._anonymous) if self._anonymous is not None else None),
         )
 
-    def require_shared_access(self) -> None:
-        callers = [credential.caller for credential in self._credentials]
-        if self._anonymous is not None or not callers:
-            raise AccessPolicyConfigurationError(
-                "Managed source mode requires authenticated query and admin identities"
-            )
-        if not any(not caller.operator for caller in callers):
-            raise AccessPolicyConfigurationError(
-                "Managed source mode requires a non-admin query identity"
-            )
-        if not any(caller.operator for caller in callers):
-            raise AccessPolicyConfigurationError(
-                "Managed source mode requires an admin identity"
-            )
-
-
 def _digest(token: str) -> bytes:
     return hashlib.sha256(token.encode("utf-8")).digest()
 

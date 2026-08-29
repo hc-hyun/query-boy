@@ -35,16 +35,28 @@ cutover·rollback의 정확한 승인이 모두 필요합니다.
   필요한 type만 다시 고르고 lossless value/OID/reader policy를 제안합니다.
 - `ENC-02`: 승인된 loader, encoder, revision, verified migration과 rollback을 구현·검증합니다.
 
-## Managed canonical-time cutover
+## Database-backed source authority 재검토
 
-- `TIME-03`: 실제 managed environment가 canonical-time R2 이후 정책으로 전환될 때 protected
-  inventory, drain, current/rollback verified membership과 route evidence를 별도 실행 승인 아래
-  남깁니다. Static first launch의 선행 조건은 아닙니다.
+현재 상태: [ADR 0030](decisions/0030-git-reviewed-yaml-source-authority.md)에 따라 Git-reviewed YAML만
+source, verified query와 budget authority로 사용합니다. 이전 managed package와 Control DB integration은
+제거됐으며 비활성 switch로 보존되지 않습니다.
+
+시작 조건: 배포 없는 source 변경이 실제 요구가 되고, Git review보다 DB authority가 더 적합하다는
+운영 근거와 정확한 ownership·보안·복구 요구를 승인받아야 합니다.
+
+- `DBAUTH-01`: 새 ADR에서 authority, persisted/versioned format, admin surface, credential boundary와
+  compatibility를 결정합니다.
+- `DBAUTH-02`: Git YAML에서 새 store로의 explicit import/migration, dual-authority 없는 cutover,
+  backup/restore와 rollback을 설계·검증합니다.
+- `DBAUTH-03`: Protected environment inventory와 execution approval 아래에서만 실제 data migration과
+  route 전환을 수행합니다.
+
+과거 managed code나 Control DB를 암묵적으로 복원하거나 YAML 장애 시 fallback으로 연결하지 않습니다.
 
 ## DB-native 비용과 사용량 경보
 
-현재 상태: Timeout, concurrency, row/byte와 resource limit는 이미 강제합니다. Gateway usage
-lower-bound projection은 있지만 provider 금액은 `not_configured`입니다.
+현재 상태: Timeout, concurrency, row/byte와 resource limit는 이미 강제합니다. DB-native/provider
+비용 수집과 authoritative monetary projection은 구성하지 않습니다.
 
 시작 조건: PostgreSQL statement aggregate가 실제 운영 의사결정에 필요하고 monitoring 권한과
 retention 범위를 다시 승인해야 합니다.

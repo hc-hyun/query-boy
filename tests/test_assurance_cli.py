@@ -112,7 +112,6 @@ async def test_evaluation_cli_preserves_bootstrap_paths_output_exit_and_cleanup(
         def revision_map(self) -> dict[str, frozenset[str]]:
             return {"known-source": frozenset({"sha256:revision"})}
 
-    monkeypatch.setenv("QUERY_MAN_SOURCE_MODE", "managed")
     monkeypatch.setattr(
         assurance_cli,
         "load_dotenv",
@@ -236,7 +235,6 @@ async def test_verify_cli_composes_guarded_query_path_and_preserves_cleanup_orde
             events.append(("verify-all", prepared, service))
             return [{"query_id": "verified-query", "row_count": 1}]
 
-    monkeypatch.setenv("QUERY_MAN_SOURCE_MODE", "managed")
     monkeypatch.setattr(
         assurance_cli,
         "load_dotenv",
@@ -357,37 +355,26 @@ def test_concrete_service_construction_stays_in_approved_composition_roots() -> 
     allowed_files = {
         "SourceRegistry": {
             "runtime/composition.py",
+            "runtime/operator_shell.py",
             "assurance/cli.py",
-            "managed/runtime.py",
-            "managed/source_admin.py",
         },
         "PostgresCatalog": {
             "runtime/composition.py",
             "assurance/cli.py",
-            "managed/runtime.py",
         },
         "PostgresQueryExecutor": {
             "runtime/composition.py",
             "assurance/cli.py",
-            "managed/runtime.py",
         },
         "MetadataService": {
             "runtime/composition.py",
             "assurance/cli.py",
-            "managed/runtime.py",
-            "managed/source_admin.py",
         },
         "QueryService": {
             "runtime/composition.py",
             "assurance/cli.py",
-            "managed/runtime.py",
         },
     }
-    if not (source_root / "managed").is_dir():
-        for files in allowed_files.values():
-            files.difference_update(
-                path for path in files if path.startswith("managed/")
-            )
     actual_files = {name: set() for name in allowed_files}
 
     for path in source_root.rglob("*.py"):

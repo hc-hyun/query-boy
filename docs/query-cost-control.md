@@ -57,21 +57,11 @@ user/organization별 tier, host cgroup CPU/memory quota와 일·월 통화 budge
 
 두 replica의 독립 concurrency·connection 경계와 session resource 누수는
 [multi-replica soak audit](verification/2026-08-23-mcp-multi-replica-soak.md)에서 검증한다.
-이는 soak 시험 구성의 acceptance 증거이며, 현재 static first launch는 단일 replica입니다. 또한
-managed `/usage` reporter와 endpoint를 현재 Runtime에 조립하지 않습니다. 이 결과는 distributed
-global quota를 뜻하지 않습니다. DB-native 비용 귀속과 사용량 경보는 현재 일정에 없는 parked
-research이며, 후보 범위는 [future work](future-work.md)의 `COST-*`에만 보존합니다. Source 규모·증가량의
-측정 방법과 gateway usage lower-bound 수집은 `CTRL-07`에서 구현됐지만 비활성인 managed capability이고,
-최종 운영 projection은 [source management plane](source-management-plane.md)의 한 management surface에서
-제공합니다.
-`CTRL-08`은 resource를 `not_configured|pending|available|stale|unavailable`로 구분하고 current
-generation의 마지막 시도와 bounded reason을 제공한다. Gateway는 global reporter pipeline의
-accepted `last_report_at`과 같은 상태를 제공하며 source traffic completeness로 해석하지 않는다.
-Missing/failed 값과 빈 hour는 0으로 표시하지 않는다. 이 public projection은 구현됐고
-DB-native/provider monetary collector는 여전히 범위 밖이라 monetary cost는
-`not_configured/PROVIDER_NOT_CONFIGURED`만 표시한다. DB-native reader-role aggregate 선택지는
-[parked ADR 0021](decisions/0021-database-native-cost-attribution.md)에 남긴 조사 결과일 뿐 현재
-`/usage` external API나 수집 동작을 바꾸지 않는다. Usage spike/alert도
+이는 soak 시험 구성의 acceptance 증거이며, 현재 first launch는 단일 replica입니다. 이 결과는
+distributed global quota를 뜻하지 않습니다. DB-native 비용 귀속과 사용량 경보는 현재 일정에 없는
+parked research이며, 후보 범위는 [future work](future-work.md)의 `COST-*`에만 보존합니다.
+DB-native reader-role aggregate 선택지는 [parked ADR 0021](decisions/0021-database-native-cost-attribution.md)에
+남긴 조사 결과일 뿐 현재 API나 수집 동작을 바꾸지 않는다. Usage spike/alert도
 [parked ADR 0023](decisions/0023-database-native-usage-spike-alert.md)에 남긴 조사 결과이며, 별도 요구와
 정확한 승인 전에는 threshold, event, polling route나 notification 동작이 없다.
 
@@ -84,10 +74,8 @@ DB-native/provider monetary collector는 여전히 범위 밖이라 monetary cos
 - `plan_summary.total_cost`, `max_rows`, `node_count`
 - `row_count`, `result_bytes`, `truncated`
 
-운영 rollup은 bounded한
-`source_id + budget_profile + metadata_revision + definition_revision + time bucket`을 기본 key로
-사용한다. Budget
-정의는 metadata revision 재료이므로 별도 tier revision entity를 만들지 않는다.
+외부 collector가 운영 rollup을 만든다면 bounded한 source ID, metadata revision과 time bucket을
+사용한다. Budget 정의는 metadata revision 재료이므로 별도 tier revision entity를 만들지 않는다.
 `pg_stat_statements`의 query ID와 gateway fingerprint는 정확히 대응한다고 가정하지 않는다.
 Caller/tenant는 security audit에는 남을 수 있지만 비용, quota 또는 metric label dimension으로
 쓰지 않는다.
@@ -125,9 +113,7 @@ ADR 0027의 consent-gated diagnostic capture는 question/SQL 품질 조사용 �
 
 1. `qm status metrics`로 현재 replica counter를 확인하고 응답 또는 audit에서 `query_id`,
    source, fingerprint와 error/reject reason을 확보한다. `qm logs --qid <query-id>`는 local
-   Compose의 같은 query event를 모아 보여준다. Managed activation 뒤 source별 31일 lower-bound와
-   resource freshness는 `qm source usage <source-id>`로 본다. 어느 명령도 통화 비용을 계산하지
-   않는다.
+   Compose의 같은 query event를 모아 보여준다. 이 명령들은 통화 비용을 계산하지 않는다.
 2. 실행 중 query만 monitoring identity로 확인한다. Application reader에 통계 전역 권한을
    추가하지 않는다.
 

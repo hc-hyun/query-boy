@@ -161,37 +161,6 @@ class DeliveryQueryExecutor(QueryExecutor, Protocol):
     async def drain(self, grace_ms: int) -> None: ...
 
 
-class RuntimeQueryExecutor(DeliveryQueryExecutor, Protocol):
-
-    async def invalidate(self, source_id: str) -> None: ...
-
-
-GatewayUsageOutcome = Literal[
-    "success",
-    "rejected",
-    "timeout",
-    "overloaded",
-    "cancelled",
-    "failed",
-]
-
-
-class GatewayUsageRecorder(Protocol):
-    def record_gateway_usage(
-        self,
-        *,
-        source_id: str,
-        budget_profile: str,
-        metadata_revision: str,
-        outcome: GatewayUsageOutcome,
-        queue_ms: int = 0,
-        elapsed_ms: int = 0,
-        returned_rows: int = 0,
-        result_bytes: int = 0,
-        truncated: bool = False,
-    ) -> None: ...
-
-
 class _QueryCancelledTimeoutError(QueryTimeoutError):
     """Preserve the public timeout envelope while classifying a terminal cancel."""
 
@@ -206,12 +175,10 @@ class QueryService:
         registry: SourceReader,
         metadata: MetadataService,
         executor: QueryExecutor,
-        usage_recorder: GatewayUsageRecorder | None = None,
     ) -> None:
         self._registry = registry
         self._metadata = metadata
         self._executor = executor
-        self._usage_recorder = usage_recorder
 
     async def query(
         self,
@@ -239,12 +206,6 @@ class QueryService:
             or sql_policy_revision != SQL_POLICY_REVISION
         ):
             operations.increment("query_revision_rejected", source.source_id)
-            _record_gateway_usage_safely(
-                self._usage_recorder,
-                source,
-                published.revision,
-                "rejected",
-            )
             raise MetadataRevisionMismatchError
         try:
             validated = validate_sql(
@@ -254,136 +215,23 @@ class QueryService:
             )
         except SqlValidationError as error:
             operations.increment("query_rejected", source.source_id)
-            _record_gateway_usage_safely(
-                self._usage_recorder,
-                source,
-                published.revision,
-                "rejected",
-            )
             raise QueryRejectedError(
                 error.code,
                 rejected_construct=error.rejected_construct,
             ) from error
-        except Exception:
-            _record_gateway_usage_safely(
-                self._usage_recorder,
-                source,
-                published.revision,
-                "failed",
-            )
-            raise
-        try:
-            result = await self._executor.execute(
-                source,
-                sql,
-                published.revision,
-                validated,
-                query_id=query_id,
-                tenant_id=tenant_id,
-            )
-        except (
-            _QueryCancelledTimeoutError,
-            _QueryCancelledUnavailableError,
-            asyncio.CancelledError,
-        ):
-            _record_gateway_usage_safely(
-                self._usage_recorder,
-                source,
-                published.revision,
-                "cancelled",
-            )
-            raise
-        except (QueryRejectedError, QueryInvalidError):
-            _record_gateway_usage_safely(
-                self._usage_recorder,
-                source,
-                published.revision,
-                "rejected",
-            )
-            raise
-        except QueryOverloadedError:
-            _record_gateway_usage_safely(
-                self._usage_recorder,
-                source,
-                published.revision,
-                "overloaded",
-            )
-            raise
-        except QueryTimeoutError:
-            _record_gateway_usage_safely(
-                self._usage_recorder,
-                source,
-                published.revision,
-                "timeout",
-            )
-            raise
-        except Exception:
-            _record_gateway_usage_safely(
-                self._usage_recorder,
-                source,
-                published.revision,
-                "failed",
-            )
-            raise
-        result["sql_policy_revision"] = SQL_POLICY_REVISION
-        _record_gateway_usage_safely(
-            self._usage_recorder,
+        result = await self._executor.execute(
             source,
+            sql,
             published.revision,
-            "success",
-            result=result,
+            validated,
+            query_id=query_id,
+            tenant_id=tenant_id,
         )
+        result["sql_policy_revision"] = SQL_POLICY_REVISION
         return result
 
     async def cancel(self, query_id: str) -> bool:
         return await self._executor.cancel(query_id)
-
-
-def _record_gateway_usage_safely(
-    recorder: GatewayUsageRecorder | None,
-    source: SourceProfile,
-    metadata_revision: str,
-    outcome: GatewayUsageOutcome,
-    *,
-    result: dict[str, object] | None = None,
-) -> None:
-    if recorder is None:
-        return
-    try:
-        if outcome != "success":
-            recorder.record_gateway_usage(
-                source_id=source.source_id,
-                budget_profile=source.budget.name,
-                metadata_revision=metadata_revision,
-                outcome=outcome,
-            )
-            return
-        if result is None:
-            raise ValueError("Successful gateway usage requires a result")
-        truncated = result.get("truncated")
-        if not isinstance(truncated, bool):
-            raise ValueError("Successful gateway usage requires a truncation flag")
-        recorder.record_gateway_usage(
-            source_id=source.source_id,
-            budget_profile=source.budget.name,
-            metadata_revision=metadata_revision,
-            outcome=outcome,
-            queue_ms=_gateway_usage_success_value(result, "queue_ms"),
-            elapsed_ms=_gateway_usage_success_value(result, "elapsed_ms"),
-            returned_rows=_gateway_usage_success_value(result, "row_count"),
-            result_bytes=_gateway_usage_success_value(result, "result_bytes"),
-            truncated=truncated,
-        )
-    except Exception:
-        # Usage is a best-effort lower-bound observation and cannot change query behavior.
-        return
-
-
-def _gateway_usage_success_value(result: dict[str, object], field: str) -> int:
-    value = result.get(field)
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise ValueError("Successful gateway usage value is invalid")
-    return value
 
 
 class PostgresQueryExecutor:
@@ -645,13 +493,6 @@ class PostgresQueryExecutor:
             task.cancel()
         if pending:
             await asyncio.wait(pending, timeout=1)
-
-    async def invalidate(self, source_id: str) -> None:
-        async with self._pool_lock:
-            pool = self._pools.pop(source_id, None)
-            self._semaphores.pop(source_id, None)
-        if pool is not None:
-            await pool.close()
 
     async def _execute_connection(
         self,

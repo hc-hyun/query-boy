@@ -5,14 +5,13 @@ from dataclasses import replace
 import pytest
 
 from query_man.errors import MetadataUnavailableError
-from query_man.metadata.models import CatalogSnapshot, PreparedMetadata
+from query_man.metadata.models import CatalogSnapshot
 from query_man.metadata.quality_level import assess_quality_level
 from query_man.metadata.revision import create_metadata_revision
 from query_man.metadata.service import MetadataService
 from query_man.source_catalog.models import SemanticOverlay, SourceProfile
 from query_man.source_catalog.registry import SourceRegistry
 from tests.helpers import load_test_registry, minimal_development_snapshot
-from tests.test_metadata import MemoryMetadataStore
 
 
 class StaticCatalog:
@@ -74,41 +73,3 @@ async def test_metadata_publish_fails_below_declared_quality_level() -> None:
             "no verified query contract matches the metadata revision"
         ]
     }
-
-
-@pytest.mark.asyncio
-async def test_rejected_rollback_preserves_active_revision() -> None:
-    source = load_test_registry().get("development-issues")
-    assert source is not None
-    source = replace(source, minimum_quality_level="L2")
-    snapshot = minimal_development_snapshot()
-    old_revision = create_metadata_revision(source, snapshot)
-    old_value = PreparedMetadata(snapshot, old_revision)
-
-    current_snapshot = minimal_development_snapshot()
-    current_snapshot = replace(
-        current_snapshot,
-        relations=(
-            replace(current_snapshot.relations[0], comment="verified revision"),
-            *current_snapshot.relations[1:],
-        ),
-    )
-    current_revision = create_metadata_revision(source, current_snapshot)
-    current_value = PreparedMetadata(current_snapshot, current_revision)
-    store = MemoryMetadataStore()
-    store.values[source.source_id] = {
-        old_revision: old_value,
-        current_revision: current_value,
-    }
-    store.active[source.source_id] = current_revision
-    service = MetadataService(
-        SourceRegistry([source]),
-        StaticCatalog(),
-        store=store,
-        verified_revisions={source.source_id: frozenset({current_revision})},
-    )
-
-    with pytest.raises(MetadataUnavailableError):
-        await service.rollback(source.source_id, old_revision)
-
-    assert store.active[source.source_id] == current_revision

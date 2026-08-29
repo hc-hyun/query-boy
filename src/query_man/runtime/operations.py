@@ -5,22 +5,15 @@ import logging
 import re
 import threading
 from collections import defaultdict
-from collections.abc import Iterable, Iterator
-from contextlib import contextmanager
-from contextvars import ContextVar
-from dataclasses import dataclass, replace
+from collections.abc import Iterable
 from datetime import UTC, datetime
-from typing import Any, Literal, cast
+from typing import Any
 
 _BEARER = re.compile(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]+")
 _SECRET_ASSIGNMENT = re.compile(
     r"(?i)\b(password|credential|token|secret)\s*[=:]\s*[^\s,;]+"
 )
 _SQL_LITERAL = re.compile(r"'(?:''|[^'])*'")
-_source_health_updates_suppressed: ContextVar[bool] = ContextVar(
-    "query_man_source_health_updates_suppressed",
-    default=False,
-)
 _STRUCTURED_LOG_FIELDS = (
     "mcp_http_request_id",
     "mcp_call_id",
@@ -53,42 +46,6 @@ _STRUCTURED_LOG_FIELDS = (
     "plan_rows_limit",
     "plan_nodes_limit",
 )
-
-ReplicaRuntimeReason = Literal["CONTROL_SCAN_FAILED"]
-ReplicaSourceHealth = Literal["initializing", "healthy", "stale", "unavailable"]
-ReplicaSourceReason = Literal[
-    "RUNTIME_VALIDATION_REJECTED",
-    "RUNTIME_APPLY_FAILED",
-    "METADATA_PROBE_FAILED",
-]
-_REPLICA_SOURCE_HEALTH = frozenset(
-    {"initializing", "healthy", "stale", "unavailable"}
-)
-_REPLICA_SOURCE_REASONS = frozenset(
-    {
-        "RUNTIME_VALIDATION_REJECTED",
-        "RUNTIME_APPLY_FAILED",
-        "METADATA_PROBE_FAILED",
-    }
-)
-
-
-@dataclass(frozen=True)
-class ReplicaSourceRuntimeState:
-    source_id: str
-    applied_generation: int | None
-    applied_state_version: int | None
-    applied_enabled: bool | None
-    applied_metadata_revision: str | None
-    source_health: ReplicaSourceHealth | None
-    reason_code: ReplicaSourceReason | None
-
-
-@dataclass(frozen=True)
-class ReplicaRuntimeSnapshot:
-    reason_code: ReplicaRuntimeReason | None
-    sources: tuple[ReplicaSourceRuntimeState, ...]
-
 
 class SafeJsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
@@ -136,8 +93,6 @@ class OperationalState:
         self._active_sources: set[str] | None = None
         self._component_health: dict[str, str] = {}
         self._accepting = True
-        self._replica_scan_failed = False
-        self._replica_sources: dict[str, ReplicaSourceRuntimeState] = {}
 
     def reset(self) -> None:
         with self._lock:
@@ -147,8 +102,6 @@ class OperationalState:
             self._active_sources = None
             self._component_health.clear()
             self._accepting = True
-            self._replica_scan_failed = False
-            self._replica_sources.clear()
 
     def increment(self, name: str, source_id: str | None = None, value: int = 1) -> None:
         with self._lock:
@@ -160,111 +113,10 @@ class OperationalState:
             self._totals[(f"{name}_sum", source_id)] += value
 
     def set_source_health(self, source_id: str, status: str) -> None:
-        if _source_health_updates_suppressed.get():
-            return
         with self._lock:
             if self._active_sources is not None and source_id not in self._active_sources:
                 return
             self._source_health[source_id] = status
-            replica_state = self._replica_sources.get(source_id)
-            if (
-                replica_state is not None
-                and replica_state.applied_enabled is True
-                and status in _REPLICA_SOURCE_HEALTH
-            ):
-                self._replica_sources[source_id] = replace(
-                    replica_state,
-                    source_health=cast(ReplicaSourceHealth, status),
-                )
-
-    def set_replica_scan_failed(self, failed: bool) -> None:
-        with self._lock:
-            self._replica_scan_failed = failed
-
-    def set_replica_source_applied(
-        self,
-        source_id: str,
-        generation: int,
-        state_version: int,
-        enabled: bool,
-    ) -> None:
-        with self._lock:
-            self._replica_sources[source_id] = ReplicaSourceRuntimeState(
-                source_id=source_id,
-                applied_generation=generation,
-                applied_state_version=state_version,
-                applied_enabled=enabled,
-                applied_metadata_revision=None,
-                source_health=None,
-                reason_code=None,
-            )
-
-    def set_replica_source_failure(
-        self,
-        source_id: str,
-        reason_code: ReplicaSourceReason,
-    ) -> None:
-        if reason_code not in _REPLICA_SOURCE_REASONS:
-            raise ValueError("Replica source reason is invalid")
-        with self._lock:
-            current = self._replica_sources.get(source_id)
-            if current is None:
-                current = ReplicaSourceRuntimeState(
-                    source_id=source_id,
-                    applied_generation=None,
-                    applied_state_version=None,
-                    applied_enabled=None,
-                    applied_metadata_revision=None,
-                    source_health=None,
-                    reason_code=None,
-                )
-            self._replica_sources[source_id] = replace(
-                current,
-                reason_code=reason_code,
-            )
-
-    def clear_replica_source_apply_failure(self, source_id: str) -> None:
-        with self._lock:
-            current = self._replica_sources.get(source_id)
-            if current is None or current.reason_code not in {
-                "RUNTIME_VALIDATION_REJECTED",
-                "RUNTIME_APPLY_FAILED",
-            }:
-                return
-            self._replica_sources[source_id] = replace(current, reason_code=None)
-
-    def set_replica_metadata_revision(
-        self,
-        source_id: str,
-        revision: str | None,
-    ) -> None:
-        if _source_health_updates_suppressed.get():
-            return
-        with self._lock:
-            current = self._replica_sources.get(source_id)
-            if current is None or current.applied_enabled is not True:
-                return
-            reason_code = current.reason_code
-            if revision is not None and reason_code == "METADATA_PROBE_FAILED":
-                reason_code = None
-            self._replica_sources[source_id] = replace(
-                current,
-                applied_metadata_revision=revision,
-                reason_code=reason_code,
-            )
-
-    def replica_runtime_snapshot(self) -> ReplicaRuntimeSnapshot:
-        with self._lock:
-            reason_code: ReplicaRuntimeReason | None = (
-                "CONTROL_SCAN_FAILED" if self._replica_scan_failed else None
-            )
-            return ReplicaRuntimeSnapshot(
-                reason_code=reason_code,
-                sources=tuple(
-                    self._replica_sources[source_id]
-                    for source_id in sorted(self._replica_sources)
-                ),
-            )
 
     def reconcile_sources(self, source_ids: Iterable[str]) -> None:
         active = set(source_ids)
@@ -294,14 +146,6 @@ class OperationalState:
     def set_component_health(self, component: str, status: str) -> None:
         with self._lock:
             self._component_health[component] = status
-
-    @contextmanager
-    def suppress_source_health_updates(self) -> Iterator[None]:
-        token = _source_health_updates_suppressed.set(True)
-        try:
-            yield
-        finally:
-            _source_health_updates_suppressed.reset(token)
 
     def set_accepting(self, accepting: bool) -> None:
         with self._lock:

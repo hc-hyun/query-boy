@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Protocol
 
@@ -27,9 +26,7 @@ from query_man.source_catalog.models import (
     QualityLevel,
     QuestionRule,
     RelationSemantic,
-    RepresentativeRecordsTarget,
     ResolvedConnection,
-    ResourceObservationDefinition,
     SemanticOverlay,
     SourceEnvironment,
     SourceProfile,
@@ -81,12 +78,6 @@ def _is_forbidden_schema(schema: str) -> bool:
 
 class RegistryConfigurationError(Exception):
     pass
-
-
-@dataclass(frozen=True)
-class ValidatedSourceManifest:
-    profile: SourceProfile
-    document: dict[str, object]
 
 
 class _StrictModel(BaseModel):
@@ -153,30 +144,6 @@ class _Provenance(_StrictModel):
         ):
             raise ValueError("database_migration_ref cannot contain ASCII control characters")
         return value
-
-
-class _RepresentativeRecords(_StrictModel):
-    grain: Identifier
-    physical_relation: RelationName
-
-
-class _Observability(_StrictModel):
-    representative_records: _RepresentativeRecords
-    storage_relations: list[RelationName] = Field(min_length=1, max_length=16)
-
-    @model_validator(mode="after")
-    def validate_relations(self) -> _Observability:
-        if len(set(self.storage_relations)) != len(self.storage_relations):
-            raise ValueError("storage_relations must be distinct")
-        if self.representative_records.physical_relation not in self.storage_relations:
-            raise ValueError("representative physical_relation must be in storage_relations")
-        for relation in self.storage_relations:
-            schema = relation.split(".", 1)[0]
-            if _is_forbidden_schema(schema):
-                raise ValueError(
-                    "observability cannot reference PostgreSQL system schema"
-                )
-        return self
 
 
 class _Grain(_StrictModel):
@@ -326,7 +293,6 @@ class _SourceFile(_StrictModel):
     minimum_quality_level: QualityLevel = "L0"
     tenant_isolation: TenantIsolation = "none"
     semantic_overlay: _SemanticOverlay = Field(default_factory=_SemanticOverlay)
-    observability: _Observability | None = None
 
     @model_validator(mode="after")
     def valid_values(self) -> _SourceFile:
@@ -346,12 +312,6 @@ class SourceReader(Protocol):
     def get(self, source_id: str) -> SourceProfile | None: ...
 
     def source_ids(self) -> frozenset[str]: ...
-
-
-class SourceProjectionWriter(SourceReader, Protocol):
-    def upsert(self, source: SourceProfile) -> None: ...
-
-    def remove(self, source_id: str) -> None: ...
 
 
 class SourceRegistry:
@@ -399,16 +359,6 @@ class SourceRegistry:
     def get(self, source_id: str) -> SourceProfile | None:
         return self._sources.get(source_id)
 
-    def upsert(self, source: SourceProfile) -> None:
-        self._sources = {**self._sources, source.source_id: source}
-
-    def remove(self, source_id: str) -> None:
-        self._sources = {
-            current_id: source
-            for current_id, source in self._sources.items()
-            if current_id != source_id
-        }
-
     def source_ids(self) -> frozenset[str]:
         return frozenset(self._sources)
 
@@ -435,39 +385,6 @@ def load_budget_profiles(path: Path) -> dict[str, BudgetProfile]:
         )
         for name, profile in parsed.profiles.items()
     }
-
-
-def validate_source_manifest(
-    raw: object,
-    budgets: Mapping[str, BudgetProfile],
-    secret: str,
-    *,
-    origin: str = "control-plane source manifest",
-) -> ValidatedSourceManifest:
-    try:
-        parsed = _SourceFile.model_validate(raw)
-    except ValidationError as error:
-        raise RegistryConfigurationError(f"Invalid configuration in {origin}: {error}") from error
-    environment = dict(os.environ)
-    environment[parsed.connection.password_env] = secret
-    profile = _resolve_source(
-        parsed,
-        dict(budgets),
-        environment,
-        origin,
-    )
-    document = parsed.model_dump(mode="json", exclude_none=True)
-    connection = document["connection"]
-    if not isinstance(connection, dict):
-        raise RegistryConfigurationError("Control-plane connection must be an object")
-    connection["host"] = profile.connection.host
-    connection["port"] = profile.connection.port
-    connection.pop("host_env", None)
-    connection.pop("port_env", None)
-    return ValidatedSourceManifest(
-        profile,
-        document,
-    )
 
 
 def _resolve_source(
@@ -527,19 +444,6 @@ def _resolve_source(
         ),
         minimum_quality_level=parsed.minimum_quality_level,
         tenant_isolation=parsed.tenant_isolation,
-        observability=(
-            ResourceObservationDefinition(
-                representative_records=RepresentativeRecordsTarget(
-                    grain=parsed.observability.representative_records.grain,
-                    physical_relation=(
-                        parsed.observability.representative_records.physical_relation
-                    ),
-                ),
-                storage_relations=tuple(parsed.observability.storage_relations),
-            )
-            if parsed.observability is not None
-            else None
-        ),
     )
 
 

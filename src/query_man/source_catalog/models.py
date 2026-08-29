@@ -58,21 +58,6 @@ class SourceProvenance:
 
 
 @dataclass(frozen=True)
-class RepresentativeRecordsTarget:
-    grain: str
-    physical_relation: str
-
-
-@dataclass(frozen=True)
-class ResourceObservationDefinition:
-    representative_records: RepresentativeRecordsTarget
-    storage_relations: tuple[str, ...]
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "storage_relations", tuple(self.storage_relations))
-
-
-@dataclass(frozen=True)
 class GrainDefinition:
     name: str
     description: str
@@ -216,9 +201,6 @@ class SourceProfile:
     provenance: SourceProvenance
     minimum_quality_level: QualityLevel = "L0"
     tenant_isolation: TenantIsolation = "none"
-    control_generation: int | None = None
-    control_state_version: int | None = None
-    observability: ResourceObservationDefinition | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "allowed_schemas", tuple(self.allowed_schemas))

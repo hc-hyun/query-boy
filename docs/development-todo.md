@@ -10,12 +10,14 @@ Status: Active — 현재 launch 작업은 `LAUNCH-02` 하나
 
 [ADR 0025](decisions/0025-static-non-rls-first-launch.md)의 `LAUNCH-01-A` repository 구현과 local
 acceptance는 완료됐습니다.
+[ADR 0030](decisions/0030-git-reviewed-yaml-source-authority.md)에 따라 source·verified-query·budget의
+유일한 authority는 Git-reviewed YAML입니다.
 
 | 항목 | 현재 값 |
 |---|---|
 | Source | `development-issues`, `market-voc` |
 | Runtime | 단일 Query Man replica |
-| Managed | `query_man.managed` package와 별도 acceptance lane에 보존; static composition에는 미참여 |
+| Source authority | Git-reviewed source·verified-query·budget YAML |
 | Database | PostgreSQL 18, server/client UTF-8 |
 | RLS | 전면 차단 |
 | 결과 type | OID `20, 21, 23, 25, 1082, 1184, 1700` |
@@ -89,7 +91,6 @@ Repository 문서나 procedure를 승인한 것만으로 실제 protected action
 |---|---|---|
 | RLS serving | Parked | 실제 RLS source 요구와 attestation·migration 승인 |
 | 결과 type 확대 | Parked | 일곱 OID로 답할 수 없는 실제 질문 |
-| Managed canonical-time cutover | Parked | 실제 managed environment 전환 |
 | DB-native 비용·경보 | Parked | 운영 의사결정에 필요한 aggregate와 권한 승인 |
 | Workflow trace | Parked | 현재 ID로 부족한 실제 correlation 요구 |
 

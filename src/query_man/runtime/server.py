@@ -6,17 +6,13 @@ from types import FrameType
 import uvicorn
 from dotenv import load_dotenv
 
+from query_man.runtime.composition import build_app
 from query_man.runtime.config import load_runtime_config
 from query_man.runtime.operations import configure_logging, operations
 
 load_dotenv()
 runtime_config = load_runtime_config()
 configure_logging(runtime_config.log_level)
-if runtime_config.source_mode == "managed":
-    from query_man.managed.runtime import build_app
-else:
-    from query_man.runtime.composition import build_app
-
 app = build_app(runtime_config)
 
 

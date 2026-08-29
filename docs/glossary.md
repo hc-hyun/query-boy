@@ -10,7 +10,7 @@ accepted ADR이 기준이고, 이 문서는 개념을 쉽게 이해하기 위한
 | Query Man | AI나 사용자가 만든 SQL을 검사하고, 허용된 PostgreSQL 데이터만 제한 안에서 조회하는 관문입니다. AI 모델 자체는 포함하지 않습니다. |
 | Source | Query Man이 조회 대상으로 다루는 데이터 한 묶음입니다. 보통 PostgreSQL database 하나와 연결되지만, 사용자는 접속 주소 대신 Source ID만 봅니다. |
 | Source ID | Source를 가리키는 공개 이름입니다. 예: `market-voc`. 비밀번호나 DB 주소가 아닙니다. |
-| Source manifest | Source의 위치, reader 이름, 허용 schema, 제한과 업무 설명을 적은 설정 문서입니다. 실제 비밀번호는 넣지 않습니다. |
+| Source manifest | Git에서 review하는 `config/sources/*.yaml`입니다. Source의 위치, reader 이름, 허용 schema, 제한과 업무 설명을 적고 실제 비밀번호는 넣지 않습니다. |
 | Curated view | 원본 table을 AI 조회에 적합하도록 DB owner가 정리해 공개한 읽기 전용 view입니다. Query Man은 현재 `ai` schema의 승인된 view를 사용합니다. |
 | Grain | 결과 한 행이 무엇 하나를 뜻하는지 나타냅니다. 예: “VOC 한 건”, “판매 기기 한 대”. |
 | Fanout | 서로 다른 grain을 잘못 join해 같은 사실이 여러 번 복제되는 문제입니다. 합계나 건수가 부풀 수 있습니다. |
@@ -58,17 +58,10 @@ accepted ADR이 기준이고, 이 문서는 개념을 쉽게 이해하기 위한
 
 | 용어 | 쉽게 말하면 |
 |---|---|
-| Bootstrap mode | 시작할 때 repository의 source 설정을 읽어 고정된 inventory로 실행하는 방식입니다. 현재 first launch가 이 모드입니다. |
-| Static launch | 검토된 두 source와 단일 replica를 배포물에 고정한 현재 첫 오픈 범위입니다. 실행 중 새 source를 추가하지 않습니다. |
-| Managed mode | Control DB를 source 상태의 기준으로 삼고 관리 API로 추가·변경하는 구현입니다. 코드는 보존돼 있지만 현재 first launch에서는 비활성입니다. |
-| Control Plane | Managed mode에서 source generation, metadata, verified query, 변경 이력과 관측값을 관리하는 모듈입니다. |
-| Control DB | Control Plane의 상태를 저장하는 별도 PostgreSQL database입니다. Source의 업무 데이터를 저장하는 DB와 다릅니다. |
-| Generation | Source manifest와 암호화된 credential을 함께 고정한 불변 버전입니다. |
-| State version | 활성화·비활성화·rollback 같은 상태 변경 순서를 충돌 없이 확인하는 번호입니다. |
-| Receipt | 관리 요청이 성공했는지 거부됐는지 나중에 다시 확인할 수 있는 변경 영수증입니다. |
+| Git-reviewed YAML authority | `config/sources/*.yaml`, `config/verified-queries.yaml`, `config/budget-profiles.yaml`이 source·verified query·제한을 결정하는 유일한 기준인 방식입니다. 변경은 review·test·배포로 반영합니다. |
+| Static launch | Git에서 검토한 두 source와 단일 replica를 배포물에 고정한 현재 첫 오픈 범위입니다. 실행 중 새 source를 추가하지 않습니다. |
 | Replica | 같은 Query Man 애플리케이션을 실행하는 process 한 개입니다. 현재 first launch 계획은 단일 replica입니다. |
-| Drift | 원하는 generation·상태와 실제 replica에 적용된 값이 다른 상태입니다. |
-| Freshness / stale | 관측값이나 metadata가 얼마나 최근 것인지 나타냅니다. `stale`은 마지막 정상값은 있지만 신선도 기준을 넘었다는 뜻입니다. |
+| Freshness / stale | Metadata가 얼마나 최근 것인지 나타냅니다. `stale`은 마지막 정상 snapshot은 있지만 신선도 기준을 넘었다는 뜻입니다. |
 | Projection | 내부 정보 중 외부에 보여도 되는 필드만 골라 만든 응답 모양입니다. Secret이나 내부 row 전체를 그대로 내보내지 않습니다. |
 | Cutover | 준비한 새 version으로 실제 요청 경로를 전환하는 작업입니다. |
 | Rollback | 문제가 생겼을 때 요청을 끊고 직전 안전한 version·설정·경로로 돌아가는 작업입니다. |

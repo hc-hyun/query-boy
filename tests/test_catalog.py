@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import inspect
 import os
-from collections.abc import Mapping
 from dataclasses import FrozenInstanceError, replace
 from typing import get_type_hints
 
@@ -20,15 +19,9 @@ from query_man.metadata.models import (
     CatalogProvider,
     CatalogSnapshot,
     PreparedMetadata,
-    ResourceObservation,
-    RuntimeCatalogProvider,
 )
 from query_man.metadata.service import MetadataService
-from query_man.source_catalog.models import (
-    RepresentativeRecordsTarget,
-    ResourceObservationDefinition,
-    SourceProfile,
-)
+from query_man.source_catalog.models import SourceProfile
 from query_man.source_catalog.reader_policy import (
     READER_CLIENT_ENCODING,
     READER_SESSION_TIMEZONE_SETTER,
@@ -45,34 +38,24 @@ from tests.helpers import (
 )
 
 
-def test_runtime_catalog_provider_protocol_has_exact_lifecycle_shape() -> None:
-    application_methods = {
+def test_catalog_provider_protocol_has_exact_lifecycle_shape() -> None:
+    methods = {
         name
         for name, value in vars(CatalogProvider).items()
         if not name.startswith("_") and callable(value)
     }
-    runtime_methods = {
-        name
-        for name, value in vars(RuntimeCatalogProvider).items()
-        if not name.startswith("_") and callable(value)
-    }
 
-    assert application_methods == {"close", "load"}
-    assert CatalogProvider in RuntimeCatalogProvider.__mro__
-    assert runtime_methods == {"invalidate", "observe_resources"}
-    assert get_type_hints(RuntimeCatalogProvider.invalidate) == {
-        "source_id": str,
-        "return": type(None),
-    }
-    assert inspect.iscoroutinefunction(RuntimeCatalogProvider.invalidate)
-    assert get_type_hints(RuntimeCatalogProvider.observe_resources) == {
+    assert methods == {"close", "load"}
+    assert get_type_hints(CatalogProvider.load) == {
         "source": SourceProfile,
-        "return": ResourceObservation,
+        "return": CatalogSnapshot,
     }
-    assert inspect.iscoroutinefunction(RuntimeCatalogProvider.observe_resources)
+    assert get_type_hints(CatalogProvider.close) == {"return": type(None)}
+    assert inspect.iscoroutinefunction(CatalogProvider.load)
+    assert inspect.iscoroutinefunction(CatalogProvider.close)
     for method, names in (
-        (RuntimeCatalogProvider.invalidate, ("self", "source_id")),
-        (RuntimeCatalogProvider.observe_resources, ("self", "source")),
+        (CatalogProvider.load, ("self", "source")),
+        (CatalogProvider.close, ("self",)),
     ):
         parameters = tuple(inspect.signature(method).parameters.values())
         assert tuple(parameter.name for parameter in parameters) == names
@@ -82,18 +65,6 @@ def test_runtime_catalog_provider_protocol_has_exact_lifecycle_shape() -> None:
             for parameter in parameters
         )
     assert get_type_hints(MetadataService.__init__)["catalog"] is CatalogProvider
-
-
-def test_resource_observation_is_immutable() -> None:
-    observation = ResourceObservation(
-        representative_records=None,
-        table_bytes=1,
-        index_bytes=2,
-        total_storage_bytes=3,
-    )
-
-    with pytest.raises(FrozenInstanceError):
-        observation.total_storage_bytes = 4  # type: ignore[misc]
 
 
 def test_static_launch_domain_guard_uses_declared_catalog_type_kind() -> None:
@@ -112,138 +83,6 @@ def test_static_launch_domain_guard_uses_declared_catalog_type_kind() -> None:
     assert PostgresCatalog(reject_domain_columns=True)._reject_domain_columns is True
 
 
-class _ResourceCursor:
-    def __init__(self, row: dict[str, object] | None) -> None:
-        self._row = row
-
-    async def fetchone(self) -> dict[str, object] | None:
-        return self._row
-
-
-class _ResourceConnection:
-    def __init__(
-        self,
-        row: dict[str, object] | None,
-        *,
-        query_error: Exception | None = None,
-        settings_error: Exception | None = None,
-        timezone_error: Exception | None = None,
-    ) -> None:
-        self._row = row
-        self._query_error = query_error
-        self._settings_error = settings_error
-        self._timezone_error = timezone_error
-        self.executions: list[tuple[str, object | None]] = []
-        self.events: list[str] = []
-        self.rolled_back = False
-
-    async def execute(
-        self,
-        statement: str,
-        parameters: object | None = None,
-    ) -> object:
-        self.executions.append((statement, parameters))
-        self.events.append(statement)
-        if (
-            statement == READER_SESSION_TIMEZONE_SETTER
-            and self._timezone_error is not None
-        ):
-            raise self._timezone_error
-        if (
-            statement == catalog_module._CATALOG_SESSION_SETTINGS
-            and self._settings_error is not None
-        ):
-            raise self._settings_error
-        if statement == catalog_module.RESOURCE_OBSERVATION_QUERY:
-            if self._query_error is not None:
-                raise self._query_error
-            return _ResourceCursor(self._row)
-        if "current_setting('transaction_read_only')" in statement:
-            return _ResourceCursor(self._row)
-        return object()
-
-    async def rollback(self) -> None:
-        self.rolled_back = True
-
-
-class _ResourceConnectionContext:
-    def __init__(self, connection: _ResourceConnection) -> None:
-        self._connection = connection
-
-    async def __aenter__(self) -> _ResourceConnection:
-        return self._connection
-
-    async def __aexit__(self, *_args: object) -> None:
-        pass
-
-
-class _ResourcePool:
-    def __init__(self, connection: _ResourceConnection) -> None:
-        self._connection = connection
-
-    def connection(self) -> _ResourceConnectionContext:
-        return _ResourceConnectionContext(self._connection)
-
-
-def _source_with_observability(
-    *,
-    representative_relation: str = "development.issues",
-    storage_relations: tuple[str, ...] = (
-        "development.users",
-        "development.issues",
-    ),
-    environment: Mapping[str, str] | None = None,
-) -> SourceProfile:
-    registry = load_test_registry() if environment is None else load_test_registry(environment)
-    source = registry.get("development-issues")
-    assert source is not None
-    return replace(
-        source,
-        observability=ResourceObservationDefinition(
-            representative_records=RepresentativeRecordsTarget(
-                grain="development_issue",
-                physical_relation=representative_relation,
-            ),
-            storage_relations=storage_relations,
-        ),
-    )
-
-
-def _catalog_with_resource_connection(
-    monkeypatch: pytest.MonkeyPatch,
-    source: SourceProfile,
-    connection: _ResourceConnection,
-) -> PostgresCatalog:
-    catalog = PostgresCatalog()
-
-    async def get_pool(requested_source: SourceProfile) -> _ResourcePool:
-        assert requested_source is source
-        return _ResourcePool(connection)
-
-    async def accept_reader_policy(
-        _connection: object,
-        requested_source: SourceProfile,
-    ) -> None:
-        assert _connection is connection
-        assert requested_source is source
-        connection.events.append("session-policy")
-
-    def accept_connection_policy(_connection: object) -> None:
-        assert _connection is connection
-        connection.events.append("connection-policy")
-
-    monkeypatch.setattr(catalog, "_get_pool", get_pool)
-    monkeypatch.setattr(
-        catalog_module,
-        "require_reader_session_policy",
-        accept_reader_policy,
-    )
-    monkeypatch.setattr(
-        catalog_module,
-        "require_reader_connection_policy",
-        accept_connection_policy,
-    )
-    return catalog
 
 
 @pytest.mark.asyncio
@@ -335,15 +174,14 @@ async def test_catalog_load_checks_connection_before_existing_transaction_order(
     assert not connection.rolled_back
 
 
-@pytest.mark.parametrize("operation", ["load", "observe_resources"])
 @pytest.mark.parametrize("close_fails", [False, True])
 @pytest.mark.asyncio
 async def test_catalog_connection_policy_mismatch_closes_without_sql_or_rollback(
     monkeypatch: pytest.MonkeyPatch,
-    operation: str,
     close_fails: bool,
 ) -> None:
-    source = _source_with_observability()
+    source = load_test_registry().get("development-issues")
+    assert source is not None
     marker = ReaderSessionPolicyError("Source reader connection policy mismatch")
 
     class Connection:
@@ -393,10 +231,7 @@ async def test_catalog_connection_policy_mismatch_closes_without_sql_or_rollback
     )
 
     with pytest.raises(ReaderSessionPolicyError) as captured:
-        if operation == "load":
-            await catalog.load(source)
-        else:
-            await catalog.observe_resources(source)
+        await catalog.load(source)
 
     assert captured.value is marker
     assert connection.close_calls == 1
@@ -404,13 +239,12 @@ async def test_catalog_connection_policy_mismatch_closes_without_sql_or_rollback
     assert connection.execute_calls == 0
 
 
-@pytest.mark.parametrize("operation", ["load", "observe_resources"])
 @pytest.mark.asyncio
 async def test_catalog_connection_info_failure_preserves_transient_exception(
     monkeypatch: pytest.MonkeyPatch,
-    operation: str,
 ) -> None:
-    source = _source_with_observability()
+    source = load_test_registry().get("development-issues")
+    assert source is not None
     failure = RuntimeError("private connection info failure")
 
     class Connection:
@@ -458,10 +292,7 @@ async def test_catalog_connection_info_failure_preserves_transient_exception(
     )
 
     with pytest.raises(RuntimeError) as captured:
-        if operation == "load":
-            await catalog.load(source)
-        else:
-            await catalog.observe_resources(source)
+        await catalog.load(source)
 
     assert captured.value is failure
     assert connection.close_calls == 0
@@ -492,83 +323,6 @@ async def test_catalog_pool_requests_approved_client_encoding(
     connection_kwargs = configuration["kwargs"]
     assert isinstance(connection_kwargs, dict)
     assert connection_kwargs["client_encoding"] == READER_CLIENT_ENCODING
-
-
-@pytest.mark.asyncio
-async def test_resource_observation_uses_exact_bounded_catalog_query_without_new_grants(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    source = _source_with_observability()
-    connection = _ResourceConnection(
-        {
-            "representative_records": 12.6,
-            "table_bytes": 1_000,
-            "index_bytes": 250,
-            "total_storage_bytes": 1_250,
-        }
-    )
-    catalog = _catalog_with_resource_connection(monkeypatch, source, connection)
-
-    observation = await catalog.observe_resources(source)
-
-    assert observation == ResourceObservation(
-        representative_records=13,
-        table_bytes=1_000,
-        index_bytes=250,
-        total_storage_bytes=1_250,
-    )
-    assert set(vars(observation)) == {
-        "representative_records",
-        "table_bytes",
-        "index_bytes",
-        "total_storage_bytes",
-    }
-    assert connection.executions[0] == (
-        "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
-        None,
-    )
-    assert connection.executions[1] == (READER_SESSION_TIMEZONE_SETTER, None)
-    settings_statement, settings_parameters = connection.executions[2]
-    assert settings_statement == catalog_module._CATALOG_SESSION_SETTINGS
-    assert isinstance(settings_parameters, tuple)
-    assert settings_parameters[:2] == (
-        f"{source.budget.metadata_statement_timeout_ms}ms",
-        f"{source.budget.lock_timeout_ms}ms",
-    )
-    assert connection.executions[3] == (
-        catalog_module.RESOURCE_OBSERVATION_QUERY,
-        (
-            ["development", "development"],
-            ["users", "issues"],
-            2,
-        ),
-    )
-    assert connection.executions[4] == ("COMMIT", None)
-    assert not connection.rolled_back
-    assert connection.events == [
-        "connection-policy",
-        "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY",
-        READER_SESSION_TIMEZONE_SETTER,
-        catalog_module._CATALOG_SESSION_SETTINGS,
-        "session-policy",
-        catalog_module.RESOURCE_OBSERVATION_QUERY,
-        "COMMIT",
-    ]
-
-    normalized_query = " ".join(
-        catalog_module.RESOURCE_OBSERVATION_QUERY.casefold().split()
-    )
-    assert "pg_catalog.pg_class" in normalized_query
-    assert "pg_catalog.pg_namespace" in normalized_query
-    assert "relation.relkind in ('r', 'm')" in normalized_query
-    assert "pg_catalog.has_schema_privilege" not in normalized_query
-    assert "pg_catalog.has_table_privilege" not in normalized_query
-    assert "pg_catalog.pg_table_size" in normalized_query
-    assert "pg_catalog.pg_indexes_size" in normalized_query
-    assert "pg_catalog.pg_total_relation_size" in normalized_query
-    assert "count(" not in normalized_query
-    assert "explain" not in normalized_query
-    assert "development.issues" not in normalized_query
 
 
 @pytest.mark.asyncio
@@ -675,206 +429,32 @@ async def test_catalog_limit_with_failed_rollback_never_serves_warm_stale(
 
 
 @pytest.mark.asyncio
-async def test_resource_observation_allows_absent_representative_estimate(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    source = _source_with_observability(
-        storage_relations=("development.issues",),
-    )
-    connection = _ResourceConnection(
-        {
-            "representative_records": None,
-            "table_bytes": 800,
-            "index_bytes": 200,
-            "total_storage_bytes": 1_000,
-        }
-    )
-    catalog = _catalog_with_resource_connection(monkeypatch, source, connection)
-
-    observation = await catalog.observe_resources(source)
-
-    assert observation.representative_records is None
-    assert observation.table_bytes == 800
-    assert connection.executions[-1] == ("COMMIT", None)
-
-
-@pytest.mark.asyncio
-async def test_resource_observation_accepts_sixteen_storage_relations(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    storage_relations = tuple(f"application.table_{index}" for index in range(16))
-    source = _source_with_observability(
-        representative_relation=storage_relations[-1],
-        storage_relations=storage_relations,
-    )
-    connection = _ResourceConnection(
-        {
-            "representative_records": 1,
-            "table_bytes": 16,
-            "index_bytes": 0,
-            "total_storage_bytes": 16,
-        }
-    )
-    catalog = _catalog_with_resource_connection(monkeypatch, source, connection)
-
-    await catalog.observe_resources(source)
-
-    query_parameters = connection.executions[3][1]
-    assert isinstance(query_parameters, tuple)
-    assert query_parameters == (
-        ["application"] * 16,
-        [f"table_{index}" for index in range(16)],
-        16,
-    )
-
-
-@pytest.mark.parametrize(
-    ("representative_relation", "storage_relations"),
-    [
-        ("application.events", ()),
-        (
-            "application.table_0",
-            tuple(f"application.table_{index}" for index in range(17)),
-        ),
-        (
-            "application.events",
-            ("application.events", "application.events"),
-        ),
-        ("application.missing", ("application.events",)),
-        ("pg_catalog.pg_class", ("pg_catalog.pg_class",)),
-        (
-            "application.events",
-            ("application.events", "information_schema.tables"),
-        ),
-        ("application.events.extra", ("application.events.extra",)),
-    ],
-)
-@pytest.mark.asyncio
-async def test_resource_observation_rejects_invalid_definition_before_db_access(
-    monkeypatch: pytest.MonkeyPatch,
-    representative_relation: str,
-    storage_relations: tuple[str, ...],
-) -> None:
-    source = _source_with_observability(
-        representative_relation=representative_relation,
-        storage_relations=storage_relations,
-    )
-    catalog = PostgresCatalog()
-
-    async def unexpected_pool(_source: SourceProfile) -> object:
-        raise AssertionError("invalid resource definition reached the database")
-
-    monkeypatch.setattr(catalog, "_get_pool", unexpected_pool)
-
-    with pytest.raises(RuntimeError, match="definition is invalid"):
-        await catalog.observe_resources(source)
-
-
-@pytest.mark.asyncio
-async def test_resource_observation_rejects_unconfigured_source_before_db_access(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    source = replace(_source_with_observability(), observability=None)
-    catalog = PostgresCatalog()
-
-    async def unexpected_pool(_source: SourceProfile) -> object:
-        raise AssertionError("unconfigured resource observation reached the database")
-
-    monkeypatch.setattr(catalog, "_get_pool", unexpected_pool)
-
-    with pytest.raises(RuntimeError, match="not configured"):
-        await catalog.observe_resources(source)
-
-
-@pytest.mark.asyncio
-async def test_resource_observation_rolls_back_unavailable_target(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    source = _source_with_observability()
-    connection = _ResourceConnection(None)
-    catalog = _catalog_with_resource_connection(monkeypatch, source, connection)
-
-    with pytest.raises(RuntimeError, match="targets are unavailable"):
-        await catalog.observe_resources(source)
-
-    assert connection.rolled_back
-    assert not any(statement == "COMMIT" for statement, _ in connection.executions)
-
-
-@pytest.mark.asyncio
-async def test_resource_observation_rolls_back_storage_query_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    source = _source_with_observability()
-    failure = RuntimeError("private database failure")
-    connection = _ResourceConnection(None, query_error=failure)
-    catalog = _catalog_with_resource_connection(monkeypatch, source, connection)
-
-    with pytest.raises(RuntimeError) as caught:
-        await catalog.observe_resources(source)
-
-    assert caught.value is failure
-    assert connection.rolled_back
-    assert not any(statement == "COMMIT" for statement, _ in connection.executions)
-
-
-@pytest.mark.asyncio
-async def test_resource_observation_rolls_back_session_budget_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    source = _source_with_observability()
-    connection = _ResourceConnection(
-        None,
-        settings_error=RuntimeError("private session failure"),
-    )
-    catalog = _catalog_with_resource_connection(monkeypatch, source, connection)
-
-    with pytest.raises(
-        ReaderSessionPolicyError,
-        match="Source reader session budget could not be applied",
-    ):
-        await catalog.observe_resources(source)
-
-    assert connection.rolled_back
-    assert not any(
-        statement == catalog_module.RESOURCE_OBSERVATION_QUERY
-        for statement, _ in connection.executions
-    )
-
-
-@pytest.mark.asyncio
-async def test_resource_observation_stops_after_timezone_setter_failure(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    source = _source_with_observability()
-    connection = _ResourceConnection(
-        None,
-        timezone_error=RuntimeError("private timezone failure"),
-    )
-    catalog = _catalog_with_resource_connection(monkeypatch, source, connection)
-
-    with pytest.raises(
-        ReaderSessionPolicyError,
-        match="Source reader session budget could not be applied",
-    ):
-        await catalog.observe_resources(source)
-
-    assert connection.rolled_back
-    assert connection.executions == [
-        ("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY", None),
-        (READER_SESSION_TIMEZONE_SETTER, None),
-    ]
-
-
-@pytest.mark.asyncio
 async def test_common_reader_policy_rejects_non_utc_timezone() -> None:
-    source = _source_with_observability()
-    connection = _ResourceConnection({"utc_timezone": False})
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+
+    class Cursor:
+        async def fetchone(self) -> dict[str, object]:
+            return {"utc_timezone": False}
+
+    class Connection:
+        def __init__(self) -> None:
+            self.executions: list[str] = []
+
+        async def execute(
+            self,
+            statement: str,
+            _parameters: object | None = None,
+        ) -> Cursor:
+            self.executions.append(statement)
+            return Cursor()
+
+    connection = Connection()
 
     with pytest.raises(ReaderSessionPolicyError, match="session policy mismatch"):
         await require_reader_session_policy(connection, source)  # type: ignore[arg-type]
 
-    assert "current_setting('TimeZone') = 'UTC'" in connection.executions[0][0]
+    assert "current_setting('TimeZone') = 'UTC'" in connection.executions[0]
 
 
 def test_published_catalog_graph_is_recursively_immutable_and_alias_free() -> None:
@@ -1047,53 +627,3 @@ async def test_live_catalog_collects_only_simple_visible_table_structures() -> N
     assert ("discovered_at",) in index_columns
     assert ("status", "discovered_at") in index_columns
     assert ("assignee_id", "status") not in index_columns
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_live_resource_observation_needs_no_physical_table_reader_grant() -> None:
-    load_dotenv(ROOT_DIRECTORY / ".env")
-    required = [
-        "POSTGRES_USER",
-        "POSTGRES_PASSWORD",
-        "DEVELOPMENT_ISSUES_READER_PASSWORD",
-        "MARKET_VOC_READER_PASSWORD",
-    ]
-    if any(not os.environ.get(name) for name in required):
-        pytest.skip("local PostgreSQL administrator credentials are not configured")
-    source = _source_with_observability(
-        storage_relations=("development.issues",),
-        environment=os.environ,
-    )
-    admin = await AsyncConnection.connect(
-        make_conninfo(
-            host="127.0.0.1",
-            port=os.environ.get("POSTGRES_PORT", "5432"),
-            dbname="development_issues",
-            user=os.environ["POSTGRES_USER"],
-            password=os.environ["POSTGRES_PASSWORD"],
-            sslmode="disable",
-        )
-    )
-    catalog = PostgresCatalog()
-    try:
-        privileges = await admin.execute(
-            "SELECT "
-            "has_schema_privilege('development_issues_reader', 'development', 'USAGE'), "
-            "has_table_privilege("
-            "'development_issues_reader', 'development.issues', 'SELECT'"
-            ")"
-        )
-        privilege_row = await privileges.fetchone()
-        assert privilege_row == (False, False)
-
-        observation = await catalog.observe_resources(source)
-    finally:
-        await catalog.close()
-        await admin.close()
-
-    assert observation.representative_records is None or observation.representative_records >= 0
-    assert observation.table_bytes > 0
-    assert observation.index_bytes >= 0
-    assert observation.total_storage_bytes >= observation.table_bytes
-    assert observation.total_storage_bytes >= observation.index_bytes

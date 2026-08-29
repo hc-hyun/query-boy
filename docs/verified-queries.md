@@ -1,6 +1,6 @@
 # Verified Query: 결과가 달라지지 않았는지 확인하는 회귀검사
 
-Status: ADR 0025 static launch에서 사용하는 9개 검사 항목; managed 저장소는 현재 비활성
+Status: ADR 0025 launch에서 사용하는 9개 검사 항목; ADR 0030 Git YAML authority
 
 ## 30초 설명
 
@@ -12,7 +12,8 @@ Verified query는 이미 검토한 질문과 SQL을 다시 실행해 결과가 �
 > source 권한, 자원 제한을 통과하면 실행할 수 있다. 반대로 이 file에 있다는 이유로 안전
 > 검사를 건너뛰지도 않는다.
 
-현재 기준은 [ADR 0025](decisions/0025-static-non-rls-first-launch.md)다. RLS source는 전면
+Serving 범위는 [ADR 0025](decisions/0025-static-non-rls-first-launch.md), 저장 권위는
+[ADR 0030](decisions/0030-git-reviewed-yaml-source-authority.md)을 따른다. RLS source는 전면
 격리하므로 성공하는 verified-query case가 없다.
 
 ## 현재 9개 검사
@@ -54,8 +55,8 @@ expected hash를 검토한다. 통과 역시 모든 질문의 정답이나 produ
 uv run query-man-verify
 ```
 
-이 command는 repository의 static dataset만 검사한다. Managed inventory를 검사하거나 Control DB로
-import하지 않는다.
+이 command는 Git-reviewed `config/verified-queries.yaml`과 현재 source를 검사한다. 설정을 쓰거나
+외부 저장소로 import하지 않는다.
 
 ## 결과가 같은지 판단하는 기술 기준
 
@@ -67,18 +68,13 @@ Date는 기존 ISO 표현을 유지한다. Boolean, bytea, JSON, float, array �
 
 Source execution budget이나 revision-scoped source policy가 바뀌면 metadata revision도 바뀐다.
 Canonical-time material은 SQL policy와 모든 metadata revision에 포함된다. 이 의미가 바뀌면 새 exact
-revision에서 bootstrap 9개 전체와 managed current/rollback-preserved baseline 전체를 다시 실행한다.
-기존 immutable record를 수정·삭제하거나 membership을 자동 승계하지 않는다. Application 전역 SQL
-policy 변경도 별도 release regression으로 검증한다.
+revision에서 9개 전체를 다시 실행한다. 기존 immutable record를 수정·삭제하거나 membership을 자동
+승계하지 않는다. Application 전역 SQL policy 변경도 별도 release regression으로 검증한다.
 
-## Static 저장소와 비활성 managed 저장소
+## Git YAML 저장소와 rollback
 
-현재 static launch는 Git이 immutable history와 rollback을 제공하는 version 1 file만 읽는다. 별도로
-managed mode를 활성화하면 이 file을 읽거나 합치지 않고 Control DB의 immutable
-`control.verified_query_contracts`만 L2 evidence로 사용한다.
-
-두 저장소 사이에는 startup 자동 import, fallback, merge나 write-back이 없다. 향후 기존 검사 항목을
-managed source로 옮길 때도 traffic 밖에서 source를 L0/L1으로 먼저 publish하고, 정확한 revision의
-record를 admin endpoint로 저장한다. 같은 Guarded Query 경로로 결과를 확인한 뒤에만 L2로 승격한다.
-자세한 소유 경계는
-[Assurance module](modules/assurance/README.md)을 따른다.
+Runtime은 Git이 history와 rollback을 제공하는 version 1 file만 읽으며 다른 authority와 merge,
+fallback 또는 write-back하지 않는다. 변경은 traffic 밖에서 같은 Guarded Query 경로로 exact
+revision과 결과를 검증한 뒤 review한다. Rollback은 검토된 Git revert나 이전 pinned artifact이며
+runtime fallback이 아니다. 자세한 소유 경계는 [Assurance module](modules/assurance/README.md)을
+따른다.

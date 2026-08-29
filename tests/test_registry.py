@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import ast
 import inspect
-import json
 import shutil
 import textwrap
 from dataclasses import FrozenInstanceError, replace
@@ -22,11 +21,9 @@ from query_man.source_catalog.models import SourceProfile
 from query_man.source_catalog.registry import (
     POSTGRES_IDENTIFIER_MAX_LENGTH,
     RegistryConfigurationError,
-    SourceProjectionWriter,
     SourceReader,
     SourceRegistry,
     load_budget_profiles,
-    validate_source_manifest,
 )
 from tests.helpers import DUMMY_ENVIRONMENT, ROOT_DIRECTORY, load_test_registry
 
@@ -61,33 +58,27 @@ def _development_manifest() -> dict[str, object]:
     return raw
 
 
-def _development_manifest_with_observability() -> dict[str, object]:
-    raw = _development_manifest()
-    raw["observability"] = {
-        "representative_records": {
-            "grain": "development_issue",
-            "physical_relation": "development.issues",
-        },
-        "storage_relations": [
-            "development.users",
-            "development.product_models",
-            "development.test_units",
-            "development.issues",
-            "development.issue_comments",
-        ],
-    }
-    return raw
+def _load_single_manifest(
+    tmp_path: Path,
+    raw: dict[str, object],
+    *,
+    budget_file: Path | None = None,
+    environment: dict[str, str] | None = None,
+) -> SourceRegistry:
+    source_directory = tmp_path / "sources"
+    source_directory.mkdir()
+    (source_directory / "source.yaml").write_text(
+        yaml.safe_dump(raw),
+        encoding="utf-8",
+    )
+    return SourceRegistry.load(
+        source_directory,
+        budget_file or ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
+        environment or DUMMY_ENVIRONMENT,
+    )
 
 
-def _development_source_with_observability() -> SourceProfile:
-    return validate_source_manifest(
-        _development_manifest_with_observability(),
-        load_budget_profiles(ROOT_DIRECTORY / "config" / "budget-profiles.yaml"),
-        "reader-secret",
-    ).profile
-
-
-def test_source_capability_protocols_have_exact_approved_shapes() -> None:
+def test_source_reader_protocol_has_exact_approved_shape() -> None:
     assert _public_methods(SourceReader) == {"get", "list", "source_ids"}
     assert get_type_hints(SourceReader.list) == {
         "return": list[dict[str, str]],
@@ -98,16 +89,6 @@ def test_source_capability_protocols_have_exact_approved_shapes() -> None:
     }
     assert get_type_hints(SourceReader.source_ids) == {
         "return": frozenset[str],
-    }
-    assert SourceReader in SourceProjectionWriter.__mro__
-    assert _public_methods(SourceProjectionWriter) == {"remove", "upsert"}
-    assert get_type_hints(SourceProjectionWriter.upsert) == {
-        "source": SourceProfile,
-        "return": type(None),
-    }
-    assert get_type_hints(SourceProjectionWriter.remove) == {
-        "source_id": str,
-        "return": type(None),
     }
 
 
@@ -134,7 +115,6 @@ def test_published_source_profile_graph_is_recursively_immutable() -> None:
 
     assert isinstance(source.allowed_schemas, tuple)
     assert isinstance(source.allowed_relation_kinds, tuple)
-    assert source.observability is None
     assert isinstance(overlay.relations, tuple)
     assert isinstance(overlay.joins, tuple)
     assert isinstance(overlay.business_terms, tuple)
@@ -168,11 +148,6 @@ def test_published_source_profile_graph_is_recursively_immutable() -> None:
 
     with pytest.raises(FrozenInstanceError):
         source.name = "mutated"  # type: ignore[misc]
-    observable_source = _development_source_with_observability()
-    assert observable_source.observability is not None
-    assert isinstance(observable_source.observability.storage_relations, tuple)
-    with pytest.raises(FrozenInstanceError):
-        observable_source.observability.representative_records.grain = "mutated"  # type: ignore[misc]
     with pytest.raises(TypeError):
         overlay.relations[0].column_aliases["mutated"] = ()  # type: ignore[index]
     with pytest.raises(TypeError):
@@ -182,21 +157,16 @@ def test_published_source_profile_graph_is_recursively_immutable() -> None:
 
 
 def test_source_profile_construction_does_not_retain_mutable_aliases() -> None:
-    source = _development_source_with_observability()
+    source = load_test_registry().get("development-issues")
+    assert source is not None
     relation = source.semantic_overlay.relations[0]
     join = source.semantic_overlay.joins[0]
-    assert source.observability is not None
     schemas = list(source.allowed_schemas)
-    storage_relations = list(source.observability.storage_relations)
     aliases = ["original-alias"]
     column_aliases = {"issue_id": ["original-column-alias"]}
     pair = {"left": "issue_id", "right": "issue_id"}
 
     copied_source = replace(source, allowed_schemas=schemas)  # type: ignore[arg-type]
-    copied_observability = replace(  # type: ignore[arg-type]
-        source.observability,
-        storage_relations=storage_relations,
-    )
     copied_relation = replace(  # type: ignore[arg-type]
         relation,
         aliases=aliases,
@@ -204,13 +174,11 @@ def test_source_profile_construction_does_not_retain_mutable_aliases() -> None:
     )
     copied_join = replace(join, column_pairs=[pair])  # type: ignore[arg-type]
     schemas.append("mutated")
-    storage_relations.append("application.mutated")
     aliases.append("mutated")
     column_aliases["issue_id"].append("mutated")
     pair["left"] = "mutated"
 
     assert "mutated" not in copied_source.allowed_schemas
-    assert "application.mutated" not in copied_observability.storage_relations
     assert copied_relation.aliases == ("original-alias",)
     assert copied_relation.column_aliases["issue_id"] == (
         "original-column-alias",
@@ -248,200 +216,18 @@ def test_loads_public_source_fields_only() -> None:
     assert "development.issues" not in serialized
 
 
-def test_loads_optional_resource_observation_definition() -> None:
-    source = _development_source_with_observability()
-    assert source.observability is not None
-
-    assert source.observability.representative_records.grain == "development_issue"
-    assert (
-        source.observability.representative_records.physical_relation
-        == "development.issues"
-    )
-    assert source.observability.storage_relations == (
-        "development.users",
-        "development.product_models",
-        "development.test_units",
-        "development.issues",
-        "development.issue_comments",
-    )
-
-
-@pytest.mark.parametrize("extra_location", ["observability", "representative_records"])
-def test_rejects_unapproved_resource_observation_fields(
-    extra_location: str,
-) -> None:
-    raw = _development_manifest_with_observability()
-    observability = raw["observability"]
-    assert isinstance(observability, dict)
-    if extra_location == "observability":
-        observability["approved_counter"] = "pg_stat_user_tables"
-    else:
-        representative = observability["representative_records"]
-        assert isinstance(representative, dict)
-        representative["provider"] = "postgres"
-
-    with pytest.raises(RegistryConfigurationError, match="observability"):
-        validate_source_manifest(
-            raw,
-            load_budget_profiles(
-                ROOT_DIRECTORY / "config" / "budget-profiles.yaml"
-            ),
-            "reader-secret",
-        )
-
-
-def test_manifest_without_observability_remains_valid() -> None:
-    raw = _development_manifest()
-
-    validated = validate_source_manifest(
-        raw,
-        load_budget_profiles(ROOT_DIRECTORY / "config" / "budget-profiles.yaml"),
-        "reader-secret",
-    )
-
-    assert validated.profile.observability is None
-    assert "observability" not in validated.document
-
-
-@pytest.mark.parametrize("relation_count", [1, 16])
-def test_accepts_storage_relation_bounds(relation_count: int) -> None:
-    raw = _development_manifest()
-    storage_relations = [f"application.table_{index}" for index in range(relation_count)]
-    raw["observability"] = {
-        "representative_records": {
-            "grain": "application_record",
-            "physical_relation": storage_relations[0],
-        },
-        "storage_relations": storage_relations,
-    }
-
-    validated = validate_source_manifest(
-        raw,
-        load_budget_profiles(ROOT_DIRECTORY / "config" / "budget-profiles.yaml"),
-        "reader-secret",
-    )
-
-    assert validated.profile.observability is not None
-    assert validated.profile.observability.storage_relations == tuple(storage_relations)
-
-
-@pytest.mark.parametrize("relation_count", [0, 17])
-def test_rejects_storage_relations_outside_bounds(relation_count: int) -> None:
-    raw = _development_manifest()
-    raw["observability"] = {
-        "representative_records": {
-            "grain": "application_record",
-            "physical_relation": "application.table_0",
-        },
-        "storage_relations": [
-            f"application.table_{index}" for index in range(relation_count)
-        ],
-    }
-
-    with pytest.raises(RegistryConfigurationError, match="storage_relations"):
-        validate_source_manifest(
-            raw,
-            load_budget_profiles(
-                ROOT_DIRECTORY / "config" / "budget-profiles.yaml"
-            ),
-            "reader-secret",
-        )
-
-
-def test_rejects_duplicate_storage_relations() -> None:
+def test_rejects_retired_managed_observability_field(tmp_path: Path) -> None:
     raw = _development_manifest()
     raw["observability"] = {
         "representative_records": {
             "grain": "development_issue",
             "physical_relation": "development.issues",
         },
-        "storage_relations": ["development.issues", "development.issues"],
-    }
-
-    with pytest.raises(RegistryConfigurationError, match="must be distinct"):
-        validate_source_manifest(
-            raw,
-            load_budget_profiles(
-                ROOT_DIRECTORY / "config" / "budget-profiles.yaml"
-            ),
-            "reader-secret",
-        )
-
-
-@pytest.mark.parametrize(
-    "relation",
-    [
-        "information_schema.tables",
-        "pg_catalog.pg_class",
-        "pg_toast.internal_table",
-        "pg_temp_1.temporary_table",
-        "pg_toast_temp_1.temporary_table",
-    ],
-)
-def test_rejects_observability_system_schema(relation: str) -> None:
-    raw = _development_manifest()
-    raw["observability"] = {
-        "representative_records": {
-            "grain": "system_record",
-            "physical_relation": relation,
-        },
-        "storage_relations": [relation],
-    }
-
-    with pytest.raises(RegistryConfigurationError, match="system schema"):
-        validate_source_manifest(
-            raw,
-            load_budget_profiles(
-                ROOT_DIRECTORY / "config" / "budget-profiles.yaml"
-            ),
-            "reader-secret",
-        )
-
-
-def test_rejects_representative_relation_outside_storage_relations() -> None:
-    raw = _development_manifest()
-    raw["observability"] = {
-        "representative_records": {
-            "grain": "development_issue",
-            "physical_relation": "development.issues",
-        },
-        "storage_relations": ["development.issue_comments"],
-    }
-
-    with pytest.raises(RegistryConfigurationError, match="must be in storage_relations"):
-        validate_source_manifest(
-            raw,
-            load_budget_profiles(
-                ROOT_DIRECTORY / "config" / "budget-profiles.yaml"
-            ),
-            "reader-secret",
-        )
-
-
-@pytest.mark.parametrize(
-    "representative_records",
-    [
-        {"grain": "not-a-postgres-identifier", "physical_relation": "data.records"},
-        {"grain": "record", "physical_relation": "unqualified_relation"},
-    ],
-)
-def test_rejects_invalid_representative_record_identifiers(
-    representative_records: dict[str, str],
-) -> None:
-    raw = _development_manifest()
-    raw["observability"] = {
-        "representative_records": representative_records,
-        "storage_relations": ["data.records"],
+        "storage_relations": ["development.issues"],
     }
 
     with pytest.raises(RegistryConfigurationError, match="observability"):
-        validate_source_manifest(
-            raw,
-            load_budget_profiles(
-                ROOT_DIRECTORY / "config" / "budget-profiles.yaml"
-            ),
-            "reader-secret",
-        )
+        _load_single_manifest(tmp_path, raw)
 
 
 def test_loads_versioned_hard_session_budget() -> None:
@@ -554,22 +340,18 @@ budget_profile: interactive
 
 
 @pytest.mark.parametrize("version", [0, 1, 3])
-def test_rejects_non_v2_source_manifest(version: int) -> None:
-    source_path = ROOT_DIRECTORY / "config" / "sources" / "development-issues.yaml"
-    raw = yaml.safe_load(source_path.read_text(encoding="utf-8"))
+def test_rejects_non_v2_source_manifest(tmp_path: Path, version: int) -> None:
+    raw = _development_manifest()
     raw["version"] = version
 
     with pytest.raises(RegistryConfigurationError, match="version must be 2"):
-        validate_source_manifest(
-            raw,
-            load_budget_profiles(ROOT_DIRECTORY / "config" / "budget-profiles.yaml"),
-            "reader-secret",
-        )
+        _load_single_manifest(tmp_path, raw)
 
 
-def test_accepts_postgresql_identifier_boundary_in_projected_fields() -> None:
-    source_path = ROOT_DIRECTORY / "config" / "sources" / "development-issues.yaml"
-    raw = yaml.safe_load(source_path.read_text(encoding="utf-8"))
+def test_accepts_postgresql_identifier_boundary_in_source_fields(
+    tmp_path: Path,
+) -> None:
+    raw = _development_manifest()
     identifier = "a" * POSTGRES_IDENTIFIER_MAX_LENGTH
     raw["allowed_schemas"] = [identifier]
     raw["budget_profile"] = identifier
@@ -578,17 +360,27 @@ def test_accepts_postgresql_identifier_boundary_in_projected_fields() -> None:
     assert isinstance(connection, dict)
     connection["database"] = identifier
     connection["user"] = identifier
-    budgets = load_budget_profiles(
-        ROOT_DIRECTORY / "config" / "budget-profiles.yaml"
+    budget_raw = yaml.safe_load(
+        (ROOT_DIRECTORY / "config" / "budget-profiles.yaml").read_text(
+            encoding="utf-8"
+        )
     )
-    budget = replace(budgets["interactive"], name=identifier)
+    assert isinstance(budget_raw, dict)
+    profiles = budget_raw["profiles"]
+    assert isinstance(profiles, dict)
+    profiles[identifier] = profiles.pop("interactive")
+    budget_file = tmp_path / "budget-profiles.yaml"
+    budget_file.write_text(yaml.safe_dump(budget_raw), encoding="utf-8")
 
-    validated = validate_source_manifest(raw, {identifier: budget}, "reader-secret")
+    source = _load_single_manifest(tmp_path, raw, budget_file=budget_file).get(
+        "development-issues"
+    )
 
-    assert validated.profile.budget.name == identifier
-    assert validated.profile.allowed_schemas == (identifier,)
-    assert validated.profile.connection.database == identifier
-    assert validated.profile.connection.user == identifier
+    assert source is not None
+    assert source.budget.name == identifier
+    assert source.allowed_schemas == (identifier,)
+    assert source.connection.database == identifier
+    assert source.connection.user == identifier
 
 
 @pytest.mark.parametrize(
@@ -598,22 +390,16 @@ def test_accepts_postgresql_identifier_boundary_in_projected_fields() -> None:
         ("budget_profile", "a" * (POSTGRES_IDENTIFIER_MAX_LENGTH + 1)),
     ],
 )
-def test_rejects_projected_identifiers_above_postgresql_limit(
+def test_rejects_source_identifiers_above_postgresql_limit(
+    tmp_path: Path,
     field: str,
     value: object,
 ) -> None:
-    source_path = ROOT_DIRECTORY / "config" / "sources" / "development-issues.yaml"
-    raw = yaml.safe_load(source_path.read_text(encoding="utf-8"))
+    raw = _development_manifest()
     raw[field] = value
 
     with pytest.raises(RegistryConfigurationError, match=field):
-        validate_source_manifest(
-            raw,
-            load_budget_profiles(
-                ROOT_DIRECTORY / "config" / "budget-profiles.yaml"
-            ),
-            "reader-secret",
-        )
+        _load_single_manifest(tmp_path, raw)
 
 
 @pytest.mark.parametrize(
@@ -663,88 +449,53 @@ def test_rejects_projected_identifiers_above_postgresql_limit(
         },
     ],
 )
-def test_rejects_invalid_source_provenance(provenance: object) -> None:
-    source_path = ROOT_DIRECTORY / "config" / "sources" / "development-issues.yaml"
-    raw = yaml.safe_load(source_path.read_text(encoding="utf-8"))
+def test_rejects_invalid_source_provenance(
+    tmp_path: Path,
+    provenance: object,
+) -> None:
+    raw = _development_manifest()
     raw["provenance"] = provenance
 
     with pytest.raises(RegistryConfigurationError, match="provenance"):
-        validate_source_manifest(
-            raw,
-            load_budget_profiles(ROOT_DIRECTORY / "config" / "budget-profiles.yaml"),
-            "reader-secret",
-        )
+        _load_single_manifest(tmp_path, raw)
 
 
-def test_requires_source_provenance() -> None:
-    source_path = ROOT_DIRECTORY / "config" / "sources" / "development-issues.yaml"
-    raw = yaml.safe_load(source_path.read_text(encoding="utf-8"))
+def test_requires_source_provenance(tmp_path: Path) -> None:
+    raw = _development_manifest()
     raw.pop("provenance")
 
     with pytest.raises(RegistryConfigurationError, match="provenance"):
-        validate_source_manifest(
-            raw,
-            load_budget_profiles(ROOT_DIRECTORY / "config" / "budget-profiles.yaml"),
-            "reader-secret",
-        )
+        _load_single_manifest(tmp_path, raw)
 
 
-def test_validates_control_plane_manifest_without_storing_secret(
-    monkeypatch: pytest.MonkeyPatch,
+def test_rejects_non_source_scoped_secret_environment(
+    tmp_path: Path,
 ) -> None:
-    source_path = ROOT_DIRECTORY / "config" / "sources" / "development-issues.yaml"
-    raw = yaml.safe_load(source_path.read_text(encoding="utf-8"))
-    monkeypatch.setenv("QUERY_MAN_POSTGRES_HOST", "postgres")
-    monkeypatch.setenv("POSTGRES_PORT", "55432")
-    validated = validate_source_manifest(
-        raw,
-        load_budget_profiles(ROOT_DIRECTORY / "config" / "budget-profiles.yaml"),
-        "control-plane-secret",
-    )
-
-    assert validated.profile.connection.password == "control-plane-secret"
-    assert "control-plane-secret" not in str(validated.document)
-    assert json.loads(json.dumps(validated.document)) == validated.document
-    assert isinstance(validated.document["allowed_schemas"], list)
-    assert isinstance(validated.document["allowed_relation_kinds"], list)
-    assert isinstance(validated.document["semantic_overlay"], dict)
-    assert isinstance(validated.document["semantic_overlay"]["relations"], list)  # type: ignore[index]
-    assert "observability" not in validated.document
-    assert validated.document["version"] == 2
-    assert validated.document["provenance"] == raw["provenance"]
-    assert validated.profile.provenance.owner == "query-man"
-    assert validated.profile.provenance.environment == "development"
-    assert (
-        validated.profile.provenance.database_migration_ref
-        == "docker/postgres/init/10-development-issues-schema.sql"
-    )
-    assert validated.profile.connection.host == "postgres"
-    assert validated.document["connection"]["host"] == "postgres"  # type: ignore[index]
-    assert validated.profile.connection.port == 55_432
-    assert validated.document["connection"]["port"] == 55_432  # type: ignore[index]
-    assert validated.profile.observability is None
-    assert "host_env" not in validated.document["connection"]  # type: ignore[operator]
-    assert "port_env" not in validated.document["connection"]  # type: ignore[operator]
-
-
-def test_bootstrap_registry_rejects_rls_source(tmp_path: Path) -> None:
     raw = _development_manifest()
-    raw["tenant_isolation"] = "rls"
-    (tmp_path / "rls-source.yaml").write_text(
-        yaml.safe_dump(raw),
-        encoding="utf-8",
-    )
+    connection = raw["connection"]
+    assert isinstance(connection, dict)
+    connection["password_env"] = "SHARED_READER_PASSWORD"
 
-    with pytest.raises(RegistryConfigurationError, match="RLS sources are not supported"):
-        SourceRegistry.load(
+    with pytest.raises(
+        RegistryConfigurationError,
+        match="must use the source-scoped secret",
+    ):
+        _load_single_manifest(
             tmp_path,
-            ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
-            DUMMY_ENVIRONMENT,
+            raw,
+            environment={
+                **DUMMY_ENVIRONMENT,
+                "SHARED_READER_PASSWORD": "shared-secret",
+            },
         )
 
 
-@pytest.mark.parametrize("relation_kinds", [["view"], ["table", "view"]])
-def test_managed_manifest_validation_rejects_every_rls_source(
+@pytest.mark.parametrize(
+    "relation_kinds",
+    [["table"], ["view"], ["table", "view"]],
+)
+def test_yaml_registry_rejects_every_rls_source(
+    tmp_path: Path,
     relation_kinds: list[str],
 ) -> None:
     raw = _development_manifest()
@@ -752,8 +503,4 @@ def test_managed_manifest_validation_rejects_every_rls_source(
     raw["allowed_relation_kinds"] = relation_kinds
 
     with pytest.raises(RegistryConfigurationError, match="RLS sources are not supported"):
-        validate_source_manifest(
-            raw,
-            load_budget_profiles(ROOT_DIRECTORY / "config" / "budget-profiles.yaml"),
-            "reader-secret",
-        )
+        _load_single_manifest(tmp_path, raw)

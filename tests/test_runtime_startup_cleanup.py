@@ -1,4 +1,4 @@
-"""Compatibility pointer for immutable records.
+"""Compatibility path retained for immutable records.
 
-Managed startup cleanup coverage lives in test_managed_runtime_startup_cleanup.py.
+Current startup cleanup and graceful shutdown coverage lives in ``test_http.py``.
 """

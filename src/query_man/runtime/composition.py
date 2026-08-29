@@ -63,8 +63,6 @@ def build_app(
     access_policy: AccessPolicy | None = None,
     authenticator: BearerAuthenticator | None = None,
 ) -> FastAPI:
-    if runtime_config.source_mode != "bootstrap":
-        raise ValueError("Managed source mode must use query_man.managed.runtime")
     operations.reset()
     diagnostic_capture: EncryptedDiagnosticCapture | None = None
     if runtime_config.diagnostic_capture_database is not None:

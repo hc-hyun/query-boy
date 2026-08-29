@@ -20,8 +20,8 @@ Status: Optional local fixture; production 사용 금지
 | PostgreSQL marker | `query_boy.scale_fixture=on` |
 
 Overlay는 base Compose의 init mount를 추가하거나 교체하지 않는다. 따라서 시작 상태는 기존
-`development-issues`, `market-voc` 두 static source와 동일하며 Control DB, support/commerce 또는
-managed fixture를 포함하지 않는다. PostgreSQL command도 base의 `pg_stat_statements`와 slow-query
+`development-issues`, `market-voc` 두 source와 동일하며 다른 source fixture를 포함하지 않는다.
+PostgreSQL command도 base의 `pg_stat_statements`와 slow-query
 logging 설정을 보존하고 scale marker만 추가한다.
 
 이 구성은 loopback, 로컬 secret과 관리자 적재 계정을 사용하는 disposable fixture다. TLS, backup,

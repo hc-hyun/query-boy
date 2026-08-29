@@ -21,7 +21,8 @@ source는 [활성 개발 지침](docs/development-guidelines.md)이다. Primary 
 5. 다른 module이 쓰는 interface나 external/persisted/policy/lifecycle/procedure 의미를 바꿔야 하면
    구현을 멈추고 아래 승인 trigger와 [상세 절차](docs/development-guidelines.md#승인-규칙)를 따른다.
 
-현재 launch authority는 [ADR 0025](docs/decisions/0025-static-non-rls-first-launch.md)이고 실제 active
+현재 launch authority는 [ADR 0025](docs/decisions/0025-static-non-rls-first-launch.md), source·verified-query·budget
+authority는 [ADR 0030](docs/decisions/0030-git-reviewed-yaml-source-authority.md)의 Git-reviewed YAML이고 실제 active
 작업은 [development TODO](docs/development-todo.md)에서 확인한다. 과거 roadmap이나 verification의
 `Complete`를 현재 serving 범위로 자동 해석하지 않는다.
 

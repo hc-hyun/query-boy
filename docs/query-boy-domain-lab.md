@@ -11,7 +11,7 @@ Change-sets: `QB-DOMAIN-LAB-20260828` (baseline `deef37a`),
 1,000,000건이 아니다.
 
 이 문서는 로컬 disposable fixture 절차다. `compose.yaml`, 기본 두 source inventory,
-`config/verified-queries.yaml`, 운영 migration이나 managed source authority를 변경하지 않는다.
+`config/verified-queries.yaml`, 운영 migration이나 현재 source authority를 변경하지 않는다.
 
 ## 격리 경계와 source inventory
 

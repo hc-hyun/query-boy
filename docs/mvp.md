@@ -6,7 +6,8 @@ Status: 현재 ADR 0025 static two-source launch dataset
 정책보다 “어떤 데이터가 있고 한 행이 무엇을 뜻하는가”에 집중합니다.
 
 현재 범위는 [ADR 0025](decisions/0025-static-non-rls-first-launch.md)의 단일 replica,
-PostgreSQL 18/UTF-8, non-RLS launch profile입니다.
+PostgreSQL 18/UTF-8, non-RLS launch profile이며 source authority는
+[ADR 0030](decisions/0030-git-reviewed-yaml-source-authority.md)의 Git YAML입니다.
 
 ## 먼저 알아둘 말
 
@@ -28,9 +29,6 @@ PostgreSQL 18/UTF-8, non-RLS launch profile입니다.
 | `market-voc` | `market_voc` | 시장 VOC, 제품·시리얼·HW/SW version과 처리 이력 |
 
 Query 한 번은 source 하나만 조회합니다. 두 database를 한 SQL로 join하지 않습니다.
-
-`query_man`이라는 별도 database는 managed Control Plane 구현에 사용됩니다. 코드는 보존돼 있지만
-현재 static first launch의 source authority는 repository 설정이며 Control DB가 아닙니다.
 
 ## 개발 문제 데이터
 
@@ -157,9 +155,8 @@ docker compose up -d --wait postgres
 ./scripts/apply-db.sh
 ```
 
-`apply-db.sh`는 현재 두 bootstrap source만 준비합니다. Control DB와 managed onboarding integration
-fixture는 `compose.acceptance.yaml`과 `scripts/apply-managed-acceptance-fixtures.sh`를 명시적으로
-사용할 때만 준비되며 현재 serving inventory가 아닙니다.
+`apply-db.sh`는 현재 Git YAML inventory의 두 source fixture만 준비합니다. Source 추가나 definition
+변경은 별도 YAML review, traffic-off 검증과 배포 승인을 거칩니다.
 
 ## 안전 정책은 어디서 보나
 

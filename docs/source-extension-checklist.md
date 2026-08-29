@@ -1,20 +1,20 @@
 # Source Extension Checklist
 
-Status: Static first-launch inventory frozen by ADR 0025
+Status: Git-reviewed YAML source authority; first-launch inventory frozen by ADR 0025
+
+Source authority의 결정 기준은 [ADR 0030](decisions/0030-git-reviewed-yaml-source-authority.md)이다.
 
 ## 이 문서는 언제 사용하나요?
 
 현재 첫 오픈에 사용할 source는 `development-issues`, `market-voc` 두 개뿐이다. 새 PostgreSQL
 database나 source ID를 추가하려면 이 checklist로 영향 범위를 먼저 확인한다.
 
-지금의 source 추가는 실행 중 관리 API로 처리하는 hot onboarding이 아니다. 검토된 inventory를
+지금의 source 추가와 변경은 Git-reviewed `config/sources/*.yaml`로 처리한다. 검토된 inventory를
 바꾸고 traffic 밖에서 검증한 뒤 재배포하는 변경이다. 따라서
 [ADR 0025](decisions/0025-static-non-rls-first-launch.md)의 대상, 이유, 영향과 rollback을 사용자에게
 제시하고 정확히 승인받기 전에는 manifest, 코드, schema와 route를 변경하지 않는다.
 
-동적 관리 기능은 구현 상태로 보존돼 있지만 현재 launch에는 참여하지 않는다. Managed mode
-활성화가 별도로 승인된 경우에만 [Managed Source Onboarding](managed-source-onboarding.md)과
-[Source Management Plane](source-management-plane.md)을 사용한다.
+Runtime admin mutation, Control DB와 hot reload 경로는 없다. 반영에는 review·test·배포가 필요하다.
 
 ## 먼저 알아둘 용어
 
@@ -23,7 +23,7 @@ database나 source ID를 추가하려면 이 checklist로 영향 범위를 먼�
 | Source | DB 연결 정보, 공개할 view, 업무 설명과 query 제한을 묶은 Query Man 등록 단위다. |
 | Curated view | DB owner가 한 가지 데이터 단위와 필요한 column만 안전하게 공개한 읽기용 view다. |
 | Reader | Curated view에 필요한 `SELECT` 권한만 가진 PostgreSQL 로그인 계정이다. |
-| Manifest | Source ID, DB 위치, 공개 범위, 기존 budget profile과 secret 환경 변수 이름을 적은 등록 문서다. Secret 값은 넣지 않는다. |
+| Manifest | Git-reviewed `config/sources/*.yaml`이다. Source ID, DB 위치, 공개 범위, 기존 budget profile과 secret 환경 변수 이름을 적고 secret 값은 넣지 않는다. |
 | Budget profile | Timeout, 동시 실행 수, 임시 자원과 결과 크기를 함께 제한하는 기존 설정 묶음이다. |
 | Metadata revision | 공개 DB 구조와 업무 설명 등 SQL 생성에 필요한 context의 정확한 버전이다. |
 | SQL policy revision | 허용 SQL, 함수, 연산자와 최종 결과 타입 규칙의 정확한 버전이다. |
@@ -59,7 +59,7 @@ float, UUID, array 등 다른 타입도 현재 final result 범위 밖이다. �
 | 영역 | 확인할 결과 | 쉽게 말하면 |
 |---|---|---|
 | Source database | PostgreSQL 18, server UTF-8, 최소 권한 `LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`, 유한 connection limit와 non-RLS curated view | DB와 읽기 계정 자체가 안전해야 한다. |
-| Source Catalog | Strict manifest, credential 환경 변수 이름, 기존 budget profile, 필요한 semantic overlay, static source projection과 공개 domain column 0개 | 등록 문서에 비밀이나 지원 밖 DB 타입이 없어야 한다. |
+| Source Catalog | Strict YAML manifest, credential 환경 변수 이름, 기존 budget profile, 필요한 semantic overlay, source projection과 공개 domain column 0개 | 등록 문서에 비밀이나 지원 밖 DB 타입이 없어야 한다. |
 | Metadata | Pool checkout에서 client UTF-8 요청, SQL 없는 PG18/server·client·driver UTF-8 검사, domain 사전 거부, bounded catalog와 revision publish | SQL을 만들기 전에 읽는 DB 지도가 정확하고 제한돼야 한다. |
 | Guarded Query | 실제·광고 final result OID가 `20, 21, 23, 25, 1082, 1184, 1700` 안인지, read-only transaction·limit·cancel·rollback | 안전한 SQL과 결과 타입만 제한 안에서 실행돼야 한다. |
 | Assurance | L0/L1/L2 품질, verified question/SQL/result expectation, unsupported OID와 drift negative case | 대표 질문의 답과 실패 경로가 회귀 시험을 통과해야 한다. |
@@ -68,6 +68,11 @@ float, UUID, array 등 다른 타입도 현재 final result 범위 밖이다. �
 Manifest에는 host, port, database와 user 같은 운영 locator와 password 환경 변수 이름만 둔다.
 Password, token과 실제 secret은 Git, metadata, HTTP/MCP와 log에 넣지 않는다. Client나 AI model은
 DSN, schema, role 또는 source credential을 선택할 수 없다.
+
+PostgreSQL catalog에서 type과 numeric precision/scale을 자동 수집한다. Table·column `COMMENT`는
+grain, 단위, 상태값, nullable 의미와 집계 주의를 설명하는 사람-readable metadata로 활용하되
+비신뢰 입력으로 검증한다. Comment의 PII 표시는 검토 정보일 뿐 노출 허가가 아니며,
+실제 보호는 curated view, reader grant, source policy와 검증이 강제한다.
 
 ## 조건에 따라 필요한 작업
 
@@ -111,7 +116,7 @@ revision은 그대로 유지하고 원인과 필요한 변경 범위를 다시 �
 - Database별 HTTP/MCP tool이나 endpoint
 - 새 framework, plugin, factory 또는 wrapper
 - 새 budget tier나 caller별 source grant
-- Control DB schema 변경
+- 새 persisted authority나 runtime mutation surface
 
 이 항목이 필요해 보이면 단순 source 추가가 아니라 module interface, external/persisted format,
 policy, safety/lifecycle, composition 또는 protected procedure 변경일 가능성이 높다. 실제 변경 범주,

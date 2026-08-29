@@ -7,8 +7,6 @@ import sys
 from pathlib import Path
 from urllib.parse import unquote
 
-import yaml
-
 import query_man.guarded_query.sql_validation as sql_validation_module
 from tests.helpers import ROOT_DIRECTORY
 
@@ -25,12 +23,17 @@ LAUNCH_ADR = (
     / "decisions"
     / "0025-static-non-rls-first-launch.md"
 )
+SOURCE_AUTHORITY_ADR = (
+    ROOT_DIRECTORY
+    / "docs"
+    / "decisions"
+    / "0030-git-reviewed-yaml-source-authority.md"
+)
 
 MODULE_NAMES = (
     "source-catalog",
     "metadata",
     "guarded-query",
-    "control-plane",
     "delivery",
     "runtime",
     "assurance",
@@ -72,7 +75,9 @@ EXPECTED_PARKED_IDS = (
     "RLS-03",
     "ENC-01",
     "ENC-02",
-    "TIME-03",
+    "DBAUTH-01",
+    "DBAUTH-02",
+    "DBAUTH-03",
     "COST-01",
     "COST-02",
     "COST-03",
@@ -112,8 +117,6 @@ CRITICAL_NON_PYTHON_MAPPINGS = (
 )
 CRITICAL_SHARED_WRITER_REFERENCES = (
     "tests/helpers.py",
-    "tests/conftest.py",
-    "tests/control_database.py",
     "tests/test_documentation.py",
     "docs/development-todo.md",
     "docs/implementation-roadmap.md",
@@ -178,7 +181,7 @@ def test_active_todo_is_small_open_work_only() -> None:
     for heading in (
         "## RLS source 제공",
         "## 결과 type 확대",
-        "## Managed canonical-time cutover",
+        "## Database-backed source authority 재검토",
         "## DB-native 비용과 사용량 경보",
         "## Workflow trace",
     ):
@@ -213,6 +216,27 @@ def test_adr_0025_is_the_narrow_current_launch_authority() -> None:
     assert {
         path.stem for path in (ROOT_DIRECTORY / "config" / "sources").glob("*.yaml")
     } == {"development-issues", "market-voc"}
+
+
+def test_adr_0030_is_the_only_current_source_authority() -> None:
+    adr = SOURCE_AUTHORITY_ADR.read_text(encoding="utf-8")
+    assert "Status: Accepted" in adr
+    assert "Decision ID: `QB-YAML-SOURCE-AUTHORITY-20260829`" in adr
+    assert "config/sources/*.yaml" in adr
+    assert "config/verified-queries.yaml" in adr
+    assert "config/budget-profiles.yaml" in adr
+    assert "fail-closed" in adr
+    assert "Control DB" in adr
+    assert "drop" in adr.lower()
+
+    assert not any(
+        (ROOT_DIRECTORY / "src" / "query_man" / "managed").glob("*.py")
+    )
+    assert not (ROOT_DIRECTORY / "compose.acceptance.yaml").exists()
+    assert not any((ROOT_DIRECTORY / "config" / "onboarding").glob("*"))
+    assert not any(
+        (ROOT_DIRECTORY / "docker" / "postgres" / "init" / "control-migrations").glob("*")
+    )
 
 
 def test_current_navigation_documents_agree_on_launch_scope() -> None:
@@ -361,7 +385,7 @@ def test_container_inputs_are_immutable_and_revision_labeled() -> None:
     assert "COPY --from=ghcr.io/astral-sh/uv:0.9.18@sha256:" in dockerfile
     assert "ARG QUERY_MAN_VCS_REF" in dockerfile
     assert 'LABEL org.opencontainers.image.revision="${QUERY_MAN_VCS_REF}"' in dockerfile
-    assert len(re.findall(r"image: postgres:[^\n]+@sha256:[0-9a-f]{64}", compose)) == 2
+    assert len(re.findall(r"image: postgres:[^\n]+@sha256:[0-9a-f]{64}", compose)) == 1
     assert 'payload == b\'{"status":"ready"}\'' in compose
     assert "QUERY_MAN_VCS_REF: ${{ github.sha }}" in workflow
     assert (
@@ -416,22 +440,17 @@ def test_traceback_probe() -> None:
     assert secret not in output
 
 
-def test_managed_acceptance_compose_uses_an_isolated_project() -> None:
-    base = yaml.safe_load((ROOT_DIRECTORY / "compose.yaml").read_text(encoding="utf-8"))
-    acceptance = yaml.safe_load(
-        (ROOT_DIRECTORY / "compose.acceptance.yaml").read_text(encoding="utf-8")
-    )
+def test_ci_and_compose_use_only_the_yaml_authority() -> None:
+    compose = (ROOT_DIRECTORY / "compose.yaml").read_text(encoding="utf-8")
     workflow = (ROOT_DIRECTORY / ".github" / "workflows" / "ci.yml").read_text(
         encoding="utf-8"
     )
 
-    assert base["name"] == "query-man"
-    assert acceptance["name"] == "query-man-managed-acceptance"
-    assert (
-        base["services"]["postgres"]["container_name"]
-        != acceptance["services"]["postgres"]["container_name"]
-    )
-    assert "COMPOSE_FILE: compose.yaml:compose.acceptance.yaml" in workflow
+    assert "name: query-man" in compose
+    assert "QUERY_MAN_SOURCE_MODE" not in compose
+    assert "postgres-control-recovery-source" not in compose
+    assert "managed-acceptance" not in workflow
+    assert "--ignore=tests/test_managed" not in workflow
 
 
 def test_verification_index_lists_every_immutable_record_once() -> None:
@@ -488,7 +507,25 @@ def _markdown_heading_anchors(path: Path) -> set[str]:
 
 def test_local_markdown_links_resolve() -> None:
     markdown_paths = [ROOT_DIRECTORY / "README.md", ROOT_DIRECTORY / "AGENTS.md"]
-    markdown_paths.extend(sorted((ROOT_DIRECTORY / "docs").rglob("*.md")))
+    immutable_paths = {
+        ROADMAP,
+        ROOT_DIRECTORY / "docs" / "module-boundary-decision-guide.md",
+        ROOT_DIRECTORY / "docs" / "source-onboarding-skill-plan.md",
+    }
+    immutable_paths.update(
+        path
+        for directory in (
+            ROOT_DIRECTORY / "docs" / "decisions",
+            VERIFICATION_DIRECTORY,
+        )
+        for path in directory.glob("*.md")
+        if path.name != "README.md"
+    )
+    markdown_paths.extend(
+        path
+        for path in sorted((ROOT_DIRECTORY / "docs").rglob("*.md"))
+        if path not in immutable_paths
+    )
     missing: list[str] = []
     for path in markdown_paths:
         content = path.read_text(encoding="utf-8")

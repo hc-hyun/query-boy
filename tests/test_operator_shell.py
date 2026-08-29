@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import shutil
 import sys
 import tomllib
 from datetime import UTC, datetime
@@ -9,11 +10,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 from query_man.runtime.operator_shell import (
     LogQuery,
     OperatorSettings,
     QueryManShell,
+    RealOperatorBackend,
     _public_error,
     run_main,
 )
@@ -22,7 +25,7 @@ from tests.helpers import ROOT_DIRECTORY
 
 class FakeBackend:
     def __init__(self) -> None:
-        self.mutations: list[tuple[object, ...]] = []
+        self.source_calls: list[tuple[str, ...]] = []
         self.diag_shown: list[str] = []
         self.diag_purged: list[str] = []
 
@@ -40,40 +43,42 @@ class FakeBackend:
             '"error_code":"QUERY_TIMEOUT"}'
         )
 
-    def admin_get(
-        self,
-        path: str,
-        parameters: dict[str, str | int] | None = None,
-    ) -> dict[str, object]:
-        if path == "/admin/sources":
-            assert parameters == {"limit": 50}
-            return {
-                "sources": [
-                    {
-                        "source_id": "known-source",
-                        "generation": 3,
-                        "state_version": 9,
-                    }
-                ]
-            }
-        if path == "/admin/sources/known-source":
-            return {
-                "source_id": "known-source",
-                "generation": 3,
-                "state_version": 9,
-            }
-        raise AssertionError(path)
+    def source_list(self) -> dict[str, object]:
+        self.source_calls.append(("list",))
+        return {
+            "authority": "yaml",
+            "source_count": 1,
+            "sources": [
+                {
+                    "path": "config/sources/known-source.yaml",
+                    "source_id": "known-source",
+                    "name": "Known source",
+                }
+            ],
+        }
 
-    def admin_mutate(
+    def source_show(self, source_id: str) -> dict[str, object]:
+        self.source_calls.append(("show", source_id))
+        return {
+            "authority": "yaml",
+            "path": f"config/sources/{source_id}.yaml",
+            "manifest": {"version": 2, "source_id": source_id},
+        }
+
+    def source_validate(self) -> dict[str, object]:
+        self.source_calls.append(("validate",))
+        return {
+            "status": "valid",
+            "authority": "yaml",
+            "live_database_checked": False,
+        }
+
+    def unexpected_http_call(
         self,
-        method: str,
-        path: str,
-        *,
-        headers: dict[str, str],
-        body: dict[str, object] | None = None,
+        *_arguments: object,
+        **_keyword_arguments: object,
     ) -> dict[str, object]:
-        self.mutations.append((method, path, headers, body))
-        return {"status": "completed", "source_id": "known-source"}
+        raise AssertionError("source command must not use HTTP")
 
     def diagnostic_list(
         self,
@@ -110,7 +115,7 @@ class FakeBackend:
 
 
 def _shell(
-    backend: FakeBackend,
+    backend: Any,
     *,
     input_text: str = "",
 ) -> tuple[QueryManShell, io.StringIO]:
@@ -120,10 +125,31 @@ def _shell(
             backend,
             stdin=io.StringIO(input_text),
             stdout=output,
-            secret_reader=lambda _prompt: "private-credential",
         ),
         output,
     )
+
+
+def _real_backend(root: Path) -> RealOperatorBackend:
+    return RealOperatorBackend(
+        OperatorSettings(
+            root=root.resolve(),
+            base_url="http://127.0.0.1:3000",
+            operator_token=None,
+            compose_service="query-man",
+            diagnostic_database=None,
+            diagnostic_key=None,
+            diagnostic_key_id=None,
+        )
+    )
+
+
+def _copy_source_configuration(target_root: Path) -> None:
+    target_config = target_root / "config"
+    target_config.mkdir()
+    shutil.copytree(ROOT_DIRECTORY / "config" / "sources", target_config / "sources")
+    for name in ("budget-profiles.yaml", "verified-queries.yaml"):
+        shutil.copy2(ROOT_DIRECTORY / "config" / name, target_config / name)
 
 
 def test_console_script_targets_runtime_operator_shell() -> None:
@@ -210,42 +236,165 @@ def test_diag_show_and_purge_require_explicit_confirmation() -> None:
     assert "삭제 완료: 2건" in output.getvalue()
 
 
-def test_source_mutation_uses_current_state_receipt_and_confirmation() -> None:
+def test_source_commands_render_yaml_and_cache_listed_sources() -> None:
     backend = FakeBackend()
-    shell, output = _shell(backend, input_text="DISABLE known-source\n")
+    shell, output = _shell(backend)
 
-    shell.onecmd("source disable known-source --reason incident-123")
+    shell.onecmd("source")
 
-    assert len(backend.mutations) == 1
-    method, path, headers, body = backend.mutations[0]
-    assert method == "DELETE"
-    assert path == "/admin/sources/known-source"
-    assert body is None
-    assert headers["X-Expected-Generation"] == "3"
-    assert headers["X-Expected-State-Version"] == "9"
-    assert headers["X-Query-Man-Reason"] == "incident-123"
-    assert headers["Idempotency-Key"]
-    assert "Mutation 결과" in output.getvalue()
+    listed = yaml.safe_load(output.getvalue())
+    assert listed == {
+        "authority": "yaml",
+        "source_count": 1,
+        "sources": [
+            {
+                "path": "config/sources/known-source.yaml",
+                "source_id": "known-source",
+                "name": "Known source",
+            }
+        ],
+    }
+    line = "source show kn"
+    assert shell.complete_source("kn", line, line.index("kn"), len(line)) == [
+        "known-source"
+    ]
+
+    output.seek(0)
+    output.truncate()
+    shell.onecmd("source show known-source")
+
+    shown = yaml.safe_load(output.getvalue())
+    assert shown["path"] == "config/sources/known-source.yaml"
+    assert shown["manifest"] == {"version": 2, "source_id": "known-source"}
+    assert backend.source_calls == [("list",), ("show", "known-source")]
 
 
-def test_source_apply_keeps_credential_out_of_command_output(
+def test_retired_source_mutation_commands_only_show_the_yaml_guide() -> None:
+    backend = FakeBackend()
+    shell, output = _shell(backend)
+
+    removed = (
+        "usage known-source",
+        "history known-source",
+        "replicas known-source",
+        "changes known-source",
+        "receipt 123e4567-e89b-12d3-a456-426614174000",
+        "apply known-source source.yaml --reason change-123",
+        "secret known-source --reason rotation-123",
+        "verified known-source query.yaml --reason verify-123",
+        "rollback known-source 1 --reason rollback-123",
+        "resume known-source sha256:deadbeef --reason incident-123",
+        "disable known-source --reason incident-123",
+    )
+    for command in removed:
+        shell.onecmd(f"source {command}")
+
+    assert backend.source_calls == []
+    assert output.getvalue().count("사용법: source <list|show|validate>") == len(removed)
+    assert "Mutation" not in output.getvalue()
+
+
+def test_real_source_commands_read_git_yaml_without_secrets_or_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_value = "must-not-appear-in-yaml-output"
+    monkeypatch.setenv("DEVELOPMENT_ISSUES_READER_PASSWORD", private_value)
+    monkeypatch.setenv("MARKET_VOC_READER_PASSWORD", private_value)
+
+    def fail_network(*_arguments: object, **_keyword_arguments: object) -> None:
+        pytest.fail("YAML source commands must not call HTTP")
+
+    monkeypatch.setattr(
+        "query_man.runtime.operator_shell.urllib.request.urlopen",
+        fail_network,
+    )
+    backend = _real_backend(ROOT_DIRECTORY)
+
+    list_shell, list_output = _shell(backend)
+    list_shell.onecmd("source list")
+    listed = yaml.safe_load(list_output.getvalue())
+    assert listed["authority"] == "yaml"
+    assert listed["source_count"] == 2
+    assert [source["source_id"] for source in listed["sources"]] == [
+        "development-issues",
+        "market-voc",
+    ]
+    assert listed["sources"][0]["path"] == (
+        "config/sources/development-issues.yaml"
+    )
+
+    show_shell, show_output = _shell(backend)
+    show_shell.onecmd("source show development-issues")
+    shown = yaml.safe_load(show_output.getvalue())
+    assert shown["authority"] == "yaml"
+    assert shown["path"] == "config/sources/development-issues.yaml"
+    assert shown["manifest"]["connection"]["password_env"] == (
+        "DEVELOPMENT_ISSUES_READER_PASSWORD"
+    )
+    assert "password" not in shown["manifest"]["connection"]
+
+    validate_shell, validate_output = _shell(backend)
+    validate_shell.onecmd("source validate")
+    validated = yaml.safe_load(validate_output.getvalue())
+    assert validated == {
+        "status": "valid",
+        "authority": "yaml",
+        "source_directory": "config/sources",
+        "budget_file": "config/budget-profiles.yaml",
+        "verified_query_file": "config/verified-queries.yaml",
+        "source_count": 2,
+        "source_ids": ["development-issues", "market-voc"],
+        "verified_query_document": "valid",
+        "live_database_checked": False,
+    }
+
+    rendered = list_output.getvalue() + show_output.getvalue() + validate_output.getvalue()
+    assert private_value not in rendered
+    assert "query-man-yaml-validation-placeholder" not in rendered
+    assert "generation" not in rendered
+
+
+def test_source_validate_rejects_unknown_verified_source_without_raw_input(
     tmp_path: Path,
 ) -> None:
-    manifest = tmp_path / "source.yaml"
-    manifest.write_text("version: 2\nsource_id: known-source\n", encoding="utf-8")
-    backend = FakeBackend()
-    shell, output = _shell(backend, input_text="APPLY known-source\n")
+    _copy_source_configuration(tmp_path)
+    verified_path = tmp_path / "config" / "verified-queries.yaml"
+    verified = yaml.safe_load(verified_path.read_text(encoding="utf-8"))
+    verified["queries"][0]["source_id"] = "unknown-source"
+    verified_path.write_text(
+        yaml.safe_dump(verified, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    shell, output = _shell(_real_backend(tmp_path))
 
-    shell.onecmd(f"source apply known-source {manifest} --reason change-123")
+    shell.onecmd("source validate")
 
-    assert len(backend.mutations) == 1
-    method, _path, _headers, body = backend.mutations[0]
-    assert method == "PUT"
-    assert body == {
-        "manifest": {"version": 2, "source_id": "known-source"},
-        "credential": "private-credential",
-    }
-    assert "private-credential" not in output.getvalue()
+    assert shell.last_error is True
+    assert "YAML verified query 설정 검증에 실패했습니다." in output.getvalue()
+    assert "unknown-source" not in output.getvalue()
+    assert "Traceback" not in output.getvalue()
+
+
+def test_source_validation_error_does_not_echo_accidental_secret(
+    tmp_path: Path,
+) -> None:
+    _copy_source_configuration(tmp_path)
+    manifest_path = tmp_path / "config" / "sources" / "development-issues.yaml"
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    accidental_secret = "accidental-plaintext-credential"
+    manifest["credential"] = accidental_secret
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    shell, output = _shell(_real_backend(tmp_path))
+
+    shell.onecmd("source validate")
+
+    assert shell.last_error is True
+    assert "YAML source 설정 검증에 실패했습니다." in output.getvalue()
+    assert accidental_secret not in output.getvalue()
+    assert "Traceback" not in output.getvalue()
 
 
 def test_settings_discovers_operator_token_without_printing_it(

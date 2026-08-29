@@ -11,10 +11,6 @@ from query_man.metadata.models import (
     CatalogIndex,
 )
 from query_man.metadata.revision import _canonicalize, create_metadata_revision
-from query_man.source_catalog.models import (
-    RepresentativeRecordsTarget,
-    ResourceObservationDefinition,
-)
 from tests.helpers import load_test_registry, minimal_development_snapshot
 
 
@@ -225,42 +221,3 @@ def test_revision_ignores_source_provenance() -> None:
     assert create_metadata_revision(changed_owner, snapshot) == revision
     assert create_metadata_revision(changed_migration, snapshot) == revision
     assert create_metadata_revision(changed_environment, snapshot) == revision
-
-
-def test_revision_ignores_resource_observation_definition() -> None:
-    source = load_test_registry().get("development-issues")
-    assert source is not None
-    assert source.observability is None
-    source = replace(
-        source,
-        observability=ResourceObservationDefinition(
-            representative_records=RepresentativeRecordsTarget(
-                grain="development_issue",
-                physical_relation="development.issues",
-            ),
-            storage_relations=(
-                "development.issues",
-                "development.issue_comments",
-            ),
-        ),
-    )
-    snapshot = minimal_development_snapshot()
-    revision = create_metadata_revision(source, snapshot)
-    assert source.observability is not None
-    changed_definition = replace(
-        source,
-        observability=replace(
-            source.observability,
-            representative_records=replace(
-                source.observability.representative_records,
-                grain="changed_grain",
-            ),
-            storage_relations=(
-                "development.issues",
-                "development.issue_comments",
-            ),
-        ),
-    )
-
-    assert create_metadata_revision(replace(source, observability=None), snapshot) == revision
-    assert create_metadata_revision(changed_definition, snapshot) == revision

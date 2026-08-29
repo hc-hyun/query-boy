@@ -1,6 +1,6 @@
 # Query Man Architecture
 
-Status: 현재 구조 안내 — ADR 0025 static non-RLS first launch
+Status: 현재 구조 안내 — Git-reviewed YAML source authority, ADR 0025 static non-RLS first launch
 
 이 문서는 Query Man이 지금 어떻게 실행되는지 설명합니다. 정확한 Python interface는
 [모듈 안내](modules/README.md), 외부 API와 정책 의미는 해당 모듈 문서와
@@ -20,9 +20,8 @@ Query Man은 하나의 애플리케이션 process 안에서 여러 책임을 모
 | PostgreSQL | Major version 18, server/client UTF-8 |
 | RLS | 모든 RLS source를 실행 전에 거부 |
 | Query 결과 | exact seven result OID `20, 21, 23, 25, 1082, 1184, 1700`만 허용 |
-| Source authority | Repository의 static bootstrap 설정 |
+| Source authority | Git-reviewed `config/sources/*.yaml`, `config/verified-queries.yaml`, `config/budget-profiles.yaml` |
 | Authentication | Local/CI opaque bearer 기본; AuthBridge JWT resource server는 opt-in |
-| Control Plane | 구현은 보존하지만 현재 launch composition에서는 비활성 |
 | 남은 일 | 실제 대상 환경 전환 `LAUNCH-02` |
 
 저장소 구현·로컬 container·CI 통과는 실제 운영 배포 완료와 다릅니다. TLS, secret, backup,
@@ -52,7 +51,6 @@ AI 또는 API client
        `--> market_voc PostgreSQL
 
 Assurance는 같은 저장소에서 품질·회귀 검증을 수행하지만 요청을 serving하는 계층은 아닙니다.
-Control Plane은 코드에 남아 있으나 현재 첫 오픈에서는 연결하지 않습니다.
 ```
 
 HTTP와 MCP는 같은 application service를 사용합니다. Transport에 따라 다른 source, 권한 또는
@@ -101,6 +99,9 @@ Query Man은 source를 통째로 AI에게 보여주지 않습니다. 두 종류�
 DB comment는 비신뢰 설명 데이터로 취급하고 길이·제어 문자를 제한합니다. Comment 문장을 분석해
 join을 자동 승인하지 않습니다. 복잡한 join이나 여러 grain의 집계는 source DB owner가 `ai`
 schema의 curated view로 캡슐화합니다.
+Column type과 numeric precision/scale은 catalog에서 수집합니다. Comment의 PII 표시는 사람의
+검토를 돕는 정보일 뿐 노출 허가가 아니며, curated view·reader grant·source policy가 실제
+공개 범위를 강제합니다.
 
 Metadata는 immutable revision으로 발행됩니다.
 
@@ -111,7 +112,7 @@ Client는 context에서 받은 두 값을 query에 그대로 전달합니다. �
 정보로 만든 SQL을 실행하지 않고 context 재조회를 요구합니다. 일반 업무 row의 INSERT·UPDATE만으로
 metadata revision이 바뀌지는 않습니다.
 
-## 일곱 모듈의 역할
+## 여섯 모듈의 역할
 
 | 모듈 | 쉬운 비유 | 책임 |
 |---|---|---|
@@ -121,10 +122,9 @@ metadata revision이 바뀌지는 않습니다.
 | Delivery | 현관 | 인증·인가 후 HTTP와 MCP로 같은 기능 제공 |
 | Runtime | 조립·운영 담당 | 실제 구현 연결, 설정, 시작, 상태·종료, encrypted capture와 `qm` operator shell |
 | Assurance | 검사소 | Metadata 품질과 verified query 결과 검증 |
-| Control Plane | 관리실 | Managed mode의 source·revision·이력 관리; 현재 launch에서는 비활성 |
 
-Static core는 `src/query_man` 아래 `source_catalog`, `metadata`, `guarded_query`, `delivery`, `runtime`,
-`assurance`의 여섯 physical package로 나뉘고 managed 구현은 `managed` package에 있습니다. 모두 같은
+Core는 `src/query_man` 아래 `source_catalog`, `metadata`, `guarded_query`, `delivery`, `runtime`,
+`assurance`의 여섯 physical package로 나뉩니다. 모두 같은
 repository·wheel·process에 속하며 별도 service가 아닙니다. Package `__init__.py`는 marker-only이고
 interface는 owner의 leaf module에서 직접 import합니다. 정확한 file owner와 허용 의존은
 [module index](modules/README.md)의 map에서 확인합니다.
@@ -146,24 +146,24 @@ module interface입니다. HTTP/MCP request·response, persisted DB/config 형�
 정책과 lifecycle invariant는 중요하지만 각각 별도 변경 경계입니다. 의미를 바꾸려면 정확한 영향과
 승인을 먼저 확인합니다.
 
-Production 구현 조립과 operator CLI는 Runtime, candidate source의 격리 staging 조립은 Control Plane,
-offline acceptance 조립은 Assurance CLI만 수행합니다. Operator CLI의 source 명령은 Control Plane을
-직접 조립하지 않고 기존 managed HTTP API를 소비합니다.
+Production 구현 조립과 operator CLI는 Runtime, offline acceptance 조립은 Assurance CLI만
+수행합니다. Operator CLI의 `source list/show/validate`는 원격 admin API가 아니라
+현재 checkout의 YAML authority를 읽는 local read-only 명령입니다.
 
-## 현재 첫 오픈에서 사용하지 않는 구현
+## 현재 첫 오픈에서 사용하지 않는 범위
 
-다음 기능은 삭제하지 않았지만 현재 serving 경로에는 참여하지 않습니다.
+다음 기능은 현재 serving 범위가 아닙니다.
 
 | 기능 | 코드 상태 | 현재 운영 상태 |
 |---|---|---|
-| Managed source hot-add와 Control DB authority | 구현·검증 이력 보존 | 별도 운영 결정 전 비활성 |
-| 여러 replica의 convergence 관측 | 구현·soak 이력 보존 | 현재는 단일 replica |
+| 실행 중 source hot-add | 현재 구현에서 제거 | YAML review·test·배포로 변경 |
+| 여러 replica 운영 | soak 연구 기록 보존 | 현재는 단일 replica |
 | RLS tenant serving | 과거 구현과 연구 보존 | 모든 RLS source quarantine |
 | 넓은 PostgreSQL 결과 type | 연구 기록 보존 | 일곱 OID만 허용 |
 | DB-native 금액 귀속·workflow trace | Parked research | 일정과 구현 승인 없음 |
 
-구현이 있다는 이유로 설정만 켜서 현재 launch에 포함하지 않습니다. 활성화에는 대상, interface·정책,
-migration, rollback과 protected procedure의 별도 검토가 필요합니다.
+범위 확장은 대상, interface·정책, migration, rollback과 protected procedure의 별도 검토가
+필요합니다.
 
 ## 새 데이터베이스가 들어오면
 
@@ -172,17 +172,15 @@ migration, rollback과 protected procedure의 별도 검토가 필요합니다.
 
 ```text
 Source DB의 curated view와 최소 권한 reader
--> Source manifest와 기존 budget 선택
+-> `config/sources/*.yaml`과 기존 budget 선택
 -> Metadata 수집·revision
 -> Guarded Query의 SQL/result policy
 -> Verified question과 결과
 -> Runtime artifact·배포·rollback
 ```
 
-일반적으로 source별 Python 분기, 새 HTTP/MCP endpoint나 Control DB schema 변경은 필요하지
-않습니다. 자세한 현재 절차는 [source extension checklist](source-extension-checklist.md)를 따릅니다.
-Managed hot-add가 실제 요구가 되면 [source onboarding 안내](source-onboarding.md)에서 별도 경로를
-선택합니다.
+일반적으로 source별 Python 분기나 새 HTTP/MCP endpoint는 필요하지 않습니다. 자세한 현재
+절차는 [source extension checklist](source-extension-checklist.md)를 따릅니다.
 
 ## Success Criteria
 
@@ -201,11 +199,12 @@ Managed hot-add가 실제 요구가 되면 [source onboarding 안내](source-onb
 - Source별 Python 분기 없이 여러 PostgreSQL database를 같은 안전 경계로 제공합니다.
 - 업무 의미가 필요한 DB에만 semantic overlay나 curated view를 추가합니다.
 - 보안과 resource policy를 prompt가 아니라 gateway와 PostgreSQL이 강제합니다.
-- Managed 운영을 활성화한 환경에서는 source lifecycle과 관측값을 한 관리 surface에서 봅니다.
+- Source·verified query·budget 변경은 하나의 Git review 흐름으로 추적합니다.
 
 ## 결정과 상세 문서
 
 - 현재 launch 범위: [ADR 0025](decisions/0025-static-non-rls-first-launch.md)
+- 현재 source authority: [ADR 0030](decisions/0030-git-reviewed-yaml-source-authority.md)
 - 현재 physical package 구조: [ADR 0026](decisions/0026-physical-module-packages.md)
 - 결정 전체 색인: [ADR index](decisions/README.md)
 - 정확한 모듈 owner와 interface: [module index](modules/README.md)

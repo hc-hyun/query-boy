@@ -5,7 +5,7 @@ on:
   push:
 
 jobs:
-  core-static:
+  yaml-authority:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -15,139 +15,27 @@ jobs:
           enable-cache: true
       - name: Install locked environment
         run: uv sync --locked
-      - name: Start current static PostgreSQL fixtures
+      - name: Start Git-reviewed YAML PostgreSQL fixtures
         run: |
           cp .env.example .env
           docker compose config --quiet
           docker compose up -d --wait postgres
           ./scripts/apply-db.sh
-      - name: Confirm managed fixtures stay out of the default database
-        run: |
-          acceptance_database_count="$(
-            docker compose exec -T postgres psql \
-              --username query_man_admin \
-              --dbname postgres \
-              --tuples-only \
-              --no-align \
-              --command="SELECT count(*) FROM pg_catalog.pg_database WHERE datname IN ('support_tickets', 'commerce_edges')"
-          )"
-          control_schema_absent="$(
-            docker compose exec -T postgres psql \
-              --username query_man_admin \
-              --dbname query_man \
-              --tuples-only \
-              --no-align \
-              --command="SELECT pg_catalog.to_regnamespace('control') IS NULL"
-          )"
-          test "$acceptance_database_count" = "0"
-          test "$control_schema_absent" = "t"
-      - name: Core static analysis and unit checks
+      - name: Static analysis and unit checks
         run: |
           uv run ruff check .
           uv run mypy src
-          uv run pytest -m 'not integration and not load and not soak and not mcp_server' \
-            --ignore=tests/test_control_migrations.py \
-            --ignore=tests/test_control_recovery.py \
-            --ignore=tests/test_control_startup.py \
-            --ignore=tests/test_managed_http.py \
-            --ignore=tests/test_managed_mode.py \
-            --ignore=tests/test_managed_operations.py \
-            --ignore=tests/test_managed_runtime_startup_cleanup.py \
-            --ignore=tests/test_metadata_store.py \
-            --ignore=tests/test_secrets.py \
-            --ignore=tests/test_source_admin.py \
-            --ignore=tests/test_source_store.py
-      - name: Static database, retrieval and golden checks
+          uv run pytest -m 'not integration and not load and not soak and not mcp_server'
+      - name: Database, retrieval and golden checks
         run: |
-          uv run pytest -m 'integration and not load and not soak and not mcp_server' \
-            --ignore=tests/test_control_migrations.py \
-            --ignore=tests/test_control_recovery.py \
-            --ignore=tests/test_control_startup.py \
-            --ignore=tests/test_managed_http.py \
-            --ignore=tests/test_managed_mode.py \
-            --ignore=tests/test_managed_operations.py \
-            --ignore=tests/test_managed_runtime_startup_cleanup.py \
-            --ignore=tests/test_metadata_store.py \
-            --ignore=tests/test_secrets.py \
-            --ignore=tests/test_source_admin.py \
-            --ignore=tests/test_source_store.py \
-            -k 'not onboards_third_source_without_runtime_restart and not onboards_commerce_edges_across_authenticated_mcp_replicas'
+          uv run pytest -m 'integration and not load and not soak and not mcp_server'
           uv run query-man-evaluate
           uv run query-man-verify
-      - name: Bounded static load check
+      - name: Bounded load check
         run: uv run pytest -m load tests/test_load.py
       - name: Stop fixtures
         if: always()
         run: docker compose down -v
-
-  managed-acceptance:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      COMPOSE_FILE: compose.yaml:compose.acceptance.yaml
-    steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-      - name: Install locked environment
-        run: uv sync --locked
-      - name: Start opt-in managed acceptance fixtures
-        run: |
-          cp .env.example .env
-          docker compose --file compose.yaml --file compose.acceptance.yaml config --quiet
-          docker compose --file compose.yaml --file compose.acceptance.yaml up -d --wait postgres
-          ./scripts/apply-managed-acceptance-fixtures.sh
-      - name: Confirm managed acceptance inventory
-        run: |
-          compose=(docker compose --file compose.yaml --file compose.acceptance.yaml)
-          acceptance_database_count="$(
-            "${compose[@]}" exec -T postgres psql \
-              --username query_man_admin \
-              --dbname postgres \
-              --tuples-only \
-              --no-align \
-              --command="SELECT count(*) FROM pg_catalog.pg_database WHERE datname IN ('support_tickets', 'commerce_edges')"
-          )"
-          control_schema_present="$(
-            "${compose[@]}" exec -T postgres psql \
-              --username query_man_admin \
-              --dbname query_man \
-              --tuples-only \
-              --no-align \
-              --command="SELECT pg_catalog.to_regnamespace('control') IS NOT NULL"
-          )"
-          test "$acceptance_database_count" = "2"
-          test "$control_schema_present" = "t"
-      - name: Managed unit and direct-consumer checks
-        run: |
-          uv run pytest -m 'not integration and not load and not soak and not mcp_server' \
-            tests/test_control_migrations.py \
-            tests/test_control_recovery.py \
-            tests/test_control_startup.py \
-            tests/test_managed_http.py \
-            tests/test_managed_mode.py \
-            tests/test_managed_operations.py \
-            tests/test_managed_runtime_startup_cleanup.py \
-            tests/test_metadata_store.py \
-            tests/test_secrets.py \
-            tests/test_source_admin.py \
-            tests/test_source_store.py \
-            tests/test_http.py \
-            tests/test_runtime_config.py
-      - name: Managed persistence and onboarding acceptance
-        run: |
-          uv run pytest -m 'integration and not load and not soak and not mcp_server' \
-            tests/test_control_migrations.py \
-            tests/test_control_recovery.py \
-            tests/test_control_startup.py \
-            tests/test_metadata_store.py \
-            tests/test_source_store.py
-          uv run pytest -m 'integration and not load and not soak and not mcp_server' tests/test_integration.py \
-            -k 'onboards_third_source_without_runtime_restart or onboards_commerce_edges_across_authenticated_mcp_replicas'
-      - name: Stop managed acceptance fixtures
-        if: always()
-        run: docker compose --file compose.yaml --file compose.acceptance.yaml down -v --remove-orphans
 
   container:
     runs-on: ubuntu-latest

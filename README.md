@@ -27,10 +27,10 @@ Query Man 자체에 자연어를 SQL로 바꾸는 AI 모델이 들어 있는 것
 | MCP | AI 도구가 source 목록, context와 query 기능을 호출하는 통신 방식입니다. |
 | RLS | PostgreSQL이 사용자나 tenant별로 볼 수 있는 행을 제한하는 기능입니다. 현재 첫 오픈에서는 지원하지 않습니다. |
 | Replica | 실행 중인 Query Man 서버 인스턴스 하나입니다. 첫 오픈 계획과 검증 범위는 하나입니다. |
-| Bootstrap mode | 저장소에 미리 등록된 source 목록을 시작할 때 읽는 정적 방식입니다. |
+| Git-reviewed YAML | `config/sources/*.yaml`을 review·test한 뒤 배포물이 시작할 때 읽는 방식입니다. |
 | Fixture | 로컬·CI 테스트를 위해 만든 DB와 데이터입니다. 실제 운영 DB와 구분합니다. |
 
-이 밖의 `grain`, `revision`, `managed mode`, `OID` 같은 말은
+이 밖의 `grain`, `revision`, `OID` 같은 말은
 [전체 용어 사전](docs/glossary.md)에서 쉽게 풀어 설명합니다.
 
 ## 어떻게 동작하나요?
@@ -58,14 +58,14 @@ Query Man 자체에 자연어를 SQL로 바꾸는 AI 모델이 들어 있는 것
 | DB 접근 | `ai` schema의 검토된 view, 읽기 전용 계정 | 원본 table이나 쓰기 SQL에 접근하지 않습니다. |
 | RLS | 모든 RLS source 차단 | 행 단위 권한을 사용하는 DB는 이번 첫 오픈에서 제공하지 않습니다. |
 | 결과 column | 정수 3종, text, date, timezone timestamp, numeric | 그 밖의 결과 타입은 결과 행을 가져오기 전에 거부합니다. |
-| Source 설정 | static `bootstrap` mode | 저장소에 미리 검토된 목록을 시작할 때 읽습니다. 변경에는 review와 재배포가 필요합니다. |
+| Source 설정 | Git-reviewed source·verified-query·budget YAML | `config/sources/*.yaml`, `config/verified-queries.yaml`, `config/budget-profiles.yaml`이 authority입니다. 변경에는 review·test·재배포가 필요합니다. |
 
 Boolean은 SQL의 조건식이나 중간 계산에는 사용할 수 있지만 최종 결과 column으로 반환할 수
 없습니다. 내부적으로 허용하는 정확한 PostgreSQL type 번호와 정책은 ADR 0025에 기록돼 있습니다.
 
-다음 기능은 구현이 일부 존재하더라도 **현재 첫 오픈 범위에는 포함되지 않습니다.**
+다음 기능은 **현재 첫 오픈 범위에는 포함되지 않습니다.**
 
-- 실행 중 신규 DB를 바로 추가하는 managed 운영
+- 실행 중 신규 DB를 바로 추가하는 hot reload 운영
 - RLS source 제공
 - 두 번째 replica, 장애 시 자동 전환(failover)과 고가용성(HA)
 - 임의의 PostgreSQL 결과 타입
@@ -75,6 +75,7 @@ Boolean은 SQL의 조건식이나 중간 계산에는 사용할 수 있지만 �
 `LAUNCH-01-A`입니다. 완료된 검증은
 [첫 오픈 증적](docs/verification/2026-08-26-static-first-launch.md), 운영까지 남은 일은
 [개발 TODO](docs/development-todo.md)에서 확인할 수 있습니다.
+Source authority의 현재 결정은 [ADR 0030](docs/decisions/0030-git-reviewed-yaml-source-authority.md)입니다.
 
 ## 제공 데이터
 
@@ -112,7 +113,6 @@ openssl rand -hex 32
 두 난수 결과를 각각 `.env`의 `QUERY_MAN_CODEX_MCP_TOKEN`과 `QUERY_MAN_OPERATOR_TOKEN`에 넣습니다.
 두 token은 서로 달라야 합니다. 기본 Compose가 사용하는 PostgreSQL과 current 두 reader의
 `replace-with-...` 값도 각각 로컬 전용 password로 바꿉니다.
-Support/commerce 값은 managed acceptance overlay를 실행할 때만 필요합니다.
 
 - `.env`는 Git에서 제외됩니다. commit하지 마세요.
 - `.env.example`은 로컬 Compose용 예시일 뿐 운영 비밀값 관리 방법이 아닙니다.
@@ -128,8 +128,7 @@ docker compose ps
 ```
 
 `apply-db.sh`는 현재 static launch와 같은 `development-issues`, `market-voc` 두 fixture DB의
-role·schema·예제 데이터만 적용하고 검증합니다. Control DB와 managed onboarding acceptance
-fixture는 [별도 개발 지침](docs/development-guidelines.md)의 managed acceptance 절차를 사용합니다.
+role·schema·예제 데이터만 적용하고 검증합니다.
 어느 스크립트도 운영 DB migration 도구가 아닙니다.
 
 ### 3. 정상 동작 확인하기
@@ -164,7 +163,8 @@ uv run qm
 
 기본 Compose에는 query token과 별도의 `QUERY_MAN_OPERATOR_TOKEN`이 필요합니다. `.env.example`에서 새
 random token으로 바꾸고 application image를 다시 빌드해야 container의 access policy에도 반영됩니다.
-Managed source 변경 명령은 별도 managed 활성화 전에는 사용할 수 없습니다.
+`qm source list/show/validate`는 현재 checkout의 source·verified-query·budget YAML을 조회·검증하는
+local read-only 명령입니다. Source 변경은 pull request와 배포로만 반영합니다.
 
 AuthBridge를 쓰는 배포는 opaque token 대신 [Resource Server JWT Access Token 검증 계약](docs/resource-server-jwt-auth.md)을
 선택할 수 있습니다. 이때 Query Man은 JWT access token을 로컬 검증하며 client secret이나 refresh token을
@@ -262,10 +262,10 @@ docker compose down
 
 ## 모듈을 쉽게 이해하기
 
-Query Man은 한 프로그램으로 배포하지만 내부 책임을 일곱 module로 나눈 구조, 즉 modular
+Query Man은 한 프로그램으로 배포하지만 내부 책임을 여섯 module로 나눈 구조, 즉 modular
 monolith입니다.
-Static core의 여섯 책임은 `src/query_man` 아래 `source_catalog`, `metadata`, `guarded_query`,
-`delivery`, `runtime`, `assurance` package로 나뉘고 managed 구현은 `managed` package에 있습니다.
+여섯 책임은 `src/query_man` 아래 `source_catalog`, `metadata`, `guarded_query`,
+`delivery`, `runtime`, `assurance` package로 나뉩니다.
 이 구분은 별도 repository나 service가 아닙니다. 모두 같은 wheel과 하나의 Query Man process로
 배포되며, package `__init__.py`는 re-export 없는 marker라 필요한 leaf module을 직접 import합니다.
 
@@ -277,7 +277,6 @@ Static core의 여섯 책임은 `src/query_man` 아래 `source_catalog`, `metada
 | Delivery | 현관 | Caller를 인증하고 같은 기능을 HTTP와 MCP로 제공합니다. |
 | Runtime | 조립·운영 담당 | 다른 module을 연결하고 설정, 시작·종료, health와 container 실행을 관리합니다. |
 | Assurance | 검사소 | 품질 질문, verified query, 통합·container 테스트로 전체 흐름을 검증합니다. |
-| Control Plane | 관리실 | Managed mode에서 source와 revision 이력을 저장하고 변경합니다. 현재 첫 오픈에서는 비활성입니다. |
 
 Module 하나를 수정할 때는 repository 전체를 먼저 읽지 말고
 [module index](docs/modules/README.md)에서 담당 module, 읽을 코드·테스트와 사용 가능한 interface를
@@ -314,20 +313,12 @@ uv run query-man-evaluate
 uv run query-man-verify
 ```
 
-Control DB와 support/commerce onboarding까지 포함한 전체 integration gate는 기본 volume과 분리된
-managed acceptance project에서 실행합니다.
+전체 integration 경계는 기본 두 source fixture를 준비한 뒤 같은 repository gate의 integration
+marker로 확인합니다.
 
 ```bash
-export COMPOSE_FILE=compose.yaml:compose.acceptance.yaml
-docker compose up -d --wait postgres
-./scripts/apply-managed-acceptance-fixtures.sh
 uv run pytest -m integration
-docker compose down -v --remove-orphans
-unset COMPOSE_FILE
 ```
-
-중간 실패 시에도 같은 `COMPOSE_FILE` 값으로 `down -v --remove-orphans`를 실행한 뒤 unset합니다.
-이는 `query-man-managed-acceptance` volume만 지우며 기본 `query-man_postgres_data`는 건드리지 않습니다.
 
 실행 중인 Compose container와 MCP 경계는 다음 명령으로 확인합니다.
 
@@ -336,7 +327,7 @@ unset COMPOSE_FILE
 uv run pytest -m 'mcp_server and not soak' -s
 ```
 
-부하, 두-replica soak, Control DB recovery와 보안 update 절차는 일반 개발 흐름과 분리돼 있습니다.
+부하, 두-replica soak과 보안 update 절차는 일반 개발 흐름과 분리돼 있습니다.
 필요할 때 [운영 문서](docs/operations.md)와 [CI workflow](.github/workflows/ci.yml)를 따라 실행하세요.
 
 ## 운영까지 남은 일
@@ -362,8 +353,13 @@ uv run pytest -m 'mcp_server and not soak' -s
 질문과 승인 SQL을 통과한 뒤, 변경 승인을 받아 다시 배포합니다. 현재 기본 절차는
 [source extension checklist](docs/source-extension-checklist.md)를 따릅니다.
 
-현재 module interface 안에서 처리할 수 있다면 source별 Python 분기를 추가하지 않습니다. 실행 중
-동적 추가가 실제 요구가 되면 보존된 managed mode의 운영 활성화를 별도 결정해야 합니다.
+현재 module interface 안에서 처리할 수 있다면 source별 Python 분기를 추가하지 않습니다. Source
+추가·변경은 `config/sources/*.yaml`과 관련 verified-query/budget YAML을 같은 review에서
+검증한 뒤 재배포합니다.
+
+PostgreSQL table·column comment는 grain, 단위, 상태값과 주의사항을 설명하는
+human-readable metadata로 활용합니다. Type과 numeric precision/scale은 catalog에서 수집하고,
+PII 표시는 comment만 믿지 않고 curated view·reader grant·policy로 강제합니다.
 
 ## 문서 읽는 순서
 
@@ -375,12 +371,12 @@ uv run pytest -m 'mcp_server and not soak' -s
 | 현재 제공 데이터와 예제 | [MVP 데이터 안내](docs/mvp.md) |
 | 전체 구조와 module 작업 범위 | [Architecture](docs/architecture.md), [Module index](docs/modules/README.md) |
 | 첫 오픈 결정과 정확한 제한 | [ADR 0025](docs/decisions/0025-static-non-rls-first-launch.md) |
+| Source·verified-query·budget authority | [ADR 0030](docs/decisions/0030-git-reviewed-yaml-source-authority.md) |
 | AuthBridge API 인증 연동 | [Resource Server JWT Access Token 검증 계약](docs/resource-server-jwt-auth.md), [ADR 0029](docs/decisions/0029-authbridge-resource-server-jwt.md) |
-| 운영 배포·복구·관측 절차 | [Operations](docs/operations.md), [Disaster recovery](docs/disaster-recovery.md) |
+| 운영 배포·rollback·관측 절차 | [Operations](docs/operations.md) |
 | 남은 일과 완료 이력 | [Active TODO](docs/development-todo.md), [Implementation roadmap](docs/implementation-roadmap.md) |
 | 실행 시점별 검증 기록 | [Verification evidence](docs/verification/README.md) |
 | 일정에 없는 후속 연구 | [Future work](docs/future-work.md), [ADR index](docs/decisions/README.md) |
-| 동적 source 관리의 고급 문서 | [Source management plane](docs/source-management-plane.md), [Managed onboarding](docs/managed-source-onboarding.md) |
 
 과거 verification 문서는 그 문서에 적힌 commit·환경·범위만 증명합니다. 현재 상태는 이 README,
 accepted ADR, active TODO와 최신 runnable test를 함께 확인하세요.

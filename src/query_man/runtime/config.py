@@ -2,11 +2,9 @@ from __future__ import annotations
 
 import ipaddress
 import os
-import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator
 
@@ -18,8 +16,14 @@ _DEFAULT_MCP_ALLOWED_ORIGINS = (
     "http://localhost:*",
     "http://[::1]:*",
 )
-_REPLICA_ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _DEFAULT_DIAGNOSTIC_CAPTURE_DAILY_BYTES = 100 * 1024 * 1024
+_RETIRED_SOURCE_AUTHORITY_SETTINGS = (
+    "QUERY_MAN_SOURCE_MODE",
+    "QUERY_MAN_CONTROL_DSN",
+    "QUERY_MAN_SOURCE_ENCRYPTION_KEY",
+    "QUERY_MAN_REPLICA_ID",
+    "QUERY_MAN_SOURCE_RELOAD_INTERVAL_MS",
+)
 
 
 class _Environment(BaseModel):
@@ -86,25 +90,9 @@ class _Environment(BaseModel):
         alias="QUERY_MAN_OAUTH_OPERATOR_GROUPS",
         max_length=4_096,
     )
-    source_mode: Literal["bootstrap", "managed"] = Field(
-        "bootstrap",
-        alias="QUERY_MAN_SOURCE_MODE",
-    )
     cache_ttl_ms: int = Field(30_000, alias="QUERY_MAN_METADATA_CACHE_TTL_MS", ge=0, le=3_600_000)
     max_stale_ms: int = Field(300_000, alias="QUERY_MAN_METADATA_MAX_STALE_MS", ge=0, le=86_400_000)
     retry_delay_ms: int = Field(5_000, alias="QUERY_MAN_METADATA_RETRY_DELAY_MS", ge=100, le=300_000)
-    control_dsn: SecretStr | None = Field(
-        None,
-        alias="QUERY_MAN_CONTROL_DSN",
-        min_length=1,
-        max_length=2_048,
-    )
-    source_encryption_key: SecretStr | None = Field(
-        None,
-        alias="QUERY_MAN_SOURCE_ENCRYPTION_KEY",
-        min_length=43,
-        max_length=64,
-    )
     diagnostic_capture_database: str | None = Field(
         None,
         alias="QUERY_MAN_DIAGNOSTIC_CAPTURE_DATABASE",
@@ -129,13 +117,6 @@ class _Environment(BaseModel):
         alias="QUERY_MAN_DIAGNOSTIC_CAPTURE_DAILY_BYTES",
         ge=1_048_576,
         le=10_737_418_240,
-    )
-    replica_id: str | None = Field(None, alias="QUERY_MAN_REPLICA_ID")
-    source_reload_interval_ms: int = Field(
-        5_000,
-        alias="QUERY_MAN_SOURCE_RELOAD_INTERVAL_MS",
-        ge=250,
-        le=300_000,
     )
     shutdown_grace_ms: int = Field(
         10_000,
@@ -185,11 +166,6 @@ class RuntimeConfig:
     metadata_cache_ttl_ms: int
     metadata_max_stale_ms: int
     metadata_retry_delay_ms: int
-    source_mode: Literal["bootstrap", "managed"] = "bootstrap"
-    control_dsn: str | None = None
-    source_encryption_key: str | None = None
-    replica_id: str | None = None
-    source_reload_interval_ms: int = 5_000
     shutdown_grace_ms: int = 10_000
     mcp_allowed_hosts: tuple[str, ...] = _DEFAULT_MCP_ALLOWED_HOSTS
     mcp_allowed_origins: tuple[str, ...] = _DEFAULT_MCP_ALLOWED_ORIGINS
@@ -228,33 +204,6 @@ class RuntimeConfig:
             raise ValueError(
                 "QUERY_MAN_DIAGNOSTIC_CAPTURE_DAILY_BYTES must be between 1 MiB and 10 GiB"
             )
-        if self.source_mode == "bootstrap":
-            if self.control_dsn is not None or self.source_encryption_key is not None:
-                raise ValueError(
-                    "QUERY_MAN_CONTROL_DSN and QUERY_MAN_SOURCE_ENCRYPTION_KEY "
-                    "require QUERY_MAN_SOURCE_MODE=managed"
-                )
-            return
-        if self.source_mode != "managed":
-            raise ValueError("QUERY_MAN_SOURCE_MODE must be bootstrap or managed")
-        if self.api_token is not None:
-            raise ValueError(
-                "QUERY_MAN_API_TOKEN is not accepted when QUERY_MAN_SOURCE_MODE=managed"
-            )
-        if self.control_dsn is None or self.source_encryption_key is None:
-            raise ValueError(
-                "QUERY_MAN_CONTROL_DSN and QUERY_MAN_SOURCE_ENCRYPTION_KEY are required "
-                "when QUERY_MAN_SOURCE_MODE=managed"
-            )
-        if (
-            self.replica_id is None
-            or not 1 <= len(self.replica_id) <= 80
-            or _REPLICA_ID.fullmatch(self.replica_id) is None
-        ):
-            raise ValueError(
-                "QUERY_MAN_REPLICA_ID is required in managed mode and must be a "
-                "1-80 character lowercase stable slug"
-            )
 
 
 def load_runtime_config(
@@ -262,6 +211,15 @@ def load_runtime_config(
     root_directory: Path | None = None,
 ) -> RuntimeConfig:
     values = dict(os.environ if environment is None else environment)
+    retired_settings = tuple(
+        name for name in _RETIRED_SOURCE_AUTHORITY_SETTINGS if name in values
+    )
+    if retired_settings:
+        raise ValueError(
+            "Retired source-authority settings are no longer supported; "
+            "Git-reviewed YAML is the only source authority. Remove: "
+            + ", ".join(retired_settings)
+        )
     for optional_name in (
         "QUERY_MAN_API_TOKEN",
         "QUERY_MAN_DIAGNOSTIC_CAPTURE_DATABASE",
@@ -309,14 +267,6 @@ def load_runtime_config(
             "Configure exactly one of QUERY_MAN_API_TOKEN, "
             "QUERY_MAN_ACCESS_POLICY_FILE or OAuth resource-server settings"
         )
-    if parsed.source_mode == "managed" and (
-        parsed.api_token is not None
-        or (parsed.access_policy_file is None and not oauth_enabled)
-    ):
-        raise ValueError(
-            "QUERY_MAN_SOURCE_MODE=managed requires QUERY_MAN_ACCESS_POLICY_FILE or "
-            "OAuth resource-server settings and does not accept QUERY_MAN_API_TOKEN"
-        )
     if (
         not _is_loopback(parsed.host)
         and parsed.api_token is None
@@ -355,15 +305,6 @@ def load_runtime_config(
         metadata_cache_ttl_ms=parsed.cache_ttl_ms,
         metadata_max_stale_ms=parsed.max_stale_ms,
         metadata_retry_delay_ms=parsed.retry_delay_ms,
-        source_mode=parsed.source_mode,
-        control_dsn=(parsed.control_dsn.get_secret_value() if parsed.control_dsn is not None else None),
-        source_encryption_key=(
-            parsed.source_encryption_key.get_secret_value()
-            if parsed.source_encryption_key is not None
-            else None
-        ),
-        replica_id=parsed.replica_id if parsed.source_mode == "managed" else None,
-        source_reload_interval_ms=parsed.source_reload_interval_ms,
         shutdown_grace_ms=parsed.shutdown_grace_ms,
         mcp_allowed_hosts=_split_allowlist(parsed.mcp_allowed_hosts),
         mcp_allowed_origins=_split_allowlist(parsed.mcp_allowed_origins),

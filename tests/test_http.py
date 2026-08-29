@@ -26,7 +26,6 @@ from query_man.guarded_query.sql_validation import SQL_POLICY_REVISION, Validate
 from query_man.metadata.models import (
     CatalogProvider,
     CatalogSnapshot,
-    ResourceObservation,
 )
 from query_man.runtime.composition import build_app
 from query_man.runtime.config import RuntimeConfig
@@ -43,16 +42,6 @@ class NeverCalledCatalog:
 
     async def close(self) -> None:
         pass
-
-    async def invalidate(self, _source_id: str) -> None:
-        pass
-
-    async def observe_resources(
-        self,
-        _source: SourceProfile,
-    ) -> ResourceObservation:
-        raise RuntimeError("Resource observation should not be called")
-
 
 class FailingCatalog(NeverCalledCatalog):
     async def load(self, _source: SourceProfile) -> CatalogSnapshot:
@@ -149,9 +138,6 @@ class RecordingQueryExecutor:
     async def drain(self, grace_ms: int) -> None:
         self.stop_accepting()
         self.lifecycle.append(f"drain:{grace_ms}")
-
-    async def invalidate(self, _source_id: str) -> None:
-        pass
 
     async def cancel(self, query_id: str) -> bool:
         self.cancel_calls.append(query_id)

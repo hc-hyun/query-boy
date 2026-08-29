@@ -4,6 +4,9 @@
 
 현재 첫 오픈 기준은 [ADR 0025](decisions/0025-static-non-rls-first-launch.md)입니다.
 저장소 구현과 로컬 검증은 끝났고, 실제 대상 환경 전환인 `LAUNCH-02`는 아직 남아 있습니다.
+Source·verified query·budget의 현재 authority는 Git-reviewed `config/sources/*.yaml`,
+`config/verified-queries.yaml`, `config/budget-profiles.yaml`입니다. 결정 기준은
+[ADR 0030](decisions/0030-git-reviewed-yaml-source-authority.md)입니다.
 
 ## 처음 보는 경우
 
@@ -11,13 +14,13 @@
 
 1. [프로젝트 README](../README.md): 무엇을 하는 제품인지, 로컬에서 어떻게 실행하는지 설명합니다.
 2. [용어 사전](glossary.md): 낯선 단어를 쉬운 말로 풉니다.
-3. [Architecture](architecture.md): 현재 실행 구조와 일곱 모듈의 관계를 보여줍니다.
+3. [Architecture](architecture.md): 현재 실행 구조와 여섯 모듈의 관계를 보여줍니다.
 
 코드를 수정하려면 그다음 [활성 개발 지침](development-guidelines.md)의 공통 규칙을 확인하고
 [모듈 안내](modules/README.md)에서 담당 모듈 하나를 고릅니다.
 
-Static core는 `query_man.source_catalog`, `metadata`, `guarded_query`, `delivery`, `runtime`,
-`assurance`의 여섯 physical package로 나뉘며 managed 구현은 `query_man.managed`에 있습니다. 모두
+Core는 `query_man.source_catalog`, `metadata`, `guarded_query`, `delivery`, `runtime`,
+`assurance`의 여섯 physical package로 나뉩니다. 모두
 같은 repository·wheel·process에 속하고 package marker는 interface를 re-export하지 않으므로 module
 README가 가리키는 leaf path에서 시작합니다.
 
@@ -27,13 +30,11 @@ README가 가리키는 leaf path에서 시작합니다.
 |---|---|---|
 | 현재 안내 | 지금 개발·운영할 때 따르는 문서 | 이 문서에서 시작합니다. |
 | 상세 참고 | 특정 작업에만 필요한 기술 설명 | 필요할 때만 읽습니다. |
-| 구현됐지만 비활성 | 코드는 보존하지만 현재 첫 오픈에서는 사용하지 않는 기능 | 별도 활성화 결정 전에는 실행 절차로 사용하지 않습니다. |
 | 보류 | 실제 요구와 승인이 생기기 전까지 일정에 없는 연구 | 구현을 시작하지 않습니다. |
 | 기록 | 과거 결정·완료·실행 사실 | 현재 지침으로 해석하거나 소급 수정하지 않습니다. |
 
-“구현됐다”와 “현재 운영에 사용한다”는 같은 말이 아닙니다. 예를 들어 Control Plane의 managed
-기능은 `query_man.managed` package와 별도 acceptance lane에 보존돼 있지만 현재 static first
-launch의 import, fixture, route와 runtime work에는 참여하지 않습니다.
+현재 source·verified query·budget authority는 Git-reviewed YAML입니다. 변경은 review·test·배포로
+반영하고 과거 ADR·verification의 완료 기록은 해당 commit의 사실로만 읽습니다.
 
 ## 하고 싶은 일로 찾기
 
@@ -63,13 +64,10 @@ launch의 import, fixture, route와 runtime work에는 참여하지 않습니다
 - [Query limits](query-cost-control.md): query 제한, 관측값과 조사 순서
 - [Resource Server JWT Access Token 검증 계약](resource-server-jwt-auth.md): AuthBridge OAuth bearer 검증과 scope/error/rollout 경계
 
-## 상세 참고와 비활성 기능
+## 상세 참고
 
 - [MVP data](mvp.md): 두 예제 source의 구조, row 의미와 아홉 가지 검증 질문
 - [Verified queries](verified-queries.md): 대표 질문의 결과가 바뀌지 않았는지 검사하는 방법
-- [Managed source onboarding](managed-source-onboarding.md): managed mode를 별도로 활성화했을 때만 쓰는 절차
-- [Source management plane](source-management-plane.md): 구현됐지만 현재 첫 오픈에서는 비활성인 관리 기능
-- [Control Plane disaster recovery](disaster-recovery.md): managed Control DB의 백업·복구 절차
 
 ## 기록과 연구
 

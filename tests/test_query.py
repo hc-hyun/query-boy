@@ -14,21 +14,16 @@ from query_man.errors import (
     MetadataRevisionMismatchError,
     MetadataUnavailableError,
     QueryInvalidError,
-    QueryOverloadedError,
     QueryRejectedError,
     QueryTimeoutError,
     QueryUnavailableError,
-    SourceNotFoundError,
 )
 from query_man.guarded_query.query import (
     DeliveryQueryExecutor,
-    GatewayUsageOutcome,
-    GatewayUsageRecorder,
     PlanSummary,
     PostgresQueryExecutor,
     QueryExecutor,
     QueryService,
-    RuntimeQueryExecutor,
     _summarize_plan,
 )
 from query_man.guarded_query.result_encoding import ResultEncodingError
@@ -42,15 +37,10 @@ from query_man.source_catalog.registry import SourceRegistry
 from tests.helpers import load_test_registry, minimal_development_snapshot
 
 
-def test_runtime_query_executor_protocol_has_exact_lifecycle_shape() -> None:
+def test_delivery_query_executor_protocol_has_exact_lifecycle_shape() -> None:
     application_methods = {
         name
         for name, value in vars(QueryExecutor).items()
-        if not name.startswith("_") and callable(value)
-    }
-    runtime_methods = {
-        name
-        for name, value in vars(RuntimeQueryExecutor).items()
         if not name.startswith("_") and callable(value)
     }
     delivery_methods = {
@@ -62,27 +52,18 @@ def test_runtime_query_executor_protocol_has_exact_lifecycle_shape() -> None:
     assert application_methods == {"cancel", "close", "execute"}
     assert delivery_methods == {"drain", "stop_accepting"}
     assert QueryExecutor in DeliveryQueryExecutor.__mro__
-    assert DeliveryQueryExecutor in RuntimeQueryExecutor.__mro__
-    assert QueryExecutor in RuntimeQueryExecutor.__mro__
-    assert runtime_methods == {"invalidate"}
-    assert get_type_hints(RuntimeQueryExecutor.stop_accepting) == {
+    assert get_type_hints(DeliveryQueryExecutor.stop_accepting) == {
         "return": type(None),
     }
-    assert get_type_hints(RuntimeQueryExecutor.drain) == {
+    assert get_type_hints(DeliveryQueryExecutor.drain) == {
         "grace_ms": int,
         "return": type(None),
     }
-    assert get_type_hints(RuntimeQueryExecutor.invalidate) == {
-        "source_id": str,
-        "return": type(None),
-    }
-    assert not inspect.iscoroutinefunction(RuntimeQueryExecutor.stop_accepting)
-    assert inspect.iscoroutinefunction(RuntimeQueryExecutor.drain)
-    assert inspect.iscoroutinefunction(RuntimeQueryExecutor.invalidate)
+    assert not inspect.iscoroutinefunction(DeliveryQueryExecutor.stop_accepting)
+    assert inspect.iscoroutinefunction(DeliveryQueryExecutor.drain)
     for method, names in (
-        (RuntimeQueryExecutor.stop_accepting, ("self",)),
-        (RuntimeQueryExecutor.drain, ("self", "grace_ms")),
-        (RuntimeQueryExecutor.invalidate, ("self", "source_id")),
+        (DeliveryQueryExecutor.stop_accepting, ("self",)),
+        (DeliveryQueryExecutor.drain, ("self", "grace_ms")),
     ):
         parameters = tuple(inspect.signature(method).parameters.values())
         assert tuple(parameter.name for parameter in parameters) == names
@@ -92,9 +73,6 @@ def test_runtime_query_executor_protocol_has_exact_lifecycle_shape() -> None:
             for parameter in parameters
         )
     assert get_type_hints(QueryService.__init__)["executor"] is QueryExecutor
-    assert get_type_hints(QueryService.__init__)["usage_recorder"] == (
-        GatewayUsageRecorder | None
-    )
 
 
 class StaticCatalog:
@@ -140,57 +118,6 @@ class RecordingExecutor:
 
     async def cancel(self, _query_id: str) -> bool:
         return False
-
-
-class RecordingGatewayUsage:
-    def __init__(self) -> None:
-        self.calls: list[dict[str, object]] = []
-
-    def record_gateway_usage(
-        self,
-        *,
-        source_id: str,
-        budget_profile: str,
-        metadata_revision: str,
-        outcome: GatewayUsageOutcome,
-        queue_ms: int = 0,
-        elapsed_ms: int = 0,
-        returned_rows: int = 0,
-        result_bytes: int = 0,
-        truncated: bool = False,
-    ) -> None:
-        self.calls.append(
-            {
-                "source_id": source_id,
-                "budget_profile": budget_profile,
-                "metadata_revision": metadata_revision,
-                "outcome": outcome,
-                "queue_ms": queue_ms,
-                "elapsed_ms": elapsed_ms,
-                "returned_rows": returned_rows,
-                "result_bytes": result_bytes,
-                "truncated": truncated,
-            }
-        )
-
-
-class FailingExecutor(RecordingExecutor):
-    def __init__(self, error: BaseException) -> None:
-        super().__init__()
-        self.error = error
-
-    async def execute(
-        self,
-        source: SourceProfile,
-        sql: str,
-        metadata_revision: str,
-        validated: ValidatedSql,
-        *,
-        query_id: str | None = None,
-        tenant_id: str | None = None,
-    ) -> dict[str, object]:
-        self.calls.append((source, sql, metadata_revision, validated))
-        raise self.error
 
 
 class _PlanCursor:
@@ -390,14 +317,12 @@ def _stub_internal_query_checks(
     monkeypatch.setattr(query_module, "_validate_resolved_objects", validate_resolved_objects)
 
 
-def query_service(
-    usage_recorder: GatewayUsageRecorder | None = None,
-) -> tuple[QueryService, MetadataService, RecordingExecutor]:
+def query_service() -> tuple[QueryService, MetadataService, RecordingExecutor]:
     registry = load_test_registry()
     metadata = MetadataService(registry, StaticCatalog())
     executor = RecordingExecutor()
     return (
-        QueryService(registry, metadata, executor, usage_recorder=usage_recorder),
+        QueryService(registry, metadata, executor),
         metadata,
         executor,
     )
@@ -418,196 +343,6 @@ async def test_validates_revision_and_sql_before_execution() -> None:
     assert response["status"] == "ok"
     assert len(executor.calls) == 1
     assert executor.calls[0][3].relations == ("ai.issue_overview",)
-
-
-@pytest.mark.asyncio
-async def test_success_records_one_gateway_terminal_with_success_only_sums() -> None:
-    recorder = RecordingGatewayUsage()
-    service, metadata, _executor = query_service(recorder)
-    published = await metadata.get_published("development-issues")
-    source = load_test_registry().get("development-issues")
-    assert source is not None
-    response = await service.query(
-        source.source_id,
-        "SELECT count(*) AS issue_count FROM ai.issue_overview",
-        published.revision,
-        SQL_POLICY_REVISION,
-    )
-
-    assert recorder.calls == [
-        {
-            "source_id": source.source_id,
-            "budget_profile": source.budget.name,
-            "metadata_revision": published.revision,
-            "outcome": "success",
-            "queue_ms": response["queue_ms"],
-            "elapsed_ms": response["elapsed_ms"],
-            "returned_rows": response["row_count"],
-            "result_bytes": response["result_bytes"],
-            "truncated": response["truncated"],
-        }
-    ]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("terminal_error", "counts"),
-    [
-        (QueryRejectedError("QUERY_PLAN_COST_EXCEEDED"), (0, 1, 0, 0, 0, 0)),
-        (QueryInvalidError("QUERY_INVALID_CAST"), (0, 1, 0, 0, 0, 0)),
-        (QueryOverloadedError(), (0, 0, 0, 1, 0, 0)),
-        (QueryTimeoutError(), (0, 0, 1, 0, 0, 0)),
-        (query_module._QueryCancelledTimeoutError(), (0, 0, 0, 0, 1, 0)),
-        (query_module._QueryCancelledUnavailableError(), (0, 0, 0, 0, 1, 0)),
-        (asyncio.CancelledError(), (0, 0, 0, 0, 1, 0)),
-        (QueryUnavailableError(), (0, 0, 0, 0, 0, 1)),
-        (RuntimeError("bounded internal failure"), (0, 0, 0, 0, 0, 1)),
-    ],
-    ids=[
-        "rejected",
-        "invalid-user-sql",
-        "overloaded",
-        "timeout",
-        "operator-or-shutdown-cancelled",
-        "queued-shutdown-cancelled",
-        "disconnect-cancelled",
-        "unavailable",
-        "unexpected-failure",
-    ],
-)
-async def test_query_service_maps_each_terminal_to_exactly_one_gateway_category(
-    terminal_error: BaseException,
-    counts: tuple[int, int, int, int, int, int],
-) -> None:
-    registry = load_test_registry()
-    metadata = MetadataService(registry, StaticCatalog())
-    published = await metadata.get_published("development-issues")
-    recorder = RecordingGatewayUsage()
-    service = QueryService(
-        registry,
-        metadata,
-        FailingExecutor(terminal_error),
-        usage_recorder=recorder,
-    )
-    with pytest.raises(type(terminal_error)):
-        await service.query(
-            "development-issues",
-            "SELECT count(*) FROM ai.issue_overview",
-            published.revision,
-            SQL_POLICY_REVISION,
-        )
-
-    assert len(recorder.calls) == 1
-    call = recorder.calls[0]
-    outcome = call["outcome"]
-    assert tuple(
-        int(outcome == category)
-        for category in (
-            "success",
-            "rejected",
-            "timeout",
-            "overloaded",
-            "cancelled",
-            "failed",
-        )
-    ) == counts
-    assert (
-        call["queue_ms"],
-        call["elapsed_ms"],
-        call["returned_rows"],
-        call["result_bytes"],
-        call["truncated"],
-    ) == (0, 0, 0, 0, False)
-
-
-@pytest.mark.asyncio
-async def test_revision_and_ast_rejections_are_each_recorded_once() -> None:
-    recorder = RecordingGatewayUsage()
-    service, metadata, executor = query_service(recorder)
-    published = await metadata.get_published("development-issues")
-    with pytest.raises(MetadataRevisionMismatchError):
-        await service.query(
-            "development-issues",
-            "SELECT 1",
-            f"sha256:{'0' * 64}",
-            SQL_POLICY_REVISION,
-        )
-    with pytest.raises(QueryRejectedError):
-        await service.query(
-            "development-issues",
-            "DELETE FROM ai.issue_overview",
-            published.revision,
-            SQL_POLICY_REVISION,
-        )
-
-    assert len(recorder.calls) == 2
-    assert {call["metadata_revision"] for call in recorder.calls} == {
-        published.revision
-    }
-    assert {call["outcome"] for call in recorder.calls} == {"rejected"}
-    assert executor.calls == []
-
-
-@pytest.mark.asyncio
-async def test_gateway_usage_excludes_failures_before_trusted_revision_attribution(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    recorder = RecordingGatewayUsage()
-    service, metadata, _executor = query_service(recorder)
-    with pytest.raises(SourceNotFoundError):
-        await service.query(
-            "unknown-source",
-            "SELECT 1",
-            "revision",
-            SQL_POLICY_REVISION,
-        )
-    assert recorder.calls == []
-
-    async def fail_active_revision(_source_id: str) -> object:
-        raise RuntimeError("bounded active revision failure")
-
-    monkeypatch.setattr(metadata, "get_published", fail_active_revision)
-    with pytest.raises(RuntimeError, match="active revision"):
-        await service.query(
-            "development-issues",
-            "SELECT 1",
-            "revision",
-            SQL_POLICY_REVISION,
-        )
-    assert recorder.calls == []
-
-
-@pytest.mark.asyncio
-async def test_gateway_usage_recorder_failure_never_changes_query_outcome(
-) -> None:
-    class FailingRecorder:
-        def record_gateway_usage(self, **_values: object) -> None:
-            raise RuntimeError("bounded recorder failure")
-
-    recorder = FailingRecorder()
-    service, metadata, _executor = query_service(recorder)
-    published = await metadata.get_published("development-issues")
-    response = await service.query(
-        "development-issues",
-        "SELECT count(*) AS issue_count FROM ai.issue_overview",
-        published.revision,
-        SQL_POLICY_REVISION,
-    )
-    assert response["status"] == "ok"
-
-    failed_service = QueryService(
-        load_test_registry(),
-        metadata,
-        FailingExecutor(QueryOverloadedError()),
-        usage_recorder=recorder,
-    )
-    with pytest.raises(QueryOverloadedError):
-        await failed_service.query(
-            "development-issues",
-            "SELECT count(*) FROM ai.issue_overview",
-            published.revision,
-            SQL_POLICY_REVISION,
-        )
 
 
 @pytest.mark.asyncio
@@ -708,13 +443,7 @@ async def test_query_service_quarantines_rls_before_metadata_and_execution(
     registry = SourceRegistry([replace(source, tenant_isolation="rls")])
     metadata = MetadataService(registry, StaticCatalog())
     executor = RecordingExecutor()
-    recorder = RecordingGatewayUsage()
-    service = QueryService(
-        registry,
-        metadata,
-        executor,
-        usage_recorder=recorder,
-    )
+    service = QueryService(registry, metadata, executor)
 
     async def unexpected_metadata(_source_id: str) -> object:
         raise AssertionError("RLS quarantine must precede metadata")
@@ -733,7 +462,6 @@ async def test_query_service_quarantines_rls_before_metadata_and_execution(
     assert captured.value.code == "QUERY_UNAVAILABLE"
     assert captured.value.details is None
     assert executor.calls == []
-    assert recorder.calls == []
 
 
 @pytest.mark.asyncio
@@ -1229,7 +957,7 @@ async def test_executor_rejects_unsupported_result_description_before_fetch(
 
 
 @pytest.mark.asyncio
-async def test_result_oid_failure_records_one_failed_gateway_usage(
+async def test_result_oid_failure_maps_to_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     registry = load_test_registry()
@@ -1244,13 +972,7 @@ async def test_result_oid_failure_records_one_failed_gateway_usage(
         description=(_ResultColumn("unsupported", 16),),
     )
     executor = PostgresQueryExecutor()
-    recorder = RecordingGatewayUsage()
-    service = QueryService(
-        registry,
-        metadata,
-        executor,
-        usage_recorder=recorder,
-    )
+    service = QueryService(registry, metadata, executor)
 
     async def get_pool(_source: SourceProfile) -> _PhasePool:
         return _PhasePool(connection)
@@ -1270,8 +992,6 @@ async def test_result_oid_failure_records_one_failed_gateway_usage(
         assert captured.value.status_code == 503
         assert captured.value.code == "QUERY_UNAVAILABLE"
         assert captured.value.details is None
-        assert len(recorder.calls) == 1
-        assert recorder.calls[0]["outcome"] == "failed"
     finally:
         await executor.close()
         operations.reset()

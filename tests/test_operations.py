@@ -94,7 +94,7 @@ def test_readiness_is_degraded_while_any_active_source_remains_usable() -> None:
     state.set_source_health("unavailable-source", "unavailable")
     assert state.public_status() == "degraded"
 
-    state.set_component_health("source_reload", "unavailable")
+    state.set_component_health("metadata_catalog", "unavailable")
     state.set_source_health("unavailable-source", "stale")
     assert state.public_status() == "degraded"
 
@@ -110,7 +110,7 @@ def test_inventory_reconcile_removes_inactive_and_ignores_late_health_write() ->
     state.set_source_health("removed-source", "stale")
     state.increment("query_execution_started", "active-source")
     state.increment("query_execution_started", "removed-source")
-    state.increment("source_reload_scan_failed")
+    state.increment("catalog_refresh_failed")
 
     state.reconcile_sources(["active-source"])
     state.set_source_health("removed-source", "unavailable")
@@ -122,7 +122,7 @@ def test_inventory_reconcile_removes_inactive_and_ignores_late_health_write() ->
         for metric in state.snapshot()["metrics"]
     } == {
         ("query_execution_started", "active-source"),
-        ("source_reload_scan_failed", None),
+        ("catalog_refresh_failed", None),
     }
 
 

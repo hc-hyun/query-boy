@@ -50,9 +50,8 @@ Common Closure Principle과 YAGNI/KISS의 실용적인 조합이다. 완전한 D
 
 ## Module-Scoped Development
 
-Query Man은 하나의 repository, wheel과 deployable process를 유지하는 modular monolith다. Static
-core는 owner별 여섯 physical package, 비활성 managed 기능은 같은 repository의 `query_man.managed`
-package에 둔다. 논리 module의 owner, 현재 leaf-file mapping, 허용 dependency와 module interface는
+Query Man은 하나의 repository, wheel과 deployable process를 유지하는 modular monolith다. Core는
+owner별 여섯 physical package로 나뉜다. 논리 module의 owner, 현재 leaf-file mapping, 허용 dependency와 module interface는
 [module index](modules/README.md)를 유일한 시작점으로 사용한다.
 
 - 작업 시작 시 repository 전체를 선행 학습하지 않는다. Root router, module index, primary module의
@@ -64,8 +63,8 @@ package에 둔다. 논리 module의 owner, 현재 leaf-file mapping, 허용 depe
 - 흐름이나 trust boundary가 다른 module로 넘어가면 그 module 문서와 직접 관련된
   interface/code/test만 추가로 읽는다. 보안 경계는 module 경계에서 조사를 중단할 이유가 되지 않는다.
 - 다른 module의 implementation, table 또는 private symbol에 새로 의존하지 않고 owner가 공개한
-  module interface를 소비한다. Production server 조립은 Runtime, 후보 source의 격리 staging 조립은
-  Control Plane, offline acceptance 조립은 Assurance CLI entrypoint만 수행한다.
+  module interface를 소비한다. Production server 조립은 Runtime, offline acceptance 조립은
+  Assurance CLI entrypoint만 수행한다.
 - 현재 shared transition file을 수정하면 module index에 표시된 모든 owner 문서를 읽고 symbol
   단위로 변경한다. Shared file 정리와 업무 변경을 한 diff에 섞지 않는다.
 - Shared transition file과 공통 interface/governance 문서는 single-writer로 다룬다. 병렬 agent가
@@ -200,30 +199,7 @@ Root [agent router](../AGENTS.md#non-negotiable-safety)의 안전 불변조건�
 - 보안 parser와 데이터 손실 경로는 최소 테스트 원칙의 예외다. 허용·거부 corpus, 우회 사례와
   property test를 유지한다.
 - 완료 전 최소한 `uv run ruff check .`, `uv run mypy src`, `uv run pytest`를 실행한다. DB 경계를
-  변경하면 해당 CI lane의 integration test도 실행한다. Repository 전체 `uv run pytest -m integration`
-  gate는 아래 managed acceptance fixture session에서 실행한다.
-
-### Managed acceptance fixture
-
-Base `compose.yaml`과 `scripts/apply-db.sh`는 current 두 static source만 준비한다. Control DB와
-support/commerce onboarding fixture가 필요한 managed test에서만 다음 opt-in overlay를 사용한다.
-Overlay의 top-level project는 `query-man-managed-acceptance`이며 base `query-man`과 다른 PostgreSQL
-container 및 `postgres_data` volume을 쓴다. Integration fixture가 내부에서 실행하는 bare
-`docker compose` subprocess도 같은 project를 보도록 이 test session에는 `COMPOSE_FILE`을 전달한다.
-
-```bash
-export COMPOSE_FILE=compose.yaml:compose.acceptance.yaml
-docker compose up -d --wait postgres
-./scripts/apply-managed-acceptance-fixtures.sh
-# 필요한 managed focused/integration test 실행
-docker compose down -v --remove-orphans
-unset COMPOSE_FILE
-```
-
-`down -v`는 이 명령으로 만든 managed-acceptance volume만 삭제하며 base `query-man_postgres_data`를
-재사용하거나 삭제하지 않는다. 이는 disposable local/CI acceptance 절차이며 production migration이나
-managed activation 승인이 아니다. CI도 `core-static`과 `managed-acceptance` job을 분리하며 static
-gate가 managed fixture를 암묵적으로 준비하거나 managed test failure를 숨기지 않는다.
+  변경하면 해당 CI lane의 integration test와 container·verified-query acceptance도 실행한다.
 
 ## Documentation And Handoff
 
