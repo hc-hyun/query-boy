@@ -19,7 +19,7 @@ connection:
 allowed_schemas: [ai]
 allowed_relation_kinds: [view]
 budget_profile: interactive
-minimum_quality_level: L1
+minimum_quality_level: L2
 
 semantic_overlay:
   default_relation: ai.subscription_overview

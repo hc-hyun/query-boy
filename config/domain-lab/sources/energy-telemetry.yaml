@@ -19,7 +19,7 @@ connection:
 allowed_schemas: [ai]
 allowed_relation_kinds: [view]
 budget_profile: interactive
-minimum_quality_level: L1
+minimum_quality_level: L2
 
 semantic_overlay:
   default_relation: ai.meter_readings
@@ -33,7 +33,7 @@ semantic_overlay:
         description: 계량기 UTC 구간 검침 1건
         key_columns: [reading_id]
       default_time_column: interval_start
-      use_for: [시간대별 전력 사용, 발전량, 순사용량, 역송전, 누락 검침, 추정 검침, 계량기 reset]
+      use_for: [시간대별 전력 사용, 검침 품질별 검침 수, 발전량, 순사용량, 역송전, 누락 검침, 추정 검침, 계량기 reset]
       column_aliases:
         interval_start: [검침 구간 시작]
         local_hour: [현지 시각, 로컬 시간]

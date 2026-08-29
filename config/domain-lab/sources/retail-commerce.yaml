@@ -19,7 +19,7 @@ connection:
 allowed_schemas: [ai]
 allowed_relation_kinds: [view]
 budget_profile: interactive
-minimum_quality_level: L1
+minimum_quality_level: L2
 
 semantic_overlay:
   default_relation: ai.order_overview
@@ -33,7 +33,7 @@ semantic_overlay:
         description: 리테일 주문 1건
         key_columns: [order_id]
       default_time_column: ordered_at
-      use_for: [최근 주문, 채널별 주문, 지역별 취소, 주문별 환불, 통화별 매출, 배송 완료 주문]
+      use_for: [최근 주문, 주문 상태별 주문 수, 채널별 주문, 지역별 취소, 주문별 환불, 통화별 매출, 배송 완료 주문]
       column_aliases:
         customer_code: [구매 고객, 고객 코드]
         fulfillment_region: [배송 권역, 주문 지역]

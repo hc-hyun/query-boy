@@ -187,9 +187,29 @@ LEFT JOIN (
 ) AS outage_stats ON outage_stats.site_id = site.id;
 
 COMMENT ON VIEW ai.meter_readings IS 'Grain: one meter interval. Negative net_kwh means net export; missing readings are null and are not zero usage.';
+COMMENT ON COLUMN ai.meter_readings.reading_key IS 'Stable synthetic interval-reading reference.';
+COMMENT ON COLUMN ai.meter_readings.meter_id IS 'Join key to ai.meter_overview.meter_id; joining repeats one meter across many intervals.';
+COMMENT ON COLUMN ai.meter_readings.meter_code IS 'Stable synthetic meter code with no customer identity or service address.';
+COMMENT ON COLUMN ai.meter_readings.site_code IS 'Stable synthetic metered-site code with no service address.';
+COMMENT ON COLUMN ai.meter_readings.region IS 'Synthetic region of the metered site.';
+COMMENT ON COLUMN ai.meter_readings.site_type IS 'Synthetic operational category of the metered site.';
+COMMENT ON COLUMN ai.meter_readings.tariff IS 'Synthetic tariff category of the meter, not a monetary rate.';
+COMMENT ON COLUMN ai.meter_readings.interval_end IS 'Exclusive end timestamp of the UTC metering interval.';
+COMMENT ON COLUMN ai.meter_readings.local_date IS 'Site-local calendar date label; use with local_hour and utc_offset_minutes around DST changes.';
 COMMENT ON COLUMN ai.meter_readings.local_hour IS 'Wall-clock hour label; use with local_date and utc_offset_minutes because DST may repeat an hour.';
 COMMENT ON VIEW ai.outage_overview IS 'Grain: one outage report. Overlapping site intervals can double-count duration.';
+COMMENT ON COLUMN ai.outage_overview.outage_no IS 'Synthetic human-readable outage reference.';
+COMMENT ON COLUMN ai.outage_overview.site_id IS 'Synthetic site key; one site can have overlapping outage reports.';
+COMMENT ON COLUMN ai.outage_overview.site_code IS 'Stable synthetic metered-site code with no service address.';
+COMMENT ON COLUMN ai.outage_overview.region IS 'Synthetic region of the affected site.';
+COMMENT ON COLUMN ai.outage_overview.site_type IS 'Synthetic operational category of the affected site.';
+COMMENT ON COLUMN ai.outage_overview.started_on IS 'Asia/Seoul calendar date derived from started_at.';
 COMMENT ON VIEW ai.meter_overview IS 'Grain: one meter, preserving meters with zero readings. net_kwh_sum stays null when no non-missing readings exist.';
+COMMENT ON COLUMN ai.meter_overview.meter_code IS 'Stable synthetic meter code with no customer identity or service address.';
+COMMENT ON COLUMN ai.meter_overview.site_code IS 'Stable synthetic metered-site code with no service address.';
+COMMENT ON COLUMN ai.meter_overview.retired_on IS 'Meter retirement date; null while the synthetic meter remains active.';
+COMMENT ON COLUMN ai.meter_overview.first_interval_start IS 'Earliest reading interval start; null when the meter has no readings.';
+COMMENT ON COLUMN ai.meter_overview.last_interval_start IS 'Latest reading interval start; null when the meter has no readings.';
 
 GRANT USAGE ON SCHEMA energy TO energy_telemetry_view_owner;
 GRANT SELECT ON ALL TABLES IN SCHEMA energy TO energy_telemetry_view_owner;

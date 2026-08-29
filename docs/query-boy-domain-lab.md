@@ -2,7 +2,8 @@
 
 Status: Optional local fixture; production 사용 금지
 
-Change-set: `QB-DOMAIN-LAB-20260828` (baseline `deef37a`)
+Change-sets: `QB-DOMAIN-LAB-20260828` (baseline `deef37a`),
+`QB-DOMAIN-LAB-HARDEN-20260829` (baseline `c83fc7e`)
 
 이 lab은 Query Boy가 질문에 맞는 source를 먼저 고르고, 선택한 source 안에서 grain·분모·시간·통화
 모호성을 안전하게 처리하는지 시험한다. 서로 전혀 다른 다섯 합성 도메인과 기존 두 source를 한
@@ -37,9 +38,10 @@ Domain-lab catalog는 기존 `development-issues`, `market-voc`와 다음 다섯
 | `clinical-operations` | `clinical_operations` | `ai.appointment_overview`, `ai.lab_results`, `ai.patient_overview` |
 | `saas-billing` | `saas_billing` | `ai.subscription_overview`, `ai.invoice_overview`, `ai.usage_daily` |
 
-기존 두 manifest와 verified-query registry는 domain-lab directory에 byte-for-byte 복사한다. 따라서
-기존 두 source의 L2 baseline은 유지되고, 신규 다섯 source는 verified query를 꾸며내지 않은 L1이다.
-Overlay는 base Compose와 함께만 사용한다. `compose.scale.yaml`이나 기본/scale volume과 섞지 않는다.
+기존 두 manifest와 기존 9개 verified-query contract는 domain-lab directory에 byte-for-byte 복사한다.
+신규 다섯 source는 공개 view마다 한 개씩 총 15개 contract를 추가해 모두 L2다. Domain-lab 전체는
+기존 9개와 신규 15개를 합쳐 24개 contract를 traffic 밖에서 검증한다. Overlay는 base Compose와
+함께만 사용한다. `compose.scale.yaml`이나 기본/scale volume과 섞지 않는다.
 
 모든 데이터는 seed `2026082802`, 기준 시각 `2026-08-28T00:00:00Z`의 결정적 합성 데이터다.
 `clinical-operations`에는 실제 환자, PII, 진단 또는 처방이 없다.
@@ -261,6 +263,28 @@ WHERE table_schema = 'ai'
 TEMP, 다른 여섯 database CONNECT는 실패해야 한다. 오류 메시지나 credential을 외부 결과에 복사하지
 않는다.
 
+### Catalog comment와 기존 volume 보강
+
+신규 15개 view의 relation comment는 모두 grain과 핵심 집계 주의를 설명한다. 255개 공개 column은
+PostgreSQL comment 117개와 manifest의 grain key, default time, alias, value hint 또는 measure를 합쳐
+255/255가 설명된다. Comment는 합성 identifier, `NULL`/0, 통화·단위, 시간, preaggregation과 fanout처럼
+SQL 생성에서 추측하면 위험한 의미에만 사용한다. PostgreSQL이 보고하는 type과 precision/scale은 catalog
+fact이므로 comment에 반복하지 않는다.
+
+Comment의 합성·민감도 설명은 노출 허가나 PII 정책이 아니다. Curated view와 reader grant가 실제 공개
+범위를 정하며, 이 fixture 밖의 실제 개인·민감 데이터는 별도 owner 판정과 masking/exclusion 승인이
+없으면 onboarding하지 않는다.
+
+새 volume은 schema init에서 comment를 받는다. 기존 `query-man-domain-lab-postgres-data`를 보존할 때는
+marker를 먼저 검사하고 column comment만 재적용하는 다음 idempotent migration을 실행한다. 이 명령은
+table row, view 정의, role, grant 또는 volume을 변경하지 않는다.
+
+```bash
+scripts/apply-domain-lab-comments.sh
+```
+
+성공 결과는 database별 exact 공개 column/comment 수 `53/26`, `45/22`, `47/21`, `51/20`, `59/28`이다.
+
 ## 7. Query Boy와 source-selection 검증
 
 Full 또는 pilot load 뒤 app을 시작한다.
@@ -290,6 +314,17 @@ curl -sS "http://127.0.0.1:${QUERY_MAN_DOMAIN_PORT:-3101}/sources" \
 응답은 정확히 일곱 source를 보여야 한다. 기존 `verify-container.sh`는 기본 two-source inventory를
 검증하므로 domain-lab app에 그대로 사용하지 않는다.
 
+Domain-lab 전용 traffic-off gate는 marker가 명시된 경우에만 실행한다. Metadata relation/answerability
+20개와 기존·신규 verified query 24개를 실제 Catalog와 Guarded Query 경로로 검사한다.
+
+```bash
+QUERY_MAN_DOMAIN_LAB=1 uv run python scripts/verify-domain-lab.py
+```
+
+성공 결과는 relation accuracy와 answerability recall `1.0`, context 최대 `65,536` bytes 이하,
+`verified_count=24`, 신규 source별 verified count `3`이다. Expected result는 실행 결과로 자동 갱신하지
+않고 metadata revision, relation, column, row count와 hash 차이를 검토한다.
+
 Source 선택 검증 순서는 다음과 같다.
 
 1. AI에게 인증된 `/sources` 또는 MCP `list_sources`의 `source_id`, `name`, `description`만 준다.
@@ -308,7 +343,7 @@ clarification/unsupported로 남겨야 한다.
 Text-to-SQL skill과 corpus의 구조 gate는 다음처럼 실행한다.
 
 ```bash
-uv run pytest tests/test_text_to_sql_skill.py -q
+uv run pytest tests/test_text_to_sql_skill.py tests/test_domain_lab_assurance.py -q
 ```
 
 독립 blind catalog-only 평가에서 최초 corpus는 24/25였다. 실패한 `취소 후 재개율` 문구를 domain이

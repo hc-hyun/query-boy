@@ -19,7 +19,7 @@ connection:
 allowed_schemas: [ai]
 allowed_relation_kinds: [view]
 budget_profile: interactive
-minimum_quality_level: L1
+minimum_quality_level: L2
 
 semantic_overlay:
   default_relation: ai.shipment_overview
@@ -33,7 +33,7 @@ semantic_overlay:
         description: 운송장 1건
         key_columns: [shipment_id]
       default_time_column: shipped_at
-      use_for: [최근 발송, 권역별 배송, 약속 대비 지연, 분실 건, 파손 건, 스캔 없는 배송]
+      use_for: [최근 발송, 권역별 배송, 약속 대비 지연, 배송 지연율, 분실 건, 파손 건, 스캔 없는 배송]
       column_aliases:
         tracking_no: [운송장 번호]
         promised_at: [배송 약속 시각, 도착 예정]

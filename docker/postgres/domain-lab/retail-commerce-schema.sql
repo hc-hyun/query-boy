@@ -210,10 +210,34 @@ LEFT JOIN (
 ) AS order_stats ON order_stats.customer_id = customer.id;
 
 COMMENT ON VIEW ai.order_overview IS 'Grain: one retail order. Monetary amounts must be grouped by currency; no FX conversion exists.';
+COMMENT ON COLUMN ai.order_overview.order_no IS 'Synthetic human-readable order reference; it is not a customer identifier.';
+COMMENT ON COLUMN ai.order_overview.customer_segment IS 'Synthetic customer segment copied from the customer record at fixture generation time.';
+COMMENT ON COLUMN ai.order_overview.home_region IS 'Synthetic customer home-region label; fulfillment_region is the order delivery region.';
+COMMENT ON COLUMN ai.order_overview.ordered_on IS 'Asia/Seoul calendar date derived from ordered_at.';
+COMMENT ON COLUMN ai.order_overview.discount_amount IS 'Order-level discount amount in the row currency; aggregate only within one currency.';
 COMMENT ON COLUMN ai.order_overview.net_collected_amount IS 'Gross minus discount minus refunded amount only for PAID, PARTIALLY_REFUNDED, and REFUNDED payments; all unsettled statuses are zero. This is not accounting revenue.';
+COMMENT ON COLUMN ai.order_overview.delivered_at IS 'Delivery-completion timestamp; null until the order is delivered or when delivery does not apply.';
+COMMENT ON COLUMN ai.order_overview.canceled_at IS 'Cancellation timestamp; null when the order was not canceled.';
 COMMENT ON COLUMN ai.order_overview.line_count IS 'Preaggregated line count that does not multiply order rows.';
+COMMENT ON COLUMN ai.order_overview.item_quantity IS 'Preaggregated sum of ordered item quantity at order grain; zero means the order has no exposed lines.';
+COMMENT ON COLUMN ai.order_overview.returned_quantity IS 'Preaggregated returned item quantity at order grain; zero means no item was returned.';
 COMMENT ON VIEW ai.order_lines IS 'Grain: one order line. Joining to ai.order_overview by order_id fans one order out to many lines.';
+COMMENT ON COLUMN ai.order_lines.order_id IS 'Join key to ai.order_overview.order_id; joining expands one order to many order lines.';
+COMMENT ON COLUMN ai.order_lines.order_no IS 'Synthetic human-readable order reference copied from the parent order.';
+COMMENT ON COLUMN ai.order_lines.customer_code IS 'Stable synthetic customer code with no real-person identity or contact data.';
+COMMENT ON COLUMN ai.order_lines.fulfillment_region IS 'Delivery region of the parent order, not the synthetic customer home region.';
+COMMENT ON COLUMN ai.order_lines.order_status IS 'Current fixture status of the parent order repeated on each order line.';
+COMMENT ON COLUMN ai.order_lines.line_no IS 'Line sequence within one order; it is unique only together with order_id.';
+COMMENT ON COLUMN ai.order_lines.product_name IS 'Synthetic product display name; product_code is the stable product identifier.';
+COMMENT ON COLUMN ai.order_lines.brand IS 'Synthetic product brand label.';
+COMMENT ON COLUMN ai.order_lines.unit_price IS 'Per-item price in the row currency before line discount and refund.';
+COMMENT ON COLUMN ai.order_lines.discount_amount IS 'Line-level discount amount in the row currency.';
+COMMENT ON COLUMN ai.order_lines.line_gross_amount IS 'unit_price multiplied by quantity in the row currency, before line discount and refund.';
+COMMENT ON COLUMN ai.order_lines.return_requested_at IS 'Return-request timestamp; null when no return was requested.';
 COMMENT ON VIEW ai.customer_overview IS 'Grain: one synthetic retail customer, including zero-order customers. Monetary totals are intentionally absent because currencies can differ.';
+COMMENT ON COLUMN ai.customer_overview.customer_code IS 'Stable synthetic customer code with no real-person identity or contact data.';
+COMMENT ON COLUMN ai.customer_overview.first_order_at IS 'Earliest order timestamp for the customer; null when the customer has no orders.';
+COMMENT ON COLUMN ai.customer_overview.last_order_at IS 'Latest order timestamp for the customer; null when the customer has no orders.';
 
 GRANT USAGE ON SCHEMA retail TO retail_commerce_view_owner;
 GRANT SELECT ON ALL TABLES IN SCHEMA retail TO retail_commerce_view_owner;

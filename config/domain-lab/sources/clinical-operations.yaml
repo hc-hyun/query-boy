@@ -19,7 +19,7 @@ connection:
 allowed_schemas: [ai]
 allowed_relation_kinds: [view]
 budget_profile: interactive
-minimum_quality_level: L1
+minimum_quality_level: L2
 
 semantic_overlay:
   default_relation: ai.appointment_overview
@@ -146,7 +146,7 @@ semantic_overlay:
       options: [NO_SHOW / 전체 예약, NO_SHOW / 취소 제외 예약, NO_SHOW / 완료 예정 시각이 지난 예약]
     - code: CLINICAL_SYNTHETIC_ONLY
       status: unsupported
-      phrases: [실제 환자, 환자 이름, 전화번호, 이메일, 주민번호, 진단명, 처방]
+      phrases: [실제 환자, 환자 이름, 개인정보, 전화번호, 이메일, 주민번호, 진단명, 처방]
       message: 이 source는 완전 합성 운영 데이터만 포함하며 실제 환자 PII, 진단, 처방은 제공하지 않는다.
       missing_concepts: [real patient identity or clinical diagnosis]
       options: [합성 patient_code와 예약·검사 운영 지표로 질문 범위를 변경]

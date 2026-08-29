@@ -219,8 +219,28 @@ LEFT JOIN (
 ) AS lab_stats ON lab_stats.patient_id = patient.id;
 
 COMMENT ON VIEW ai.appointment_overview IS 'Grain: one fully synthetic appointment. NO_SHOW excludes CANCELED by status definition.';
+COMMENT ON COLUMN ai.appointment_overview.appointment_no IS 'Synthetic appointment reference with no real patient or encounter identity.';
+COMMENT ON COLUMN ai.appointment_overview.sex_at_birth IS 'Fully synthetic demographic category; it is sensitive in real clinical data but identifies no person in this fixture.';
+COMMENT ON COLUMN ai.appointment_overview.home_region IS 'Fully synthetic broad home-region category; no address is exposed.';
+COMMENT ON COLUMN ai.appointment_overview.booked_at IS 'Timestamp when the synthetic appointment was booked.';
+COMMENT ON COLUMN ai.appointment_overview.scheduled_on IS 'Asia/Seoul calendar date derived from scheduled_at.';
+COMMENT ON COLUMN ai.appointment_overview.checked_in_at IS 'Check-in timestamp; null when the appointment has not checked in or check-in does not apply.';
+COMMENT ON COLUMN ai.appointment_overview.completed_at IS 'Completion timestamp; null unless the appointment was completed.';
 COMMENT ON VIEW ai.lab_results IS 'Grain: one fully synthetic lab-result record. Pending numeric values are null, not zero; CORRECTED is the latest fixture record state.';
+COMMENT ON COLUMN ai.lab_results.result_no IS 'Synthetic lab-result reference with no real specimen or patient identity.';
+COMMENT ON COLUMN ai.lab_results.patient_id IS 'Synthetic patient join key; joining to ai.patient_overview can repeat one patient across many lab results.';
+COMMENT ON COLUMN ai.lab_results.patient_code IS 'Stable synthetic patient code with no real-person identity or contact data.';
+COMMENT ON COLUMN ai.lab_results.age_band IS 'Fully synthetic age band; it is not an exact age or birth date.';
+COMMENT ON COLUMN ai.lab_results.home_region IS 'Fully synthetic broad home-region category; no address is exposed.';
+COMMENT ON COLUMN ai.lab_results.appointment_id IS 'Optional join key to ai.appointment_overview; null for lab results without an appointment.';
+COMMENT ON COLUMN ai.lab_results.appointment_no IS 'Optional synthetic appointment reference; null for lab results without an appointment.';
+COMMENT ON COLUMN ai.lab_results.resulted_at IS 'Result publication timestamp; null while result_status is PENDING.';
+COMMENT ON COLUMN ai.lab_results.unit IS 'Measurement unit determined by test_code; do not compare or sum values across different tests or units.';
 COMMENT ON VIEW ai.patient_overview IS 'Grain: one fully synthetic patient code, preserving patients with no appointments or labs. It contains no PII or diagnoses.';
+COMMENT ON COLUMN ai.patient_overview.canceled_appointment_count IS 'Preaggregated count of CANCELED appointments for the synthetic patient.';
+COMMENT ON COLUMN ai.patient_overview.last_scheduled_at IS 'Latest scheduled appointment timestamp; null when the patient has no appointments.';
+COMMENT ON COLUMN ai.patient_overview.lab_result_count IS 'Preaggregated count of lab-result records for the synthetic patient.';
+COMMENT ON COLUMN ai.patient_overview.last_collected_at IS 'Latest specimen collection timestamp; null when the patient has no lab results.';
 
 GRANT USAGE ON SCHEMA clinical TO clinical_operations_view_owner;
 GRANT SELECT ON ALL TABLES IN SCHEMA clinical TO clinical_operations_view_owner;

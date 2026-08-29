@@ -179,10 +179,30 @@ LEFT JOIN (
 ) AS event_stats ON event_stats.hub_id = hub.id;
 
 COMMENT ON VIEW ai.shipment_overview IS 'Grain: one shipment. tracking_event_count is preaggregated and missing scans remain zero.';
+COMMENT ON COLUMN ai.shipment_overview.origin_hub_code IS 'Stable synthetic code of the shipment origin hub.';
+COMMENT ON COLUMN ai.shipment_overview.origin_region IS 'Region of the shipment origin hub.';
+COMMENT ON COLUMN ai.shipment_overview.destination_hub_code IS 'Stable synthetic code of the shipment destination hub.';
+COMMENT ON COLUMN ai.shipment_overview.destination_region IS 'Region of the shipment destination hub.';
+COMMENT ON COLUMN ai.shipment_overview.customer_segment IS 'Synthetic shipment customer segment; no customer identity or contact data is exposed.';
+COMMENT ON COLUMN ai.shipment_overview.shipped_on IS 'Asia/Seoul calendar date derived from shipped_at.';
 COMMENT ON COLUMN ai.shipment_overview.delivery_outcome IS 'Stable fixture classification: delivered on/before promise, delivered late, pending, or lost/not applicable.';
+COMMENT ON COLUMN ai.shipment_overview.weight_kg IS 'Shipment package weight measured in kilograms.';
+COMMENT ON COLUMN ai.shipment_overview.package_value IS 'Synthetic package-value amount without currency or FX metadata; do not report it as revenue or combine it with monetary sources.';
+COMMENT ON COLUMN ai.shipment_overview.first_scanned_at IS 'Earliest physical scan timestamp; null when the shipment has no tracking events.';
+COMMENT ON COLUMN ai.shipment_overview.last_scanned_at IS 'Latest physical scan timestamp; null when the shipment has no tracking events.';
+COMMENT ON COLUMN ai.shipment_overview.last_recorded_at IS 'Latest ingest timestamp among tracking events; null when the shipment has no tracking events.';
 COMMENT ON VIEW ai.tracking_events IS 'Grain: one tracking event. Joining to shipment overview by shipment_id fans one shipment out to many scans.';
+COMMENT ON COLUMN ai.tracking_events.event_key IS 'Stable synthetic tracking-event reference.';
+COMMENT ON COLUMN ai.tracking_events.shipment_id IS 'Join key to ai.shipment_overview.shipment_id; joining fans one shipment out to many tracking events.';
+COMMENT ON COLUMN ai.tracking_events.tracking_no IS 'Synthetic human-readable tracking reference copied from the parent shipment.';
+COMMENT ON COLUMN ai.tracking_events.service_level IS 'Service level copied from the parent shipment.';
+COMMENT ON COLUMN ai.tracking_events.shipment_status IS 'Current fixture status of the parent shipment repeated on each tracking event.';
+COMMENT ON COLUMN ai.tracking_events.hub_code IS 'Synthetic hub code for the scan; null when an event has no hub.';
+COMMENT ON COLUMN ai.tracking_events.hub_region IS 'Region of the scan hub; null when an event has no hub.';
 COMMENT ON COLUMN ai.tracking_events.ingest_lag_minutes IS 'Recorded time minus scan time; use recorded_at for ingest chronology and scanned_at for physical-event chronology.';
 COMMENT ON VIEW ai.hub_overview IS 'Grain: one hub, preserving hubs with zero shipment or scan activity.';
+COMMENT ON COLUMN ai.hub_overview.hub_code IS 'Stable synthetic hub identifier.';
+COMMENT ON COLUMN ai.hub_overview.hub_name IS 'Synthetic hub display name.';
 
 GRANT USAGE ON SCHEMA logistics TO parcel_logistics_view_owner;
 GRANT SELECT ON ALL TABLES IN SCHEMA logistics TO parcel_logistics_view_owner;
