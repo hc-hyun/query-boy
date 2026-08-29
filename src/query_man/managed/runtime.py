@@ -14,6 +14,10 @@ from fastapi import FastAPI
 
 from query_man.delivery.access import AccessPolicy
 from query_man.delivery.app import build_http_app
+from query_man.delivery.authentication import (
+    BearerAuthenticator,
+    OAuth2JWTBearerAuthenticator,
+)
 from query_man.delivery.gateway import GatewayService
 from query_man.guarded_query.query import (
     GatewayUsageOutcome,
@@ -393,16 +397,24 @@ def build_app(
         query_executor,
         usage_recorder=usage_recorder,
     )
+    authenticator: BearerAuthenticator | None = None
     if access_policy is None:
-        if runtime_config.access_policy_file is not None:
+        if runtime_config.oauth is not None:
+            authenticator = OAuth2JWTBearerAuthenticator(runtime_config.oauth)
+        elif runtime_config.access_policy_file is not None:
             access_policy = AccessPolicy.load(runtime_config.access_policy_file)
         elif runtime_config.api_token is not None:
             access_policy = AccessPolicy.legacy(runtime_config.api_token)
         else:
             access_policy = AccessPolicy.local()
     if diagnostic_capture is not None:
+        if access_policy is None:
+            raise ValueError("Diagnostic capture requires an access policy consent authority")
         access_policy = access_policy.with_subject_identifier(diagnostic_capture.subject_id)
-    access_policy.require_shared_access()
+    if access_policy is not None:
+        access_policy.require_shared_access()
+    elif authenticator is None:
+        raise ValueError("Managed source mode requires bearer authentication")
     gateway = GatewayService(
         registry,
         metadata,
@@ -556,6 +568,7 @@ def build_app(
         query_executor=query_executor,
         query_service=query_service,
         access_policy=access_policy,
+        authenticator=authenticator,
         gateway=gateway,
         lifespan=lifespan,
         route_registrar=register_source_admin_routes,

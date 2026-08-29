@@ -114,7 +114,8 @@ gateway와 PostgreSQL hard limit이 거부한다.
   귀속할 수 없다.
 - Protocol version을 바꿀 때는 parent header gate, 공식 client mode, raw transport 회귀,
   container verification과 운영 문서를 한 변경에서 함께 갱신한다.
-- 현재 인증은 기존 bearer policy를 재사용한다. OAuth discovery나 별도 MCP identity
-  provider는 이 ADR의 범위가 아니다.
+- 이 ADR에서 인증은 기존 bearer policy를 재사용했고 OAuth discovery나 별도 MCP identity provider는
+  범위 밖이었다. 이후 [ADR 0029](0029-authbridge-resource-server-jwt.md)가 HTTP와 MCP의 공통 opt-in
+  AuthBridge JWT resource-server authority를 추가했다.
 - Immutable control-plane revision이 도입되어도 tool schema와 application service 경계는
   유지한다.

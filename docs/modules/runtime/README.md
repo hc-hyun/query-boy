@@ -225,9 +225,12 @@ old process와 source connection을 drain한 뒤 route 밖에서 새 baseline을
 - Source/component detail과 metric은 operator surface에만 있다. Counter와 health는 replica-local이며
   restart 후 초기화된다.
 - Bootstrap loopback에 token/policy가 없으면 anonymous query-only compatibility caller를 쓴다. Legacy
-  token과 policy file은 함께 설정할 수 없고, non-loopback에서 둘 다 없으면 startup이 실패한다.
-- Managed mode는 anonymous/legacy token을 거부하고 version 2 policy의 non-admin query identity와
-  explicit operator identity를 모두 요구한다. Visibility/admin/cancel 의미는 Delivery 소유다.
+  token, version 2 policy file과 OAuth resource-server settings는 상호 배타적이고 non-loopback에서 셋 다
+  없으면 startup이 실패한다.
+- OAuth는 issuer, audience, query/MCP/operator scope를 함께 요구하고 optional realm role/group을 받는다.
+  Diagnostic capture는 access-policy consent authority가 없으므로 OAuth와 함께 설정하면 startup이 실패한다.
+- Managed mode는 anonymous/legacy token을 거부하고 version 2 policy의 non-admin query+operator identity
+  또는 OAuth query+operator scope를 요구한다. Visibility/admin/cancel 의미는 Delivery 소유다.
 - PostgreSQL 18.6 serving, PostgreSQL 18.4 recovery fixture, Python 3.14 slim과 uv 0.9.18 upstream은
   readable tag와 OCI digest를 함께 고정한다. 정확한 pin authority는 `Dockerfile`과 `compose.yaml`이다.
 - Release build는 approved Git revision을 `QUERY_MAN_VCS_REF`로 받아
@@ -242,7 +245,7 @@ Build, exact-ready와 artifact 확인 절차는 [Operations Guide](../../operati
 Managed path는 same-repository `query_man.managed` package, `compose.acceptance.yaml` fixture overlay와
 CI `managed-acceptance` lane에 보존한다. CI `core-static`과 container lane은 base static fixture만 쓴다. 별도
 활성화 시 empty registry에서 시작하고 Control DB의 source와 verified membership만 authority로 사용하며
-filesystem으로 복구하지 않는다. Version 2 access policy, stable replica ID, initial sync, inventory
+filesystem으로 복구하지 않는다. Version 2 access policy 또는 OAuth resource-server settings, stable replica ID, initial sync, inventory
 reconcile, metadata probe와 reload task가 필요하다.
 
 Runtime은 Control Plane의 공개 replica/resource/gateway writer만 소비한다. Reporter는 fixed Control pool과
@@ -271,7 +274,7 @@ RLS source, exact-ready 실패 또는 artifact 식별 불가는 route stop condi
 | [Metadata](../metadata/README.md) | Service/store, immutable snapshot, `RuntimeCatalogProvider` lifecycle | Required callable을 ready 전에 검사; private cache에 의존하지 않음 |
 | [Guarded Query](../guarded-query/README.md) | `RuntimeQueryExecutor` admission/drain/invalidate/close lifecycle | Direct drain/cancel/rollback 순서를 보존 |
 | [Control Plane](../control-plane/README.md) | Managed-only store/reloader와 replica/resource/gateway writer | Current static launch에는 조립하지 않고 private table을 읽지 않음 |
-| [Delivery](../delivery/README.md) | Gateway/routes/MCP factory, parent middleware와 transport lifespan | Wire/auth/error 의미를 Runtime이 재정의하지 않음 |
+| [Delivery](../delivery/README.md) | Gateway/routes/MCP factory, `BearerAuthenticator`, parent middleware와 transport lifespan | Wire/auth/error 의미를 Runtime이 재정의하지 않음 |
 | [Assurance](../assurance/README.md) | Bootstrap verified membership 또는 managed Control membership, container acceptance | Runtime은 verified 결과를 판정하지 않음 |
 
 Concrete implementation을 조립할 권한은 provider의 private table/type을 업무 호출에 사용할 권한이 아니다.
@@ -325,7 +328,7 @@ change-record 책임을 확인한 실행 승인이 필요하다. 과거 evidence
 
 ```text
 uv run pytest tests/test_registry.py tests/test_runtime_config.py tests/test_operations.py \
-  tests/test_server.py tests/test_http.py
+  tests/test_server.py tests/test_oauth_authentication.py tests/test_http.py
 uv run pytest tests/test_managed_mode.py tests/test_managed_operations.py \
   tests/test_managed_runtime_startup_cleanup.py tests/test_managed_http.py
 ```
@@ -343,7 +346,7 @@ Built image의 OCI revision label/digest와 Compose exact-ready를 확인한다.
 
 | 작업 | 먼저 읽을 범위 |
 |---|---|
-| Environment/source authority | `runtime/config.py`, `test_runtime_config.py`, ADR 0025 |
+| Environment/source authority | `runtime/config.py`, `test_runtime_config.py`, ADR 0025; OAuth이면 ADR 0029와 `delivery/authentication.py` |
 | Production composition/startup cleanup | Static은 `runtime/composition.py`, managed는 `managed/runtime.py`의 composition/lifespan symbol, `delivery/app.py` child interface, `test_managed_runtime_startup_cleanup.py`, `test_managed_mode.py` |
 | Health/logging/capture/operator shell/shutdown | `runtime/operations.py`, `runtime/diagnostic_capture.py`, `runtime/operator_shell.py`, `runtime/server.py`, 직접 consumer와 `test_operations.py`, `test_diagnostic_capture.py`, `test_operator_shell.py`, managed `test_managed_operations.py`, `test_server.py` |
 | Container/image/readiness | `Dockerfile`, base `compose.yaml`, managed fixture면 `compose.acceptance.yaml`, `verify-container.sh`, [Operations Guide](../../operations.md)와 관련 acceptance |

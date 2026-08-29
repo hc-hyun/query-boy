@@ -166,6 +166,10 @@ uv run qm
 random token으로 바꾸고 application image를 다시 빌드해야 container의 access policy에도 반영됩니다.
 Managed source 변경 명령은 별도 managed 활성화 전에는 사용할 수 없습니다.
 
+AuthBridge를 쓰는 배포는 opaque token 대신 [Resource Server JWT Access Token 검증 계약](docs/resource-server-jwt-auth.md)을
+선택할 수 있습니다. 이때 Query Man은 JWT access token을 로컬 검증하며 client secret이나 refresh token을
+보관하지 않습니다. 실제 audience/scope 발급과 protected route 전환은 별도 실행 승인 대상입니다.
+
 ## HTTP로 한 번 조회해 보기
 
 아래 예시는 기본 port `3000` 기준이며 Query Man container가 실행 중이어야 합니다. `.env`에서
@@ -243,6 +247,8 @@ docker compose down
 - 클라이언트가 DB host, DSN, database, role이나 비밀번호를 지정할 수 없습니다.
 - 기본 Compose에서는 bearer token으로 인증된 조회 caller만 source, metadata와 query API를 사용할 수
   있습니다.
+- AuthBridge mode에서는 서명, 고정 algorithm, issuer, audience, 만료와 endpoint scope/role/group을
+  검증하고 ID/refresh token을 거부합니다.
 - Reader는 각 source의 `ai` view만 읽을 수 있고 원본 schema에는 접근하지 못합니다.
 - SQL의 문법 구조(AST)를 검사해 한 개의 허용된 읽기 전용 `SELECT`만 실행합니다.
 - PostgreSQL도 read-only transaction, timeout과 최소 권한으로 다시 제한합니다.
@@ -369,6 +375,7 @@ uv run pytest -m 'mcp_server and not soak' -s
 | 현재 제공 데이터와 예제 | [MVP 데이터 안내](docs/mvp.md) |
 | 전체 구조와 module 작업 범위 | [Architecture](docs/architecture.md), [Module index](docs/modules/README.md) |
 | 첫 오픈 결정과 정확한 제한 | [ADR 0025](docs/decisions/0025-static-non-rls-first-launch.md) |
+| AuthBridge API 인증 연동 | [Resource Server JWT Access Token 검증 계약](docs/resource-server-jwt-auth.md), [ADR 0029](docs/decisions/0029-authbridge-resource-server-jwt.md) |
 | 운영 배포·복구·관측 절차 | [Operations](docs/operations.md), [Disaster recovery](docs/disaster-recovery.md) |
 | 남은 일과 완료 이력 | [Active TODO](docs/development-todo.md), [Implementation roadmap](docs/implementation-roadmap.md) |
 | 실행 시점별 검증 기록 | [Verification evidence](docs/verification/README.md) |

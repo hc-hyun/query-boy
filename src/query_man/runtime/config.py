@@ -10,6 +10,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator
 
+from query_man.delivery.authentication import OAuth2ResourceServerConfig
+
 _DEFAULT_MCP_ALLOWED_HOSTS = ("127.0.0.1:*", "localhost:*", "[::1]:*")
 _DEFAULT_MCP_ALLOWED_ORIGINS = (
     "http://127.0.0.1:*",
@@ -34,6 +36,56 @@ class _Environment(BaseModel):
     source_dir: str | None = Field(None, alias="QUERY_MAN_SOURCE_DIR")
     budget_file: str | None = Field(None, alias="QUERY_MAN_BUDGET_FILE")
     access_policy_file: str | None = Field(None, alias="QUERY_MAN_ACCESS_POLICY_FILE")
+    oauth_issuer: str | None = Field(
+        None,
+        alias="QUERY_MAN_OAUTH_ISSUER",
+        min_length=1,
+        max_length=2_048,
+    )
+    oauth_audience: str | None = Field(
+        None,
+        alias="QUERY_MAN_OAUTH_AUDIENCE",
+        min_length=1,
+        max_length=2_048,
+    )
+    oauth_query_scopes: str | None = Field(
+        None,
+        alias="QUERY_MAN_OAUTH_QUERY_SCOPES",
+        min_length=1,
+        max_length=4_096,
+    )
+    oauth_mcp_scopes: str | None = Field(
+        None,
+        alias="QUERY_MAN_OAUTH_MCP_SCOPES",
+        min_length=1,
+        max_length=4_096,
+    )
+    oauth_operator_scopes: str | None = Field(
+        None,
+        alias="QUERY_MAN_OAUTH_OPERATOR_SCOPES",
+        min_length=1,
+        max_length=4_096,
+    )
+    oauth_query_roles: str | None = Field(
+        None,
+        alias="QUERY_MAN_OAUTH_QUERY_ROLES",
+        max_length=4_096,
+    )
+    oauth_query_groups: str | None = Field(
+        None,
+        alias="QUERY_MAN_OAUTH_QUERY_GROUPS",
+        max_length=4_096,
+    )
+    oauth_operator_roles: str | None = Field(
+        None,
+        alias="QUERY_MAN_OAUTH_OPERATOR_ROLES",
+        max_length=4_096,
+    )
+    oauth_operator_groups: str | None = Field(
+        None,
+        alias="QUERY_MAN_OAUTH_OPERATOR_GROUPS",
+        max_length=4_096,
+    )
     source_mode: Literal["bootstrap", "managed"] = Field(
         "bootstrap",
         alias="QUERY_MAN_SOURCE_MODE",
@@ -145,8 +197,16 @@ class RuntimeConfig:
     diagnostic_capture_key: str | None = None
     diagnostic_capture_key_id: str | None = None
     diagnostic_capture_daily_bytes: int = _DEFAULT_DIAGNOSTIC_CAPTURE_DAILY_BYTES
+    oauth: OAuth2ResourceServerConfig | None = None
 
     def __post_init__(self) -> None:
+        if self.oauth is not None and (
+            self.api_token is not None or self.access_policy_file is not None
+        ):
+            raise ValueError(
+                "OAuth resource-server settings cannot be combined with "
+                "QUERY_MAN_API_TOKEN or QUERY_MAN_ACCESS_POLICY_FILE"
+            )
         diagnostic_values = (
             self.diagnostic_capture_database,
             self.diagnostic_capture_key,
@@ -159,6 +219,10 @@ class RuntimeConfig:
                 "QUERY_MAN_DIAGNOSTIC_CAPTURE_DATABASE, "
                 "QUERY_MAN_DIAGNOSTIC_CAPTURE_KEY and "
                 "QUERY_MAN_DIAGNOSTIC_CAPTURE_KEY_ID must be configured together"
+            )
+        if self.oauth is not None and any(value is not None for value in diagnostic_values):
+            raise ValueError(
+                "OAuth resource-server mode does not accept diagnostic capture settings"
             )
         if not 1_048_576 <= self.diagnostic_capture_daily_bytes <= 10_737_418_240:
             raise ValueError(
@@ -203,6 +267,15 @@ def load_runtime_config(
         "QUERY_MAN_DIAGNOSTIC_CAPTURE_DATABASE",
         "QUERY_MAN_DIAGNOSTIC_CAPTURE_KEY",
         "QUERY_MAN_DIAGNOSTIC_CAPTURE_KEY_ID",
+        "QUERY_MAN_OAUTH_ISSUER",
+        "QUERY_MAN_OAUTH_AUDIENCE",
+        "QUERY_MAN_OAUTH_QUERY_SCOPES",
+        "QUERY_MAN_OAUTH_MCP_SCOPES",
+        "QUERY_MAN_OAUTH_OPERATOR_SCOPES",
+        "QUERY_MAN_OAUTH_QUERY_ROLES",
+        "QUERY_MAN_OAUTH_QUERY_GROUPS",
+        "QUERY_MAN_OAUTH_OPERATOR_ROLES",
+        "QUERY_MAN_OAUTH_OPERATOR_GROUPS",
     ):
         if values.get(optional_name) == "":
             values.pop(optional_name)
@@ -210,19 +283,66 @@ def load_runtime_config(
         parsed = _Environment.model_validate(values)
     except ValidationError as error:
         raise ValueError(f"Invalid runtime configuration: {error}") from error
-    if parsed.api_token is not None and parsed.access_policy_file is not None:
-        raise ValueError("Configure QUERY_MAN_API_TOKEN or QUERY_MAN_ACCESS_POLICY_FILE, not both")
+    oauth_required = (
+        parsed.oauth_issuer,
+        parsed.oauth_audience,
+        parsed.oauth_query_scopes,
+        parsed.oauth_mcp_scopes,
+        parsed.oauth_operator_scopes,
+    )
+    oauth_enabled = any(value is not None for value in oauth_required)
+    if oauth_enabled and any(value is None for value in oauth_required):
+        raise ValueError(
+            "QUERY_MAN_OAUTH_ISSUER, QUERY_MAN_OAUTH_AUDIENCE, "
+            "QUERY_MAN_OAUTH_QUERY_SCOPES, QUERY_MAN_OAUTH_MCP_SCOPES and "
+            "QUERY_MAN_OAUTH_OPERATOR_SCOPES must be configured together"
+        )
+    configured_authentication = sum(
+        (
+            parsed.api_token is not None,
+            parsed.access_policy_file is not None,
+            oauth_enabled,
+        )
+    )
+    if configured_authentication > 1:
+        raise ValueError(
+            "Configure exactly one of QUERY_MAN_API_TOKEN, "
+            "QUERY_MAN_ACCESS_POLICY_FILE or OAuth resource-server settings"
+        )
     if parsed.source_mode == "managed" and (
-        parsed.api_token is not None or parsed.access_policy_file is None
+        parsed.api_token is not None
+        or (parsed.access_policy_file is None and not oauth_enabled)
     ):
         raise ValueError(
-            "QUERY_MAN_SOURCE_MODE=managed requires QUERY_MAN_ACCESS_POLICY_FILE "
-            "and does not accept QUERY_MAN_API_TOKEN"
+            "QUERY_MAN_SOURCE_MODE=managed requires QUERY_MAN_ACCESS_POLICY_FILE or "
+            "OAuth resource-server settings and does not accept QUERY_MAN_API_TOKEN"
         )
-    if not _is_loopback(parsed.host) and parsed.api_token is None and parsed.access_policy_file is None:
+    if (
+        not _is_loopback(parsed.host)
+        and parsed.api_token is None
+        and parsed.access_policy_file is None
+        and not oauth_enabled
+    ):
         raise ValueError(
-            "QUERY_MAN_API_TOKEN or QUERY_MAN_ACCESS_POLICY_FILE is required when QUERY_MAN_HOST is not loopback"
+            "QUERY_MAN_API_TOKEN, QUERY_MAN_ACCESS_POLICY_FILE or OAuth resource-server "
+            "settings are required when QUERY_MAN_HOST is not loopback"
         )
+    oauth = None
+    if oauth_enabled:
+        try:
+            oauth = OAuth2ResourceServerConfig(
+                issuer=_required(parsed.oauth_issuer),
+                audience=_required(parsed.oauth_audience),
+                query_scopes=_split_values(_required(parsed.oauth_query_scopes)),
+                mcp_scopes=_split_values(_required(parsed.oauth_mcp_scopes)),
+                operator_scopes=_split_values(_required(parsed.oauth_operator_scopes)),
+                query_roles=_split_values(parsed.oauth_query_roles),
+                query_groups=_split_values(parsed.oauth_query_groups),
+                operator_roles=_split_values(parsed.oauth_operator_roles),
+                operator_groups=_split_values(parsed.oauth_operator_groups),
+            )
+        except ValueError as error:
+            raise ValueError(f"Invalid OAuth resource-server configuration: {error}") from error
     root = (root_directory or Path.cwd()).resolve()
     return RuntimeConfig(
         host=parsed.host,
@@ -259,6 +379,7 @@ def load_runtime_config(
         ),
         diagnostic_capture_key_id=parsed.diagnostic_capture_key_id,
         diagnostic_capture_daily_bytes=parsed.diagnostic_capture_daily_bytes,
+        oauth=oauth,
     )
 
 
@@ -273,3 +394,15 @@ def _is_loopback(host: str) -> bool:
 
 def _split_allowlist(value: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys(entry.strip() for entry in value.split(",")))
+
+
+def _split_values(value: str | None) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    return tuple(entry.strip() for entry in value.split(",") if entry.strip())
+
+
+def _required(value: str | None) -> str:
+    if value is None:
+        raise ValueError("required OAuth setting is missing")
+    return value

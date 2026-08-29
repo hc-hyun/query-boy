@@ -21,6 +21,7 @@ Query Man은 하나의 애플리케이션 process 안에서 여러 책임을 모
 | RLS | 모든 RLS source를 실행 전에 거부 |
 | Query 결과 | exact seven result OID `20, 21, 23, 25, 1082, 1184, 1700`만 허용 |
 | Source authority | Repository의 static bootstrap 설정 |
+| Authentication | Local/CI opaque bearer 기본; AuthBridge JWT resource server는 opt-in |
 | Control Plane | 구현은 보존하지만 현재 launch composition에서는 비활성 |
 | 남은 일 | 실제 대상 환경 전환 `LAUNCH-02` |
 
@@ -36,7 +37,7 @@ AI 또는 API client
        v
 +---------------- Query Man 한 process ----------------+
 | Delivery                                               |
-|   인증·인가, 요청 검증, HTTP/MCP 응답                 |
+|   Bearer 검증·인가, 요청 검증, HTTP/MCP 응답          |
 |        |                                               |
 |        +--> Metadata ------> 질문에 필요한 DB 설명    |
 |        |        |                                      |
@@ -56,6 +57,10 @@ Control Plane은 코드에 남아 있으나 현재 첫 오픈에서는 연결하
 
 HTTP와 MCP는 같은 application service를 사용합니다. Transport에 따라 다른 source, 권한 또는
 query 실행기를 사용하지 않습니다.
+
+Runtime은 authentication authority도 process당 하나만 선택합니다. 기본 Compose의 opaque access policy와
+[AuthBridge JWT resource-server mode](resource-server-jwt-auth.md)는 함께 켤 수 없습니다. OAuth mode는
+Discovery/JWKS로 access token을 로컬 검증할 뿐 token 발급·refresh나 client secret을 소유하지 않습니다.
 
 ## 요청 한 건이 처리되는 순서
 

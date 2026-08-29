@@ -4,6 +4,11 @@
 > authorization and shared source visibility remain current, but every RLS source is quarantined before
 > tenant/revision/metadata/queue/database work. RLS trusted-context consequences below are historical
 > capability, not current launch serving behavior.
+>
+> [ADR 0029](0029-authbridge-resource-server-jwt.md) authentication note: the version 2 opaque
+> policy remains the local/CI default, while an opt-in AuthBridge JWT authority may produce the same
+> server-side `CallerContext`. Its managed-mode and token-validation rules supersede the policy-only
+> wording below when OAuth mode is selected.
 
 Status: Accepted; source-scope model superseded by ADR 0017
 

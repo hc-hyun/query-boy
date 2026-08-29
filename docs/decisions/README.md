@@ -39,6 +39,7 @@ ADR은 중요한 설계 선택과 그 이유를 보존하는 기록입니다. �
 | [0026](0026-physical-module-packages.md) | Owner별 physical Python package | 같은 repository/wheel/process의 path와 composition 경계; serving 의미는 ADR 0025 유지 |
 | [0027](0027-consent-gated-diagnostic-capture.md) | 동의 기반 진단 원문 수집 | 일반 log와 분리된 최대 7일 암호화 capture, 가명 subject와 fail-open 경계 |
 | [0028](0028-interactive-operator-shell.md) | 대화형 운영 Shell | `qm`의 자동완성·입력 안내와 bounded status/log/diag/source 운영 경계 |
+| [0029](0029-authbridge-resource-server-jwt.md) | AuthBridge resource-server JWT | Opt-in OAuth bearer 검증 capability; 기본 Compose와 protected route는 아직 변경하지 않음 |
 
 ## 보류된 연구
 

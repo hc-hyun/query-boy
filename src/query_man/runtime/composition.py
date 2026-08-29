@@ -10,6 +10,10 @@ from fastapi import FastAPI
 from query_man.assurance.verified import VerifiedQueryRegistry
 from query_man.delivery.access import AccessPolicy
 from query_man.delivery.app import build_http_app
+from query_man.delivery.authentication import (
+    BearerAuthenticator,
+    OAuth2JWTBearerAuthenticator,
+)
 from query_man.delivery.gateway import GatewayService
 from query_man.guarded_query.query import (
     DeliveryQueryExecutor,
@@ -57,6 +61,7 @@ def build_app(
     catalog: CatalogProvider | None = None,
     query_executor: DeliveryQueryExecutor | None = None,
     access_policy: AccessPolicy | None = None,
+    authenticator: BearerAuthenticator | None = None,
 ) -> FastAPI:
     if runtime_config.source_mode != "bootstrap":
         raise ValueError("Managed source mode must use query_man.managed.runtime")
@@ -103,14 +108,18 @@ def build_app(
         ("execute", "cancel", "close", "stop_accepting", "drain"),
     )
     query_service = QueryService(registry, metadata, query_executor)
-    if access_policy is None:
-        if runtime_config.access_policy_file is not None:
+    if access_policy is None and authenticator is None:
+        if runtime_config.oauth is not None:
+            authenticator = OAuth2JWTBearerAuthenticator(runtime_config.oauth)
+        elif runtime_config.access_policy_file is not None:
             access_policy = AccessPolicy.load(runtime_config.access_policy_file)
         elif runtime_config.api_token is not None:
             access_policy = AccessPolicy.legacy(runtime_config.api_token)
         else:
             access_policy = AccessPolicy.local()
     if diagnostic_capture is not None:
+        if access_policy is None:
+            raise ValueError("Diagnostic capture requires an access policy consent authority")
         access_policy = access_policy.with_subject_identifier(diagnostic_capture.subject_id)
     gateway = GatewayService(
         registry,
@@ -204,6 +213,7 @@ def build_app(
         query_executor=query_executor,
         query_service=query_service,
         access_policy=access_policy,
+        authenticator=authenticator,
         gateway=gateway,
         lifespan=lifespan,
         extra_state={"diagnostic_capture": diagnostic_capture},

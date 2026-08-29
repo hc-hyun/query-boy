@@ -61,6 +61,7 @@ launch의 import, fixture, route와 runtime work에는 참여하지 않습니다
 - [Source onboarding](source-onboarding.md): 새 DB 요청을 어느 절차로 보낼지 결정하는 입구
 - [Source extension checklist](source-extension-checklist.md): 현재 static launch의 새 DB 검토 기준
 - [Query limits](query-cost-control.md): query 제한, 관측값과 조사 순서
+- [Resource Server JWT Access Token 검증 계약](resource-server-jwt-auth.md): AuthBridge OAuth bearer 검증과 scope/error/rollout 경계
 
 ## 상세 참고와 비활성 기능
 

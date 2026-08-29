@@ -50,6 +50,7 @@ HTTP와 MCP가 같다는 말은 endpoint가 모두 같다는 뜻이 아니다. �
 | 위치 | 역할 |
 |---|---|
 | [`delivery/access.py`](../../../src/query_man/delivery/access.py) | `CallerContext`, `AccessPolicy`와 token 확인 |
+| [`delivery/authentication.py`](../../../src/query_man/delivery/authentication.py) | Async bearer interface, opaque adapter와 AuthBridge Discovery/JWKS JWT 검증 |
 | [`delivery/diagnostics.py`](../../../src/query_man/delivery/diagnostics.py) | 동의된 question/SQL capture를 Runtime sink에 전달하는 port |
 | [`delivery/gateway.py`](../../../src/query_man/delivery/gateway.py) | Transport-independent `GatewayService` |
 | [`delivery/mcp_server.py`](../../../src/query_man/delivery/mcp_server.py) | MCP server, schema, error와 disconnect |
@@ -140,6 +141,34 @@ Runtime key가 만든 trusted server state이고 HTTP/MCP request field가 아�
 `AccessPolicy.with_subject_identifier(callable) -> AccessPolicy`는 authenticated caller graph를 그대로
 복사하면서 audit `subject_id`만 채우며 token digest, consent, operator와 tenant 의미를 바꾸지 않는다.
 
+AuthBridge resource-server mode에서 Runtime이 소비하는 additive interface는 다음과 같다.
+
+```python
+@dataclass(frozen=True)
+class OAuth2ResourceServerConfig:
+    issuer: str
+    audience: str
+    query_scopes: tuple[str, ...]
+    mcp_scopes: tuple[str, ...]
+    operator_scopes: tuple[str, ...]
+    query_roles: tuple[str, ...] = ()
+    query_groups: tuple[str, ...] = ()
+    operator_roles: tuple[str, ...] = ()
+    operator_groups: tuple[str, ...] = ()
+
+class BearerAuthenticator(Protocol):
+    async def authenticate(
+        self,
+        token: str | None,
+        *,
+        mcp: bool,
+    ) -> CallerContext: ...
+```
+
+Opaque access policy는 adapter를 통해 같은 interface를 구현한다. OAuth 구현은 `RS256`, exact issuer와
+audience, `exp`/`nbf`/`sub`, query/MCP scope와 optional realm role/group을 검증한다. Runtime만 concrete
+authenticator를 선택하며 route나 Gateway가 Discovery/JWKS를 직접 호출하지 않는다.
+
 ### 현재 data API
 
 | 기능 | HTTP | MCP |
@@ -163,6 +192,9 @@ HTTP status와 MCP `isError`, validation issue 형식, discovery, health/admin/c
 
 - `/health`와 `/ready`를 제외한 요청은 parent access policy를 통과한다. Authorization header는 최대
   하나이며 token 원문을 저장하지 않는다.
+- OAuth mode는 AuthBridge JWT access token만 받고 ID/refresh/다른 audience token을 거부한다. Discovery와
+  JWKS는 bounded cache하고 unknown `kid`에서 cooldown 안의 단일 refresh만 허용한다. Server는 token을
+  저장하거나 refresh하지 않는다.
 - Caller ID, tenant ID와 operator 여부는 server가 결정한다.
 - Source 존재 확인은 metadata load, SQL validation과 admission보다 먼저다.
 - 모든 인증 query identity와 operator는 같은 active source 목록을 본다. Caller별 source scope가 없고
@@ -197,6 +229,10 @@ HTTP status와 MCP `isError`, validation issue 형식, discovery, health/admin/c
 HTTP 오류는 `{error: {code, message, details?}}`, MCP는 같은 업무 의미의 structured tool result를
 사용한다. 예상하지 못한 오류는 고정 internal error로 줄이며 raw PostgreSQL error, SQL literal,
 credential, token과 5xx detail을 반환하지 않는다.
+
+Bearer invalid/missing은 401과 `Bearer error="invalid_token"`, 유효한 token의 scope/role/group 또는
+operator 부족은 403과 `Bearer error="insufficient_scope"` challenge를 사용한다. Opaque local mode도
+같은 public challenge를 사용하지만 token의 내부 검증 방식이나 값을 공개하지 않는다.
 
 - RLS source는 인증·인가와 source 존재 확인 뒤, tenant/revision/metadata/SQL/queue/DB 작업 전에
   차단한다. HTTP는 detail 없는 `503 QUERY_UNAVAILABLE`, MCP는 같은 code/message의 detail 없는
@@ -337,7 +373,7 @@ Delivery는 audit event 의미와 기록 금지 대상을 소유하고 Runtime�
 
 ```text
 uv run pytest tests/test_registry.py tests/test_access.py tests/test_diagnostic_capture.py \
-  tests/test_http.py tests/test_mcp.py \
+  tests/test_oauth_authentication.py tests/test_http.py tests/test_mcp.py \
   tests/test_text_to_sql_skill.py
 uv run pytest tests/test_managed_http.py tests/test_managed_runtime_startup_cleanup.py
 ```
@@ -351,7 +387,7 @@ root 전체 gate를 실행한다.
 ## 집중해서 읽을 범위
 
 1. 이 문서와 [module index](../README.md)
-2. 변경하는 access/gateway/HTTP/MCP/admin/error code와 focused test
+2. 변경하는 access/authentication/gateway/HTTP/MCP/admin/error code와 focused test
 3. 호출하는 provider의 input/output/error interface
 4. 직접 관련된 [guarded query](../../decisions/0002-guarded-query-contract.md),
    [authorization](../../decisions/0004-caller-source-authorization.md),

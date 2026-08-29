@@ -33,6 +33,9 @@ accepted ADR이 기준이고, 이 문서는 개념을 쉽게 이해하기 위한
 | RLS | Row-Level Security. 같은 table에서도 사용자·tenant에 따라 보이는 행을 DB가 제한하는 기능입니다. Query Man의 현재 첫 오픈에서는 RLS source를 전부 거부합니다. |
 | Cancel / rollback | 실행 중 query를 중단하고 transaction에서 생긴 작업 상태를 되돌리는 절차입니다. Client 연결이 끊겨도 수행합니다. |
 | Fail-closed | 확인할 수 없을 때 안전하다고 추측하지 않고 요청을 거부하는 방식입니다. |
+| Resource Server | OAuth access token을 받아 자기 API의 audience와 권한을 검증하는 서비스입니다. Query Man은 token을 발급하거나 refresh하지 않습니다. |
+| JWT access token | AuthBridge가 서명해 발급한 OAuth bearer token입니다. Payload decode만으로 신뢰하지 않고 서명, issuer, audience, 만료와 scope를 함께 검사합니다. |
+| JWKS | JWT 서명을 검증할 공개 key 모음입니다. Discovery의 `jwks_uri`에서 읽어 cache하며 새로운 `kid`가 나타날 때 제한적으로 갱신합니다. |
 
 ## Metadata와 검증
 

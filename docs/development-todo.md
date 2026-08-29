@@ -32,8 +32,10 @@ Repository implementation과 local acceptance는 protected environment 전환 �
 
 1. 대상 서버·DB, 접근 권한과 변경 기록 책임자를 확정합니다.
 2. TLS, secret, backup과 직전 version rollback을 준비합니다.
-3. Source·DDL·reader role·PostgreSQL 설정·RLS 0건과 배포 image digest를 승인 inventory와 대조합니다.
-4. Traffic을 받기 전에 readiness와 아홉 verified query를 확인하고, route 뒤 오류·사용량·DB 연결을
+3. Authentication authority를 정합니다. AuthBridge를 선택하면 exact issuer, Query Man 전용
+   audience/scope mapper, CA trust와 client token refresh owner를 확인합니다.
+4. Source·DDL·reader role·PostgreSQL 설정·RLS 0건과 배포 image digest를 승인 inventory와 대조합니다.
+5. Traffic을 받기 전에 readiness와 아홉 verified query를 확인하고, route 뒤 오류·사용량·DB 연결을
    관찰합니다.
 
 정확한 명령, 기록 항목과 순서는 [Operations](operations.md#static-non-rls-first-launch)를 따릅니다.
@@ -47,6 +49,7 @@ Repository fixture나 local container 결과를 실제 환경 증거로 대신�
 - 실행자와 change-record owner
 - 승인된 Git commit과 application/upstream image digest
 - TLS, secret, backup과 복구 확인 방법
+- 선택한 authentication authority; AuthBridge이면 audience/scope mapper, CA와 token refresh owner
 - Source·DB 설정 inventory
 - Traffic route와 관찰 방법
 - 즉시 중단할 조건과 rollback 순서
@@ -61,6 +64,8 @@ Repository 문서나 procedure를 승인한 것만으로 실제 protected action
 - 두 source만 보이고 RLS source가 없음
 - `/ready`가 exact ready이며 PostgreSQL 18/UTF-8 검사가 통과함
 - 아홉 verified query와 현재 SQL policy가 통과함
+- AuthBridge 선택 시 access token 성공, ID/refresh/다른 audience/만료 token 거부, query/MCP/operator
+  scope와 signing-key rotation이 traffic 밖에서 통과함
 - Traffic 전환 뒤 오류·resource·connection 상태가 정상임
 - 실제 실행 결과, 담당자와 rollback 가능 상태를 immutable environment evidence로 남김
 
@@ -72,6 +77,7 @@ Repository 문서나 procedure를 승인한 것만으로 실제 protected action
 - 지원하지 않는 결과 type이 노출됨
 - SQL policy v2와 v3 process가 동시에 요청을 받음
 - Backup, rollback, 실행 책임이나 secret 취급이 불명확함
+- Authentication authority가 둘 이상 설정됐거나 AuthBridge audience/scope/CA/refresh 책임이 불명확함
 
 중단 후 임의로 baseline을 넓히지 않습니다. 원인을 정리하고 변경 범위와 영향을 다시 승인받습니다.
 

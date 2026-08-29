@@ -17,6 +17,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from query_man.delivery.access import AccessPolicy, CallerContext, caller_audit_fields
+from query_man.delivery.authentication import (
+    AccessPolicyBearerAuthenticator,
+    BearerAuthenticator,
+    InsufficientBearerScopeError,
+    InvalidBearerTokenError,
+)
 from query_man.delivery.gateway import GatewayService
 from query_man.delivery.http_validation import is_json_content_type
 from query_man.delivery.mcp_server import (
@@ -24,7 +30,7 @@ from query_man.delivery.mcp_server import (
     GetContextSuccessOutput,
     create_mcp_server,
 )
-from query_man.errors import AppError, OperatorRequiredError, QueryTimeoutError
+from query_man.errors import AppError, InsufficientScopeError, OperatorRequiredError, QueryTimeoutError
 from query_man.guarded_query.query import DeliveryQueryExecutor, QueryService
 from query_man.metadata.models import CatalogProvider
 from query_man.metadata.service import MetadataService
@@ -191,12 +197,19 @@ def build_http_app(
     metadata: MetadataService,
     query_executor: DeliveryQueryExecutor,
     query_service: QueryService,
-    access_policy: AccessPolicy,
+    access_policy: AccessPolicy | None,
     gateway: GatewayService,
     lifespan: Callable[[FastAPI], AbstractAsyncContextManager[None]],
+    authenticator: BearerAuthenticator | None = None,
     route_registrar: Callable[[FastAPI], None] | None = None,
     extra_state: Mapping[str, object] | None = None,
 ) -> FastAPI:
+    if authenticator is not None and access_policy is not None:
+        raise ValueError("Configure an access policy or bearer authenticator, not both")
+    if authenticator is None:
+        if access_policy is None:
+            raise ValueError("An access policy or bearer authenticator is required")
+        authenticator = AccessPolicyBearerAuthenticator(access_policy)
     mcp_server = create_mcp_server(gateway, _mcp_caller)
     mcp_app = mcp_server.streamable_http_app(
         streamable_http_path="/mcp",
@@ -217,6 +230,7 @@ def build_http_app(
     app.state.query_executor = query_executor
     app.state.query_service = query_service
     app.state.access_policy = access_policy
+    app.state.authenticator = authenticator
     app.state.gateway = gateway
     app.state.mcp_server = mcp_server
     app.state.mcp_app = mcp_app
@@ -241,24 +255,42 @@ def build_http_app(
         if request.url.path not in {"/health", "/ready"}:
             authorizations = request.headers.getlist("authorization")
             authorization = authorizations[0] if len(authorizations) == 1 else None
-            received = (
-                authorization[7:]
-                if authorization is not None and authorization.startswith("Bearer ")
-                else None
-            )
-            caller = access_policy.authenticate(received) if len(authorizations) <= 1 else None
-            if caller is None:
+            received = _bearer_token(authorization) if len(authorizations) == 1 else None
+            try:
+                if len(authorizations) > 1:
+                    raise InvalidBearerTokenError
+                caller = await authenticator.authenticate(
+                    received,
+                    mcp=request.url.path == "/mcp",
+                )
+            except InvalidBearerTokenError:
                 audit_logger.warning(
                     "authentication_failed method=%s",
                     request.method,
                 )
                 return JSONResponse(
                     status_code=401,
-                    headers={"WWW-Authenticate": "Bearer"},
+                    headers={"WWW-Authenticate": 'Bearer error="invalid_token"'},
                     content={
                         "error": {
                             "code": "UNAUTHORIZED",
                             "message": "A valid bearer token is required.",
+                        }
+                    },
+                )
+            except InsufficientBearerScopeError:
+                audit_logger.warning(
+                    "authorization_denied",
+                    extra={"operation": "bearer_scope"},
+                )
+                error = InsufficientScopeError()
+                return JSONResponse(
+                    status_code=error.status_code,
+                    headers={"WWW-Authenticate": 'Bearer error="insufficient_scope"'},
+                    content={
+                        "error": {
+                            "code": error.code,
+                            "message": error.message,
                         }
                     },
                 )
@@ -322,7 +354,12 @@ def build_http_app(
         body: dict[str, object] = {"code": error.code, "message": error.message}
         if error.status_code < 500 and error.details is not None:
             body["details"] = error.details
-        return JSONResponse(status_code=error.status_code, content={"error": body})
+        headers = (
+            {"WWW-Authenticate": 'Bearer error="insufficient_scope"'}
+            if isinstance(error, OperatorRequiredError)
+            else None
+        )
+        return JSONResponse(status_code=error.status_code, headers=headers, content={"error": body})
 
     @app.exception_handler(Exception)
     async def unexpected_error(_request: Request, error: Exception) -> JSONResponse:
@@ -449,6 +486,15 @@ async def _wait_for_disconnect(request: Request) -> None:
 def _caller(request: Request) -> CallerContext:
     caller: CallerContext = request.state.caller
     return caller
+
+
+def _bearer_token(authorization: str | None) -> str | None:
+    if authorization is None or not authorization.startswith("Bearer "):
+        return None
+    token = authorization[7:]
+    if not token or any(character.isspace() for character in token):
+        return None
+    return token
 
 
 def _require_operator(request: Request) -> CallerContext:

@@ -12,7 +12,13 @@ from pathlib import Path
 import httpx
 import pytest
 
-from query_man.delivery.access import AccessPolicy
+from query_man.delivery.access import AccessPolicy, CallerContext
+from query_man.delivery.authentication import (
+    BearerAuthenticator,
+    InsufficientBearerScopeError,
+    OAuth2JWTBearerAuthenticator,
+    OAuth2ResourceServerConfig,
+)
 from query_man.delivery.mcp_server import MCP_PROTOCOL_VERSION
 from query_man.errors import QueryInvalidError, QueryUnavailableError
 from query_man.guarded_query.query import DeliveryQueryExecutor
@@ -72,6 +78,31 @@ class PartiallyHangingCatalog(ReturningCatalog):
 class FailingAccessPolicy:
     def authenticate(self, _token: str | None) -> None:
         raise RuntimeError("authentication dependency failed")
+
+
+class InsufficientScopeAuthenticator:
+    async def authenticate(
+        self,
+        _token: str | None,
+        *,
+        mcp: bool,
+    ) -> CallerContext:
+        del mcp
+        raise InsufficientBearerScopeError
+
+
+class RecordingAuthenticator:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str | None, bool]] = []
+
+    async def authenticate(
+        self,
+        token: str | None,
+        *,
+        mcp: bool,
+    ) -> CallerContext:
+        self.calls.append((token, mcp))
+        return CallerContext("oauth-test", "authbridge", False)
 
 
 class RecordingQueryExecutor:
@@ -223,11 +254,22 @@ def runtime_config(api_token: str | None = None) -> RuntimeConfig:
     )
 
 
+def oauth_config() -> OAuth2ResourceServerConfig:
+    return OAuth2ResourceServerConfig(
+        issuer="https://smart-dna.sec.samsung.net/ws2/30001/realms/authbridge",
+        audience="query-man",
+        query_scopes=("query-man.read",),
+        mcp_scopes=("mcp.tools",),
+        operator_scopes=("query-man.admin",),
+    )
+
+
 def client(
     catalog: CatalogProvider,
     api_token: str | None = None,
     query_executor: DeliveryQueryExecutor | None = None,
     access_policy: AccessPolicy | None = None,
+    authenticator: BearerAuthenticator | None = None,
 ) -> httpx.AsyncClient:
     app = build_app(
         runtime_config(api_token),
@@ -235,11 +277,36 @@ def client(
         catalog=catalog,
         query_executor=query_executor,
         access_policy=access_policy,
+        authenticator=authenticator,
     )
     return httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
         base_url="http://test",
     )
+
+
+def test_static_composition_selects_oauth_resource_server_authenticator() -> None:
+    app = build_app(
+        replace(runtime_config(), oauth=oauth_config()),
+        registry=load_test_registry(),
+        catalog=NeverCalledCatalog(),
+    )
+
+    assert app.state.access_policy is None
+    assert isinstance(app.state.authenticator, OAuth2JWTBearerAuthenticator)
+
+
+def test_static_composition_rejects_two_injected_authentication_authorities(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="not both"):
+        build_app(
+            runtime_config(),
+            registry=load_test_registry(),
+            catalog=NeverCalledCatalog(),
+            access_policy=_shared_access_policy(tmp_path),
+            authenticator=InsufficientScopeAuthenticator(),
+        )
 
 
 @pytest.mark.asyncio
@@ -705,6 +772,7 @@ async def test_bearer_token_is_required_when_configured(
         authorized = await session.get("/sources", headers={"authorization": f"Bearer {token}"})
     assert unauthorized.status_code == 401
     assert unauthorized.json()["error"]["code"] == "UNAUTHORIZED"
+    assert unauthorized.headers["www-authenticate"] == 'Bearer error="invalid_token"'
     assert authorized.status_code == 200
     assert "authentication_failed" in caplog.text
     assert token not in caplog.text
@@ -724,6 +792,73 @@ async def test_duplicate_authorization_headers_are_rejected() -> None:
 
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "UNAUTHORIZED"
+    assert response.headers["www-authenticate"] == 'Bearer error="invalid_token"'
+
+
+@pytest.mark.asyncio
+async def test_valid_token_without_required_scope_returns_bearer_challenge(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    token = "signed.jwt.access-token"
+    caplog.set_level(logging.WARNING, logger="query_man.audit")
+    async with client(
+        NeverCalledCatalog(),
+        authenticator=InsufficientScopeAuthenticator(),
+    ) as session:
+        response = await session.get(
+            "/sources",
+            headers={"authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 403
+    assert response.json() == {
+        "error": {
+            "code": "INSUFFICIENT_SCOPE",
+            "message": "Required bearer permission is missing.",
+        }
+    }
+    assert response.headers["www-authenticate"] == (
+        'Bearer error="insufficient_scope"'
+    )
+    assert token not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_mcp_request_marks_the_authentication_scope() -> None:
+    token = "signed.jwt.access-token"
+    authenticator = RecordingAuthenticator()
+    async with client(
+        NeverCalledCatalog(),
+        authenticator=authenticator,
+    ) as session:
+        response = await session.post(
+            "/mcp",
+            content=b"{}",
+            headers={"authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 400
+    assert authenticator.calls == [(token, True)]
+
+
+@pytest.mark.asyncio
+async def test_query_caller_operator_denial_returns_insufficient_scope_challenge(
+    tmp_path: Path,
+) -> None:
+    async with client(
+        NeverCalledCatalog(),
+        access_policy=_shared_access_policy(tmp_path),
+    ) as session:
+        response = await session.get(
+            "/admin/health",
+            headers={"authorization": f"Bearer {_QUERY_A_TOKEN}"},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "OPERATOR_REQUIRED"
+    assert response.headers["www-authenticate"] == (
+        'Bearer error="insufficient_scope"'
+    )
 
 
 @pytest.mark.asyncio

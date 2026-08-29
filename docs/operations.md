@@ -8,6 +8,7 @@ Status: 현재 first-launch runbook + 구현됐지만 비활성인 managed 운�
 | 상황 | 읽을 절 | 현재 launch에서 사용 |
 |---|---|---|
 | 실제 첫 오픈 준비·전환 | [Static Non-RLS First Launch](#static-non-rls-first-launch) | 예 |
+| AuthBridge bearer 인증 준비 | [Resource Server JWT 계약](resource-server-jwt-auth.md), [Static Non-RLS First Launch](#static-non-rls-first-launch) | opt-in — 실제 mapper/cutover 별도 승인 |
 | 현재 log, core health·metric, query alert 조사 | [Logging](#logging-policy), [Health](#health-and-metrics), [Alert](#alert-policy) | 예 |
 | 초보자용 상태·log·diagnostic·managed 조회 | [Interactive Operator Shell](#interactive-operator-shell) | 상태/log/diag는 예; source mutation은 managed 활성화 후 |
 | 로컬 Compose와 MCP 확인 | [Local Container Operations](#local-container-operations) | 예 |
@@ -31,10 +32,11 @@ managed onboarding 절차가 아니다. 다음 exact profile만 대상으로 한
 - 단일 Query Man replica, private Docker network와 loopback listener
 
 Repository 변경 승인은 실제 환경 실행 승인이 아니다. 실행 전 change record에는 target, operator
-access, TLS/secret/backup, source·DDL·role/settings inventory, approved Git commit, upstream/application
-image digest, route, stop/rollback condition과 책임자를 기록한다. 하나라도 확인할 수 없으면 시작하지
-않는다. 이 protected action은 active TODO의 `LAUNCH-02`이며 별도 사용자 승인 전에는 실행하지
-않는다.
+access, authentication authority, TLS/secret/backup, source·DDL·role/settings inventory, approved Git
+commit, upstream/application image digest, route, stop/rollback condition과 책임자를 기록한다. AuthBridge를
+선택하면 exact issuer, Query Man 전용 audience/scope mapper, CA trust와 client token 취득·refresh owner도
+기록한다. 하나라도 확인할 수 없으면 시작하지 않는다. 이 protected action은 active TODO의
+`LAUNCH-02`이며 별도 사용자 승인 전에는 실행하지 않는다.
 
 ### Artifact preparation
 
@@ -78,6 +80,8 @@ Acceptance는 다음을 모두 요구한다.
 - Exact seven-OID positive, bool/JSON/bytea/float/array/record negative와 scalar-domain Catalog
   pre-publication rejection acceptance가 통과한다.
 - HTTP와 MCP가 같은 unsupported result를 details 없는 `QUERY_UNAVAILABLE`로 반환한다.
+- AuthBridge를 선택한 경우 access token success와 ID/refresh/다른 audience/만료 token rejection,
+  query/MCP/operator scope, 401/403 challenge와 signing-key rotation을 확인한다.
 - Application image revision/digest, PostgreSQL image digest와 deployed config가 change record와 같다.
 
 `degraded`, RLS/unsupported advertised type, hash 차이, old SQL policy process, inventory drift 또는
@@ -414,14 +418,14 @@ Runtime은 process 전체의 source authority를 한 mode로 고정한다.
 
 | Mode | Valid source configuration | Authentication |
 |---|---|---|
-| `bootstrap` (default) | Control DSN/key 없음 | Loopback anonymous, query-only API token 또는 version 2 policy |
-| `managed` | Control DSN/key와 stable replica ID 모두 있음 | Version 2 policy file 필수; query/admin identity 분리 |
+| `bootstrap` (default) | Control DSN/key 없음 | Loopback anonymous, query-only API token, version 2 policy 또는 OAuth resource server |
+| `managed` | Control DSN/key와 stable replica ID 모두 있음 | Version 2 policy 또는 OAuth resource server; query/admin capability 분리 |
 
 Bootstrap에 Control 설정이 하나라도 있거나 managed에 Control DSN/key/replica ID 중 하나가 빠지면
 configuration error로 시작하지 않는다. Bootstrap은 replica ID가 있어도 읽거나 검증하지 않는다.
 Mode를 `auto`로 추론하거나 source별로 섞지 않는다. Managed startup은 source
 directory와 filesystem verified-query file을 열지 않지만 budget profile과 configured
-authentication/access policy는 계속 deployment configuration에서 읽는다.
+authentication authority는 계속 deployment configuration에서 읽는다.
 
 Access-policy version 2 caller는 `caller_id`, `tenant_id`, `token_env`와 `operator`만 선언한다.
 모든 인증 identity는 모든 active source를 보며 source별 scope나 grant가 없다. Version 1,
@@ -430,6 +434,12 @@ Access-policy version 2 caller는 `caller_id`, `tenant_id`, `token_env`와 `oper
 admin identity가 필요하며 `QUERY_MAN_API_TOKEN`과 anonymous local identity를 허용하지 않는다.
 Bootstrap의 anonymous/API-token identity는 query-only다. `operator`는 query 권한에 admin API와
 cancel을 추가하는 capability superset이고 별도 role hierarchy는 아니다.
+
+OAuth mode는 access-policy file/API token과 상호 배타적이며 query, MCP와 operator scope를 각각
+설정한다. Optional realm role/group도 해당 capability에 모두 필요하다. Managed mode에서는 OAuth의
+query/operator scope 분리가 access-policy의 query/admin identity 분리를 대신한다. OAuth claim에는
+server-side consent receipt authority가 없으므로 diagnostic capture와 함께 시작하지 않는다. 상세
+검증·오류·rollout 계약은 [Resource Server JWT guide](resource-server-jwt-auth.md)를 따른다.
 
 Managed lifespan은 empty registry/verified map에서 Control DB를 scan한 뒤 enabled generation을
 decrypt·validate하고 stored metadata/quality gate를 통과한 source만 적용한다. Disabled lifecycle은
