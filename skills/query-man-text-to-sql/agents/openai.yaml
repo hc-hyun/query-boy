@@ -1,4 +1,4 @@
 interface:
-  display_name: "Query Man Text-to-SQL"
-  short_description: "Safely answer questions through Query Man MCP"
-  default_prompt: "Use Query Man MCP to answer this data question safely."
+  display_name: "Query Man Data Query"
+  short_description: "Query and explain business data through Query Man"
+  default_prompt: "Use $query-man-text-to-sql to answer this business data question through Query Man."

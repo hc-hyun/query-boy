@@ -1,9 +1,9 @@
 ---
 name: query-man-text-to-sql
-description: Answer data questions through the Query Man MCP tools while preserving its source selection, metadata revision, grain, join, and returned business semantics. Use when a task requires generating and executing PostgreSQL SQL through Query Man; do not use for direct database connections or database administration.
+description: Query and answer business-data questions through the Query Man MCP tools. Use when a user asks to look up, count, compare, summarize, or analyze data available through Query Man; do not use for direct database connections, database administration, or answers that were not produced by an executed Query Man query.
 ---
 
-# Query Man Text-to-SQL
+# Query Man Data Query
 
 Use only the fixed `list_sources`, `get_context`, and `query` tools. Never request or invent a
 host, DSN, credential, schema, relation, column, function, or session setting. If any required
@@ -54,8 +54,21 @@ the `query` tool returned it in this workflow.
      the previous nonempty period. Ask when the year or ranking scope is ambiguous.
    - Do not infer missing status definitions, time windows, join paths, or denominator populations.
 6. Call `query` with the exact `metadata_revision` and `sql_policy_revision` returned by the same
-   `get_context` response. Present the returned rows and explicitly mention truncation when
-   `truncated` is true.
+   `get_context` response.
+
+## Answer the user
+
+- Lead with the business answer, not the SQL. Use the user's language and a compact table when it
+  makes multiple returned rows easier to compare.
+- State filters, time range, units, currency, and timezone only when the context or returned result
+  establishes them. Do not silently choose or convert a missing business meaning.
+- If the result has zero rows, say that no matching rows were returned for the queried scope; do
+  not claim that the underlying data does not exist. Distinguish this from a query that was not
+  executed or failed.
+- When `truncated` is true, explicitly say that the answer is partial and do not compute totals or
+  rankings as if all rows were returned.
+- Show generated SQL only when the user requests it or it materially helps an audit. SQL text alone
+  is never evidence that the query ran; only describe values returned by the `query` tool as results.
 
 If `query` returns `METADATA_REVISION_MISMATCH`, call `get_context` again, regenerate SQL only from
 the refreshed context, and retry once with both refreshed revisions. Stop after a second mismatch.

@@ -8,6 +8,9 @@ import yaml
 from tests.helpers import ROOT_DIRECTORY
 
 SKILL_PATH = ROOT_DIRECTORY / "skills" / "query-man-text-to-sql" / "SKILL.md"
+OPENAI_YAML_PATH = (
+    ROOT_DIRECTORY / "skills" / "query-man-text-to-sql" / "agents" / "openai.yaml"
+)
 SOURCE_SELECTION_CASES_PATH = (
     ROOT_DIRECTORY / "config" / "domain-lab" / "source-selection-cases.json"
 )
@@ -68,6 +71,29 @@ def test_text_to_sql_skill_requires_actual_query_man_tools_and_fails_closed() ->
     assert "seed data" in content
     assert "Never present a value as a query result unless" in content
     assert "the `query` tool returned it" in content
+
+
+def test_text_to_sql_skill_is_discoverable_and_reports_bounded_results() -> None:
+    content = SKILL_PATH.read_text(encoding="utf-8")
+    frontmatter = _skill_frontmatter(SKILL_PATH)
+    interface_document = yaml.safe_load(OPENAI_YAML_PATH.read_text(encoding="utf-8"))
+
+    description = frontmatter["description"]
+    assert isinstance(description, str)
+    assert all(action in description for action in ("look up", "count", "compare", "summarize"))
+    assert "direct database connections" in description
+
+    assert isinstance(interface_document, dict)
+    interface = interface_document["interface"]
+    assert interface["display_name"] == "Query Man Data Query"
+    assert "$query-man-text-to-sql" in interface["default_prompt"]
+
+    answer_guidance = " ".join(content.split("## Answer the user", 1)[1].split())
+    assert "zero rows" in answer_guidance
+    assert "query that was not executed or failed" in answer_guidance
+    assert "When `truncated` is true" in answer_guidance
+    assert "the answer is partial" in answer_guidance
+    assert "SQL text alone" in answer_guidance
 
 
 def test_text_to_sql_skill_selects_one_source_or_clarifies_before_context() -> None:
