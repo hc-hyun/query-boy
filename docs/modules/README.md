@@ -10,8 +10,9 @@ Query Man은 하나의 repository와 하나의 deployable process를 유지하�
 
 Python 구현은 `src/query_man` 아래 `source_catalog`, `metadata`, `guarded_query`, `delivery`, `runtime`,
 `assurance` 여섯 physical package로 나뉜다. Package `__init__.py`는 marker-only이며 interface를
-재수출하지 않는다. 제거된 managed/Control Plane 구현은 현재 module이 아니다. 과거 기록을 해석해야
-할 때만 [retired Control Plane 문서](control-plane/README.md)를 본다.
+재수출하지 않는다. 제거된 managed/Control Plane 구현은 현재 module이 아니다. 현재 authority와 제거
+경계는 [ADR 0030의 retired managed capability](../decisions/0030-git-reviewed-yaml-source-authority.md#retired-managed-capability)를
+따르고, 과거 구현은 해당 ADR·evidence의 baseline commit에서만 확인한다.
 
 ## 3분 시작법
 

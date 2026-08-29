@@ -509,8 +509,6 @@ def test_local_markdown_links_resolve() -> None:
     markdown_paths = [ROOT_DIRECTORY / "README.md", ROOT_DIRECTORY / "AGENTS.md"]
     immutable_paths = {
         ROADMAP,
-        ROOT_DIRECTORY / "docs" / "module-boundary-decision-guide.md",
-        ROOT_DIRECTORY / "docs" / "source-onboarding-skill-plan.md",
     }
     immutable_paths.update(
         path

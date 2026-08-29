@@ -210,7 +210,7 @@ Source DB의 curated view와 최소 권한 reader
 - 정확한 모듈 owner와 interface: [module index](modules/README.md)
 - 현재 운영 전환: [operations](operations.md)
 - 예제 source와 질문: [MVP data](mvp.md)
-- 새 source 검토: [source onboarding](source-onboarding.md)
+- 새 source 검토: [source onboarding·extension checklist](source-extension-checklist.md#이-문서는-언제-사용하나요)
 - 지금 남은 작업: [active TODO](development-todo.md)
 
 ## Completion Tracking

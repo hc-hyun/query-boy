@@ -1,8 +1,27 @@
-# Source Extension Checklist
+# Source Onboarding And Extension Checklist
 
 Status: Git-reviewed YAML source authority; first-launch inventory frozen by ADR 0025
 
 Source authority의 결정 기준은 [ADR 0030](decisions/0030-git-reviewed-yaml-source-authority.md)이다.
+Source·verified query·budget의 유일한 authority는 각각 다음 Git-reviewed YAML이다.
+
+- `config/sources/*.yaml`
+- `config/verified-queries.yaml`
+- `config/budget-profiles.yaml`
+
+Runtime admin mutation, Control DB와 hot reload 경로는 없다. `QUERY_MAN_SOURCE_MODE`,
+`QUERY_MAN_CONTROL_DSN`, `QUERY_MAN_SOURCE_ENCRYPTION_KEY`, `QUERY_MAN_REPLICA_ID`,
+`QUERY_MAN_SOURCE_RELOAD_INTERVAL_MS`는 폐기된 설정이며 하나라도 존재하면 startup을 fail-closed한다.
+변경 반영에는 review·test·배포가 필요하다.
+
+## 30초 경로 선택
+
+| 하려는 일 | 사용할 경로 |
+|---|---|
+| 새 DB/source 추가 또는 기존 source 변경 | 이 문서로 end-to-end 영향과 승인·검증 범위를 확인한다. |
+| 추가 가능성과 준비 항목만 정리 | [`query-man-source-onboarding` Skill](../skills/query-man-source-onboarding/SKILL.md)로 plan-only handoff를 만든다. |
+| 현재 source YAML 조회·검증 | `uv run qm source list`, `show`, `validate`를 사용한다. 이 명령은 변경하지 않는다. |
+| 현재 source의 데이터 질문 | [`query-man-text-to-sql` Skill](../skills/query-man-text-to-sql/SKILL.md)의 query workflow를 사용한다. |
 
 ## 이 문서는 언제 사용하나요?
 
@@ -13,8 +32,6 @@ database나 source ID를 추가하려면 이 checklist로 영향 범위를 먼�
 바꾸고 traffic 밖에서 검증한 뒤 재배포하는 변경이다. 따라서
 [ADR 0025](decisions/0025-static-non-rls-first-launch.md)의 대상, 이유, 영향과 rollback을 사용자에게
 제시하고 정확히 승인받기 전에는 manifest, 코드, schema와 route를 변경하지 않는다.
-
-Runtime admin mutation, Control DB와 hot reload 경로는 없다. 반영에는 review·test·배포가 필요하다.
 
 ## 먼저 알아둘 용어
 
@@ -149,4 +166,6 @@ limit을 대신하지 않는다.
 
 계획만 필요한 경우에는
 [`query-man-source-onboarding` Skill](../skills/query-man-source-onboarding/SKILL.md)을 사용한다. Skill의
-결과는 검토용 handoff이며 실제 등록, 승인 또는 실행 증거가 아니다.
+결과는 검토용 handoff이며 실제 등록, 승인 또는 실행 증거가 아니다. Skill은 credential 조회·전달,
+SQL/DDL/role/grant, repository 수정·commit·push를 수행하지 않는다. `mutation_count: 0`은 계획만
+준비됐다는 뜻이며 source 등록 완료를 뜻하지 않는다.

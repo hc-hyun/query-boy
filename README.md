@@ -347,11 +347,11 @@ uv run pytest -m 'mcp_server and not soak' -s
 
 ## 새 데이터베이스를 추가하려면
 
-현재 첫 오픈은 두 source만 승인했습니다. 먼저 [source onboarding 안내](docs/source-onboarding.md)에서
-추가하려는 DB가 현재 static 경로에 맞는지 확인합니다. 새 DB에는 PostgreSQL 18/UTF-8, RLS를 사용하지
-않는 검토된 view와 읽기 전용 계정이 필요합니다. 업무 의미·사용량 제한·결과 타입을 검토하고 품질
-질문과 승인 SQL을 통과한 뒤, 변경 승인을 받아 다시 배포합니다. 현재 기본 절차는
-[source extension checklist](docs/source-extension-checklist.md)를 따릅니다.
+현재 첫 오픈은 두 source만 승인했습니다. 아래
+[source onboarding과 extension checklist](docs/source-extension-checklist.md#이-문서는-언제-사용하나요)에서
+추가하려는 DB가 현재 static 경로에 맞는지와 end-to-end 영향을 함께 확인합니다. 새 DB에는 PostgreSQL
+18/UTF-8, RLS를 사용하지 않는 검토된 view와 읽기 전용 계정이 필요합니다. 업무 의미·사용량 제한·결과
+타입을 검토하고 품질 질문과 승인 SQL을 통과한 뒤, 변경 승인을 받아 다시 배포합니다.
 
 현재 module interface 안에서 처리할 수 있다면 source별 Python 분기를 추가하지 않습니다. Source
 추가·변경은 `config/sources/*.yaml`과 관련 verified-query/budget YAML을 같은 review에서

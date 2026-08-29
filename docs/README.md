@@ -47,7 +47,7 @@ README가 가리키는 leaf path에서 시작합니다.
 | 지금 남은 일 확인하기 | [Active TODO](development-todo.md) | [과거 완료 원장](implementation-roadmap.md) |
 | 실제 첫 오픈 준비하기 | [Operations](operations.md) | [ADR 0025](decisions/0025-static-non-rls-first-launch.md) |
 | 예제 데이터 이해하기 | [첫 오픈 데이터](mvp.md) | [Verified query](verified-queries.md) |
-| 새 DB 추가 검토하기 | [Source onboarding 안내](source-onboarding.md) | [현재 체크리스트](source-extension-checklist.md) |
+| 새 DB 추가 검토하기 | [Source onboarding·extension checklist](source-extension-checklist.md#이-문서는-언제-사용하나요) | [Plan-only onboarding Skill](../skills/query-man-source-onboarding/SKILL.md) |
 | 느리거나 거부된 query 조사하기 | [Query 제한과 자원](query-cost-control.md) | [Operations](operations.md) |
 | 결정 이유 확인하기 | [ADR 안내](decisions/README.md) | 해당 ADR 원문 |
 | 과거 실행 결과 확인하기 | [검증 기록 색인](verification/README.md) | 해당 날짜의 기록 원문 |
@@ -59,8 +59,7 @@ README가 가리키는 leaf path에서 시작합니다.
 - [Module index](modules/README.md): 모듈 owner, 허용 의존, 코드·테스트 지도와 승인 규칙
 - [Operations](operations.md): 현재 첫 오픈, 로깅, 상태 확인, 로컬 컨테이너와 종료 절차
 - [Active TODO](development-todo.md): 실제로 지금 남은 작업
-- [Source onboarding](source-onboarding.md): 새 DB 요청을 어느 절차로 보낼지 결정하는 입구
-- [Source extension checklist](source-extension-checklist.md): 현재 static launch의 새 DB 검토 기준
+- [Source onboarding·extension checklist](source-extension-checklist.md): 새 DB 요청의 경로 선택과 현재 static launch 검토 기준
 - [Query limits](query-cost-control.md): query 제한, 관측값과 조사 순서
 - [Resource Server JWT Access Token 검증 계약](resource-server-jwt-auth.md): AuthBridge OAuth bearer 검증과 scope/error/rollout 경계
 
@@ -74,8 +73,11 @@ README가 가리키는 leaf path에서 시작합니다.
 - [ADR index](decisions/README.md): 현재 결정과 보류된 연구를 구분한 색인
 - [Implementation ledger](implementation-roadmap.md): 완료 ID와 증거를 보존하는 과거 원장
 - [Verification evidence](verification/README.md): 실행 시점별 immutable record
-- [Module boundary decision guide](module-boundary-decision-guide.md): 이미 승인·완료된 모듈 경계 선택의 frozen record
-- [Source onboarding Skill plan](source-onboarding-skill-plan.md): plan-only Skill을 만든 당시 설계 기록
+
+Retired Control Plane tombstone과 완료된 module-boundary·onboarding-Skill 계획 문서는 현재 tree에서
+유지하지 않습니다. 삭제 전 원문은 Git baseline
+`95b3068a16629bf043696938d049e36efc9a162f`에서 확인할 수 있습니다. Accepted ADR, dated evidence와
+implementation ledger는 기존 immutable 기록 정책에 따라 계속 보존합니다.
 
 기록 문서의 `Complete`는 그 문서에 적힌 commit·환경·범위만 뜻합니다. 현재 지원 상태는 이 문서,
 [Architecture](architecture.md), [Active TODO](development-todo.md), accepted ADR과 실행 가능한 테스트를

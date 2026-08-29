@@ -18,6 +18,11 @@ mutation, Control DB, hot reload과 source convergence 운영 절차는 제공�
 정확한 결정 기준은 [ADR 0030](decisions/0030-git-reviewed-yaml-source-authority.md)입니다.
 실제 protected environment 전환은 [Active TODO](development-todo.md)의 `LAUNCH-02`입니다.
 
+현재 application은 reviewed Git revision, pinned artifact와 외부 secret 설정으로 복구합니다. Source
+업무 데이터의 backup·restore는 각 source DB owner의 정책에 따릅니다. 남아 있는 과거 Control DB,
+backup, credential 또는 key는 이 runbook으로 폐기하지 않습니다. Exact inventory, retention, target,
+access scope, rollback과 change-record 책임을 정한 별도 protected-operation 승인이 필요합니다.
+
 ## Static Non-RLS First Launch
 
 [ADR 0025](decisions/0025-static-non-rls-first-launch.md)의 first launch는 다음 exact profile만 대상으로 합니다.
