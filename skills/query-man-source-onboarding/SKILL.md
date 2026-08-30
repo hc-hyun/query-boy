@@ -26,9 +26,10 @@ For every plan, read only the current material needed to produce it:
 
 Read [query cost and resource control](../../docs/query-cost-control.md) and the current
 [`budget-profiles.yaml`](../../config/budget-profiles.yaml) only when selecting an existing resource tier. Read
-[shared source access and tier decision](../../docs/decisions/0017-shared-source-access-and-resource-tier.md)
-when the request mentions users, organizations, grants, quota or tier overrides. If authentication is in scope,
-preserve the [Resource Server JWT Access Token validation contract](../../docs/decisions/0029-authbridge-resource-server-jwt.md):
+[Delivery authorization boundary](../../docs/modules/delivery/README.md) and
+[Source Catalog budget boundary](../../docs/modules/source-catalog/README.md) when the request mentions users,
+organizations, grants, quota or tier overrides. If authentication is in scope, preserve the
+[Resource Server JWT Access Token validation contract](../../docs/resource-server-jwt-auth.md):
 Discovery supplies `jwks_uri`; the service validates bearer access-token signature, issuer, audience, time and
 required scope/role/group locally and neither accepts nor refreshes ID/refresh tokens.
 
@@ -85,7 +86,7 @@ in free-text comments.
 
 Any `tenant_isolation=rls` source or RLS-dependent view remains stopped. YAML review is not RLS-serving approval;
 that requires the separate attestation, migration and cutover decision tracked by
-[future work](../../docs/future-work.md#rls-source-제공).
+[the parked RLS items](../../docs/development-todo.md#현재-일정에-없는-일).
 
 Never include credential values, complete DSNs, provider secret paths, arbitrary SQL text, raw database errors
 or a statement that an unperformed check passed. The Skill is planning guidance, not authorization, source

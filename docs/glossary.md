@@ -87,12 +87,13 @@ accepted ADR이 기준이고, 이 문서는 개념을 쉽게 이해하기 위한
 | ADR | 중요한 설계 선택과 이유·영향을 보존하는 Architecture Decision Record입니다. |
 | Active TODO | 승인돼 실제로 지금 진행할 남은 일입니다. |
 | Parked research | 조사 기록은 있지만 일정과 구현 승인은 없는 미래 후보입니다. |
-| Evidence | 특정 commit·환경·시점에서 무엇을 실행했고 어떤 결과가 났는지 보존한 기록입니다. 현재 전체 상태를 자동으로 증명하지 않습니다. |
+| Evidence | Repository에서는 exact commit과 test/CI provenance, protected environment에서는 승인된 append-only change record입니다. 과거 PASS가 현재 전체 상태를 자동으로 증명하지 않습니다. |
 | Repository acceptance | 코드와 로컬·CI 검증이 통과한 상태입니다. 실제 보호 환경에 배포했다는 뜻이 아닙니다. |
 | Protected environment | 실제 secret, TLS, DB 권한, backup, route와 변경 기록 책임이 있는 제한된 운영 대상 환경입니다. |
 
 ## 약어를 만났을 때
 
 `LAUNCH-02`, `CTRL-08`, `RLS-01` 같은 표기는 작업이나 결정의 안정적인 ID입니다. ID만 보고
-의미를 추측하지 말고 [Active TODO](development-todo.md),
-[implementation ledger](implementation-roadmap.md) 또는 연결된 ADR에서 현재 상태를 확인하세요.
+의미를 추측하지 말고 [Active TODO](development-todo.md)와 [현재 결정](decisions/README.md)에서
+현재 상태를 확인하세요. 삭제한 과거 ID는 [Git 기록 안내](verification/README.md)의 archive commit에
+있습니다.

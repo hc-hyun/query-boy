@@ -2,9 +2,8 @@
 
 Status: Active — 현재 launch 작업은 `LAUNCH-02` 하나
 
-이 문서는 실제로 지금 남은 일만 보여줍니다. 일정에 없는 RLS, 결과 type, 비용·경보와 trace 연구는
-[future work](future-work.md)에 분리했습니다. 완료 이력은
-[implementation ledger](implementation-roadmap.md)에 보존합니다.
+이 문서는 실제로 지금 남은 일만 보여줍니다. 일정에 없는 주제는 checkbox 없이 아래 표에만
+요약합니다. 완료 이력과 과거 상세는 Git history에서 찾습니다.
 
 ## 현재 상태
 
@@ -85,17 +84,20 @@ Repository 문서나 procedure를 승인한 것만으로 실제 protected action
 
 ## 현재 일정에 없는 일
 
-다음 주제는 조사 기록만 있고 active queue가 아닙니다.
+다음 주제는 active queue가 아닙니다. 일반적인 “이어서 구현”, refactor나 문서 정리는 이 작업들의
+시작 승인이 아닙니다.
 
-| 주제 | 상태 | 다시 시작하는 조건 |
+| ID | 주제 | 현재 상태와 다시 시작하는 조건 |
 |---|---|---|
-| RLS serving | Parked | 실제 RLS source 요구와 attestation·migration 승인 |
-| 결과 type 확대 | Parked | 일곱 OID로 답할 수 없는 실제 질문 |
-| DB-native 비용·경보 | Parked | 운영 의사결정에 필요한 aggregate와 권한 승인 |
-| Workflow trace | Parked | 현재 ID로 부족한 실제 correlation 요구 |
+| `RLS-01`~`RLS-03` | RLS serving | 모든 RLS source를 DB 접근 전에 차단합니다. 실제 source 요구와 recursive policy/dependency attestation, migration, cross-tenant acceptance와 protected cutover의 정확한 승인이 필요합니다. |
+| `ENC-01`~`ENC-02` | Result type 확대 | OID `20, 21, 23, 25, 1082, 1184, 1700`만 허용합니다. 이 범위로 답할 수 없는 실제 질문과 lossless encoding, SQL policy v4+, verified migration·rollback 승인이 필요합니다. |
+| `DBAUTH-01`~`DBAUTH-03` | DB-backed source authority | Git-reviewed YAML만 authority입니다. 새 authority·persisted format·credential/admin 경계, explicit import, dual-authority 없는 cutover와 backup/rollback을 새로 승인해야 합니다. 과거 managed code를 암묵적으로 복원하지 않습니다. |
+| `COST-01`~`COST-05` | DB-native 비용·경보 | Query resource limit는 이미 강제하지만 통화 비용·authoritative usage collector는 없습니다. 실제 운영 요구와 monitoring 권한·retention·aggregate 의미를 승인하고 base evidence가 생긴 뒤 alert threshold를 별도 결정합니다. |
+| `TRACE-01`~`TRACE-04` | Workflow trace | 현재 request/MCP/query ID로 부족한 실제 correlation 요구와 header trust, redaction·cardinality, retry/disconnect acceptance 범위를 승인해야 합니다. |
 
-ID와 상세 시작 조건은 [future work](future-work.md)에서 확인합니다. 일반적인 “이어서 구현”이나
-문서 정리는 이 작업들의 시작 승인이 아닙니다.
+공통으로 prompt, Skill 또는 caller 관례가 authorization, SQL validation, reader privilege나 resource
+limit을 대신할 수 없습니다. 실제 요구 없이 chargeback, distributed global quota와 management RBAC를
+미리 만들지 않습니다.
 
 ## 관리 규칙
 
@@ -103,7 +105,10 @@ ID와 상세 시작 조건은 [future work](future-work.md)에서 확인합니�
 - 한 agent는 지정된 module과 file allowlist만 수정하고 shared file·Git은 coordinator가 관리합니다.
 - Module interface나 external/persisted/policy/lifecycle/procedure 의미는 정확한 사용자 승인 없이
   바꾸지 않습니다.
-- 완료한 ID는 이 파일에서 제거하고 evidence와 함께 implementation ledger로 옮깁니다.
-- 과거 verification record와 stored row를 현재 의미에 맞춰 수정·삭제하지 않습니다.
+- 완료한 ID는 이 파일에서 제거하고 exact commit/PR/CI provenance로 남깁니다. 현재 운영에 필요한
+  결과만 owner 문서에 반영하고 날짜별 완료 원장을 새로 만들지 않습니다.
+- Protected environment evidence/change record는 승인된 기록 시스템에 append-only/immutable하게
+  보존합니다. Repository의 과거 서술 문서는 archive baseline을 남긴 뒤 current tree에서 정리할 수
+  있지만 Git history를 rewrite하지 않습니다.
 - 최소 repository gate는 Ruff, mypy와 full pytest입니다. DB·release 경계는 관련 integration과
   container·verified-query acceptance까지 실행합니다.

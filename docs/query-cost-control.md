@@ -28,7 +28,8 @@ Query Man이 직접 통제하는 대상은 query가 소비할 수 있는 databas
 유일한 resource tier이며 관리자가 source마다 기존 profile 하나를 선택한다. 같은 source의
 모든 query 사용자는 같은 profile 정의를 쓴다. 별도 `cost_tier`나 caller/user/organization
 override는 없다. 현재 `interactive` 값은
-[ADR 0005](decisions/0005-initial-query-budgets.md)에 고정한다.
+[`config/budget-profiles.yaml`](../config/budget-profiles.yaml)에 고정하고
+[Source Catalog module](modules/source-catalog/README.md)이 strict validation한다.
 
 | Layer | Enforced control | Failure or result signal |
 |---|---|---|
@@ -55,15 +56,10 @@ source storage quota를 뜻하지 않는다. Reader는 별도로 database TEMP �
 user/organization별 tier, host cgroup CPU/memory quota와 일·월 통화 budget을 제공하지 않는다.
 이는 초기 운영의 명시적 deferred scope이며 미리 assignment table이나 counter를 만들지 않는다.
 
-두 replica의 독립 concurrency·connection 경계와 session resource 누수는
-[multi-replica soak audit](verification/2026-08-23-mcp-multi-replica-soak.md)에서 검증한다.
-이는 soak 시험 구성의 acceptance 증거이며, 현재 first launch는 단일 replica입니다. 이 결과는
-distributed global quota를 뜻하지 않습니다. DB-native 비용 귀속과 사용량 경보는 현재 일정에 없는
-parked research이며, 후보 범위는 [future work](future-work.md)의 `COST-*`에만 보존합니다.
-DB-native reader-role aggregate 선택지는 [parked ADR 0021](decisions/0021-database-native-cost-attribution.md)에
-남긴 조사 결과일 뿐 현재 API나 수집 동작을 바꾸지 않는다. Usage spike/alert도
-[parked ADR 0023](decisions/0023-database-native-usage-spike-alert.md)에 남긴 조사 결과이며, 별도 요구와
-정확한 승인 전에는 threshold, event, polling route나 notification 동작이 없다.
+현재 first launch는 단일 replica이며 distributed global quota를 제공하지 않습니다. DB-native 비용
+귀속과 사용량 경보는 [Active TODO의 `COST-*`](development-todo.md#현재-일정에-없는-일)에만 보존한
+parked 주제입니다. 별도 요구와 정확한 승인 전에는 collector, threshold, event, polling route나
+notification 동작이 없습니다.
 
 ## What Is Measured
 
@@ -105,7 +101,8 @@ serialization을 포함한다. 이 값도 client 수신, decode, tool scheduling
 cluster에서는 배분 추정일 뿐 query별 정확한 원가가 아니므로 방법과 오차를 함께 표시한다.
 User/organization별 chargeback은 현재 제공하지 않는다.
 
-ADR 0027의 consent-gated diagnostic capture는 question/SQL 품질 조사용 별도 encrypted store다. 그
+[ADR 0027](decisions/0027-consent-gated-diagnostic-capture.md)의 consent-gated diagnostic capture는
+question/SQL 품질 조사용 별도 encrypted store다. 그
 `subject_id`, question 또는 literal-free SQL을 metric label, quota, billing이나 per-user chargeback에 쓰지
 않는다. Monetary cost와 usage alert의 deferred 상태도 바꾸지 않는다.
 
@@ -147,8 +144,8 @@ ADR 0027의 consent-gated diagnostic capture는 question/SQL 품질 조사용 �
    request UUID별 entry 폭증은 막지만, `DECLARE`와 `FETCH` 통계가 원래 SELECT와 분리되거나
    여러 fingerprint 사이에서 합쳐질 수 있다. 따라서 reader/source aggregate 보조 신호로만
    사용한다. Extension과 monitoring role은 source owner가 별도로 관리하며 raw/queryid 통계는 Query Man
-   API에 공개하지 않는다. [Parked ADR 0021](decisions/0021-database-native-cost-attribution.md)의
-   수집 경로가 별도 요구와 정확한 승인을 받을 때만 bounded operator aggregate를 다시 검토한다.
+   API에 공개하지 않는다. [보류된 비용 방향](decisions/README.md#보류된-방향)이 별도 요구와 정확한
+   승인을 받을 때만 bounded operator aggregate를 다시 검토한다.
 
 <details>
 <summary>DBA용 pg_stat_statements 상세 조사 펼치기</summary>
@@ -178,8 +175,8 @@ Application reader에는 `pg_read_all_stats`, `pg_monitor` 또는 `pg_signal_bac
 않는다. 아래 direct-view monitoring identity는 DBA가 수동 조사에만 쓰는 현재 외부 운영 선택지이며
 Query Man이 관리하는 collector credential이나 지원하는 application 수집 경로가 아니다. Source owner가 `CONNECT`,
 `pg_read_all_stats`와 extension view의 좁은 조회 권한을 별도로 review해야 하고, 이 identity는 다른
-session 통계를 볼 수 있는 민감한 운영 계정이다. Parked ADR 0021-A에서 조사한 network-facing
-collector 후보는 이 broad role/direct view를 받지 않고 source-owner sanitized function만 실행한다.
+session 통계를 볼 수 있는 민감한 운영 계정이다. 향후 network-facing collector를 승인하더라도 이
+broad role/direct view를 주지 않고 source-owner sanitized function만 실행하게 해야 한다.
 
 ```sql
 SELECT stats.queryid, stats.calls,

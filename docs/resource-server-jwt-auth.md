@@ -38,20 +38,27 @@ query caller는 같은 active source를 보며 scope나 role이 source grant 또
 
 ## 서비스 필수 검증
 
-- JWT 서명 검증: exact issuer Discovery의 `jwks_uri` 사용
+- JWT 서명 검증: exact issuer Discovery의 `jwks_uri` 사용; Discovery/JWKS response는 각각 최대 1 MiB
 - 허용 서명 알고리즘 `RS256` 고정
 - Discovery의 issuer와 token의 `iss`가 configured issuer와 정확히 일치
 - Discovery/JWKS URL과 redirect가 HTTPS를 유지하고 TLS hostname 검증을 통과
 - `aud`에 자기 서비스 audience 포함
-- `exp`, optional `nbf`와 non-empty `sub` 확인
-- RFC access-token header type을 확인하고, Keycloak `typ=JWT` token은 payload `typ=Bearer`도 요구
+- Exact `kid`의 RSA JWK만 사용하고 JWK `alg=RS256`, signature `use`, optional `key_ops`의 `verify`를 확인
+- `exp`, optional `nbf`와 non-empty `sub`를 60초 clock-skew allowance로 확인
+- RFC `at+jwt` header type은 대소문자 차이를 허용하고, Keycloak `typ=JWT` token은 payload
+  exact `typ=Bearer`도 요구
 - Endpoint별 scope와 configured realm role/group 확인
 - ID token과 refresh token을 API 인증용으로 받지 않음
-- Discovery/JWKS 5분 cache, 알 수 없는 `kid`는 cooldown 안에서 한 번만 갱신
+- Discovery/JWKS 5분 cache, 알 수 없는 `kid`는 request당 한 번이자 process-wide 30초 cooldown 안에서
+  한 번만 갱신
 - Token, Authorization header와 raw claim을 response 또는 log에 기록하지 않음
 
 Query Man은 JWT를 단순 decode한 결과를 사용하지 않는다. `PyJWT[crypto]`로 cryptographic operation을
 검증하고 application이 algorithm, issuer, audience, access-token type과 claim policy를 제한한다.
+
+Raw `sub`와 claim은 log/response에 넣지 않습니다. Audit용 `caller_id`는 exact issuer와 subject를
+결합한 SHA-256 pseudonym이고 `tenant_id`는 현재 non-RLS shared-access를 나타내는 fixed
+`authbridge`입니다. 이 값은 source grant, quota 또는 budget selector가 아닙니다.
 
 ## Runtime 설정
 

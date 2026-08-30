@@ -1,60 +1,117 @@
-# Architecture Decision Records
+# 현재 결정과 방향
 
-ADR은 중요한 설계 선택과 그 이유를 보존하는 기록입니다. 모든 ADR을 순서대로 읽을 필요는
-없습니다. Source authority는 [ADR 0030](0030-git-reviewed-yaml-source-authority.md), 현재 첫 오픈의
-serving 범위는 [ADR 0025](0025-static-non-rls-first-launch.md)가 가장 좁고 우선하는 기준입니다.
+Status: Current — 현행 authority와 핵심 설계 방향의 압축본
 
-## 현재 기준을 찾는 순서
+현재 tree에는 모든 구현 단계를 ADR로 남기지 않습니다. Exact authority 두 개와 owner README의
+요약만으로 안전하게 대체할 수 없는 세부 계약 다섯 개만 원문으로 유지하고, 나머지 방향은 이
+문서와 owner 문서에 둡니다.
 
-1. [ADR 0030](0030-git-reviewed-yaml-source-authority.md)에서 Git-reviewed YAML 단일 source authority를
-   확인합니다.
-2. [ADR 0025](0025-static-non-rls-first-launch.md)에서 현재 first-launch serving 범위를 확인합니다.
-3. 현재 Python package와 import 위치는 [ADR 0026](0026-physical-module-packages.md)을 확인합니다.
-4. 작업 모듈의 README가 지정한 accepted ADR만 추가로 읽습니다.
-5. 이전 ADR과 후속 ADR이 겹치면 후속 문서의 supersede·exception note를 따릅니다.
-6. `research`, `parked`, `deferred` 문서는 구현 승인이 아닙니다.
+## Exact authority
 
-## Accepted decisions
+| 결정 | 정하는 범위 |
+|---|---|
+| [ADR 0025](0025-static-non-rls-first-launch.md) | 두 source, 단일 replica, PostgreSQL 18/UTF-8, RLS 차단, 일곱 result OID, SQL policy v3와 protected launch gate |
+| [ADR 0030](0030-git-reviewed-yaml-source-authority.md) | `config/sources/*.yaml`, `config/verified-queries.yaml`, `config/budget-profiles.yaml`의 Git-reviewed 단일 authority와 retired managed capability |
 
-| ADR | 주제 | 현재 읽을 때 주의할 점 |
-|---|---|---|
-| [0001](0001-postgresql-ast-validation.md) | PostgreSQL AST 검증 | SQL parser와 fingerprint 기준 |
-| [0002](0002-guarded-query-contract.md) | Guarded query 외부 동작과 안전 | 결과 성공 범위는 ADR 0025의 일곱 OID가 더 좁게 제한 |
-| [0003](0003-reader-and-resolved-object-policy.md) | Reader와 DB-resolved object 정책 | RLS launch 경로는 ADR 0025가 격리 |
-| [0004](0004-caller-source-authorization.md) | Caller와 source authorization | Source별 scope는 ADR 0017이 대체; 현재 RLS는 격리 |
-| [0005](0005-initial-query-budgets.md) | 초기 query 제한 | 현재 `interactive` budget 기준 |
-| [0006](0006-mcp-transport-and-workflow.md) | MCP transport와 Text-to-SQL 흐름 | HTTP와 같은 application service 사용 |
-| [0007](0007-immutable-metadata-publishing.md) | Metadata publish와 rollback | Revision lifecycle 기준 |
-| [0008](0008-physical-key-and-index-disclosure.md) | Key/index 공개 범위 | Metadata disclosure 기준 |
-| [0009](0009-question-scoped-column-disclosure.md) | 질문별 column 공개 | Wide relation context 제한 |
-| [0010](0010-revision-scoped-retrieval-index.md) | Revision별 metadata 검색 index | Context relation/column 선택 기준 |
-| [0011](0011-metadata-quality-level-publish-gate.md) | L0/L1/L2 publish gate | Source 품질 단계 기준 |
-| [0012](0012-control-plane-source-revisions.md) | Control Plane source generation | 과거 managed persisted/security 결정; ADR 0030이 현재 authority를 대체 |
-| [0013](0013-control-plane-verified-query-publishing.md) | Managed verified query publish | 과거 capability 기록; ADR 0030에서 제거 |
-| [0014](0014-trusted-rls-tenant-context.md) | RLS tenant context | 구현 이력은 보존하지만 현재 모든 RLS source 격리 |
-| [0015](0015-containerized-local-runtime.md) | Local container runtime | Compose, readiness와 secret 경계 |
-| [0016](0016-centralized-source-management-plane.md) | 중앙 source 관리 | 과거 managed authority 결정; ADR 0030이 현재 authority를 대체 |
-| [0017](0017-shared-source-access-and-resource-tier.md) | 공용 source visibility와 budget | 현재 query/admin capability 기준 |
-| [0018](0018-module-ownership-and-contract-governance.md) | Module ownership과 변경 승인 | 현재 모듈 개발 지침 |
-| [0019](0019-canonical-time-stability.md) | 시간 표현 안정성 | Repository 구현 완료; 환경별 cutover는 별도 작업 |
-| [0025](0025-static-non-rls-first-launch.md) | Static non-RLS first launch | 현재 launch authority; protected 실행은 `LAUNCH-02` |
-| [0026](0026-physical-module-packages.md) | Owner별 physical Python package | 같은 repository/wheel/process의 path와 composition 경계; serving 의미는 ADR 0025 유지 |
-| [0027](0027-consent-gated-diagnostic-capture.md) | 동의 기반 진단 원문 수집 | 일반 log와 분리된 최대 7일 암호화 capture, 가명 subject와 fail-open 경계 |
-| [0028](0028-interactive-operator-shell.md) | 대화형 운영 Shell | `qm`의 자동완성·입력 안내와 bounded status/log/diag/source 운영 경계 |
-| [0029](0029-authbridge-resource-server-jwt.md) | AuthBridge resource-server JWT | Opt-in OAuth bearer 검증 capability; 기본 Compose와 protected route는 아직 변경하지 않음 |
-| [0030](0030-git-reviewed-yaml-source-authority.md) | Git-reviewed YAML source authority | 현재 단일 authority; managed package·Control DB·admin/hot-reload/replica capability 제거 |
+둘이 겹치면 ADR 0030의 source-authority supersession을 적용하고 ADR 0025의 좁은 serving·safety·launch
+gate는 유지합니다. 실제 active 작업은 [Active TODO](../development-todo.md)만 기준으로 삼습니다.
 
-## 보류된 연구
+## 현행 세부 계약
 
-아래 문서는 문제와 선택지를 보존하지만 현재 일정이나 구현 승인이 아닙니다.
+아래 문서는 방향을 정하는 roadmap이 아니라 현재 구현이 지켜야 하는 정확한 보안·wire·lifecycle
+계약입니다. 변경할 때만 관련 문서를 읽습니다.
 
-| ADR | 상태 | 다시 시작하는 조건 |
-|---|---|---|
-| [0020](0020-lossless-interval-and-json-numeric-encoding.md) | Superseded research | 현재 일곱 결과 type으로 답할 수 없는 실제 질문과 새 승인 |
-| [0021](0021-database-native-cost-attribution.md) | Parked research | DB-native 비용 귀속의 실제 운영 요구와 권한·보존 범위 승인 |
-| [0022](0022-w3c-workflow-trace-context.md) | Parked research | 현재 request/query ID로 부족한 실제 workflow 추적 요구 |
-| [0023](0023-database-native-usage-spike-alert.md) | Parked research | COST base evidence와 alert 의미·threshold 별도 승인 |
-| [0024](0024-rls-policy-drift-attestation.md) | Deferred research | 실제 RLS source 제공 요구와 새 attestation·migration·cutover 승인 |
+| 계약 | 읽는 경우 |
+|---|---|
+| [ADR 0001](0001-postgresql-ast-validation.md) | PostgreSQL AST grammar, function/operator/cast와 fingerprint 경계를 바꿀 때 |
+| [ADR 0002](0002-guarded-query-contract.md) | Query success/error, admission, result byte, cancel·rollback 의미를 바꿀 때 |
+| [ADR 0003](0003-reader-and-resolved-object-policy.md) | Reader/view-owner 권한, session policy와 DB-resolved object 검사를 바꿀 때 |
+| [ADR 0006](0006-mcp-transport-and-workflow.md) | MCP protocol/version/tool schema, validation error와 retry 경계를 바꿀 때 |
+| [ADR 0027](0027-consent-gated-diagnostic-capture.md) | Consent, encrypted persisted format, privacy·TTL·fail-open lifecycle을 바꿀 때 |
 
-과거 ADR의 문장을 현재 표현에 맞춰 조용히 고치지 않습니다. 실제 의미가 달라지면 새 ADR이나
-명시적인 supersede note를 남기고, 단순 링크·오기·현재 authority 설명은 사실 정정으로 표시합니다.
+## 핵심 방향
+
+### 구조와 소유권
+
+- Query Man은 하나의 repository·wheel·process인 modular monolith입니다.
+- Source Catalog, Metadata, Guarded Query, Delivery, Runtime, Assurance 여섯 physical package를
+  사용하고 marker-only `__init__.py`에서 interface를 재수출하지 않습니다.
+- 정확한 owner, allowed dependency, module interface와 승인 분류는
+  [module index](../modules/README.md)와 각 module README가 canonical source입니다.
+- Production composition은 Runtime, offline acceptance composition은 Assurance CLI만 소유합니다.
+
+### Source와 metadata
+
+- Source definition, verified query와 budget은 Git-reviewed YAML만 authority로 사용합니다. Runtime
+  mutation, Control DB, hot reload 또는 fallback authority는 없습니다.
+- PostgreSQL catalog의 type·precision·scale은 사실로 수집하고 comment는 비신뢰 설명 데이터로
+  취급합니다. Comment나 prompt가 relation/PII 허용을 만들지 않습니다.
+- Metadata는 immutable revision으로 발행하고 질문별 context를 bounded selection합니다. Client가
+  낡은 metadata/SQL-policy revision을 보내면 실행 전에 fail-closed합니다.
+- Source DDL, view/function/operator/type/collation/extension과 semantic DB setting은 serving 중
+  동결합니다. 현재 revision이 privileged DBA drift를 모두 증명하지 못하므로 설명되지 않은 변화는
+  route 중단 조건입니다.
+- 허용 OID로 cast·derive한 값도 column/hidden-view collation, same-OID function body, operator의
+  transitive function, `standard_conforming_strings`·`transform_null_equals`·`array_nulls`·
+  `timezone_abbreviations`·`bytea_output`·`default_text_search_config` 또는 planner-order-sensitive
+  float/JSONB aggregate 때문에 같은 revision에서 달라질 수 있습니다. 현재 대응은 승인 inventory와
+  freeze이며 이를 full attestation으로 과장하지 않습니다. Passing characterization은
+  [`test_source_database_corners.py`](../../tests/test_source_database_corners.py)의 `test_enc_01_*`와
+  `test_enc_01_characterizes_planner_order_sensitive_aggregates`에 남아 있습니다.
+
+### Query와 외부 제공
+
+- PostgreSQL AST validation, relation/function/operator allowlist와 단일 read-only statement를
+  application과 DB transaction 양쪽에서 강제합니다.
+- 최소 권한 reader, timeout, concurrency, plan·row·byte limit, cancel·rollback과 client-disconnect
+  cleanup을 유지합니다. SQL literal, credential, token과 내부 DB 오류는 공개하거나 일반 log에
+  남기지 않습니다.
+- HTTP와 MCP는 같은 application service와 source/authorization/query 경계를 사용합니다.
+- 인증 principal은 현재 active source를 같은 source-wide budget으로 조회합니다. Source별 사용자
+  grant나 caller별 tier를 암묵적으로 만들지 않습니다.
+- AuthBridge 연동은 [Resource Server JWT 계약](../resource-server-jwt-auth.md)의 opt-in capability이며
+  access token만 로컬 검증합니다. 기본 Compose와 protected cutover 권한을 자동 변경하지 않습니다.
+
+### 검증과 운영
+
+- Verified query는 SQL allowlist가 아니라 metadata·relation·ordered result의 회귀검사입니다. 정확한
+  format과 실행법은 [Assurance module](../modules/assurance/README.md#verified-query-회귀검사)이 소유합니다.
+- Local Compose, encrypted consent-gated diagnostic capture와 `qm` operator shell의 현재 절차는
+  [Operations](../operations.md)가 소유합니다.
+- Repository acceptance는 exact commit의 runnable test/CI 결과입니다. Protected environment 실행은
+  별도의 target·access·inventory·stop/rollback·change-record 승인이 필요합니다.
+
+## 보류된 방향
+
+아래 항목은 요구를 잊지 않기 위한 요약일 뿐 일정이나 구현 승인이 아닙니다. 정확한 ID와 다시
+시작하는 조건은 [Active TODO의 보류 표](../development-todo.md#현재-일정에-없는-일)에 있습니다.
+
+| 주제 | 현재 방향 |
+|---|---|
+| RLS serving | 현재 모든 RLS source를 DB 접근 전에 차단하므로 cross-tenant probe는 serving에서 도달하지 않습니다. 재활성화하려면 hidden base-policy/dependency의 recursive attestation·migration·cutover 승인이 먼저이며 quarantine 회귀는 [`test_source_database_corners.py`](../../tests/test_source_database_corners.py)의 `test_rls_source_requires_base_policy_drift_to_preserve_isolation`이 검증합니다. |
+| Result type 확대 | OID `20, 21, 23, 25, 1082, 1184, 1700` 밖은 거부합니다. 실제 질문과 lossless encoding·새 policy revision 승인이 먼저입니다. |
+| DB-backed source authority | 과거 managed 구현을 복원하거나 YAML fallback으로 연결하지 않습니다. Authority·schema·credential·migration·backup/rollback을 새로 결정해야 합니다. |
+| DB-native 비용·경보 | 현재 query resource limit만 강제합니다. Monitoring 권한·retention·aggregate 의미와 alert threshold를 별도로 승인해야 합니다. |
+| Workflow trace | 현재 request/MCP/query ID를 사용합니다. 이것으로 부족한 실제 correlation 요구와 header trust boundary가 먼저입니다. |
+
+## 새 ADR이 필요한 때
+
+Module interface, external wire, persisted/versioned format, policy/compatibility identity,
+safety/lifecycle invariant, ownership/composition boundary 또는 protected operational procedure의 의미를
+바꿀 때는 [승인 절차](../development-guidelines.md#승인-규칙)를 먼저 따릅니다. 선택 이유와
+compatibility·migration·rollback을 장기간 독립적으로 유지해야 할 때만 새 ADR을 만들고, 단순 구현
+완료나 조사 일지는 current owner 문서와 runnable test에 반영합니다.
+
+## Git archive
+
+정리한 ADR 0004~0005, 0007~0024, 0026, 0028~0029, 완료 roadmap, future-work 상세와 날짜별 검증
+기록은 commit
+`1ff390ab67df215181810a84ac8b2ca8570eceee`에 보존돼 있습니다.
+
+```bash
+git show 1ff390ab67df215181810a84ac8b2ca8570eceee:docs/decisions/0020-lossless-interval-and-json-numeric-encoding.md
+git ls-tree -r --name-only 1ff390ab67df215181810a84ac8b2ca8570eceee docs/decisions docs/verification
+```
+
+현재 문장을 과거 원문에 소급 적용하지 않습니다. 필요한 역사적 맥락은 위 commit에서 읽습니다.
+Git history를 rewrite하지 않습니다.

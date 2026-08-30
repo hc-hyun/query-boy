@@ -165,11 +165,11 @@ docker compose up -d --wait postgres
 - 현재 source, PostgreSQL·RLS·결과 type 제한: [ADR 0025](decisions/0025-static-non-rls-first-launch.md)
 - SQL 검사와 실행: [Guarded Query module](modules/guarded-query/README.md)
 - HTTP/MCP 외부 API: [Delivery module](modules/delivery/README.md)
-- Verified result 검사: [Verified query 안내](verified-queries.md)
+- Verified result 검사: [Assurance module의 verified-query 절](modules/assurance/README.md#verified-query-회귀검사)
 
 ## MVP Exit Criteria
 
 두 source, 최소 권한 reader, 결정적 seed, grain별 curated view, metadata retrieval, guarded query,
-HTTP/MCP와 아홉 verified question의 repository 구현은 완료됐습니다. 완료 ID와 당시 증거는
-[implementation ledger](implementation-roadmap.md)와
-[verification index](verification/README.md)에 보존합니다. 실제 환경 전환 완료를 뜻하지는 않습니다.
+HTTP/MCP와 아홉 verified question의 repository 구현은 완료됐습니다. 현재 검증 방법과 삭제한 과거
+기록은 [검증과 Git 기록](verification/README.md)에서 확인합니다. 실제 환경 전환 완료를 뜻하지는
+않습니다.

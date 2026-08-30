@@ -104,7 +104,8 @@ limit와 lifecycle outcome은 아래 별도 범주로 분류한다.
   stop/rollback condition
 - `Operational execution authorization`: 실제 protected action의 access, scope, target, stop condition과
   change-record 책임
-- `Evidence/change record`: 실행된 사실을 보존하는 append-only/immutable evidence와 provenance
+- `Evidence/change record`: protected 실행 사실을 승인된 환경 기록 시스템에 보존하는
+  append-only/immutable evidence와 provenance
 - `Shared transition artifact`: 여러 owner가 함께 검토하고 single-writer가 편집해야 하는 file, 문서와 test
 
 하나의 변경이 여러 범주에 걸칠 수 있다. 예를 들어 SQL-policy descriptor의 Python shape는 module
@@ -120,8 +121,10 @@ format이다. 범주가 여러 개라는 이유로 관련 없는 변경까지 �
   간주하지 않는다.
 - Protected environment의 operational action은 repository 변경이나 procedure 승인과 별개다. 실제
   access, scope, target, stop condition과 change-record 책임을 확인한 별도 실행 승인이 필요하다.
-- Evidence/change record는 실행 시점의 사실을 보존한다. 과거 기록을 현재 의미에 맞춰 조용히
-  수정·삭제하지 않고, 정정이 필요하면 원문과 provenance를 남긴 새 기록을 추가한다.
+- Protected evidence/change record는 실행 시점의 사실을 승인된 환경 기록 시스템에 보존한다. 과거
+  record를 수정·삭제하지 않고 정정은 원문과 provenance를 남겨 append한다. Repository의 날짜별
+  서술 기록은 archive baseline을 남긴 뒤 current tree에서 정리할 수 있지만 Git history를 rewrite하지
+  않는다.
 - Shared transition artifact라는 사실은 single-writer 요구만 만든다. 그 자체가 의미 변경이나 사용자
   승인 필요성을 뜻하지 않는다.
 - 공식 interface와 위 경계의 의미를 보존하는 private helper, algorithm, lock 구현, file move와
@@ -140,10 +143,10 @@ format이다. 범주가 여러 개라는 이유로 관련 없는 변경까지 �
   set의 interface, format, policy, invariant, ownership 또는 procedure 의미를 사용하는 병렬 작업은
   새 baseline이 확정될 때까지 동결한다.
 - 승인 뒤 owner와 직접 consumer의 module 문서, 해당되는 external/persisted format, policy,
-  invariant, operational procedure, ADR/migration/onboarding 절차, evidence/change-record
+  invariant, operational procedure, 필요한 ADR/migration/onboarding 절차, evidence/change-record
   schema/template 및 interface/integration/acceptance test를 code와 같은 변경에서 갱신한다. 실제
-  evidence/change record는 별도 승인된 operational action을 수행한 뒤에만 append한다. 승인 범위를
-  넘으면 다시 승인받는다.
+  protected evidence/change record는 별도 승인된 operational action을 수행한 뒤에만 append한다. 승인
+  범위를 넘으면 다시 승인받는다.
 - Accepted ADR, 실제 module interface, external API/wire, persisted/versioned format,
   policy/compatibility identity, safety/lifecycle invariant, operational procedure, runnable test,
   evidence/change record와 module 문서가 충돌하면 임의로 선택하지 말고 불일치를 사용자에게
@@ -203,10 +206,12 @@ Root [agent router](../AGENTS.md#non-negotiable-safety)의 안전 불변조건�
 
 ## Documentation And Handoff
 
-- 구현과 같은 변경에서 관련 ADR, module interface, external API/wire, persisted/versioned format,
-  policy/compatibility identity, safety/lifecycle invariant, protected operational procedure,
-  onboarding 절차, evidence/change-record schema/template와 `docs/implementation-roadmap.md` checklist를
-  갱신한다.
-- 실제 evidence/change record는 별도 승인된 operational action을 수행한 뒤에만 append한다.
+- 구현과 같은 변경에서 canonical owner 문서, module interface, external API/wire,
+  persisted/versioned format, policy/compatibility identity, safety/lifecycle invariant, protected
+  operational procedure, onboarding 절차, 필요한 ADR와 runnable test를 갱신한다. 선택 이유와
+  compatibility·migration·rollback을 독립적으로 보존해야 할 때만 새 ADR을 만든다.
+- Repository 완료는 exact commit/PR/CI provenance로 남기고 날짜별 PASS 요약이나 완료 roadmap을
+  만들지 않는다. 실제 protected evidence/change record는 별도 승인된 operational action을 수행한
+  뒤 승인된 환경 기록 시스템에만 append한다.
 - 완료 보고는 구현 결과, 검증 결과, 의도적으로 생략한 범위와 추가해야 할 조건만 짧게 남긴다.
 - 구현하지 않은 미래 기능을 완료한 것처럼 문서화하지 않는다.

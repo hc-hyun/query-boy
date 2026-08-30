@@ -19,8 +19,9 @@ Enterprise review를 거친 사람이 읽을 수 있는 YAML이면 충분하며,
 PostgreSQL catalog의 physical type, precision/scale와 table/column comment는 source metadata를
 풍부하게 하는 입력이다. 그러나 이 정보가 source 등록 authority, credential store 또는 PII 접근
 허가가 되지는 않는다. SQL AST validation, allowlist, 최소 권한 reader, read-only transaction,
-timeout/concurrency/row/byte limit, cancel/rollback과 drift fail-closed도 authority 단순화와 무관하게
-계속 강제해야 한다.
+timeout/concurrency/row/byte limit, cancel/rollback과 검출 가능한 schema/revision drift의 fail-closed도
+authority 단순화와 무관하게 계속 강제해야 한다. Revision이 포착하지 못하는 semantic drift는 ADR
+0025의 승인 inventory와 serving freeze를 따른다.
 
 ## Decision
 
@@ -67,8 +68,8 @@ retention, 접근 범위, target, rollback과 실행 승인을 갖춘 운영 작
 
 ### Authentication boundary
 
-Source authority 변경은 [ADR 0029](0029-authbridge-resource-server-jwt.md)의 **Resource Server JWT
-Access Token 검증 계약**을 바꾸지 않는다. OAuth mode는 issuer Discovery의 `jwks_uri`에서 JWKS를
+Source authority 변경은 [Resource Server JWT Access Token 검증 계약](../resource-server-jwt-auth.md)을
+바꾸지 않는다. OAuth mode는 issuer Discovery의 `jwks_uri`에서 JWKS를
 받아 cache하고, 허용 알고리즘, 서명, exact issuer, service audience, expiry/nbf와 endpoint별
 scope/role/group을 검증한다. API 인증에는 access token만 받고 ID token과 refresh token을 받지
 않는다. Refresh와 token acquisition은 client/helper 책임이며 service에는 client secret이 필요하지
@@ -80,16 +81,19 @@ scope/role/group을 검증한다. API 인증에는 access token만 받고 ID tok
   query safety contract는 유지한다.
 - Managed admin HTTP wire와 Control persisted format은 더 이상 supported interface/format이 아니다.
   Retired endpoint나 setting을 bootstrap/YAML 동작으로 조용히 해석하지 않는다.
-- 이 ADR은 ADR 0012, 0013, 0016과 ADR 0025의 managed authority 보존·활성화 조항을 현재 동작에
-  한해 supersede한다. 해당 ADR과 dated verification은 당시 사실을 보존하는 immutable history다.
+- 이 ADR은 archived ADR 0012, 0013, 0016과 ADR 0025의 managed authority 보존·활성화 조항을 현재
+  동작에 한해 supersede한다. 원문과 dated verification은 Git archive commit
+  `1ff390ab67df215181810a84ac8b2ca8570eceee`의 당시 사실입니다.
 - ADR 0025의 두-source non-RLS launch, PostgreSQL/encoding/result-OID/RLS 격리와 protected execution
   gate는 이 결정으로 확대되지 않는다.
 
 ## Change and rollback
 
 Repository 변경은 managed-only package, migration, fixture, route, configuration과 procedure를 함께
-제거하고 active 문서·test를 YAML authority와 맞춘다. Historical ADR, dated evidence와 기존
-roadmap row는 변경하지 않고 새 완료 기록을 append한다.
+제거하고 active 문서·test를 YAML authority와 맞춘다. Historical narrative는 archive baseline을
+기록한 뒤 current tree에서 정리할 수 있지만 Git history를 rewrite하지 않는다. Protected environment
+evidence/change record는 repository 문서와 별개로 승인된 기록 시스템에 append-only/immutable하게
+보존한다.
 
 Rollback은 승인된 이전 Git commit/artifact로 전체 application을 되돌리고, 그 artifact가 요구하는
 설정과 외부 Control DB의 사용 가능성을 별도 검증한 뒤 재배포하는 것이다. 새 YAML만 되돌리려면

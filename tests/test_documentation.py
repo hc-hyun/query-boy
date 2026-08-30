@@ -10,11 +10,11 @@ from urllib.parse import unquote
 import query_man.guarded_query.sql_validation as sql_validation_module
 from tests.helpers import ROOT_DIRECTORY
 
-ROADMAP = ROOT_DIRECTORY / "docs" / "implementation-roadmap.md"
 ARCHITECTURE = ROOT_DIRECTORY / "docs" / "architecture.md"
 DEVELOPMENT_TODO = ROOT_DIRECTORY / "docs" / "development-todo.md"
-FUTURE_WORK = ROOT_DIRECTORY / "docs" / "future-work.md"
 MODULE_INDEX = ROOT_DIRECTORY / "docs" / "modules" / "README.md"
+DECISION_DIRECTORY = ROOT_DIRECTORY / "docs" / "decisions"
+DECISION_INDEX = DECISION_DIRECTORY / "README.md"
 VERIFICATION_DIRECTORY = ROOT_DIRECTORY / "docs" / "verification"
 VERIFICATION_INDEX = VERIFICATION_DIRECTORY / "README.md"
 LAUNCH_ADR = (
@@ -52,56 +52,14 @@ REQUIRED_MODULE_HEADINGS = (
     "## 집중해서 읽을 범위",
 )
 
-EXPECTED_BASELINE_ID_COUNTS = {
-    "BASE": 10,
-    "DEC": 9,
-    "SQL": 10,
-    "EXEC": 13,
-    "META": 10,
-    "MCP": 8,
-    "ONB": 9,
-    "AUTH": 7,
-    "OPS": 8,
-    "REL": 8,
-    "EXT": 8,
-    "REF": 15,
-    "DEP": 8,
-    "MCPX": 8,
-}
 EXPECTED_ACTIVE_TODO_IDS = ("LAUNCH-02",)
-EXPECTED_PARKED_IDS = (
-    "RLS-01",
-    "RLS-02",
-    "RLS-03",
-    "ENC-01",
-    "ENC-02",
-    "DBAUTH-01",
-    "DBAUTH-02",
-    "DBAUTH-03",
-    "COST-01",
-    "COST-02",
-    "COST-03",
-    "COST-04",
-    "COST-05",
-    "TRACE-01",
-    "TRACE-02",
-    "TRACE-03",
-    "TRACE-04",
+EXPECTED_PARKED_ID_RANGES = (
+    "`RLS-01`~`RLS-03`",
+    "`ENC-01`~`ENC-02`",
+    "`DBAUTH-01`~`DBAUTH-03`",
+    "`COST-01`~`COST-05`",
+    "`TRACE-01`~`TRACE-04`",
 )
-LOCKED_BASELINE_DESCRIPTIONS = {
-    "SQL-04": (
-        "함수와 operator를 추출하고 `BETWEEN` 같은 grammar construct를 effective operator로 "
-        "정규화하며 승인한 cast type과 분석 함수를 제한한다."
-    ),
-    "SQL-08": (
-        "정책 거부와 수정 가능한 database 의미 오류를 안정적인 reason code와 bounded detail로 "
-        "반환하고 parser/database 내부 오류를 공개하지 않는다."
-    ),
-    "EXEC-10": (
-        "수정 가능한 고정 SQLSTATE만 bounded `QUERY_INVALID`로 분리하고 나머지 DB 오류, "
-        "timeout, cancel과 serialization failure를 비공개 또는 전용 external error로 매핑한다."
-    ),
-}
 
 CRITICAL_NON_PYTHON_MAPPINGS = (
     "`config/sources/`, `config/budget-profiles.yaml`",
@@ -116,34 +74,49 @@ CRITICAL_NON_PYTHON_MAPPINGS = (
     "`uv.lock`",
 )
 CRITICAL_SHARED_WRITER_REFERENCES = (
+    "AGENTS.md",
     "tests/helpers.py",
     "tests/test_documentation.py",
     "docs/development-todo.md",
-    "docs/implementation-roadmap.md",
-    "docs/verification/",
+    "docs/decisions/README.md",
+    "docs/verification/README.md",
 )
 
 
-def test_completed_baseline_ledger_is_not_rewritten() -> None:
-    text = ROADMAP.read_text(encoding="utf-8")
-    matches = re.findall(r"^- \[([ x])\] `([A-Z]+)-(\d{2})`", text, re.MULTILINE)
-    ids = [f"{prefix}-{number}" for _checked, prefix, number in matches]
+def test_current_tree_keeps_current_decisions_and_git_archive_pointer() -> None:
+    required_decisions = {
+        "0001-postgresql-ast-validation.md",
+        "0002-guarded-query-contract.md",
+        "0003-reader-and-resolved-object-policy.md",
+        "0006-mcp-transport-and-workflow.md",
+        "0025-static-non-rls-first-launch.md",
+        "0027-consent-gated-diagnostic-capture.md",
+        "0030-git-reviewed-yaml-source-authority.md",
+    }
+    decision_files = {
+        path.name for path in DECISION_DIRECTORY.glob("[0-9][0-9][0-9][0-9]-*.md")
+    }
+    assert required_decisions <= decision_files
+    assert all(
+        int(filename[:4]) in {1, 2, 3, 6, 25, 27, 30}
+        or int(filename[:4]) > 30
+        for filename in decision_files
+    )
 
-    assert len(ids) == sum(EXPECTED_BASELINE_ID_COUNTS.values()) == 131
-    assert len(ids) == len(set(ids))
-    assert all(checked == "x" for checked, _prefix, _number in matches)
-    for prefix, count in EXPECTED_BASELINE_ID_COUNTS.items():
-        assert [item for item in ids if item.startswith(f"{prefix}-")] == [
-            f"{prefix}-{number:02}" for number in range(1, count + 1)
-        ]
-    for item_id, expected in LOCKED_BASELINE_DESCRIPTIONS.items():
-        match = re.search(
-            rf"^- \[x\] `{re.escape(item_id)}` (.*(?:\n  .*)*)$",
-            text,
-            re.MULTILINE,
-        )
-        assert match is not None, item_id
-        assert " ".join(match.group(1).split()) == expected
+    decision_index = DECISION_INDEX.read_text(encoding="utf-8")
+    assert "현행 세부 계약" in decision_index
+    assert "1ff390ab67df215181810a84ac8b2ca8570eceee" in decision_index
+    assert "Git history를 rewrite하지 않습니다" in decision_index
+
+    for archived_name in (
+        "implementation-roadmap.md",
+        "future-work.md",
+        "verified-queries.md",
+    ):
+        assert not (ROOT_DIRECTORY / "docs" / archived_name).exists()
+    assert {path.name for path in VERIFICATION_DIRECTORY.glob("*.md")} == {
+        "README.md"
+    }
 
 
 def test_active_todo_is_small_open_work_only() -> None:
@@ -166,26 +139,10 @@ def test_active_todo_is_small_open_work_only() -> None:
     ):
         assert heading in todo
 
-    future = FUTURE_WORK.read_text(encoding="utf-8")
-    parked_ids = tuple(
-        match.group(1)
-        for match in re.finditer(
-            r"^- `([A-Z]+-\d{2})`:",
-            future,
-            re.MULTILINE,
-        )
-    )
-    assert parked_ids == EXPECTED_PARKED_IDS
-    assert "- [ ]" not in future
-    assert "현재 구현 일정이나 변경 승인이 아님" in future
-    for heading in (
-        "## RLS source 제공",
-        "## 결과 type 확대",
-        "## Database-backed source authority 재검토",
-        "## DB-native 비용과 사용량 경보",
-        "## Workflow trace",
-    ):
-        assert heading in future
+    for parked_range in EXPECTED_PARKED_ID_RANGES:
+        assert parked_range in todo
+    assert "active queue가 아닙니다" in todo
+    assert "Git history를 rewrite하지 않습니다" in todo
 
 
 def test_adr_0025_is_the_narrow_current_launch_authority() -> None:
@@ -242,10 +199,11 @@ def test_adr_0030_is_the_only_current_source_authority() -> None:
 def test_current_navigation_documents_agree_on_launch_scope() -> None:
     documents = {
         "README": ROOT_DIRECTORY / "README.md",
+        "docs index": ROOT_DIRECTORY / "docs" / "README.md",
         "architecture": ARCHITECTURE,
         "module index": MODULE_INDEX,
         "operations": ROOT_DIRECTORY / "docs" / "operations.md",
-        "verified queries": ROOT_DIRECTORY / "docs" / "verified-queries.md",
+        "assurance": MODULE_INDEX.parent / "assurance" / "README.md",
         "TODO": DEVELOPMENT_TODO,
     }
     for label, path in documents.items():
@@ -256,30 +214,86 @@ def test_current_navigation_documents_agree_on_launch_scope() -> None:
         assert "RLS" in content, label
 
     readme = documents["README"].read_text(encoding="utf-8")
+    docs_index = documents["docs index"].read_text(encoding="utf-8")
     architecture = documents["architecture"].read_text(encoding="utf-8")
     operations = documents["operations"].read_text(encoding="utf-8")
-    verified = documents["verified queries"].read_text(encoding="utf-8")
+    assurance = documents["assurance"].read_text(encoding="utf-8")
     assert "단일 Query Man replica" in readme
     assert "exact seven result" in architecture
     assert "LAUNCH-02" in operations
-    assert "20, 21, 23, 25, 1082, 1184, 1700" in verified
+    assert "20, 21, 23, 25, 1082, 1184, 1700" in assurance
+    for heading in (
+        "## 공통 제품 문서",
+        "## 개발자 문서",
+        "## 운영자·DBA 문서",
+        "## 현재 결정과 Git 기록",
+    ):
+        assert heading in docs_index
+    assert "독자 구분은 탐색을 돕는 표지일 뿐" in docs_index
 
 
 def test_parked_research_is_not_presented_as_current_implementation() -> None:
-    expected_statuses = {
-        "0020-lossless-interval-and-json-numeric-encoding.md": "Superseded research",
-        "0021-database-native-cost-attribution.md": "Parked research",
-        "0022-w3c-workflow-trace-context.md": "Parked research",
-        "0023-database-native-usage-spike-alert.md": "Parked research",
-        "0024-rls-policy-drift-attestation.md": "Deferred research",
-    }
-    decision_root = ROOT_DIRECTORY / "docs" / "decisions"
-    for filename, classification in expected_statuses.items():
-        first_lines = "\n".join(
-            (decision_root / filename).read_text(encoding="utf-8").splitlines()[:10]
-        )
-        assert classification in first_lines, filename
-        assert "ADR 0025" in first_lines, filename
+    decisions = DECISION_INDEX.read_text(encoding="utf-8")
+    assert "일정이나 구현 승인이 아닙니다" in decisions
+    for topic in (
+        "RLS serving",
+        "Result type 확대",
+        "DB-backed source authority",
+        "DB-native 비용·경보",
+        "Workflow trace",
+    ):
+        assert topic in decisions
+    assert "현재 모든 RLS source를 DB 접근 전에 차단" in decisions
+    assert "test_rls_source_requires_base_policy_drift_to_preserve_isolation" in decisions
+    assert "test_enc_01_" in decisions
+
+
+def test_consolidated_current_contracts_cover_archived_decisions() -> None:
+    metadata = (MODULE_INDEX.parent / "metadata" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    for fragment in (
+        "valid·ready·non-partial",
+        "max_context_columns_per_relation` 기본값은 40",
+        "`column_count`, `returned_column_count`, `columns_truncated`",
+        "`L2`: L1 + source와 **현재 metadata revision**",
+    ):
+        assert fragment in metadata
+
+    guarded = (MODULE_INDEX.parent / "guarded-query" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    for fragment in (
+        "`REPEATABLE READ READ ONLY`",
+        "`TimeZone=UTC`",
+        "`+00:00`",
+        "`date_trunc('month', received_at, 'Asia/Seoul')`",
+    ):
+        assert fragment in guarded
+
+    delivery = (MODULE_INDEX.parent / "delivery" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    assert "`caller_id`, `tenant_id`, `token_env`," in delivery
+    assert "optional `diagnostic_consent`" in delivery
+    assert "`SOURCE_NOT_FOUND`" in delivery
+
+    operations = (ROOT_DIRECTORY / "docs" / "operations.md").read_text(
+        encoding="utf-8"
+    )
+    assert "30분/50건" in operations
+    assert "7일/100건" in operations
+
+    jwt = (ROOT_DIRECTORY / "docs" / "resource-server-jwt-auth.md").read_text(
+        encoding="utf-8"
+    )
+    for fragment in (
+        "최대 1 MiB",
+        "60초 clock-skew allowance",
+        "process-wide 30초 cooldown",
+        "`authbridge`",
+    ):
+        assert fragment in jwt
 
 
 def test_module_docs_cover_owners_interfaces_and_current_python_files() -> None:
@@ -322,10 +336,6 @@ def test_interface_term_is_narrow_and_other_change_categories_remain_explicit() 
     paths = (
         ROOT_DIRECTORY / "AGENTS.md",
         MODULE_INDEX,
-        ROOT_DIRECTORY
-        / "docs"
-        / "decisions"
-        / "0018-module-ownership-and-contract-governance.md",
     )
     categories = (
         "External API/wire format",
@@ -348,14 +358,8 @@ def test_interface_term_is_narrow_and_other_change_categories_remain_explicit() 
         MODULE_INDEX,
         *(MODULE_INDEX.parent / name / "README.md" for name in MODULE_NAMES),
     )
-    historical_filenames = (
-        "0018-module-ownership-and-contract-governance.md",
-        "0002-guarded-query-contract.md",
-    )
     for path in terminology_paths:
         content = path.read_text(encoding="utf-8")
-        for filename in historical_filenames:
-            content = content.replace(filename, "")
         assert re.search(r"(?i)module\s+contract|모듈\s*간의?\s*계약", content) is None, path
 
 
@@ -453,43 +457,17 @@ def test_ci_and_compose_use_only_the_yaml_authority() -> None:
     assert "--ignore=tests/test_managed" not in workflow
 
 
-def test_verification_index_lists_every_immutable_record_once() -> None:
+def test_verification_uses_commit_provenance_and_external_protected_records() -> None:
     index = VERIFICATION_INDEX.read_text(encoding="utf-8")
-    evidence_names = {
-        path.name
-        for path in VERIFICATION_DIRECTORY.glob("*.md")
-        if path != VERIFICATION_INDEX
-    }
-    rows = re.findall(
-        r"^\| \[([^\]]+\.md)\]\(([^)]+\.md)\) \| ([^|]+) \| ([^|]+) \|",
-        index,
-        re.MULTILINE,
-    )
-    indexed_names = [target for _label, target, _title, _status in rows]
-    assert set(indexed_names) == evidence_names
-    assert len(indexed_names) == len(evidence_names)
-    assert "immutable record" in index
-    assert "현재 구현의 단일 완료 증거가 아니다" in index
-    for required in (
-        "2026-08-23-completion-audit.md",
-        "2026-08-25-canonical-time-stability.md",
-        "2026-08-25-source-database-corners.md",
-        "2026-08-26-lower-track-contract-prework.md",
-        "2026-08-26-rls-policy-drift.md",
-    ):
-        assert required in evidence_names
-
-    for label, name, indexed_title, indexed_status in rows:
-        assert label == name
-        evidence = (VERIFICATION_DIRECTORY / name).read_text(encoding="utf-8")
-        title = re.search(r"^# (.+)$", evidence, re.MULTILINE)
-        assert title is not None
-        assert indexed_title.strip() == title.group(1).strip()
-        status = re.search(r"^Status: (.+)$", evidence, re.MULTILINE)
-        expected = "미기재" if status is None else status.group(1).strip()
-        assert indexed_status.replace("`", "").strip() == expected.replace(
-            "`", ""
-        ).strip()
+    assert "1ff390ab67df215181810a84ac8b2ca8570eceee" in index
+    assert "uv run ruff check ." in index
+    assert "uv run mypy src" in index
+    assert "uv run pytest" in index
+    assert "LAUNCH-02" in index and "미실행" in index
+    assert "외부 Control DB inventory·보존·폐기" in index
+    assert "append-only/immutable" in index
+    assert "날짜별 PASS 요약 문서를 만들지 않습니다" in index
+    assert "Git history를" in index and "rewrite" in index
 
 
 def _markdown_heading_anchors(path: Path) -> set[str]:
@@ -507,22 +485,9 @@ def _markdown_heading_anchors(path: Path) -> set[str]:
 
 def test_local_markdown_links_resolve() -> None:
     markdown_paths = [ROOT_DIRECTORY / "README.md", ROOT_DIRECTORY / "AGENTS.md"]
-    immutable_paths = {
-        ROADMAP,
-    }
-    immutable_paths.update(
-        path
-        for directory in (
-            ROOT_DIRECTORY / "docs" / "decisions",
-            VERIFICATION_DIRECTORY,
-        )
-        for path in directory.glob("*.md")
-        if path.name != "README.md"
-    )
     markdown_paths.extend(
         path
         for path in sorted((ROOT_DIRECTORY / "docs").rglob("*.md"))
-        if path not in immutable_paths
     )
     missing: list[str] = []
     for path in markdown_paths:

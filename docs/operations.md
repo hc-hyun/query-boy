@@ -83,7 +83,8 @@ stop condition입니다.
 Old route를 닫고 신규 유입, active query와 source connection을 drain한 뒤 accepted single
 replica만 route합니다. Rollback은 route 차단 → new replica drain → 직전 image/config/SQL
 policy와 source inventory 복구 → readiness/verified baseline 확인 → route 순서입니다. 실제
-결과만 새 immutable evidence로 남기고 과거 verification은 수정하지 않습니다.
+결과는 승인된 environment change record에 append-only/immutable하게 남깁니다. Repository에는
+날짜별 PASS 문서를 만들지 않고 exact commit과 CI provenance만 연결합니다.
 
 ## Interactive Operator Shell
 
@@ -106,6 +107,10 @@ qm> source validate
 `source list/show/validate`는 server, DB 또는 repository를 변경하지 않습니다. 현재 파일의 strict
 schema, source ID 충돌, verified query 참조와 budget profile 참조를 검사하는 로컬 도구입니다.
 Source 변경은 YAML pull request와 배포로만 반영합니다.
+
+`logs`의 기본 window/limit는 30분/50건이고 최대 31일/1,000건입니다. `diag list`는 기본 1시간/20건,
+최대 7일/100건입니다. 모든 출력은 bounded하며 secret, token, raw request body와 내부 DB 오류를
+표시하지 않습니다.
 
 `diag show`는 question 원문이 terminal에 나타날 수 있고 `diag purge`는 복구할 수 없으므로
 reason과 exact confirmation이 필요합니다. Protected 환경의 실제 조회·삭제는 별도 operational
@@ -144,8 +149,8 @@ rotation은 대상, 실행자, 출력 처리와 stop condition을 확인한 별�
 
 ### Canonical-Time Coordinated Cutover
 
-이 heading은 immutable 과거 문서의 link target을 보존하기 위한 tombstone입니다. 해당
-managed cutover는 retired됐으며 현재 runbook으로 실행하지 않습니다.
+해당 managed cutover는 retired됐으며 현재 runbook으로 실행하지 않습니다. 과거 절차는
+[Git 기록 안내](verification/README.md)의 archive commit에서만 확인합니다.
 
 ## Health And Metrics
 

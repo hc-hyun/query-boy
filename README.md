@@ -9,7 +9,7 @@ Query Man 자체에 자연어를 SQL로 바꾸는 AI 모델이 들어 있는 것
 > 현재 상태: 첫 오픈용 코드와 저장소 검증은 완료됐습니다. 실제 운영 환경의 암호화 통신(TLS), 비밀값,
 > 백업, 배포와 트래픽 전환은 아직 남아 있습니다.
 
-찾는 내용이 정해져 있다면 [목적별 문서 안내](docs/README.md#하고-싶은-일로-찾기)에서 바로
+찾는 내용이 정해져 있다면 [독자별 문서 안내](docs/README.md#독자별-시작점)에서 바로
 출발하세요. 모든 문서를 순서대로 읽을 필요는 없습니다.
 
 ## 먼저 알아둘 용어
@@ -72,9 +72,9 @@ Boolean은 SQL의 조건식이나 중간 계산에는 사용할 수 있지만 �
 - DB 사용량을 source별 비용·금액으로 귀속하는 기능과 여러 요청을 잇는 분산 추적
 
 정확한 현재 기준은 [ADR 0025](docs/decisions/0025-static-non-rls-first-launch.md)의
-`LAUNCH-01-A`입니다. 완료된 검증은
-[첫 오픈 증적](docs/verification/2026-08-26-static-first-launch.md), 운영까지 남은 일은
-[개발 TODO](docs/development-todo.md)에서 확인할 수 있습니다.
+`LAUNCH-01-A`입니다. 현재 검증 방법과 과거 기록은
+[검증 안내](docs/verification/README.md), 운영까지 남은 일은 [개발 TODO](docs/development-todo.md)에서
+확인할 수 있습니다.
 Source authority의 현재 결정은 [ADR 0030](docs/decisions/0030-git-reviewed-yaml-source-authority.md)입니다.
 
 ## 제공 데이터
@@ -372,11 +372,11 @@ PII 표시는 comment만 믿지 않고 curated view·reader grant·policy로 강
 | 전체 구조와 module 작업 범위 | [Architecture](docs/architecture.md), [Module index](docs/modules/README.md) |
 | 첫 오픈 결정과 정확한 제한 | [ADR 0025](docs/decisions/0025-static-non-rls-first-launch.md) |
 | Source·verified-query·budget authority | [ADR 0030](docs/decisions/0030-git-reviewed-yaml-source-authority.md) |
-| AuthBridge API 인증 연동 | [Resource Server JWT Access Token 검증 계약](docs/resource-server-jwt-auth.md), [ADR 0029](docs/decisions/0029-authbridge-resource-server-jwt.md) |
+| AuthBridge API 인증 연동 | [Resource Server JWT Access Token 검증 계약](docs/resource-server-jwt-auth.md) |
 | 운영 배포·rollback·관측 절차 | [Operations](docs/operations.md) |
-| 남은 일과 완료 이력 | [Active TODO](docs/development-todo.md), [Implementation roadmap](docs/implementation-roadmap.md) |
-| 실행 시점별 검증 기록 | [Verification evidence](docs/verification/README.md) |
-| 일정에 없는 후속 연구 | [Future work](docs/future-work.md), [ADR index](docs/decisions/README.md) |
+| 지금 남은 일과 보류 주제 | [Active TODO](docs/development-todo.md) |
+| 현재 검증과 과거 기록 | [Verification and Git history](docs/verification/README.md) |
+| 핵심 방향과 세부 계약 | [Decision guide](docs/decisions/README.md) |
 
-과거 verification 문서는 그 문서에 적힌 commit·환경·범위만 증명합니다. 현재 상태는 이 README,
-accepted ADR, active TODO와 최신 runnable test를 함께 확인하세요.
+삭제한 과거 ADR·verification·완료 원장은 Git archive commit에서 확인할 수 있습니다. 현재 상태는 이
+README, 현행 decision, active TODO와 지금 실행한 runnable test/CI 결과로 판단하세요.

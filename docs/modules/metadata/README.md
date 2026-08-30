@@ -63,6 +63,49 @@ Cache는 process-local이며 bounded TTL, single-flight refresh와 source epoch�
 Invalidate 뒤 진행 중이던 old refresh가 새 cache value를 덮지 못한다. 실패한 refresh는 이전 snapshot을
 무기한 authoritative하게 만들지 않는다.
 
+## Physical metadata와 context disclosure
+
+Key/index collector는 relation·column과 같은 transaction/권한 predicate를 사용합니다. Local relation은
+allowed schema/kind이고 reader에게 schema `USAGE`, relation과 모든 key column의 `SELECT`가 있어야
+합니다. Foreign key의 referenced relation/column도 같은 eligible set이어야 합니다. Index는
+valid·ready·non-partial이고 모든 key가 simple column인 경우만 수집하며 INCLUDE column, expression,
+predicate, constraint/index name과 definition은 공개하지 않습니다.
+
+Context는 eligible `primary_key`, `foreign_keys`, `indexes`와 column semantic role을 반환합니다. Non-empty
+구조는 immutable snapshot/revision material에 포함하고 empty 구조는 불필요한 revision 변경을 막기
+위해 hash document에서 생략합니다. Physical FK를 reviewed semantic `joins`로 자동 승격하지 않고
+index를 query 허용이나 비용 안전의 증거로 쓰지 않습니다.
+
+`interactive.max_context_columns_per_relation` 기본값은 40입니다. Wide relation의 column 우선순위는
+다음과 같습니다.
+
+1. Grain·physical PK, local FK와 approved semantic join key
+2. Default time, measure source와 business-predicate column
+3. Relation-selection reason에 연결된 column
+4. 질문이 name/comment/alias/value hint에 직접 match한 column
+5. 남은 자리를 ordinal 순으로 채운 column
+
+필수 correctness column은 40개 target을 넘더라도 숨기지 않지만 전체 metadata response-byte limit는
+최종 상한입니다. Relation은 `column_count`, `returned_column_count`, `columns_truncated`를 반환하고
+하나라도 잘리면 top-level `truncated=true`입니다. 숨긴 column만 사용하는 index도 숨기고
+`indexes_truncated`를 표시합니다. 이 scoping은 disclosure 정책이며 SQL allowlist가 아닙니다.
+Revision과 query relation allowlist는 전체 published snapshot을 사용합니다.
+
+## Quality level gate
+
+Source minimum은 `L0`, `L1`, `L2` 중 하나입니다.
+
+- `L0`: Reader/catalog/overlay referential validation을 통과한 physical catalog
+- `L1`: L0 + 모든 공개 relation의 semantic entry·grain·description, event/comment/population relation의
+  default time
+- `L2`: L1 + source와 **현재 metadata revision**이 일치하는 verified-query entry 하나 이상
+
+판정 level이 declared minimum보다 낮으면 `METADATA_UNAVAILABLE`로 fail-closed하고 준비한 snapshot을
+current context로 공개하지 않습니다. HTTP/MCP metadata는 실제 `quality_level`을 반환하며 현재 두
+first-launch source는 L2를 요구합니다. Revision material이 바뀌면 결과가 같아 보여도 새 exact
+revision에서 verified query를 재실행해야 L2가 됩니다. SQL-policy-only 변경이 metadata revision
+material을 보존한다면 이 규칙만으로 metadata revision을 임의 재발행하지 않습니다.
+
 ## 소비 인터페이스와 전제
 
 | Provider | 소비 항목 | 전제 |

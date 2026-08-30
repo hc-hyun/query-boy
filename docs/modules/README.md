@@ -12,7 +12,7 @@ Python 구현은 `src/query_man` 아래 `source_catalog`, `metadata`, `guarded_q
 `assurance` 여섯 physical package로 나뉜다. Package `__init__.py`는 marker-only이며 interface를
 재수출하지 않는다. 제거된 managed/Control Plane 구현은 현재 module이 아니다. 현재 authority와 제거
 경계는 [ADR 0030의 retired managed capability](../decisions/0030-git-reviewed-yaml-source-authority.md#retired-managed-capability)를
-따르고, 과거 구현은 해당 ADR·evidence의 baseline commit에서만 확인한다.
+따르고, 과거 구현·검증은 [Git 기록 안내](../verification/README.md)의 archive commit에서만 확인한다.
 
 ## 3분 시작법
 
@@ -60,8 +60,8 @@ Python 구현은 `src/query_man` 아래 `source_catalog`, `metadata`, `guarded_q
 - Guarded Query는 SQL policy v3와 exact seven result OID를 적용한다.
 - DSN password 같은 secret은 YAML/Git에 저장하지 않고 environment로 resolve한다.
 
-RLS attestation, broader lossless encoding, COST와 TRACE 문서는 parked research다. 과거 managed ADR과
-evidence는 그 시점의 immutable record일 뿐 현재 capability가 아니다.
+RLS attestation, broader lossless encoding, COST와 TRACE는 parked 주제다. 정확한 재개 조건은
+[Active TODO](../development-todo.md#현재-일정에-없는-일)에만 둡니다.
 
 ## 허용 의존 방향
 
@@ -135,9 +135,10 @@ Python file별 primary owner는 다음과 같다. 경로는 `src/query_man/` 기
 - Assurance: `assurance/__init__.py`, `assurance/cli.py`, `assurance/quality.py`,
   `assurance/verified.py`
 
-Root `tests/`는 구현 owner가 검증한다. `tests/helpers.py`, `tests/test_documentation.py`,
-`docs/development-todo.md`, `docs/implementation-roadmap.md`, `docs/verification/`처럼 여러 owner가 함께
-사용하는 artifact는 coordinating agent가 single-writer로 편집한다.
+Root `tests/`는 구현 owner가 검증한다. `AGENTS.md`, `tests/helpers.py`,
+`tests/test_documentation.py`, `docs/development-todo.md`, `docs/decisions/README.md`,
+`docs/verification/README.md`처럼 여러 owner가 함께 사용하는 artifact는 coordinating agent가
+single-writer로 편집한다.
 
 ## 제공 인터페이스와 소유 경계
 
@@ -192,7 +193,8 @@ input/output/domain-error semantics로 한정한다. 다음 변경 범주는 일
 변경이 필요하면 현재/제안 의미, 이유, provider와 consumer, compatibility/migration/rollback,
 보안·데이터 손실 영향, 검증 계획을 제시하고 사용자의 명시적 승인을 받은 뒤 code·문서·테스트를 같은
 change set에서 갱신한다. Protected environment의 실제 action은 repository 승인과 별도의 실행 승인이
-필요하다. 과거 ADR/evidence는 수정하지 않고 새 ADR/evidence를 추가한다.
+필요하다. Protected evidence는 승인된 환경 기록 시스템에 append하고, repository history는
+[Git 기록 안내](../verification/README.md)의 archive policy를 따른다.
 
 ## 구조 변경 판단
 

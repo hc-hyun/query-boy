@@ -157,9 +157,9 @@ Production 구현 조립과 operator CLI는 Runtime, offline acceptance 조립�
 | 기능 | 코드 상태 | 현재 운영 상태 |
 |---|---|---|
 | 실행 중 source hot-add | 현재 구현에서 제거 | YAML review·test·배포로 변경 |
-| 여러 replica 운영 | soak 연구 기록 보존 | 현재는 단일 replica |
-| RLS tenant serving | 과거 구현과 연구 보존 | 모든 RLS source quarantine |
-| 넓은 PostgreSQL 결과 type | 연구 기록 보존 | 일곱 OID만 허용 |
+| 여러 replica 운영 | 현재 지원 범위 아님 | 현재는 단일 replica |
+| RLS tenant serving | 보류 | 모든 RLS source quarantine |
+| 넓은 PostgreSQL 결과 type | 보류 | 일곱 OID만 허용 |
 | DB-native 금액 귀속·workflow trace | Parked research | 일정과 구현 승인 없음 |
 
 범위 확장은 대상, interface·정책, migration, rollback과 protected procedure의 별도 검토가
@@ -205,8 +205,8 @@ Source DB의 curated view와 최소 권한 reader
 
 - 현재 launch 범위: [ADR 0025](decisions/0025-static-non-rls-first-launch.md)
 - 현재 source authority: [ADR 0030](decisions/0030-git-reviewed-yaml-source-authority.md)
-- 현재 physical package 구조: [ADR 0026](decisions/0026-physical-module-packages.md)
-- 결정 전체 색인: [ADR index](decisions/README.md)
+- 현재 physical package 구조: [module index](modules/README.md)
+- 핵심 방향과 세부 계약: [decision guide](decisions/README.md)
 - 정확한 모듈 owner와 interface: [module index](modules/README.md)
 - 현재 운영 전환: [operations](operations.md)
 - 예제 source와 질문: [MVP data](mvp.md)
@@ -215,7 +215,6 @@ Source DB의 curated view와 최소 권한 reader
 
 ## Completion Tracking
 
-[Implementation roadmap](implementation-roadmap.md)은 완료 ID와 당시 evidence를 보존하는 과거
-원장입니다. [Verification index](verification/README.md)의 각 기록도 적힌 commit·환경·범위만
-증명합니다. 현재 상태와 우선순위는 이 문서, [active TODO](development-todo.md), accepted ADR과
-현재 runnable test를 함께 확인하세요.
+현재 상태와 우선순위는 이 문서, [active TODO](development-todo.md), 현행 decision과 현재
+runnable test/CI로 판단합니다. 삭제한 완료 원장과 날짜별 검증 문서는
+[Git 기록 안내](verification/README.md)의 archive commit에서만 확인합니다.

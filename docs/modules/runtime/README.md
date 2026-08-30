@@ -66,6 +66,9 @@ query executor, catalog와 metadata close 순서다. Optional method 탐색으�
 manifest, `validate`는 source/budget/verified YAML의 consistency를 표시한다. 이 명령은 파일이나 DB를
 변경하지 않으며 실행 중 process를 reload하지 않는다.
 
+Encrypted capture의 persisted/privacy/TTL/fail-open lifecycle은
+[ADR 0027](../../decisions/0027-consent-gated-diagnostic-capture.md)이 exact contract입니다.
+
 ## 소비 인터페이스와 전제
 
 | Provider | 소비 항목 | 전제 |

@@ -1,73 +1,73 @@
-# Verification Evidence Index
+# 검증과 Git 기록
 
-Status: 기록 색인 — 실행 지침이나 현재 전체 완료 판정이 아님
+Status: Current — 현재 gate와 과거 repository 기록 조회 안내
 
-이 파일은 탐색용 색인이며 현재 구현의 단일 완료 증거가 아니다. 각 evidence 문서는 기록 당시
-실행한 범위와 사실을 보존하는 immutable record다. 과거 기록을 현재 상태에 맞춰 수정·삭제하거나
-상태를 재분류하지 않는다. 정정이 필요하면 원문을 유지하고 날짜, 대상 원문과 provenance를 명시한 새
-기록을 추가한다.
+현재 구현의 증거는 오래된 날짜별 성공 문서가 아니라 **검증한 exact Git commit과 그 commit에서
+실행한 gate 결과**입니다. 과거 `Complete` 문서는 이후 변경을 증명하지 않으므로 current tree에서
+유지하지 않습니다.
 
-`Complete`는 해당 문서가 명시한 범위에만 적용되며 이후 commit을 자동으로 증명하지 않는다. 이전 의미가 후속
-기록으로 대체되어도 이전 실행 사실은 삭제하지 않는다. `Open` finding과 strict xfail은 PASS나 위험 수용이
-아니다. 현재 지원 상태는 [architecture](../architecture.md), 활성 작업은 [development TODO](../development-todo.md),
-완료 ledger는 [implementation roadmap](../implementation-roadmap.md)에서 확인한다.
+| 항목 | 현재 판정 |
+|---|---|
+| `LAUNCH-01-A` repository 구현 | Accepted; exact launch scope는 ADR 0025 |
+| `QB-YAML-SOURCE-AUTHORITY-20260829` repository removal | Accepted; exact authority는 ADR 0030 |
+| `LAUNCH-02` protected deployment | 미실행; Active TODO |
+| 외부 Control DB inventory·보존·폐기 | 이 repository 작업에서 접근·변경·실행하지 않음; 별도 승인 필요 |
 
-원문에 `Status:` 줄이 없으면 아래 표에 `미기재`라고 표시합니다. 이는 실패나 미완료라는 뜻이
-아니라, 당시 문서가 별도 status field를 쓰지 않았다는 뜻입니다.
+## 현재 repository gate
 
-## 빠르게 찾기
+모든 변경의 최소 gate는 다음과 같습니다.
 
-| 찾는 내용 | 먼저 볼 기록 | 현재 해석 |
-|---|---|---|
-| 현재 source authority | [2026-08-29 YAML authority removal](2026-08-29-yaml-source-authority.md) | Repository removal acceptance 완료; Git-reviewed YAML만 authority |
-| 현재 static first launch | [2026-08-26 static launch](2026-08-26-static-first-launch.md) | Repository acceptance 완료, protected `LAUNCH-02` 남음 |
-| 현재 시간·revision 정책 | [2026-08-25 canonical time](2026-08-25-canonical-time-stability.md) | Repository 반영 완료, 환경별 cutover는 별도 |
-| Container와 MCP 경계 | [container runtime](2026-08-23-container-runtime.md), [MCP server](2026-08-23-mcp-server-assurance.md) | 당시 실행 증거이며 최신 CI로 다시 확인 필요 |
-| Retired Control Plane history | [managed startup](2026-08-23-managed-source-startup.md), [control recovery](2026-08-25-control-recovery-acceptance.md) | ADR 0030에서 capability 제거; 당시 baseline 기록으로만 해석 |
-| 현재 열린 보안 finding | [RLS policy drift](2026-08-26-rls-policy-drift.md) | Finding은 유효하지만 RLS serving 자체는 parked; 현재는 전면 차단 |
-| 일정에 없는 연구 | [lower-track prework](2026-08-26-lower-track-contract-prework.md) | 구현·우선순위·변경 승인 아님 |
+```bash
+uv run ruff check .
+uv run mypy src
+uv run pytest
+```
 
-아래 전체 표는 파일 누락을 막기 위한 날짜순 원장입니다. `Complete`라는 단어만 보지 말고 마지막
-`기록 범위` 열에서 무엇을 증명하고 무엇을 증명하지 않는지 확인하세요.
+DB catalog/query 경계는 관련 integration lane을, container·release 경계는 container acceptance와
+`uv run query-man-verify`를 추가합니다. 정확한 범위는
+[활성 개발 지침](../development-guidelines.md#tests)과 primary module README가 정합니다.
 
-<details>
-<summary>전체 immutable evidence 원장 펼치기</summary>
+Verified query의 format, 비교 순서와 rollback은
+[Assurance module](../modules/assurance/README.md#verified-query-회귀검사)을 따릅니다. 현재 first-launch
+profile의 exact acceptance 항목은 [ADR 0025](../decisions/0025-static-non-rls-first-launch.md)에 있습니다.
 
-| File | 문서 제목 | 문서 자체 상태 | 기록 범위 |
-|---|---|---|---|
-| [2026-08-22-safe-query.md](2026-08-22-safe-query.md) | Safe Query Verification — 2026-08-22 | 미기재 | PostgreSQL 18.6 local fixture의 당시 guarded-query 안전, 제한, 취소와 golden query 경계 |
-| [2026-08-23-column-disclosure.md](2026-08-23-column-disclosure.md) | Column Disclosure Verification — 2026-08-23 | 미기재 | 73-column synthetic relation의 당시 question-scoped column disclosure와 필수 semantic column 보존 |
-| [2026-08-23-completion-audit.md](2026-08-23-completion-audit.md) | Final Completion Audit — 2026-08-23 | `Complete` | 당시 100개 checklist production baseline의 종합 실행 증거; 이후 변경은 포괄하지 않음 |
-| [2026-08-23-container-runtime.md](2026-08-23-container-runtime.md) | Container Runtime Audit — 2026-08-23 | `Complete` | Local loopback Compose의 단일 HTTP/MCP container, 인증, readiness와 guarded query |
-| [2026-08-23-control-schema-migrations.md](2026-08-23-control-schema-migrations.md) | Control Schema Migration And Test Isolation Audit | `Complete` | Numbered migration, checksum drift, security reconciliation과 disposable Control DB test 격리 |
-| [2026-08-23-managed-source-startup.md](2026-08-23-managed-source-startup.md) | Managed Source Startup Verification — 2026-08-23 | `Complete` | Bootstrap/managed authority 분리, zero-bootstrap, Control state 복원과 one-time cutover 경계 |
-| [2026-08-23-mcp-multi-replica-soak.md](2026-08-23-mcp-multi-replica-soak.md) | MCP Multi-Replica Soak — 2026-08-23 | `Complete` | 두 Compose replica의 exact MCP 결과, 포화·복구와 1,000-session resource 경계 |
-| [2026-08-23-mcp-server-assurance.md](2026-08-23-mcp-server-assurance.md) | MCP Server Assurance — 2026-08-23 | `Complete` | 실제 Docker MCP endpoint의 protocol, 보안, 품질, 병렬·포화와 disconnect |
-| [2026-08-23-mcp.md](2026-08-23-mcp.md) | MCP MVP Verification — 2026-08-23 | 미기재 | 공식 MCP client가 HTTP와 동일한 Gateway와 PostgreSQL query 경계를 사용한 초기 MVP 증거 |
-| [2026-08-23-metadata-publishing.md](2026-08-23-metadata-publishing.md) | Metadata Publishing Verification — 2026-08-23 | 미기재 | Immutable metadata snapshot, atomic active pointer, restart 복구, rollback pin과 resume |
-| [2026-08-23-metadata-quality.md](2026-08-23-metadata-quality.md) | Metadata Quality Verification — 2026-08-23 | 미기재 | 16개 retrieval case의 relation accuracy, answerability recall과 context-byte gate |
-| [2026-08-23-no-deploy-onboarding.md](2026-08-23-no-deploy-onboarding.md) | No-Deploy Source Onboarding Verification — 2026-08-23 | 미기재 | Admin staging부터 hot reload, rotation, rollback과 세 번째 source L2/MCP까지의 초기 acceptance |
-| [2026-08-23-operations.md](2026-08-23-operations.md) | Operations Verification — 2026-08-23 | 미기재 | 당시 logging, health, shutdown, 5-table restore와 security automation 실행 결과 |
-| [2026-08-23-physical-catalog.md](2026-08-23-physical-catalog.md) | Physical Catalog Verification — 2026-08-23 | 미기재 | Reader 권한 범위의 PK/FK/index를 제한된 metadata projection으로 제공하는지 검증 |
-| [2026-08-23-quality-levels.md](2026-08-23-quality-levels.md) | Metadata Quality Level Verification — 2026-08-23 | 미기재 | L0/L1/L2 자동 판정과 declared minimum publish gate |
-| [2026-08-23-refactoring-assurance.md](2026-08-23-refactoring-assurance.md) | Refactoring Assurance Audit — 2026-08-23 | `Complete` | Production baseline 이후 `REF-01`~`REF-15`의 상태 경쟁, 권한, 종료와 운영 보강 |
-| [2026-08-23-release-acceptance.md](2026-08-23-release-acceptance.md) | Production Release Acceptance — 2026-08-23 | 미기재 | 당시 `REL-01`~`REL-08`의 세 source, 품질, 공격, 부하와 복구 acceptance |
-| [2026-08-23-shared-access.md](2026-08-23-shared-access.md) | Shared Access Verification — 2026-08-23 | `Complete` | Access-policy v2의 shared active-source visibility와 query/operator capability 분리 |
-| [2026-08-23-source-control-store.md](2026-08-23-source-control-store.md) | Source Control Store Verification — 2026-08-23 | `Historical baseline; manifest compatibility evidence superseded by CTRL-04` | Encrypted immutable source generation 저장의 역사적 baseline; 당시 manifest compatibility는 strict v2가 대체 |
-| [2026-08-23-source-extension.md](2026-08-23-source-extension.md) | Source Extension Assurance — 2026-08-23 | 미기재 | 네 번째 database의 code-branch 없는 onboarding과 두-replica MCP 결과; 당시 caller scope는 shared-access 기록이 대체 |
-| [2026-08-23-source-management-catalog.md](2026-08-23-source-management-catalog.md) | Source Management Catalog Audit — 2026-08-23 | `Complete` | Strict manifest v2 provenance와 secret-free operator inventory/detail/history |
-| [2026-08-23-source-mutation-receipts.md](2026-08-23-source-mutation-receipts.md) | Source Mutation Receipt Audit — 2026-08-23 | `Complete` | Source mutation의 expected-state CAS, idempotency와 immutable terminal receipt/history |
-| [2026-08-23-tenant-isolation.md](2026-08-23-tenant-isolation.md) | Tenant Isolation Verification — 2026-08-23 | 미기재 | Trusted tenant 전달, transaction-local context와 pool reset의 당시 표면; 후속 base-policy drift finding을 대체하지 않음 |
-| [2026-08-25-canonical-time-stability.md](2026-08-25-canonical-time-stability.md) | Canonical Time Stability Verification | `Repository acceptance complete; production cutover pending environment evidence` | UTC canonical-time repository acceptance와 revision/hash 전환; production cutover는 미완료 |
-| [2026-08-25-control-recovery-acceptance.md](2026-08-25-control-recovery-acceptance.md) | Control Recovery Acceptance — 2026-08-25 | `Complete` | PostgreSQL 18.4→18.6의 13-table archive, key, zero-bootstrap와 두-replica 복구 fixture |
-| [2026-08-25-resource-and-gateway-observations.md](2026-08-25-resource-and-gateway-observations.md) | Resource And Gateway Observation Audit — 2026-08-25 | `Complete` | `CTRL-07` resource sample과 privacy-safe gateway hourly lower-bound persistence |
-| [2026-08-25-runtime-replica-observations.md](2026-08-25-runtime-replica-observations.md) | Runtime Replica Observation Audit — 2026-08-25 | `Complete` | `CTRL-06` stable replica identity, desired/applied drift와 DB-clock freshness projection |
-| [2026-08-25-source-database-corners.md](2026-08-25-source-database-corners.md) | Source Database Corner Acceptance — 2026-08-25 | `DBEDGE-01~DBEDGE-05 complete; separate RLS security finding open` | Disposable DB의 metadata/query corner, unresolved scalar/result gap과 별도 RLS finding 구분; last updated 2026-08-26 |
-| [2026-08-25-source-onboarding-skill.md](2026-08-25-source-onboarding-skill.md) | Source Onboarding Skill Acceptance — 2026-08-25 | `Complete` | Plan-only onboarding Skill의 fresh-context routing, secret/mutation 거부와 zero-mutation handoff |
-| [2026-08-25-usage-projection.md](2026-08-25-usage-projection.md) | Usage Projection Audit — 2026-08-25 | `Complete` | `CTRL-08` resource latest-attempt/last-success와 global gateway reporter 상태의 operator projection |
-| [2026-08-26-lower-track-contract-prework.md](2026-08-26-lower-track-contract-prework.md) | Lower-Track Boundary Prework Verification | 미기재 | COST/TRACE 제안의 disposable read-only prework; 구현, 우선순위 시작 또는 사용자 승인이 아님 |
-| [2026-08-26-rls-policy-drift.md](2026-08-26-rls-policy-drift.md) | RLS Policy Drift Security Finding — 2026-08-26 | `Open — boundary decision and fail-closed implementation required` | Hidden base-policy 완화 또는 RLS disable 뒤 cross-tenant row가 성공하는 열린 보안 결함과 strict xfail |
-| [2026-08-26-static-first-launch.md](2026-08-26-static-first-launch.md) | Static Non-RLS First-Launch Acceptance — 2026-08-26 | `Repository acceptance complete; protected environment execution pending LAUNCH-02` | ADR 0025 `LAUNCH-01-A` 구현 commit의 two-source, RLS quarantine, reader/OID policy, container와 CI acceptance |
-| [2026-08-29-yaml-source-authority.md](2026-08-29-yaml-source-authority.md) | YAML Source Authority Removal Verification — 2026-08-29 | `Repository removal acceptance complete; protected deployment and external Control DB disposition not performed` | ADR 0030의 Git-reviewed YAML 단일 authority, managed/Control capability 제거와 local regression evidence |
+## protected environment evidence
 
-</details>
+Repository test 통과는 protected environment 배포 승인이거나 실행 증거가 아닙니다. 실제 작업은
+target, operator, artifact digest, source·DDL·role·setting inventory, result, stop/rollback 상태와
+change-record owner를 승인된 환경 기록 시스템에 append-only/immutable하게 남깁니다. Secret, token,
+SQL literal과 내부 DB 오류는 기록하지 않습니다.
+
+Repository에는 그 운영 기록을 복사한 날짜별 서술 문서를 추가하지 않습니다. 필요하면 비밀이 없는
+change-record ID와 exact Git commit만 handoff에 연결하고, 환경 기록의 retention·access 정책을
+그 시스템에서 유지합니다.
+
+## 삭제한 기록 찾기
+
+2026-08-22~2026-08-29의 날짜별 verification 34개와 과거 implementation roadmap은 정리 직전 commit
+`1ff390ab67df215181810a84ac8b2ca8570eceee`에 그대로 남아 있습니다.
+
+```bash
+git ls-tree -r --name-only 1ff390ab67df215181810a84ac8b2ca8570eceee docs/verification
+git show 1ff390ab67df215181810a84ac8b2ca8570eceee:docs/verification/2026-08-26-static-first-launch.md
+git show 1ff390ab67df215181810a84ac8b2ca8570eceee:docs/implementation-roadmap.md
+```
+
+그보다 앞선 1차 정리에서 제거한 retired Control Plane tombstone과 완료된 module-boundary·onboarding
+계획 8개는 baseline `95b3068a16629bf043696938d049e36efc9a162f`에서 확인합니다.
+
+```bash
+git ls-tree -r --name-only 95b3068a16629bf043696938d049e36efc9a162f docs
+```
+
+이 기록은 당시 commit·환경·명령 범위만 설명합니다. 현재 상태는 [Architecture](../architecture.md),
+[Active TODO](../development-todo.md), 현행 ADR과 지금 실행한 test/CI 결과로 판단합니다. Git history를
+rewrite하거나 archived record를 현재 의미로 소급 해석하지 않습니다.
+
+## 새 기록을 남기는 기준
+
+- 현행 계약·절차가 바뀌면 owner 문서, 필요한 ADR과 runnable test를 같은 change set에서 갱신합니다.
+- Repository 완료 사실은 commit/PR/CI provenance로 남깁니다. 날짜별 PASS 요약 문서를 만들지 않습니다.
+- Protected action의 실제 evidence는 실행 승인을 받은 뒤 환경 change record에만 append합니다.
+- 보류 연구는 [Active TODO의 보류 표](../development-todo.md#현재-일정에-없는-일)에 한 줄로 유지하고,
+  요구와 승인 전에는 설계 일지를 늘리지 않습니다.

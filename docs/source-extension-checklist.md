@@ -100,10 +100,10 @@ grain, 단위, 상태값, nullable 의미와 집계 주의를 설명하는 사�
 - 복잡한 join이나 중복 집계 위험을 DB 안에서 안전하게 감춰야 할 때만 DB owner가 `ai` curated
   view를 만든다.
 - 현재 일곱 결과 타입으로 답할 수 없는 실제 질문이 있으면 source 추가를 멈춘다. 먼저
-  [parked `ENC-01`](future-work.md#결과-type-확대)의 새 result policy, revision과
+  [parked `ENC-01`~`ENC-02`](development-todo.md#현재-일정에-없는-일)의 새 result policy, revision과
   migration 범위를 별도로 결정하고 승인받아야 한다.
 - RLS가 필요한 source는 현재 등록, publish 또는 serving하지 않는다.
-  [`RLS-01`~`RLS-03`](future-work.md#rls-source-제공)의 attestation, migration과 protected
+  [`RLS-01`~`RLS-03`](development-todo.md#현재-일정에-없는-일)의 attestation, migration과 protected
   cutover가 별도로 승인·완료되기 전 작은 예외를 만들지 않는다.
 - 새 function, operator, type, collation, extension 또는 reader setting이 필요하면 SQL policy,
   metadata revision과 result identity 영향을 별도로 검토한다.
@@ -116,7 +116,7 @@ grain, 단위, 상태값, nullable 의미와 집계 주의를 설명하는 사�
 - PostgreSQL 18 또는 server/client/driver UTF-8 불일치
 - 지원 범위 밖 final result OID나 공개된 domain column
 - 설명할 수 없는 metadata revision 또는 결과 변화
-- 현재 static dataset의 [9개 verified query expectation](verified-queries.md)이나 새 source의 승인된
+- 현재 static dataset의 [9개 verified query expectation](modules/assurance/README.md#verified-query-회귀검사)이나 새 source의 승인된
   verified result 실패
 - Reader privilege, DDL/settings inventory, image/config 또는 rollback이 불명확함
 - SQL policy v2와 v3 process가 같은 serving fleet에 섞임

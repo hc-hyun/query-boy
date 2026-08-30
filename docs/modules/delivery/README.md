@@ -48,9 +48,21 @@ Runtime에 load된 read-only source projection만 제공한다.
 interface인 `SourceReader`, Metadata application service, Guarded Query application/lifecycle와 Runtime
 operations sink만 소비한다.
 
+Opaque access-policy schema는 version 2이고 entry field는 `caller_id`, `tenant_id`, `token_env`,
+`operator`와 optional `diagnostic_consent`만 허용합니다. Consent object는 `version`, `receipt_id`,
+`expires_at`만 가지며 exact admission semantics는 ADR 0027을 따릅니다. Legacy version/scope나 다른
+unknown field는 startup에서 거부하고 token 값은 environment에서만 읽어 SHA-256 digest로 비교합니다.
+Loopback anonymous와 single-token mode는 query-only, `operator=true`는 query 권한을 포함하는
+superset입니다. Authorized caller의 unknown source는 `SOURCE_NOT_FOUND`로 끝나며
+metadata·SQL validation·queue 작업을 시작하지 않습니다.
+
 현재 data surface는 source list, source metadata context, guarded query와 cancel이다. HTTP와 MCP의 field,
 status/code/message, validation issue, authentication challenge와 protocol version은 external wire format이다.
 Source mutation/history/receipt/replica/usage route와 MCP admin tool은 제공하지 않는다.
+
+MCP protocol/version/tool schema와 bounded validation의 exact contract는
+[ADR 0006](../../decisions/0006-mcp-transport-and-workflow.md), diagnostic consent와 transport admission의
+exact contract는 [ADR 0027](../../decisions/0027-consent-gated-diagnostic-capture.md)에 있습니다.
 
 AuthBridge OAuth resource-server mode는 `Authorization: Bearer <access_token>`만 받는다. Discovery 문서의
 `jwks_uri`를 HTTPS로 읽어 JWKS를 cache하고 unknown `kid`에서 제한적으로 한 번 갱신한다. 허용

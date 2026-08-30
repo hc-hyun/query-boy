@@ -45,10 +45,32 @@ interface다. Concrete `PostgresQueryExecutor` 조립은 Runtime과 offline Assu
 current SQL policy를 강제한다. `SQL_POLICY_REVISION`과 canonical material은 Metadata revision이 소비하는
 policy identity다.
 
+정확한 PostgreSQL grammar/fingerprint 경계는 [ADR 0001](../../decisions/0001-postgresql-ast-validation.md),
+query result/error·admission·cancel 계약은 [ADR 0002](../../decisions/0002-guarded-query-contract.md),
+reader/resolved-object 검사는 [ADR 0003](../../decisions/0003-reader-and-resolved-object-policy.md)에 있습니다.
+
 ### 현재 launch policy identity
 
 SQL policy v3, current `SQL_POLICY_REVISION`과 exact seven result OID가 current launch identity다. 이
 heading은 source extension 문서와 과거 review link의 stable target이기도 하다.
+
+### Canonical time identity
+
+Reader transaction은 `REPEATABLE READ READ ONLY` 직후 transaction-local `TimeZone=UTC`를 설정하고,
+catalog·resolved-object 검사·`EXPLAIN`·user SQL보다 먼저 exact UTC를 검증합니다. Commit, rollback,
+cancel과 pool reuse 뒤 local setting이 남지 않아야 하며 database/role default를 바꾸지 않습니다.
+
+Canonical-time policy material version 1은 aware `datetime`만 UTC로 변환해 `+00:00` ISO로 표현하고
+`Z`로 축약하지 않습니다. Naive `datetime`, `date`, `time`, `timetz`의 기존 ISO 표현은 보존하며 mapping과
+sequence에도 재귀적으로 같은 규칙을 적용합니다. 이 material은 SQL-policy digest와 모든 metadata
+revision에 들어가며 stale token은 executor 진입 전에 fail-closed합니다.
+
+Transport UTC와 한국 업무 달력은 별개입니다. `ai.issue_overview.discovered_on`은
+`(discovered_at AT TIME ZONE 'Asia/Seoul')::date`, `ai.voc_overview.received_on`은
+`(received_at AT TIME ZONE 'Asia/Seoul')::date`이고 월별 VOC SQL은 SELECT/GROUP BY 모두
+`date_trunc('month', received_at, 'Asia/Seoul')`을 사용합니다. 이 의미가 바뀌면 두 source의 metadata
+revision과 9개 verified query를 함께 재검토합니다. 과거 managed coordinated-cutover 절차는 retired됐고
+현재 rollout/rollback은 ADR 0025와 Operations를 따릅니다.
 
 Application result는 stable `columns`, `rows`, `row_count`, `metadata_revision`, truncation/limit 정보로
 구성한다. `QueryRejectedError`, `QueryInvalidError`, `QueryOverloadedError`, `QueryTimeoutError`,

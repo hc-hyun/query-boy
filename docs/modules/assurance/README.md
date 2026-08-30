@@ -17,7 +17,7 @@ Assurance는 Git-reviewed quality/verified/security artifact를 strict validatio
 - Ordered column/row canonical result hash
 - `query-man-evaluate`, `query-man-verify` offline concrete composition
 - Fixture, integration, container, load/soak와 documentation acceptance ownership
-- 실행 시점 evidence의 append-only provenance 규칙
+- Repository gate의 exact commit/CI provenance와 protected evidence 경계
 
 ## 소유하지 않는 책임
 
@@ -56,6 +56,41 @@ Offline CLI만 `SourceRegistry`, PostgreSQL catalog/query와 Metadata service co
 조립한다. Runtime authority selector나 Control DB는 사용하지 않는다. Cleanup은 production과 같은
 reader/cancel/rollback invariant를 보존한다.
 
+## Verified Query 회귀검사
+
+Verified query는 검토한 질문과 SQL을 다시 실행해 metadata·relation·결과가 달라졌는지 찾는
+회귀검사이며 실행 허용 SQL 목록이 아니다. `config/verified-queries.yaml`에 없는 SQL도 일반 safety와
+권한·resource policy를 통과하면 실행할 수 있고, 등록된 SQL도 그 검사를 우회하지 않는다.
+
+현재 first-launch set은 `development-issues` 4개와 `market-voc` 5개, 총 9개입니다. 각 entry는 query/source
+ID, 질문, 결정적인 read-only SQL, exact metadata revision과 relation set, ordered columns, row count와
+SHA-256 result hash를 보존합니다. RLS source는 현재 전면 quarantine하므로 성공 entry가 없습니다.
+
+```bash
+uv run query-man-verify
+```
+
+Command는 각 entry에 대해 다음을 확인합니다.
+
+1. 현재 metadata revision이 recorded revision과 같은지 검사합니다.
+2. SQL을 다시 검증하고 실제 참조 relation set을 비교합니다.
+3. Production과 같은 Guarded Query 경로로 실행합니다.
+4. 결과가 잘리지 않았는지 확인하고 ordered columns, row count와 canonical result hash를 비교합니다.
+5. 하나라도 다르면 non-zero로 실패하며 config를 쓰거나 다른 authority로 import하지 않습니다.
+
+실패는 새 결과가 틀렸다는 자동 판정이 아니라 schema·fixture·metadata·SQL·policy 변경을 조사하라는
+신호입니다. 의도한 변경도 expected hash를 자동 갱신하지 않고 새 revision과 9개 전체 결과를
+review합니다. 통과는 모든 질문이나 production data의 정확성을 보증하지 않습니다.
+
+현재 final result는 PostgreSQL base OID `20, 21, 23, 25, 1082, 1184, 1700`만 허용합니다. Hash는 ordered
+columns/rows와 canonical JSON scalar를 사용하고 numeric scale, date ISO와 aware datetime UTC `+00:00`
+표현을 보존합니다. 이 identity를 바꾸려면 compatibility 승인과 full reissue가 필요합니다.
+
+Rollback은 reviewed Git revert 또는 이전 pinned artifact입니다. Runtime fallback, merge 또는
+write-back은 rollback이 아닙니다. Serving 범위는
+[ADR 0025](../../decisions/0025-static-non-rls-first-launch.md), 저장 authority는
+[ADR 0030](../../decisions/0030-git-reviewed-yaml-source-authority.md)을 따릅니다.
+
 ## 소비 인터페이스와 전제
 
 | Provider | 소비 항목 | 전제 |
@@ -70,8 +105,10 @@ reader/cancel/rollback invariant를 보존한다.
 - Verified SQL은 current metadata revision과 exact expected result를 모두 만족해야 한다.
 - Hash는 ordered columns/rows와 canonical encoding을 사용한다.
 - Offline CLI도 production reader, SQL, budget, OID, cancel/rollback 정책을 우회하지 않는다.
-- Evidence는 commit/environment/time/command/result를 보존하며 과거 record를 소급 수정하지 않는다.
-- 과거 managed evidence는 당시 사실일 뿐 현재 Control Plane capability를 증명하지 않는다.
+- Repository 결과는 exact commit과 실행한 command/CI run에 연결하고 오래된 PASS 서술을 현재 증거로
+  사용하지 않는다.
+- Protected environment evidence는 승인된 change-record system에 append-only/immutable하게 남기며
+  repository test 결과로 대신하지 않는다.
 
 ## 모듈 내부 변경
 
@@ -94,7 +131,8 @@ uv run pytest tests/test_quality.py tests/test_verified.py tests/test_assurance_
 ```
 
 Fixture/DB boundary 변경은 integration과 container gate도 실행한다. Evidence는 실제 command가 성공한
-뒤에만 새 날짜 문서로 append한다.
+뒤 exact commit/PR/CI provenance에 연결합니다. Protected action의 evidence는 별도 실행 승인 뒤 환경
+change record에만 append합니다.
 
 ## 집중해서 읽을 범위
 
@@ -104,4 +142,4 @@ Fixture/DB boundary 변경은 integration과 container gate도 실행한다. Evi
 | Verified/hash | `assurance/verified.py`, verified YAML, result encoding, `test_verified.py` |
 | Offline CLI | `assurance/cli.py`, provider composition, `test_assurance_cli.py` |
 | CI/fixtures | workflow/script/fixture와 integration/container tests |
-| Documentation/evidence | `test_documentation.py`, current indexes, immutable evidence rules |
+| Documentation/verification | `test_documentation.py`, current docs, Git/CI와 protected evidence rules |
