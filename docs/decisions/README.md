@@ -41,7 +41,7 @@ serving·safety·launch gate는 유지합니다. 실제 active 작업은
 - Query Man은 하나의 repository·wheel·process인 modular monolith입니다.
 - Source Catalog, Metadata, Guarded Query, Delivery, Runtime, Assurance 여섯 physical package를
   사용하고 marker-only `__init__.py`에서 interface를 재수출하지 않습니다.
-- 정확한 owner, allowed dependency, module interface와 승인 분류는
+- 정확한 owner, allowed dependency, 중요한 provider behavior/entrypoint와 승인 분류는
   [module index](../modules/README.md)와 각 module README가 canonical source입니다.
 - Production composition은 Runtime, offline acceptance composition은 Assurance CLI만 소유합니다.
 
@@ -104,9 +104,10 @@ serving·safety·launch gate는 유지합니다. 실제 active 작업은
 
 ## 새 ADR이 필요한 때
 
-Module interface, external wire, persisted/versioned format, policy/compatibility identity,
-safety/lifecycle invariant, ownership/composition boundary 또는 protected operational procedure의 의미를
-바꿀 때는 [승인 절차](../development-guidelines.md#승인-규칙)를 먼저 따릅니다. 선택 이유와
+External wire, persisted/versioned format, policy/compatibility identity, safety/lifecycle invariant,
+ownership/composition boundary 또는 protected operational procedure의 의미를 바꿀 때는
+[승인 절차](../development-guidelines.md#승인-규칙)를 먼저 따릅니다. 내부 Python interface 정리는
+provider/consumer를 함께 검증합니다. 선택 이유와
 compatibility·migration·rollback을 장기간 독립적으로 유지해야 할 때만 새 ADR을 만들고, 단순 구현
 완료나 조사 일지는 current owner 문서와 runnable test에 반영합니다.
 

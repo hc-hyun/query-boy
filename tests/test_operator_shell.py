@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import shutil
+import subprocess
 import sys
 import tomllib
 import urllib.error
@@ -17,6 +18,7 @@ import yaml
 from query_man.runtime.operator_backend import (
     LogQuery,
     OperatorSettings,
+    OperatorShellError,
     RealOperatorBackend,
     _public_error,
 )
@@ -529,7 +531,6 @@ def test_real_logs_terminates_docker_process_when_reader_stops(
     class Process:
         def __init__(self) -> None:
             self.stdout = iter(["first line\n", "second line\n"])
-            self.stderr = io.StringIO("")
             self.terminated = False
 
         def poll(self) -> int | None:
@@ -543,9 +544,11 @@ def test_real_logs_terminates_docker_process_when_reader_stops(
             return 0
 
     process = Process()
+    popen_arguments: dict[str, object] = {}
 
     def popen(command: list[str], **_arguments: object) -> Process:
         commands.append(command)
+        popen_arguments.update(_arguments)
         return process
 
     monkeypatch.setattr(
@@ -569,7 +572,40 @@ def test_real_logs_terminates_docker_process_when_reader_stops(
         "--follow",
         "query-man",
     ]]
+    assert popen_arguments["stderr"] == subprocess.DEVNULL
     assert process.terminated is True
+
+
+def test_real_logs_discards_stderr_and_keeps_generic_nonzero_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = _real_backend(tmp_path)
+
+    class Process:
+        stdout = iter(())
+
+        def poll(self) -> int:
+            return 17
+
+        def wait(self, timeout: int | None = None) -> int:
+            assert timeout is None
+            return 17
+
+    def popen(_command: list[str], **arguments: object) -> Process:
+        assert arguments["stderr"] == subprocess.DEVNULL
+        return Process()
+
+    monkeypatch.setattr(
+        "query_man.runtime.operator_backend.subprocess.Popen",
+        popen,
+    )
+
+    with pytest.raises(
+        OperatorShellError,
+        match="Query Man container 로그를 읽지 못했습니다",
+    ):
+        list(backend.logs(LogQuery()))
 
 
 def test_container_diagnostic_command_does_not_expose_capture_key(

@@ -43,6 +43,8 @@ Assurance는 Git-reviewed quality/verified/security artifact를 strict validatio
 
 `QualityCase`, `QualityGates`, `QualityReport`, `QualityEvaluation`과 `ExpectedResult`, `VerifiedQuery`,
 `VerifiedQueryRegistry`, `create_result_hash`가 public offline/acceptance interface다.
+`assurance.verified`의 strict parser와 `VerifiedQueryConfigurationError`는 Runtime의 startup L2 revision
+확인과 local `qm source validate`도 소비한다. Assurance가 production request를 serve한다는 뜻은 아니다.
 
 `config/verified-queries.yaml`의 version, query/source ID, SQL, metadata revision, relation membership, ordered
 columns, row count와 hash는 persisted/versioned acceptance format이다. Source membership은
@@ -117,7 +119,7 @@ helper 정리는 module 내부 변경이다.
 
 ## 사용자 승인이 필요한 경계 변경
 
-- Quality/verified DTO와 YAML schema/version/default
+- Quality/verified YAML schema/version/default와 compatibility 의미
 - Verified identity, canonical encoding/result hash와 comparison semantics
 - Offline CLI command/output/exit와 concrete composition/cleanup
 - Required gate, fixture topology와 evidence procedure

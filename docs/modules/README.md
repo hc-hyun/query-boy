@@ -6,7 +6,8 @@ Status: Active development governance
 
 Query Man은 하나의 repository와 하나의 deployable process를 유지하는 modular monolith다. 이 문서는
 독립적으로 이해하고 변경할 수 있는 여섯 논리 module의 소유권, 허용 의존 방향과 변경 승인 절차를
-정의한다.
+정의한다. 논리 module은 별도 배포나 임의 구현 교체 단위가 아니며 package graph를 완전한 DAG로 만드는
+것도 목표가 아니다.
 
 Python 구현은 `src/query_man` 아래 `source_catalog`, `metadata`, `guarded_query`, `delivery`, `runtime`,
 `assurance` 여섯 physical package로 나뉜다. Package `__init__.py`는 marker-only이며 interface를
@@ -18,9 +19,9 @@ Python 구현은 `src/query_man` 아래 `source_catalog`, `metadata`, `guarded_q
 
 1. 아래 표에서 primary module 하나를 고른다.
 2. 해당 README의 `30초 요약`과 `집중해서 읽을 범위`를 따른다.
-3. 다른 module의 private 구현 대신 공개 interface를 사용한다.
-4. interface·wire·persisted format·policy·lifecycle·ownership·운영 절차 의미가 바뀌면 구현을 멈추고
-   [승인 절차](#승인-대상-변경-절차)를 따른다.
+3. Allowed dependency 안에서 owner leaf module의 public API를 사용하고 underscore private 구현은 피한다.
+4. External API/wire, persisted format, policy, lifecycle, ownership, 운영 절차 의미나 그 의미에 닿는
+   interface가 바뀌면 구현을 멈추고 [승인 절차](#승인-대상-변경-절차)를 따른다.
 
 | 바꾸려는 것 | Primary module |
 |---|---|
@@ -65,7 +66,8 @@ RLS attestation, broader lossless encoding, COST와 TRACE는 parked 주제다. �
 
 ## 허용 의존 방향
 
-아래 `->`는 왼쪽 module이 오른쪽 module의 공개 Python interface를 소비한다는 뜻이다.
+아래 `->`는 왼쪽 module이 오른쪽 module이 소유한 capability를 소비한다는 뜻이다. 중요한 동작과
+entrypoint는 owner 문서에 설명하지만 모든 public Python symbol을 열거하지 않는다.
 
 ```text
 Delivery -> Source Catalog(read), Metadata, Guarded Query, Runtime operations interface
@@ -75,6 +77,10 @@ Guarded Query -> Source Catalog(read and reader policy), Metadata published revi
                  Runtime operations interface
 Assurance -> Source Catalog(read), Metadata, Guarded Query
 ```
+
+Runtime composition과 operations sink, Metadata/Guarded Query의 revision-policy 연결은 허용된 reciprocal
+dependency다. Leaf Python import는 비순환으로 유지하지만 package 자체의 독립 추출이나 모든 provider의
+대체 가능성을 보장하지 않는다.
 
 Concrete implementation 조립은 다음 composition root만 소유한다.
 
@@ -106,7 +112,7 @@ YAML pull request와 DBA 작업 handoff를 만들 수 있지만 credential 접�
 | `delivery/access.py`, `delivery/authentication.py`, `delivery/diagnostics.py`, `delivery/gateway.py`, `delivery/mcp_server.py`, `delivery/http_validation.py`, `delivery/app.py` | Delivery | Caller/authentication, application facade와 HTTP/MCP wire |
 | `runtime/config.py`, `runtime/composition.py`, `runtime/server.py`, `runtime/operations.py`, `runtime/diagnostic_capture.py`, `runtime/operator_shell.py`, `runtime/operator_backend.py` | Runtime | Environment, production composition/lifecycle, safe operations와 local YAML CLI/backend |
 | `assurance/quality.py`, `assurance/verified.py`, `assurance/cli.py` | Assurance | Offline quality/verified artifact와 concrete verification composition |
-| `errors.py` | Symbol별 provider; file은 shared single-writer | Domain error의 발생 의미는 provider, external envelope는 Delivery가 소유 |
+| `errors.py` | Shared interface; file은 shared single-writer | `AppError` base는 shared, domain error 발생 의미는 provider, external envelope는 Delivery가 소유 |
 | `config/sources/`, `config/budget-profiles.yaml` | Source Catalog | Git-reviewed YAML source authority와 versioned budget |
 | `config/access-policies*.yaml` | Delivery | Caller/source/scope policy |
 | `config/quality-evaluation.yaml`, `config/verified-queries.yaml`, `config/security-evaluation.yaml` | Assurance | Versioned acceptance data; source membership은 Git YAML과 일치해야 함 |
@@ -143,18 +149,20 @@ single-writer로 편집한다.
 
 ## 제공 인터페이스와 소유 경계
 
-각 module README의 `제공 인터페이스와 소유 경계`가 official interface의 canonical 설명이다. Public처럼
-보이는 Python 이름이 자동으로 module interface가 되는 것은 아니다. Consumer는 package marker가 아닌
-owner leaf module에서 직접 import한다.
+각 module README의 `제공 인터페이스와 소유 경계`는 provider가 보장하는 중요한 동작과 안정된
+entrypoint를 설명한다. Public Python symbol 전체를 inventory처럼 등록하지 않으며, consumer는 allowed
+dependency 안에서 package marker가 아닌 owner leaf module에서 직접 import한다. Underscore private
+symbol과 provider의 concrete storage에는 의존하지 않는다.
 
 Root `errors.py`는 interface-only shared artifact다. Domain error의 발생 조건은 provider module이,
 HTTP/MCP status/code/message/details rendering은 Delivery가 소유한다. Metadata와 Guarded Query 사이의
-published-revision/SQL-policy interface, 여러 module이 쓰는 Runtime operations sink는 현재 transition
-dependency이며 다른 private implementation 접근 권한을 만들지 않는다.
+published-revision/SQL-policy 연결, 여러 module이 쓰는 Runtime operations sink는 허용된 cross-cutting
+dependency이며 package 독립 추출이나 다른 private implementation 접근 권한을 만들지 않는다.
 
 Error symbol ownership은 다음과 같다.
 
-- Delivery: `AppError`, `OperatorRequiredError`, `InsufficientScopeError`
+- Shared: `AppError`
+- Delivery: `OperatorRequiredError`, `InsufficientScopeError`
 - Source Catalog: `SourceNotFoundError`
 - Metadata: `MetadataUnavailableError`, `MetadataRevisionMismatchError`
 - Guarded Query: `QueryRejectedError`, `QueryInvalidError`, `QueryOverloadedError`,
@@ -180,10 +188,10 @@ Source YAML schema/revision, metadata revision material, verified result identit
 
 ## 승인 대상 변경 절차
 
-`Module interface`는 provider가 allowed dependency map과 자기 module 문서에서 다른 logical module이
-쓰도록 공개한 Python symbol과 lifecycle capability다. 의미는 Python shape/signature와 호출 단위
-input/output/domain-error semantics로 한정한다. 다음 변경 범주는 일반 구현 요청으로 승인된 것으로
-보지 않는다.
+Allowed dependency map 안의 내부 Python shape/signature와 public leaf symbol은 provider와 직접 consumer를
+같은 change set에서 수정·검증할 수 있다. Module interface는 중요한 entrypoint의 호출 단위
+input/output/domain-error semantics를 설명하며, 모든 symbol을 문서 목록에 등록하거나 실제 교체 요구가
+없는 구현에 Protocol을 만들 필요는 없다. 다음 의미 변경은 일반 구현 요청으로 승인된 것으로 보지 않는다.
 
 - `External API/wire format`: HTTP/MCP/CLI wire, authentication과 public error
 - `Persisted/versioned format`: YAML/config schema와 version
@@ -198,12 +206,16 @@ change set에서 갱신한다. Protected environment의 실제 action은 reposit
 필요하다. Protected evidence는 승인된 환경 기록 시스템에 append하고, repository history는
 [Git 기록 안내](../verification/README.md)의 archive policy를 따른다.
 
+위 의미를 보존하는 additive helper, internal/public Python symbol 정리, file move와 provider/consumer
+동시 refactor는 별도 사용자 승인을 요구하지 않는다. 중요한 behavior/entrypoint와 runnable test만
+owner 문서에 유지한다.
+
 ## 구조 변경 판단
 
-Module은 사람과 agent가 독립적으로 이해·변경하는 단위다. Folder나 package 수를 늘리는 것이 목표가
-아니다. 같은 transaction·cleanup·실패 경로에 속하면 함께 두고, 실제로 다른 변경 이유와 consumer가
-확인될 때만 새 경계를 검토한다. 이름만 전달하는 facade, unused extension point, re-export용
-`__init__.py`는 만들지 않는다.
+Module은 사람과 agent가 독립적으로 이해·변경하는 단위이지 독립 배포·교체 단위가 아니다. Folder나
+package 수를 늘리는 것이 목표가 아니다. 같은 transaction·cleanup·실패 경로에 속하면 함께 두고,
+실제로 다른 release, owner, 접근 권한이나 lifecycle이 확인될 때만 새 경계를 검토한다. 이름만 전달하는
+facade, unused extension point, re-export용 `__init__.py`는 만들지 않는다.
 
 ## 검증
 
@@ -211,6 +223,7 @@ Module focused test는 빠른 feedback이며 전체 gate를 대체하지 않는�
 
 ```bash
 uv run ruff check .
+uv run ruff check src/query_man/runtime --select C901 --config "lint.mccabe.max-complexity=19"
 uv run mypy src
 uv run pytest
 ```

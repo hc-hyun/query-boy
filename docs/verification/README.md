@@ -19,6 +19,7 @@ Status: Current — 현재 gate와 과거 repository 기록 조회 안내
 
 ```bash
 uv run ruff check .
+uv run ruff check src/query_man/runtime --select C901 --config "lint.mccabe.max-complexity=19"
 uv run mypy src
 uv run pytest
 ```

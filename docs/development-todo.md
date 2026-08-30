@@ -107,8 +107,8 @@ limit을 대신할 수 없습니다. 실제 요구 없이 chargeback, distribute
 
 - 작업은 [module index](modules/README.md)와 primary module README에서 시작합니다.
 - 한 agent는 지정된 module과 file allowlist만 수정하고 shared file·Git은 coordinator가 관리합니다.
-- Module interface나 external/persisted/policy/lifecycle/procedure 의미는 정확한 사용자 승인 없이
-  바꾸지 않습니다.
+- Internal Python interface는 provider/consumer를 함께 수정·검증할 수 있습니다. External/persisted/
+  policy/lifecycle/ownership/procedure 의미는 정확한 사용자 승인 없이 바꾸지 않습니다.
 - 완료한 ID는 이 파일에서 제거하고 exact commit/PR/CI provenance로 남깁니다. 현재 운영에 필요한
   결과만 owner 문서에 반영하고 날짜별 완료 원장을 새로 만들지 않습니다.
 - Protected environment evidence/change record는 승인된 기록 시스템에 append-only/immutable하게

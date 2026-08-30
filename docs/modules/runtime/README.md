@@ -48,12 +48,18 @@ managed environment가 남아 있으면 조용히 무시하지 않고 startup co
 
 `OperationalState`의 `increment`, `observe`, `set_source_health`, `reconcile_sources`,
 `set_component_health`, `set_accepting`, `public_status`, `snapshot`이 domain/Delivery가 소비하는 operations
-interface다. 일반 request path는 operations sink 실패 때문에 query cleanup을 실패시키지 않는다.
+interface다. 이 process-wide sink는 허용된 cross-cutting dependency이며 core package의 독립 추출이나
+별도 telemetry Protocol 주입을 약속하지 않는다. 일반 request path는 operations sink 실패 때문에 query
+cleanup을 실패시키지 않는다.
 
 `build_app`은 production composition root다. `SourceRegistry.load`, concrete PostgreSQL catalog/query,
 Metadata service, Gateway/Delivery와 OAuth/capture adapter를 연결한다. Ordinary consumer에는 concrete
 registry 대신 `SourceReader`를 주입한다. Assurance offline CLI 이외의 코드가 production concrete
 implementation을 조립하지 않는다.
+
+Runtime은 `build_http_app`이 제공하는 `state.mcp_app` child-lifespan handle을 사용하고, 자신이 만든
+idempotent `state.shutdown_trigger`를 server entrypoint에 전달한다. 나머지 FastAPI state 배치를 모듈 간
+API로 확대하거나 이를 위한 별도 DTO를 만들지 않는다.
 
 Startup은 configuration/YAML load, exact inventory와 RLS quarantine, provider capability 및 bounded DB
 probe, application/lifespan 진입 후 accepting/ready 순서다. 실패하면 ready가 되지 않으며 생성한 parent
@@ -61,12 +67,13 @@ resource를 역순으로 정확히 한 번 close 시도한다. Cleanup은 첫 pr
 나머지를 계속한다. Startup, parent lifespan body 또는 child lifespan 오류는 cleanup 오류보다 우선 보존하고,
 정상 shutdown에서만 최초 cleanup 오류를 호출자에게 돌려준다.
 
-Shutdown은 accepting 중단, active query bounded drain, 남은 query cancel/rollback, capture flush/close,
-query executor, catalog와 metadata close 순서다. 최초 SIGTERM/SIGINT가 monotonic shared graceful-work
-deadline을 시작하고, signal 없는 server shutdown이나 direct lifespan cleanup은 종료 시작 시 lazy하게
-같은 deadline을 만든다. Uvicorn 대기에 사용된 wall-clock time을 차감한 remaining만 query executor에
-전달하고, capture는 query drain 뒤 다시 계산한 `min(remaining, 2초)`만 받는다. 반복 signal은 deadline을
-연장하지 않는다. Optional method 탐색으로 required cleanup을 건너뛰지 않는다.
+Shutdown은 하나의 Runtime-private trigger로 deadline 시작, Runtime readiness admission 중단과 query
+executor admission 중단을 먼저 수행한 뒤 active query bounded drain, 남은 query cancel/rollback,
+capture flush/close, query executor, catalog와 metadata close 순서로 진행한다. Signal, signal 없는 server
+shutdown과 direct lifespan cleanup이 같은 idempotent trigger를 사용한다. Uvicorn 대기에 사용된 wall-clock
+time을 차감한 remaining만 query executor에 전달하고, capture는 query drain 뒤 다시 계산한
+`min(remaining, 2초)`만 받는다. 반복 signal은 deadline을 연장하지 않는다. Optional method 탐색으로
+required cleanup을 건너뛰지 않는다.
 
 이 deadline은 graceful wait의 cutoff이지 hard process-exit 시각이 아니다. Remaining이 0이어도
 cancel/rollback, capture interrupt/drop과 모든 resource close를 시도하며 이 cleanup, Uvicorn의 초 단위
@@ -91,9 +98,9 @@ connection interrupt와 대기 항목 drop을 시도한 다음 다른 Runtime cl
 |---|---|---|
 | Source Catalog | `SourceRegistry.load`, `SourceReader`, reader policy | Git working tree/release artifact가 authority; fallback 없음 |
 | Metadata | Application/lifecycle와 concrete catalog | Required callable을 ready 전에 확인 |
-| Guarded Query | Delivery executor lifecycle | Direct drain/cancel/rollback/close 순서를 보존 |
+| Guarded Query | Delivery executor lifecycle | Stop admission 뒤 drain/cancel/rollback/close 순서를 보존 |
 | Delivery | `build_http_app`, auth/capture contracts | Wire semantics를 Runtime에서 재정의하지 않음 |
-| Assurance | Verified YAML parser for local `qm source validate`, container acceptance | Runtime은 expected result를 판정하지 않음 |
+| Assurance | Verified YAML parser for startup L2 revision과 local validation, container acceptance | Runtime은 expected result를 판정하지 않음 |
 
 ## 불변조건
 
@@ -109,7 +116,8 @@ connection interrupt와 대기 항목 drop을 시도한 다음 다른 Runtime cl
 
 Configuration/wire/lifecycle 의미를 보존하는 private parsing, composition helper, metric storage와 CLI
 UI/backend 분리는 module 내부 변경이다. `operator_shell.py`는 입력·표시를,
-`operator_backend.py`는 외부 I/O와 local source loading을 소유한다.
+`operator_backend.py`는 외부 I/O와 local source loading을 소유한다. 둘은 같은 logical Runtime module이므로
+container diagnostic dispatch 같은 내부 연결을 별도 module interface나 DTO로 승격하지 않는다.
 
 ## 사용자 승인이 필요한 경계 변경
 
@@ -123,6 +131,7 @@ UI/backend 분리는 module 내부 변경이다. `operator_shell.py`는 입력·
 ## 검증
 
 ```bash
+uv run ruff check src/query_man/runtime --select C901 --config "lint.mccabe.max-complexity=19"
 uv run pytest tests/test_runtime_config.py tests/test_runtime_startup_cleanup.py \
   tests/test_operations.py tests/test_operator_shell.py tests/test_server.py
 ```

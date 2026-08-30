@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 
 from query_man.runtime.composition import build_app
 from query_man.runtime.config import load_runtime_config
-from query_man.runtime.operations import configure_logging, operations
+from query_man.runtime.operations import configure_logging
 
 load_dotenv()
 runtime_config = load_runtime_config()
@@ -21,21 +21,17 @@ class _QueryManServer(uvicorn.Server):
     def __init__(
         self,
         config: uvicorn.Config,
-        stop_accepting: Callable[[], None],
-        begin_shutdown: Callable[[], None],
+        shutdown_trigger: Callable[[], None],
     ) -> None:
         super().__init__(config)
-        self._stop_accepting = stop_accepting
-        self._begin_shutdown = begin_shutdown
+        self._shutdown_trigger = shutdown_trigger
 
     def handle_exit(self, sig: int, frame: FrameType | None) -> None:
-        self._begin_shutdown()
-        operations.set_accepting(False)
-        self._stop_accepting()
+        self._shutdown_trigger()
         super().handle_exit(sig, frame)
 
     async def shutdown(self, sockets: list[socket.socket] | None = None) -> None:
-        self._begin_shutdown()
+        self._shutdown_trigger()
         await super().shutdown(sockets=sockets)
 
 
@@ -50,8 +46,7 @@ def main() -> None:
     try:
         _QueryManServer(
             config,
-            app.state.query_executor.stop_accepting,
-            app.state.shutdown_deadline.begin,
+            app.state.shutdown_trigger,
         ).run()
     except KeyboardInterrupt:  # Uvicorn re-raises a captured SIGINT after graceful shutdown.
         pass

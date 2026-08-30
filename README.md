@@ -280,12 +280,11 @@ monolith입니다.
 
 Module 하나를 수정할 때는 repository 전체를 먼저 읽지 말고
 [module index](docs/modules/README.md)에서 담당 module, 읽을 코드·테스트와 사용 가능한 interface를
-확인합니다. 다른 module이 사용하는 interface 의미를 바꿔야 한다면 변경 내용과 영향을 사용자에게
-먼저 설명하고 승인을 받아야 합니다.
+확인합니다. 내부 Python interface는 provider와 consumer를 함께 수정할 수 있고, external API·저장
+형식·정책·lifecycle·ownership 의미를 바꿀 때 변경 내용과 영향을 사용자에게 먼저 설명하고 승인받습니다.
 
-여기서 module interface는 다른 내부 module에 공개한 Python 상수·type·Protocol·함수·method와
-시작·종료 같은 lifecycle capability를 포함하는 내부 연결점입니다. HTTP/MCP 같은 외부 API와는
-별도 경계입니다.
+Module interface는 allowed dependency 안에서 provider가 보장하는 중요한 entrypoint와 호출 동작입니다.
+모든 public Python symbol을 목록화하거나 구현을 임의 교체할 수 있게 만들 필요는 없습니다.
 
 ## 개발과 테스트
 
@@ -297,10 +296,11 @@ docker compose up -d --wait postgres
 uv sync --locked
 ```
 
-일상적인 repository gate는 다음 세 명령입니다.
+일상적인 repository gate는 다음 네 명령입니다.
 
 ```bash
 uv run ruff check .
+uv run ruff check src/query_man/runtime --select C901 --config "lint.mccabe.max-complexity=19"
 uv run mypy src
 uv run pytest
 ```

@@ -13,8 +13,9 @@ import pytest
 import uvicorn
 from fastapi import FastAPI
 
+import query_man.runtime.composition as composition_module
 import query_man.runtime.server as server_module
-from query_man.runtime.composition import _ShutdownDeadline
+from query_man.runtime.composition import _ShutdownDeadline, _ShutdownTrigger
 from query_man.runtime.operations import OperationalState, operations
 
 
@@ -37,12 +38,10 @@ def test_main_configures_ceil_uvicorn_shutdown_timeout(
         def __init__(
             self,
             config: uvicorn.Config,
-            stop_accepting: Callable[[], None],
-            begin_shutdown: Callable[[], None],
+            shutdown_trigger: Callable[[], None],
         ) -> None:
             captured["config"] = config
-            captured["stop_accepting"] = stop_accepting
-            captured["begin_shutdown"] = begin_shutdown
+            captured["shutdown_trigger"] = shutdown_trigger
 
         def run(self) -> None:
             captured["ran"] = True
@@ -59,8 +58,8 @@ def test_main_configures_ceil_uvicorn_shutdown_timeout(
     config = captured["config"]
     assert isinstance(config, uvicorn.Config)
     assert config.timeout_graceful_shutdown == expected_seconds
-    assert callable(captured["stop_accepting"])
-    assert callable(captured["begin_shutdown"])
+    assert callable(captured["shutdown_trigger"])
+    assert captured["shutdown_trigger"] is server_module.app.state.shutdown_trigger
     assert captured["ran"] is True
 
 
@@ -103,15 +102,14 @@ def test_first_signal_owns_deadline_and_repeated_signal_does_not_extend_it(
         "set_accepting",
         lambda accepting: events.append(("accepting", accepting)),
     )
-
-    def begin_shutdown() -> None:
-        events.append("deadline")
-        deadline.begin()
+    shutdown_trigger = _ShutdownTrigger(
+        deadline,
+        lambda: events.append("executor_stop"),
+    )
 
     server = server_module._QueryManServer(
         uvicorn.Config(FastAPI(), log_level="critical"),
-        lambda: events.append("executor_stop"),
-        begin_shutdown,
+        shutdown_trigger,
     )
 
     server.handle_exit(signal.SIGTERM, None)
@@ -122,10 +120,6 @@ def test_first_signal_owns_deadline_and_repeated_signal_does_not_extend_it(
     assert server.should_exit is True
     assert server.force_exit is True
     assert events == [
-        "deadline",
-        ("accepting", False),
-        "executor_stop",
-        "deadline",
         ("accepting", False),
         "executor_stop",
     ]
@@ -137,11 +131,14 @@ def test_signal_shutdown_update_can_reenter_operational_state_lock(
     state = OperationalState()
     handled = threading.Event()
     errors: list[BaseException] = []
-    monkeypatch.setattr(server_module, "operations", state)
+    monkeypatch.setattr(composition_module, "operations", state)
+    shutdown_trigger = _ShutdownTrigger(
+        _ShutdownDeadline(10_000),
+        lambda: None,
+    )
     server = server_module._QueryManServer(
         uvicorn.Config(FastAPI(), log_level="critical"),
-        lambda: None,
-        lambda: None,
+        shutdown_trigger,
     )
 
     def handle_signal_while_state_lock_is_held() -> None:
@@ -183,20 +180,28 @@ async def test_programmatic_shutdown_begins_deadline_before_uvicorn_waits(
         clock.advance_ms(4_000)
 
     monkeypatch.setattr(uvicorn.Server, "shutdown", uvicorn_shutdown)
-
-    def begin_shutdown() -> None:
-        events.append("deadline")
-        deadline.begin()
+    monkeypatch.setattr(
+        operations,
+        "set_accepting",
+        lambda accepting: events.append(f"accepting:{accepting}"),
+    )
+    shutdown_trigger = _ShutdownTrigger(
+        deadline,
+        lambda: events.append("executor_stop"),
+    )
 
     server = server_module._QueryManServer(
         uvicorn.Config(FastAPI(), log_level="critical"),
-        lambda: None,
-        begin_shutdown,
+        shutdown_trigger,
     )
 
     await server.shutdown()
 
-    assert events == ["deadline", "uvicorn_shutdown"]
+    assert events == [
+        "accepting:False",
+        "executor_stop",
+        "uvicorn_shutdown",
+    ]
     assert deadline.remaining_ms() == 6_000
 
 
@@ -236,8 +241,10 @@ async def test_signal_stops_admission_before_lifespan_shutdown(
             lifespan="on",
             timeout_graceful_shutdown=1,
         ),
-        executor_stopped.set,
-        lambda: None,
+        _ShutdownTrigger(
+            _ShutdownDeadline(1_000),
+            executor_stopped.set,
+        ),
     )
     server_task = asyncio.create_task(server.serve(sockets=[server_socket]))
     operations.reset()

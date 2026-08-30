@@ -143,8 +143,8 @@ revision은 그대로 유지하고 원인과 필요한 변경 범위를 다시 �
 - 새 budget tier나 caller별 source grant
 - 새 persisted authority나 runtime mutation surface
 
-이 항목이 필요해 보이면 단순 source 추가가 아니라 module interface, external/persisted format,
-policy, safety/lifecycle, composition 또는 protected procedure 변경일 가능성이 높다. 실제 변경 범주,
+이 항목이 필요해 보이면 단순 source 추가가 아니라 external/persisted format, policy,
+safety/lifecycle, composition 또는 protected procedure 변경일 가능성이 높다. 실제 변경 범주,
 provider/consumer 영향과 rollback을 밝히고 먼저 정확한 승인을 받는다.
 
 ## HTTP와 MCP가 지켜야 할 동일한 흐름

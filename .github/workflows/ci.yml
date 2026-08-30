@@ -24,6 +24,7 @@ jobs:
       - name: Static analysis and unit checks
         run: |
           uv run ruff check .
+          uv run ruff check src/query_man/runtime --select C901 --config "lint.mccabe.max-complexity=19"
           uv run mypy src
           uv run pytest -m 'not integration and not load and not soak and not mcp_server'
       - name: Database, retrieval and golden checks

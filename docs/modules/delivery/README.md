@@ -44,7 +44,10 @@ Runtime에 load된 read-only source projection만 제공한다.
 
 ## 제공 인터페이스와 소유 경계
 
-`GatewayService`가 Runtime이 조립하는 transport-neutral application facade다. Delivery는 provider
+`GatewayService`가 Runtime이 조립하는 transport-neutral application facade다. `build_http_app`, access
+policy/authenticator configuration과 diagnostic capture port는 Runtime composition이 사용하는 주요
+entrypoint다. 반환 FastAPI의 `state.mcp_app`은 Runtime이 parent/child lifespan을 연결하는 내부
+composition handle이며, 다른 state 배치는 외부 module interface가 아니다. Delivery는 provider
 interface인 `SourceReader`, Metadata application service, Guarded Query application/lifecycle와 Runtime
 operations sink만 소비한다.
 
@@ -105,7 +108,7 @@ Wire와 provider interface 의미를 보존하는 private serialization helper, 
 - HTTP/MCP path/tool/resource, request/response/error/status/header와 protocol version
 - OAuth issuer/audience/algorithm/JWKS cache/scope/role와 401/403 contract
 - Caller/source authorization, diagnostic consent와 audit identity policy
-- Provider interface usage와 parent/child lifespan cleanup
+- Authorization 순서와 parent/child lifespan cleanup outcome
 - Source management API 재도입
 
 ## 검증

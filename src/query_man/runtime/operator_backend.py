@@ -174,7 +174,7 @@ class RealOperatorBackend:
                 command,
                 cwd=self._settings.root,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
@@ -189,8 +189,6 @@ class RealOperatorBackend:
                 yield line.rstrip("\r\n")
             return_code = process.wait()
             if return_code:
-                assert process.stderr is not None
-                process.stderr.read()
                 raise OperatorShellError(
                     "Query Man container 로그를 읽지 못했습니다. 먼저 `docker compose ps`를 확인하세요."
                 )

@@ -340,10 +340,13 @@ def test_consolidated_current_contracts_cover_archived_decisions() -> None:
 def test_module_docs_cover_owners_interfaces_and_current_python_files() -> None:
     index = MODULE_INDEX.read_text(encoding="utf-8")
     agents = (ROOT_DIRECTORY / "AGENTS.md").read_text(encoding="utf-8")
+    normalized_agents = " ".join(agents.split())
     assert "## 승인 대상 변경 절차" in index
     assert "## 새 데이터베이스 추가 시 영향" in index
     assert "docs/modules/README.md" in agents
-    assert "Module interface의 의미 변경은 additive change를 포함해" in agents
+    assert "내부 Python shape/signature 변경" in agents
+    assert "별도 사용자 승인 없이" in normalized_agents
+    assert "모든 public Python symbol을 열거하지 않는다" in agents
     assert "baseline commit" in agents
     assert "수정 가능한 file allowlist" in agents
     assert "여러 agent가 같은 worktree를 공유하면" in agents
@@ -373,7 +376,7 @@ def test_module_docs_cover_owners_interfaces_and_current_python_files() -> None:
         assert f"`{class_name}`" in index, f"Missing error owner: {class_name}"
 
 
-def test_interface_term_is_narrow_and_other_change_categories_remain_explicit() -> None:
+def test_internal_interface_flexibility_keeps_material_change_categories_explicit() -> None:
     paths = (
         ROOT_DIRECTORY / "AGENTS.md",
         MODULE_INDEX,
@@ -388,9 +391,11 @@ def test_interface_term_is_narrow_and_other_change_categories_remain_explicit() 
     )
     for path in paths:
         content = " ".join(path.read_text(encoding="utf-8").split())
-        assert "allowed dependency map" in content
+        assert "allowed dependency map" in content.casefold()
         assert "shape/signature" in content
         assert "input/output/domain-error semantics" in content
+        assert "모든 public Python symbol" in content
+        assert "별도 사용자 승인" in content
         for category in categories:
             assert category in content, f"{path.name}: {category}"
 

@@ -21,6 +21,7 @@ _NORMAL_SHUTDOWN_EVENTS = [
     "capture_start",
     "child_enter",
     "body",
+    "query_stop_accepting",
     "query_drain",
     "capture_close",
     "query_executor_close",
@@ -95,10 +96,12 @@ class _RecordingExecutor:
 
     def stop_accepting(self) -> None:
         self.accepting = False
+        self._events.append("query_stop_accepting")
+        _raise_failure(self._failures, "query_stop_accepting")
 
     async def drain(self, grace_ms: int) -> None:
         assert operations.public_status() == "shutting_down"
-        self.stop_accepting()
+        assert self.accepting is False
         self.drain_timeouts.append(grace_ms)
         self._events.append("query_drain")
         _raise_failure(self._failures, "query_drain")
@@ -229,7 +232,7 @@ async def test_direct_lifespan_starts_full_deadline_then_capture_gets_exact_rema
 
     async def drain(grace_ms: int) -> None:
         assert operations.public_status() == "shutting_down"
-        app.state.query_executor.stop_accepting()
+        assert app.state.query_executor.accepting is False
         drain_timeouts.append(grace_ms)
         events.append("query_drain")
         clock.advance_ms(1_250.4)
@@ -289,6 +292,21 @@ async def test_zero_shutdown_grace_still_calls_drain_capture_and_all_closes(
 
     assert app.state.query_executor.drain_timeouts == [0]
     assert app.state.capture_close_timeouts == [0]
+    assert events == _NORMAL_SHUTDOWN_EVENTS
+
+
+@pytest.mark.asyncio
+async def test_shutdown_trigger_is_idempotent_across_early_and_lifespan_calls(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    app, events = _build_runtime(monkeypatch, tmp_path)
+
+    async with app.router.lifespan_context(app):
+        events.append("body")
+        app.state.shutdown_trigger()
+        app.state.shutdown_trigger()
+
     assert events == _NORMAL_SHUTDOWN_EVENTS
 
 
@@ -418,6 +436,26 @@ async def test_shutdown_drain_failure_does_not_skip_cleanup(
     assert events == _NORMAL_SHUTDOWN_EVENTS
 
 
+@pytest.mark.asyncio
+async def test_shutdown_trigger_failure_does_not_skip_drain_or_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    stop_error = RuntimeError("stop accepting failed")
+    app, events = _build_runtime(
+        monkeypatch,
+        tmp_path,
+        {"query_stop_accepting": stop_error},
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        async with app.router.lifespan_context(app):
+            events.append("body")
+
+    assert raised.value is stop_error
+    assert events == _NORMAL_SHUTDOWN_EVENTS
+
+
 @pytest.mark.parametrize(
     "failed_step",
     ["query_executor_close", "catalog_close", "metadata_close"],
@@ -527,6 +565,8 @@ async def test_shutdown_cancellation_runs_all_cleanup_and_is_preserved(
     wait_forever = asyncio.Event()
 
     async def drain(_grace_ms: int) -> None:
+        assert operations.public_status() == "shutting_down"
+        assert app.state.query_executor.accepting is False
         events.append("query_drain")
         drain_started.set()
         await wait_forever.wait()
@@ -638,6 +678,7 @@ async def test_aliased_query_and_catalog_resource_is_closed_once(
         "capture_start",
         "child_enter",
         "body",
+        "query_stop_accepting",
         "query_drain",
         "capture_close",
         "combined_close",

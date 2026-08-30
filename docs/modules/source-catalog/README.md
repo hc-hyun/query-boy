@@ -60,9 +60,12 @@ manifest alias를 통해 published profile을 바꿀 수 없다. `list()`는 cre
 `RegistryConfigurationError`는 YAML, environment resolution과 validation 실패를 대표한다.
 `SourceNotFoundError`의 domain 의미도 Source Catalog가 소유하며 external envelope는 Delivery가 소유한다.
 
-Reader policy interface는 `require_reader_connection_policy`, `reader_session_budget_values`,
-`READER_SESSION_TIMEZONE_SETTER`, `READER_SESSION_BUDGET_SETTERS`다. Metadata와 Guarded Query는 pool
-checkout마다 connection 확인 후 read-only transaction과 transaction-local settings를 적용한다.
+`source_catalog.reader_policy`의 public API는 reader connection 확인, session policy 검증, canonical
+client encoding/timezone과 transaction-local budget 값을 제공한다. 현재 Metadata와 Guarded Query는
+`require_reader_connection_policy`, `require_reader_session_policy`, `reader_session_budget_values`,
+`ReaderSessionPolicyError`와 관련 setting 상수를 pool checkout마다 사용한다. 이 목록은 symbol registry가
+아니며 안정된 policy behavior가 interface다. 두 consumer는 connection 확인 후 read-only transaction과
+transaction-local settings를 적용한다.
 Database `TEMP` privilege 보유 여부는 reader admission 조건이 아니다. Query Man 사용자 SQL의
 temporary relation/DDL 차단은 Guarded Query가 계속 소유하며, 자세한 경계는
 [ADR 0032](../../decisions/0032-reader-temp-admission-relaxation.md)를 따른다.
@@ -101,7 +104,7 @@ focused test 정리는 module 내부 변경이다. 새 abstraction보다 기존 
 
 ## 사용자 승인이 필요한 경계 변경
 
-- `SourceReader`, DTO와 `SourceNotFoundError` 의미
+- Sanitized source projection과 `SourceNotFoundError` public 의미
 - Source/budget YAML schema, version, field default와 environment resolution
 - Source ID, allowlist, semantic overlay, provenance, budget와 revision material 의미
 - RLS/reader PostgreSQL version·encoding·session policy

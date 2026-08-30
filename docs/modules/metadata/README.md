@@ -133,7 +133,7 @@ Public DTO/revision/context semantics를 보존하는 SQL row assembly helper, r
 
 ## 사용자 승인이 필요한 경계 변경
 
-- Catalog/Prepared DTO, `CatalogProvider`와 `MetadataService` public capability
+- Catalog/Prepared disclosure와 published revision semantics
 - Catalog query가 수집하는 comment/type/key/index와 sanitation 의미
 - Metadata revision canonical material/encoding/hash
 - Cache freshness, invalidate, single-flight와 fail-closed lifecycle

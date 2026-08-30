@@ -5,9 +5,10 @@ source는 [활성 개발 지침](docs/development-guidelines.md)이다. Primary 
 해당하는 절만 구현 전에 읽는다. 목표는 코드 골프가 아니라 요구사항을 안전하게 만족하는 가장
 작고 단순한 변경이다.
 
-구조를 나누는 목적은 사람과 agent가 필요한 범위만 빠르게 이해하고, official interface를 보존한
-내부 변경의 영향이 다른 module로 번지지 않게 하는 것이다. Folder, package, repository 또는 service
-수를 늘리는 것 자체는 목표가 아니다. 구조 변경 전에는
+구조를 나누는 목적은 사람과 agent가 필요한 범위만 빠르게 이해하고, owner가 보장하는 동작을 보존한
+내부 변경의 영향이 다른 module로 불필요하게 번지지 않게 하는 것이다. 논리 module은 독립 배포나
+임의 구현 교체를 약속하지 않는다. Folder, package, repository 또는 service 수를 늘리는 것 자체는
+목표가 아니다. 구조 변경 전에는
 [설계 목적과 분리 판단](docs/development-guidelines.md#설계-목적과-분리-판단)을 적용한다.
 
 ## 60초 작업 시작
@@ -18,7 +19,7 @@ source는 [활성 개발 지침](docs/development-guidelines.md)이다. Primary 
    module·root `tests/`만 읽는다. Package `__init__.py`는 marker-only이므로 interface re-export를
    기대하지 않는다.
 4. 변경 지점부터 직접 consumer, transaction·cleanup, 실패 경로와 runnable test까지 확인한다.
-5. 다른 module이 쓰는 interface나 external/persisted/policy/lifecycle/procedure 의미를 바꿔야 하면
+5. External/persisted/policy/lifecycle/ownership/procedure 의미를 바꿔야 하면
    구현을 멈추고 아래 승인 trigger와 [상세 절차](docs/development-guidelines.md#승인-규칙)를 따른다.
 
 현재 launch authority는 [ADR 0025](docs/decisions/0025-static-non-rls-first-launch.md), source·verified-query·budget
@@ -32,10 +33,12 @@ authority는 [ADR 0030](docs/decisions/0030-git-reviewed-yaml-source-authority.m
 
 ## 승인 Trigger
 
-`Module interface`는 provider가 allowed dependency map과 자기 module 문서에서 다른 logical module이
-쓰도록 명시적으로 공개한 Python symbol과 lifecycle capability다. 그 의미는 Python shape/signature와
-호출 단위 input/output/domain-error semantics로 한정한다.
-Module interface의 의미 변경은 additive change를 포함해 사용자의 명시적 승인 없이 진행하지 않는다.
+`Module interface`는 allowed dependency map 안에서 provider가 다른 logical module에 보장하는 안정된
+entrypoint와 호출 단위 input/output/domain-error semantics다. 문서는 중요한 동작과 entrypoint를
+설명하며 모든 public Python symbol을 열거하지 않는다. External/persisted/policy/lifecycle/ownership
+의미를 보존하는 내부 Python shape/signature 변경, additive helper와 consumer 동시 수정은 별도 사용자
+승인 없이 같은 change set에서 구현·검증할 수 있다. 실제 교체 요구가 없는 구현에 Protocol이나 wrapper를
+추가하지 않는다.
 
 다음 의미의 변경도 정확한 영향 범주를 각각 제시하고 별도 승인받는다.
 
@@ -52,10 +55,10 @@ stop condition과 change-record 책임을 확인한 실행 승인이 필요하�
 archive baseline을 기록한 뒤 current tree에서 정리할 수 있지만 Git history를 rewrite하지 않는다.
 Shared transition artifact와 공통 governance 문서는 single-writer로 편집한다.
 
-승인 필요성, authority 충돌 또는 분류 불명확성을 발견하면 code/schema/config와 의미 문서 수정을
+위 범주의 승인 필요성, authority 충돌 또는 분류 불명확성을 발견하면 code/schema/config와 의미 문서 수정을
 멈춘다. 현재 의미, 제안 의미와 이유, provider/consumer 또는 external/persisted/operational 영향,
 compatibility/migration/rollback, 보안·데이터 손실 영향과 검증 계획을 사용자에게 제시한다. 일반적인
-“구현”, “refactor”, “정리” 요청이나 다른 agent의 동의는 승인이 아니다. 전체 분류와 절차는
+“구현”, “refactor”, “정리” 요청이나 다른 agent의 동의는 위 범주 변경의 승인이 아니다. 전체 분류와 절차는
 [활성 개발 지침](docs/development-guidelines.md#module-interface와-승인-대상-변경)을 따른다.
 
 ## Non-Negotiable Safety

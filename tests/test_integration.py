@@ -128,6 +128,7 @@ class DisconnectExecutor:
     def __init__(self) -> None:
         self.started = asyncio.Event()
         self.cancelled = asyncio.Event()
+        self.accepting = True
 
     async def execute(
         self,
@@ -153,10 +154,10 @@ class DisconnectExecutor:
         pass
 
     def stop_accepting(self) -> None:
-        pass
+        self.accepting = False
 
     async def drain(self, _grace_ms: int) -> None:
-        self.stop_accepting()
+        assert self.accepting is False
 
 @pytest.mark.integration
 @pytest.mark.asyncio

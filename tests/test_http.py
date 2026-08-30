@@ -136,7 +136,7 @@ class RecordingQueryExecutor:
         self.lifecycle.append("stop_accepting")
 
     async def drain(self, grace_ms: int) -> None:
-        self.stop_accepting()
+        assert self.lifecycle[-1] == "stop_accepting"
         self.lifecycle.append(f"drain:{grace_ms}")
 
     async def cancel(self, query_id: str) -> bool:

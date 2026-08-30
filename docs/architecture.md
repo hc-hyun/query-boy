@@ -141,10 +141,10 @@ repository를 먼저 학습하지 않고 담당 모듈의 완전한 실행 흐�
 3. 변경 지점부터 직접 consumer, transaction·cleanup과 실패 테스트까지 읽습니다.
 4. 다른 모듈로 넘어갈 때만 그 모듈의 관련 interface와 테스트를 추가로 읽습니다.
 
-다른 내부 모듈이 사용하도록 provider 문서와 dependency map에 명시한 Python symbol만 official
-module interface입니다. HTTP/MCP request·response, persisted DB/config 형식, revision/allowlist
-정책과 lifecycle invariant는 중요하지만 각각 별도 변경 경계입니다. 의미를 바꾸려면 정확한 영향과
-승인을 먼저 확인합니다.
+Allowed dependency 안에서 provider leaf module의 public API를 사용하고, owner 문서는 중요한 동작과
+entrypoint를 설명합니다. 모든 Python symbol을 inventory로 관리하거나 모듈의 독립 배포·임의 교체를
+요구하지 않습니다. HTTP/MCP request·response, persisted DB/config 형식, revision/allowlist 정책과
+lifecycle invariant는 별도 변경 경계이며 의미를 바꾸려면 정확한 영향과 승인을 먼저 확인합니다.
 
 Production 구현 조립과 operator CLI는 Runtime, offline acceptance 조립은 Assurance CLI만
 수행합니다. Operator CLI의 `source list/show/validate`는 원격 admin API가 아니라

@@ -62,6 +62,27 @@ class _ShutdownDeadline:
         return max(0, min(self._grace_ms, remaining))
 
 
+class _ShutdownTrigger:
+    def __init__(
+        self,
+        deadline: _ShutdownDeadline,
+        stop_query_admission: Callable[[], None],
+    ) -> None:
+        self._deadline = deadline
+        self._stop_query_admission = stop_query_admission
+        self._lock = threading.RLock()
+        self._started = False
+
+    def __call__(self) -> None:
+        with self._lock:
+            if self._started:
+                return
+            self._started = True
+            self._deadline.begin()
+            operations.set_accepting(False)
+            self._stop_query_admission()
+
+
 class _CleanupErrors:
     def __init__(self) -> None:
         self._first: BaseException | None = None
@@ -166,6 +187,10 @@ def build_app(
         query_executor,
         ("execute", "cancel", "close", "stop_accepting", "drain"),
     )
+    shutdown_trigger = _ShutdownTrigger(
+        shutdown_deadline,
+        query_executor.stop_accepting,
+    )
     query_service = QueryService(registry, metadata, query_executor)
     if access_policy is None and authenticator is None:
         if runtime_config.oauth is not None:
@@ -240,12 +265,8 @@ def build_app(
                     yield
                 finally:
                     cleanup_errors.attempt_sync(
-                        "shutdown_deadline",
-                        shutdown_deadline.begin,
-                    )
-                    cleanup_errors.attempt_sync(
-                        "stop_accepting",
-                        lambda: operations.set_accepting(False),
+                        "shutdown_trigger",
+                        shutdown_trigger,
                     )
                     await cleanup_errors.attempt(
                         "query_drain",
@@ -272,6 +293,7 @@ def build_app(
         extra_state={
             "diagnostic_capture": diagnostic_capture,
             "shutdown_deadline": shutdown_deadline,
+            "shutdown_trigger": shutdown_trigger,
         },
     )
 

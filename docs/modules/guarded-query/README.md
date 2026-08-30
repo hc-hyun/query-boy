@@ -45,6 +45,10 @@ interface다. Concrete `PostgresQueryExecutor` 조립은 Runtime과 offline Assu
 current SQL policy를 강제한다. `SQL_POLICY_REVISION`과 canonical material은 Metadata revision이 소비하는
 policy identity다.
 
+`diagnostics.redact_sql_literals`는 Runtime diagnostic adapter가 소비하는 literal-free rendering
+entrypoint다. Parse할 수 없거나 multi-statement인 SQL은 capture하지 않는 기존 fail-closed 의미를
+유지하며 diagnostic storage나 consent 판단은 소유하지 않는다.
+
 정확한 PostgreSQL grammar/fingerprint 경계는 [ADR 0001](../../decisions/0001-postgresql-ast-validation.md),
 query result/error·admission·cancel 계약은 [ADR 0002](../../decisions/0002-guarded-query-contract.md),
 reader/resolved-object 검사는 [ADR 0003](../../decisions/0003-reader-and-resolved-object-policy.md)에 있습니다.
@@ -108,7 +112,7 @@ module 내부 변경이다. Security parser와 cancellation path에는 runnable 
 
 ## 사용자 승인이 필요한 경계 변경
 
-- Query application/executor/lifecycle interface와 domain error semantics
+- Query lifecycle outcome과 domain error code/retry semantics
 - SQL policy version/revision, AST/function/operator/cast/relation allowlist
 - Plan, queue, timeout, row/byte/OID와 PostgreSQL session limits
 - Metadata revision match, transaction/cancel/rollback/drain/close invariant
