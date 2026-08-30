@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import socket
 from collections.abc import Callable
 from types import FrameType
 
@@ -17,14 +18,25 @@ app = build_app(runtime_config)
 
 
 class _QueryManServer(uvicorn.Server):
-    def __init__(self, config: uvicorn.Config, stop_accepting: Callable[[], None]) -> None:
+    def __init__(
+        self,
+        config: uvicorn.Config,
+        stop_accepting: Callable[[], None],
+        begin_shutdown: Callable[[], None],
+    ) -> None:
         super().__init__(config)
         self._stop_accepting = stop_accepting
+        self._begin_shutdown = begin_shutdown
 
     def handle_exit(self, sig: int, frame: FrameType | None) -> None:
+        self._begin_shutdown()
         operations.set_accepting(False)
         self._stop_accepting()
         super().handle_exit(sig, frame)
+
+    async def shutdown(self, sockets: list[socket.socket] | None = None) -> None:
+        self._begin_shutdown()
+        await super().shutdown(sockets=sockets)
 
 
 def main() -> None:
@@ -36,6 +48,10 @@ def main() -> None:
         timeout_graceful_shutdown=(runtime_config.shutdown_grace_ms + 999) // 1_000,
     )
     try:
-        _QueryManServer(config, app.state.query_executor.stop_accepting).run()
+        _QueryManServer(
+            config,
+            app.state.query_executor.stop_accepting,
+            app.state.shutdown_deadline.begin,
+        ).run()
     except KeyboardInterrupt:  # Uvicorn re-raises a captured SIGINT after graceful shutdown.
         pass

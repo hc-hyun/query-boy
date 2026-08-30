@@ -104,7 +104,7 @@ YAML pull request와 DBA 작업 handoff를 만들 수 있지만 credential 접�
 | `metadata/models.py`, `metadata/catalog.py`, `metadata/service.py`, `metadata/relevance.py`, `metadata/revision.py`, `metadata/quality_level.py` | Metadata | Catalog/context/revision/quality; persisted metadata store는 없음 |
 | `guarded_query/query.py`, `guarded_query/sql_validation.py`, `guarded_query/diagnostics.py`, `guarded_query/result_encoding.py` | Guarded Query | SQL validation, admission, execution/cancel/rollback와 canonical result encoding |
 | `delivery/access.py`, `delivery/authentication.py`, `delivery/diagnostics.py`, `delivery/gateway.py`, `delivery/mcp_server.py`, `delivery/http_validation.py`, `delivery/app.py` | Delivery | Caller/authentication, application facade와 HTTP/MCP wire |
-| `runtime/config.py`, `runtime/composition.py`, `runtime/server.py`, `runtime/operations.py`, `runtime/diagnostic_capture.py`, `runtime/operator_shell.py` | Runtime | Environment, production composition/lifecycle, safe operations와 local YAML CLI |
+| `runtime/config.py`, `runtime/composition.py`, `runtime/server.py`, `runtime/operations.py`, `runtime/diagnostic_capture.py`, `runtime/operator_shell.py`, `runtime/operator_backend.py` | Runtime | Environment, production composition/lifecycle, safe operations와 local YAML CLI/backend |
 | `assurance/quality.py`, `assurance/verified.py`, `assurance/cli.py` | Assurance | Offline quality/verified artifact와 concrete verification composition |
 | `errors.py` | Symbol별 provider; file은 shared single-writer | Domain error의 발생 의미는 provider, external envelope는 Delivery가 소유 |
 | `config/sources/`, `config/budget-profiles.yaml` | Source Catalog | Git-reviewed YAML source authority와 versioned budget |
@@ -131,7 +131,8 @@ Python file별 primary owner는 다음과 같다. 경로는 `src/query_man/` 기
   `delivery/authentication.py`, `delivery/diagnostics.py`, `delivery/gateway.py`,
   `delivery/http_validation.py`, `delivery/mcp_server.py`
 - Runtime: `runtime/__init__.py`, `runtime/composition.py`, `runtime/config.py`,
-  `runtime/diagnostic_capture.py`, `runtime/operations.py`, `runtime/operator_shell.py`, `runtime/server.py`
+  `runtime/diagnostic_capture.py`, `runtime/operations.py`, `runtime/operator_backend.py`,
+  `runtime/operator_shell.py`, `runtime/server.py`
 - Assurance: `assurance/__init__.py`, `assurance/cli.py`, `assurance/quality.py`,
   `assurance/verified.py`
 

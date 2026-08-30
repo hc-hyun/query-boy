@@ -211,8 +211,22 @@ finding은 dependency/image update로 먼저 해소하고, 예외은 exact path�
 
 ## Graceful Shutdown
 
-SIGTERM/SIGINT에서 readiness와 executor admission을 먼저 닫고 listener를 종료한 뒤 이미 수락한
-task를 grace 안에 drain합니다. 기한을 넘으면 PostgreSQL cancel·rollback을 실행합니다.
-Orchestrator termination grace는 `QUERY_MAN_SHUTDOWN_GRACE_MS`와 process 종료 overhead보다 길게
-설정합니다. Transaction-local `TimeZone=UTC`는 commit, timeout, disconnect, forced cancel
-후 pool에 남지 않아야 합니다.
+`QUERY_MAN_SHUTDOWN_GRACE_MS`는 단계별 timeout이 아니라 하나의 shared graceful-work budget입니다.
+최초 SIGTERM/SIGINT에서 monotonic deadline을 한 번 기록하고 readiness와 executor admission을 먼저
+닫습니다. Signal 없는 server shutdown은 Uvicorn shutdown 시작에서, direct lifespan 종료는 cleanup
+시작에서 같은 방식으로 deadline을 만들며 반복 호출은 이를 연장하지 않습니다.
+
+Uvicorn은 configured grace를 초 단위로 올림한 기존 timeout으로 listener와 accepted task를 정리합니다.
+그동안 지난 wall-clock time은 application deadline에서 차감합니다. Lifespan shutdown이 시작되면 query
+executor에는 remaining milliseconds만 전달하고, 그 뒤 diagnostic capture에는 다시 계산한
+`min(remaining, 2초)`를 전달합니다. Remaining이 0이어도 `drain(0)`, `capture.close(0)`과
+query/catalog/metadata close를 생략하지 않습니다. Query는 cancel·rollback하고 capture는 새 admission을
+막은 뒤 active SQLite connection interrupt와 queued drop을 시도합니다.
+
+이 deadline은 graceful wait의 cutoff이며 process 종료 완료시한은 아닙니다. PostgreSQL cancel·rollback,
+pool/resource close, child lifespan exit, Uvicorn handoff·초 단위 반올림과 이미 commit에 진입한 diagnostic
+worker는 deadline 뒤에도 남을 수 있습니다. 두 번째 SIGINT의 force-exit이나 SIGKILL로 ASGI lifespan이
+시작되지 않으면 application cleanup도 보장되지 않습니다. Orchestrator termination grace는
+`QUERY_MAN_SHUTDOWN_GRACE_MS`에 이 forced-cleanup/process overhead를 더한 값보다 길어야 합니다. 기본
+10초 budget에 Compose의 30초 `stop_grace_period`를 유지합니다. Transaction-local `TimeZone=UTC`는
+commit, timeout, disconnect, forced cancel 후 pool에 남지 않아야 합니다.

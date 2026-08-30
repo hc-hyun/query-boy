@@ -355,7 +355,7 @@ def test_concrete_service_construction_stays_in_approved_composition_roots() -> 
     allowed_files = {
         "SourceRegistry": {
             "runtime/composition.py",
-            "runtime/operator_shell.py",
+            "runtime/operator_backend.py",
             "assurance/cli.py",
         },
         "PostgresCatalog": {

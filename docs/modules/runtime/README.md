@@ -35,11 +35,12 @@ managed environment가 남아 있으면 조용히 무시하지 않고 startup co
 | 위치 | 책임 |
 |---|---|
 | [`runtime/config.py`](../../../src/query_man/runtime/config.py) | Environment parsing, cross-field validation, retired-setting rejection |
-| [`runtime/composition.py`](../../../src/query_man/runtime/composition.py) | Production provider composition, lifespan와 startup probes |
-| [`runtime/server.py`](../../../src/query_man/runtime/server.py) | Uvicorn entrypoint와 stop-accepting signal handling |
+| [`runtime/composition.py`](../../../src/query_man/runtime/composition.py) | Production provider composition, lifespan, shared shutdown deadline와 startup probes |
+| [`runtime/server.py`](../../../src/query_man/runtime/server.py) | Uvicorn entrypoint, shutdown deadline anchor와 stop-accepting signal handling |
 | [`runtime/operations.py`](../../../src/query_man/runtime/operations.py) | Safe logging, counters, health/readiness projection |
 | [`runtime/diagnostic_capture.py`](../../../src/query_man/runtime/diagnostic_capture.py) | Consent-gated encrypted local capture lifecycle |
-| [`runtime/operator_shell.py`](../../../src/query_man/runtime/operator_shell.py) | `qm` status/logs/diag와 local YAML source commands |
+| [`runtime/operator_shell.py`](../../../src/query_man/runtime/operator_shell.py) | `qm` UI, argument parsing, rendering과 entrypoint |
+| [`runtime/operator_backend.py`](../../../src/query_man/runtime/operator_backend.py) | Operator HTTP/Docker/diagnostic I/O, settings와 local YAML source loading |
 | [`compose.yaml`](../../../compose.yaml), [`Dockerfile`](../../../Dockerfile) | Serving artifact/topology |
 | [`test_runtime_config.py`](../../../tests/test_runtime_config.py), [`test_runtime_startup_cleanup.py`](../../../tests/test_runtime_startup_cleanup.py), [`test_operator_shell.py`](../../../tests/test_operator_shell.py) | Focused tests |
 
@@ -56,11 +57,21 @@ implementation을 조립하지 않는다.
 
 Startup은 configuration/YAML load, exact inventory와 RLS quarantine, provider capability 및 bounded DB
 probe, application/lifespan 진입 후 accepting/ready 순서다. 실패하면 ready가 되지 않으며 생성한 parent
-resource를 역순으로 정확히 한 번 close 시도하고 최초 오류를 보존한다.
+resource를 역순으로 정확히 한 번 close 시도한다. Cleanup은 첫 probe 전에 등록하며 한 단계가 실패해도
+나머지를 계속한다. Startup, parent lifespan body 또는 child lifespan 오류는 cleanup 오류보다 우선 보존하고,
+정상 shutdown에서만 최초 cleanup 오류를 호출자에게 돌려준다.
 
 Shutdown은 accepting 중단, active query bounded drain, 남은 query cancel/rollback, capture flush/close,
-query executor, catalog와 metadata close 순서다. Optional method 탐색으로 required cleanup을 건너뛰지
-않는다.
+query executor, catalog와 metadata close 순서다. 최초 SIGTERM/SIGINT가 monotonic shared graceful-work
+deadline을 시작하고, signal 없는 server shutdown이나 direct lifespan cleanup은 종료 시작 시 lazy하게
+같은 deadline을 만든다. Uvicorn 대기에 사용된 wall-clock time을 차감한 remaining만 query executor에
+전달하고, capture는 query drain 뒤 다시 계산한 `min(remaining, 2초)`만 받는다. 반복 signal은 deadline을
+연장하지 않는다. Optional method 탐색으로 required cleanup을 건너뛰지 않는다.
+
+이 deadline은 graceful wait의 cutoff이지 hard process-exit 시각이 아니다. Remaining이 0이어도
+cancel/rollback, capture interrupt/drop과 모든 resource close를 시도하며 이 cleanup, Uvicorn의 초 단위
+반올림·handoff와 child lifespan exit는 deadline 뒤에도 실행될 수 있다. 두 번째 SIGINT의 Uvicorn
+force-exit처럼 ASGI lifespan 자체가 시작되지 않는 경로와 SIGKILL은 cleanup 보장 범위 밖이다.
 
 `qm source list`는 sanitized source summary, `show <source-id>`는 password 값을 제외한 human-readable
 manifest, `validate`는 source/budget/verified YAML의 consistency를 표시한다. 이 명령은 파일이나 DB를
@@ -68,6 +79,11 @@ manifest, `validate`는 source/budget/verified YAML의 consistency를 표시한�
 
 Encrypted capture의 persisted/privacy/TTL/fail-open lifecycle은
 [ADR 0027](../../decisions/0027-consent-gated-diagnostic-capture.md)이 exact contract입니다.
+Capture admission과 close 전이는 하나의 lifecycle lock으로 직렬화한다. Close는 새 enqueue를 먼저
+막고 전달받은 예산 안에서 accepted queue를 drain한다. 마지막 최대 100ms를 남겨 active SQLite
+connection interrupt와 대기 항목 drop을 시도한 다음 다른 Runtime cleanup을 계속한다. 표준 `sqlite3`는
+이미 commit에 진입한 작업을 원자적으로 강제 종료하지 못하므로 worker가 bounded close 반환 뒤에도
+남을 수 있고 in-process 종료시간을 보장하지 않으며, 이 경우 process 종료가 최종 격리 경계다.
 
 ## 소비 인터페이스와 전제
 
@@ -92,7 +108,8 @@ Encrypted capture의 persisted/privacy/TTL/fail-open lifecycle은
 ## 모듈 내부 변경
 
 Configuration/wire/lifecycle 의미를 보존하는 private parsing, composition helper, metric storage와 CLI
-rendering 정리는 module 내부 변경이다.
+UI/backend 분리는 module 내부 변경이다. `operator_shell.py`는 입력·표시를,
+`operator_backend.py`는 외부 I/O와 local source loading을 소유한다.
 
 ## 사용자 승인이 필요한 경계 변경
 
@@ -118,7 +135,8 @@ Container/topology 변경은 container acceptance를, shutdown/socket 변경은 
 | 변경 | 먼저 읽을 범위 |
 |---|---|
 | Environment | `runtime/config.py`, `.env.example`, `test_runtime_config.py` |
-| Composition/startup cleanup | `runtime/composition.py`, provider lifecycle, `test_runtime_startup_cleanup.py` |
-| Operator CLI | `runtime/operator_shell.py`, SourceRegistry/VerifiedQueryRegistry, `test_operator_shell.py` |
+| Composition/startup/shutdown cleanup | `runtime/composition.py`, `runtime/server.py`, provider lifecycle, `test_runtime_startup_cleanup.py`, `test_server.py` |
+| Operator CLI UI/parser | `runtime/operator_shell.py`, `test_operator_shell.py` |
+| Operator backend/I/O | `runtime/operator_backend.py`, SourceRegistry/VerifiedQueryRegistry, `test_operator_shell.py` |
 | Operations/logging | `runtime/operations.py`, direct consumer, focused test |
 | Server/container | `runtime/server.py`, `Dockerfile`, `compose.yaml`, operations guide와 acceptance |

@@ -51,8 +51,11 @@ bounded/fail-open 처리와 가명 subject를 적용하는 변경을 승인했�
    사용하지 않는다.
 8. Capture submit/storage/retention 실패는 query/context response, readiness와 source health를 바꾸지
    않는다. Explicit configuration의 key/shape 오류만 composition 전에 fail-closed한다. Runtime은 worker를
-   serving 전에 시작하고 shutdown에서 최대 2초 또는 남은 configured grace 중 작은 값만 drain한 뒤
-   query/catalog/metadata cleanup을 계속한다.
+   serving 전에 시작한다. 최초 shutdown trigger가 만든 monotonic shared graceful-work deadline에서 query
+   drain 뒤 남은 시간과 2초 중 작은 값을 capture 대기 예산으로 사용하고, 이 예산이 0이어도 admission
+   중단, active connection interrupt와 queued drop을 시도한 뒤 query/catalog/metadata cleanup을 계속한다.
+   이 예산은 worker-stop이나 hard process-exit deadline이 아니며, 표준 `sqlite3`에서 이미 commit에 진입한
+   작업은 bounded close 반환 뒤에도 남을 수 있다.
 9. Decrypt와 consent purge는 repository가 제공하는 offline helper를 protected operator workflow에서만
    호출한다. Consent 철회는 traffic drain → policy에서 receipt 제거 → process 교체 → active/old key별
    receipt purge 순서다. Purge 전에도 expiry 뒤 logical read는 금지된다. Diagnostic DB와 그 raw export는

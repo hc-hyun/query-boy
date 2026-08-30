@@ -86,7 +86,9 @@ def redact(value: str) -> str:
 
 class OperationalState:
     def __init__(self) -> None:
-        self._lock = threading.Lock()
+        # A process signal can re-enter an operation on the main thread while
+        # it already owns this lock. Keep the signal-side shutdown update safe.
+        self._lock = threading.RLock()
         self._counters: defaultdict[tuple[str, str | None], int] = defaultdict(int)
         self._totals: defaultdict[tuple[str, str | None], float] = defaultdict(float)
         self._source_health: dict[str, str] = {}

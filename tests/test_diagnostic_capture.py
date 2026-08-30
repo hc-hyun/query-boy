@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import queue
 import sqlite3
 import stat
 import threading
@@ -174,46 +175,77 @@ async def test_expired_or_missing_consent_is_not_captured(tmp_path: Path) -> Non
     assert "diagnostic_capture_enqueued" not in _metrics()
 
 
-@pytest.mark.asyncio
-async def test_shutdown_interrupts_cooperative_in_flight_capture(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_close_linearizes_with_in_flight_enqueue(tmp_path: Path) -> None:
     operations.reset()
+    database = tmp_path / "capture.sqlite3"
     capture = EncryptedDiagnosticCapture.from_base64(
-        tmp_path / "capture.sqlite3",
+        database,
         _KEY,
         "key-2026-08",
     )
-    loop = asyncio.get_running_loop()
-    store_started = threading.Event()
-    store_stopped = threading.Event()
+    enqueue_started = threading.Event()
+    allow_enqueue = threading.Event()
+    close_started = threading.Event()
+    close_finished = threading.Event()
+    errors: list[BaseException] = []
 
-    def wait_for_shutdown(_pending: object) -> tuple[str, int]:
-        store_started.set()
-        if not capture._shutdown_requested.wait(timeout=1):
-            raise RuntimeError("Diagnostic shutdown was not requested")
-        store_stopped.set()
-        return "shutdown", 0
+    class PausingQueue(queue.Queue[object]):
+        def put_nowait(self, item: object) -> None:
+            if item is not None and not enqueue_started.is_set():
+                enqueue_started.set()
+                allow_enqueue.wait(timeout=2)
+            super().put_nowait(item)
 
-    monkeypatch.setattr(capture, "_store", wait_for_shutdown)
+    capture._queue = PausingQueue(maxsize=capture._queue.maxsize)  # type: ignore[assignment]
     capture.start()
-    capture.capture_question(_caller(), "development-issues", "private question")
-    async with asyncio.timeout(1):
-        while not store_started.is_set():  # noqa: ASYNC110
-            await asyncio.sleep(0.001)
 
-    started_at = loop.time()
-    await capture.close(200)
+    def submit() -> None:
+        try:
+            capture.capture_question(
+                _caller(),
+                "development-issues",
+                "admitted before close",
+            )
+        except BaseException as error:
+            errors.append(error)
 
-    assert loop.time() - started_at < 0.5
-    assert store_stopped.is_set()
+    def close_capture() -> None:
+        close_started.set()
+        try:
+            asyncio.run(capture.close(2_000))
+        except BaseException as error:
+            errors.append(error)
+        finally:
+            close_finished.set()
+
+    submit_worker = threading.Thread(target=submit)
+    close_worker = threading.Thread(target=close_capture)
+    submit_worker.start()
+    assert enqueue_started.wait(timeout=1)
+    close_worker.start()
+    assert close_started.wait(timeout=1)
+    closed_before_enqueue = close_finished.wait(timeout=0.05)
+    allow_enqueue.set()
+    submit_worker.join(timeout=3)
+    close_worker.join(timeout=3)
+
+    if submit_worker.is_alive() or close_worker.is_alive():
+        allow_enqueue.set()
+        asyncio.run(capture.close(2_000))
+
+    assert closed_before_enqueue is False
+    assert submit_worker.is_alive() is False
+    assert close_worker.is_alive() is False
+    assert errors == []
     assert capture._worker is None
-    assert _metrics()["diagnostic_capture_shutdown_dropped"] == 1
+    records = decrypt_diagnostic_records(database, _KEY, "key-2026-08")
+    assert [record["request"]["question"] for record in records] == [
+        "admitted before close"
+    ]
 
 
 @pytest.mark.asyncio
-async def test_shutdown_does_not_leave_worker_waiting_on_sqlite_lock(
+async def test_exclusive_lock_preserves_bounded_close_and_eventual_worker_cleanup(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -225,20 +257,28 @@ async def test_shutdown_does_not_leave_worker_waiting_on_sqlite_lock(
         "key-2026-08",
     )
     capture.start()
-    worker_connect_started = threading.Event()
+    worker_connection_ready = threading.Event()
+    allow_worker_write = threading.Event()
+    begin_started = threading.Event()
     original_connect = capture._connect
 
     def tracked_connect(*, worker_owned: bool = False) -> sqlite3.Connection:
+        connection = original_connect(worker_owned=worker_owned)
         if worker_owned:
-            worker_connect_started.set()
-        return original_connect(worker_owned=worker_owned)
+            connection.execute("PRAGMA busy_timeout=5000")
+
+            def trace(statement: str) -> None:
+                if statement.strip().upper() == "BEGIN IMMEDIATE":
+                    begin_started.set()
+
+            connection.set_trace_callback(trace)
+            worker_connection_ready.set()
+            allow_worker_write.wait(timeout=2)
+        return connection
 
     monkeypatch.setattr(capture, "_connect", tracked_connect)
-    blocker = sqlite3.connect(database, timeout=0)
-    blocker.execute("BEGIN EXCLUSIVE")
-    elapsed = 0.0
-    worker_alive = True
-    active_connection_remained = True
+    blocker: sqlite3.Connection | None = None
+    worker = capture._worker
     try:
         capture.capture_question(
             _caller(),
@@ -246,26 +286,142 @@ async def test_shutdown_does_not_leave_worker_waiting_on_sqlite_lock(
             "private question",
         )
         async with asyncio.timeout(1):
-            while not worker_connect_started.is_set():  # noqa: ASYNC110
+            while not worker_connection_ready.is_set():  # noqa: ASYNC110
+                await asyncio.sleep(0.001)
+        blocker = sqlite3.connect(database, timeout=0)
+        blocker.execute("BEGIN EXCLUSIVE")
+        allow_worker_write.set()
+        async with asyncio.timeout(1):
+            while not begin_started.is_set():  # noqa: ASYNC110
                 await asyncio.sleep(0.001)
 
         loop = asyncio.get_running_loop()
         started_at = loop.time()
         await capture.close(200)
         elapsed = loop.time() - started_at
-        worker = capture._worker
-        worker_alive = worker is not None and worker.is_alive()
-        active_connection_remained = capture._active_connection is not None
     finally:
-        blocker.rollback()
-        blocker.close()
+        allow_worker_write.set()
+        if blocker is not None:
+            blocker.rollback()
+            blocker.close()
         await capture.close(2_000)
 
     assert elapsed < 0.5
-    assert worker_alive is False
-    assert active_connection_remained is False
+    assert worker is not None
+    assert worker.is_alive() is False
+    assert capture._worker is None
+    assert capture._active_connection is None
+    assert capture._queue.empty()
+    assert capture._queue.unfinished_tasks == 0
     assert decrypt_diagnostic_records(database, _KEY, "key-2026-08") == ()
     assert _metrics()["diagnostic_capture_dropped"] == 1
+
+
+@pytest.mark.asyncio
+async def test_zero_budget_close_drops_queued_once_and_allows_admitted_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operations.reset()
+    database = tmp_path / "capture.sqlite3"
+    capture = EncryptedDiagnosticCapture.from_base64(
+        database,
+        _KEY,
+        "key-2026-08",
+    )
+    capture.start()
+    commit_started = threading.Event()
+    allow_commit = threading.Event()
+    original_connect = capture._connect
+
+    def tracked_connect(*, worker_owned: bool = False) -> sqlite3.Connection:
+        connection = original_connect(worker_owned=worker_owned)
+        if worker_owned:
+
+            def trace(statement: str) -> None:
+                if statement.strip().upper() == "COMMIT":
+                    commit_started.set()
+                    allow_commit.wait(timeout=2)
+
+            connection.set_trace_callback(trace)
+        return connection
+
+    monkeypatch.setattr(capture, "_connect", tracked_connect)
+    capture.capture_question(_caller(), "development-issues", "active question")
+    async with asyncio.timeout(1):
+        while not commit_started.is_set():  # noqa: ASYNC110
+            await asyncio.sleep(0.001)
+    for index in range(5):
+        capture.capture_question(
+            _caller(),
+            "development-issues",
+            f"queued question {index}",
+        )
+
+    worker = capture._worker
+    loop = asyncio.get_running_loop()
+    try:
+        first_started_at = loop.time()
+        await capture.close(0)
+        first_elapsed = loop.time() - first_started_at
+        second_started_at = loop.time()
+        await capture.close(0)
+        second_elapsed = loop.time() - second_started_at
+        capture.capture_question(_caller(), "development-issues", "after close")
+        assert worker is not None
+        assert worker.is_alive()
+    finally:
+        allow_commit.set()
+        await capture.close(2_000)
+
+    assert first_elapsed < 0.5
+    assert second_elapsed < 0.5
+    assert worker.is_alive() is False
+    assert capture._worker is None
+    assert capture._active_connection is None
+    assert capture._queue.empty()
+    assert capture._queue.unfinished_tasks == 0
+    records = decrypt_diagnostic_records(database, _KEY, "key-2026-08")
+    assert len(records) in {0, 1}
+    if records:
+        assert records[0]["request"]["question"] == "active question"
+    metrics = _metrics()
+    assert metrics["diagnostic_capture_enqueued"] == 6
+    assert metrics.get("diagnostic_capture_stored", 0) == len(records)
+    assert metrics["diagnostic_capture_dropped"] == 6 - len(records)
+    assert metrics["diagnostic_capture_shutdown_dropped"] == 6 - len(records)
+
+
+@pytest.mark.asyncio
+async def test_closed_capture_rejects_new_work_and_restarts_cleanly(tmp_path: Path) -> None:
+    operations.reset()
+    database = tmp_path / "capture.sqlite3"
+    capture = EncryptedDiagnosticCapture.from_base64(database, _KEY, "key-2026-08")
+    capture.start()
+    first_worker = capture._worker
+    capture.capture_question(_caller(), "development-issues", "first run")
+    await capture.close(2_000)
+
+    capture.capture_question(_caller(), "development-issues", "after close")
+    capture.start()
+    second_worker = capture._worker
+    capture.capture_question(_caller(), "development-issues", "second run")
+    await capture.close(2_000)
+
+    assert first_worker is not None
+    assert second_worker is not None
+    assert first_worker is not second_worker
+    assert first_worker.is_alive() is False
+    assert second_worker.is_alive() is False
+    assert capture._worker is None
+    assert capture._active_connection is None
+    assert capture._queue.empty()
+    assert capture._queue.unfinished_tasks == 0
+    records = decrypt_diagnostic_records(database, _KEY, "key-2026-08")
+    assert [record["request"]["question"] for record in records] == [
+        "first run",
+        "second run",
+    ]
 
 
 @pytest.mark.asyncio

@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
+import threading
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 
 from fastapi import FastAPI
 
@@ -29,6 +32,63 @@ from query_man.runtime.operations import operations
 from query_man.source_catalog.registry import SourceReader, SourceRegistry
 
 logger = logging.getLogger("query_man")
+
+
+class _ShutdownDeadline:
+    def __init__(
+        self,
+        grace_ms: int,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        if grace_ms < 0:
+            raise ValueError("Shutdown grace must not be negative")
+        self._grace_ms = grace_ms
+        self._clock = clock
+        self._lock = threading.RLock()
+        self._deadline: float | None = None
+
+    def begin(self) -> None:
+        with self._lock:
+            if self._deadline is None:
+                self._deadline = self._clock() + self._grace_ms / 1_000
+
+    def remaining_ms(self) -> int:
+        self.begin()
+        with self._lock:
+            deadline = self._deadline
+        assert deadline is not None
+        remaining = math.ceil((deadline - self._clock()) * 1_000)
+        return max(0, min(self._grace_ms, remaining))
+
+
+class _CleanupErrors:
+    def __init__(self) -> None:
+        self._first: BaseException | None = None
+
+    async def attempt(
+        self,
+        step: str,
+        cleanup: Callable[[], Awaitable[None]],
+    ) -> None:
+        try:
+            await cleanup()
+        except BaseException as error:
+            if self._first is None:
+                self._first = error
+            logger.warning("runtime_cleanup_step_failed step=%s", step)
+
+    def attempt_sync(self, step: str, cleanup: Callable[[], None]) -> None:
+        try:
+            cleanup()
+        except BaseException as error:
+            if self._first is None:
+                self._first = error
+            logger.warning("runtime_cleanup_step_failed step=%s", step)
+
+    def raise_first(self) -> None:
+        if self._first is not None:
+            raise self._first
 
 
 def _require_runtime_capabilities(
@@ -64,6 +124,7 @@ def build_app(
     authenticator: BearerAuthenticator | None = None,
 ) -> FastAPI:
     operations.reset()
+    shutdown_deadline = _ShutdownDeadline(runtime_config.shutdown_grace_ms)
     diagnostic_capture: EncryptedDiagnosticCapture | None = None
     if runtime_config.diagnostic_capture_database is not None:
         if (
@@ -133,73 +194,67 @@ def build_app(
                 return
             try:
                 await diagnostic_capture.close(
-                    min(runtime_config.shutdown_grace_ms, 2_000)
+                    min(shutdown_deadline.remaining_ms(), 2_000)
                 )
             except Exception:
                 operations.increment("diagnostic_capture_storage_failed")
                 logger.exception("diagnostic_capture_shutdown_failed")
 
-        async def cleanup_step(
-            step: str,
-            cleanup: Callable[[], Awaitable[None]],
-        ) -> None:
-            try:
-                await cleanup()
-            except BaseException:
-                logger.warning("startup_cleanup_step_failed step=%s", step)
-
-        async def cleanup_failed_startup() -> None:
-            cleanup_steps: list[tuple[str, object, Callable[[], Awaitable[None]]]] = []
-            if diagnostic_capture is not None:
-                cleanup_steps.append(
-                    (
-                        "diagnostic_capture",
-                        diagnostic_capture,
-                        close_diagnostic_capture,
-                    )
-                )
-            cleanup_steps.extend([
-                ("query_executor", query_executor, query_executor.close),
-                ("catalog", catalog, catalog.close),
-                ("metadata", metadata, metadata.close),
-            ])
-            attempted_resources: set[int] = set()
-            for step, resource, cleanup in cleanup_steps:
-                resource_id = id(resource)
-                if resource_id in attempted_resources:
-                    continue
-                attempted_resources.add(resource_id)
-                await cleanup_step(step, cleanup)
-
-        operations.reconcile_sources(registry.source_ids())
-        await _probe_registered_sources(registry, metadata)
+        cleanup_errors = _CleanupErrors()
+        cleanup_steps: list[tuple[str, object, Callable[[], Awaitable[None]]]] = []
         if diagnostic_capture is not None:
-            diagnostic_capture.start()
-        child_entered = False
-        try:
+            cleanup_steps.append(
+                (
+                    "diagnostic_capture",
+                    diagnostic_capture,
+                    close_diagnostic_capture,
+                )
+            )
+        cleanup_steps.extend([
+            ("query_executor", query_executor, query_executor.close),
+            ("catalog", catalog, catalog.close),
+            ("metadata", metadata, metadata.close),
+        ])
+        unique_cleanup_steps: list[
+            tuple[str, object, Callable[[], Awaitable[None]]]
+        ] = []
+        registered_resources: set[int] = set()
+        for step, resource, cleanup in cleanup_steps:
+            resource_id = id(resource)
+            if resource_id in registered_resources:
+                continue
+            registered_resources.add(resource_id)
+            unique_cleanup_steps.append((step, resource, cleanup))
+
+        async with AsyncExitStack() as resources:
+            for step, _resource, cleanup in reversed(unique_cleanup_steps):
+                resources.push_async_callback(cleanup_errors.attempt, step, cleanup)
+
+            operations.reconcile_sources(registry.source_ids())
+            await _probe_registered_sources(registry, metadata)
+            if diagnostic_capture is not None:
+                diagnostic_capture.start()
             mcp_app: FastAPI = app.state.mcp_app
             async with mcp_app.router.lifespan_context(mcp_app):
-                child_entered = True
                 try:
                     yield
                 finally:
-                    operations.set_accepting(False)
-                    await query_executor.drain(runtime_config.shutdown_grace_ms)
-                    try:
-                        if diagnostic_capture is not None:
-                            await close_diagnostic_capture()
-                    finally:
-                        try:
-                            await query_executor.close()
-                        finally:
-                            try:
-                                await catalog.close()
-                            finally:
-                                await metadata.close()
-        except BaseException:
-            if not child_entered:
-                await cleanup_failed_startup()
-            raise
+                    cleanup_errors.attempt_sync(
+                        "shutdown_deadline",
+                        shutdown_deadline.begin,
+                    )
+                    cleanup_errors.attempt_sync(
+                        "stop_accepting",
+                        lambda: operations.set_accepting(False),
+                    )
+                    await cleanup_errors.attempt(
+                        "query_drain",
+                        lambda: query_executor.drain(
+                            shutdown_deadline.remaining_ms()
+                        ),
+                    )
+                    await resources.aclose()
+            cleanup_errors.raise_first()
 
     return build_http_app(
         host=runtime_config.host,
@@ -214,7 +269,10 @@ def build_app(
         authenticator=authenticator,
         gateway=gateway,
         lifespan=lifespan,
-        extra_state={"diagnostic_capture": diagnostic_capture},
+        extra_state={
+            "diagnostic_capture": diagnostic_capture,
+            "shutdown_deadline": shutdown_deadline,
+        },
     )
 
 

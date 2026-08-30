@@ -16,6 +16,7 @@ import threading
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import Enum, auto
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +49,13 @@ class _PendingCapture:
     captured_at: datetime
     expires_at: datetime
     payload: dict[str, object]
+
+
+class _CaptureLifecycle(Enum):
+    STOPPED = auto()
+    ACCEPTING = auto()
+    DRAINING = auto()
+    STOPPING = auto()
 
 
 class EncryptedDiagnosticCapture:
@@ -89,12 +97,10 @@ class EncryptedDiagnosticCapture:
         self._queue: queue.Queue[_PendingCapture | None] = queue.Queue(
             maxsize=DIAGNOSTIC_CAPTURE_QUEUE_SIZE
         )
+        self._lifecycle_lock = threading.Lock()
+        self._lifecycle = _CaptureLifecycle.STOPPED
         self._worker: threading.Thread | None = None
-        self._stop_requested = threading.Event()
-        self._shutdown_requested = threading.Event()
-        self._connection_lock = threading.Lock()
         self._active_connection: sqlite3.Connection | None = None
-        self._accepting = False
 
     @classmethod
     def from_base64(
@@ -137,61 +143,67 @@ class EncryptedDiagnosticCapture:
         return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
 
     def start(self) -> None:
-        worker = self._worker
-        if worker is not None and worker.is_alive():
-            return
-        connection = self._connect()
-        connection.close()
-        self._stop_requested.clear()
-        self._shutdown_requested.clear()
-        self._accepting = True
-        self._worker = threading.Thread(
-            target=self._run,
-            name="query-man-diagnostic-capture",
-            daemon=True,
-        )
-        self._worker.start()
+        with self._lifecycle_lock:
+            worker = self._worker
+            if worker is not None and worker.is_alive():
+                return
+            connection = self._connect()
+            connection.close()
+            worker = threading.Thread(
+                target=self._run,
+                name="query-man-diagnostic-capture",
+                daemon=True,
+            )
+            self._lifecycle = _CaptureLifecycle.ACCEPTING
+            self._worker = worker
+            try:
+                worker.start()
+            except BaseException:
+                self._worker = None
+                self._lifecycle = _CaptureLifecycle.STOPPED
+                raise
 
     async def close(self, timeout_ms: int) -> None:
-        self._accepting = False
-        worker = self._worker
-        if worker is None:
-            return
         timeout_seconds = max(0, timeout_ms) / 1_000
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout_seconds
         interrupt_window = min(0.1, timeout_seconds / 2)
-        self._stop_requested.set()
-        try:
-            self._queue.put_nowait(None)
-        except queue.Full:
-            pass
-        await self._wait_for_worker(worker, deadline - interrupt_window)
-        if worker.is_alive():
-            self._shutdown_requested.set()
-            self._interrupt_active_connection()
-            dropped = 0
-            while True:
-                try:
-                    queued = self._queue.get_nowait()
-                except queue.Empty:
-                    break
-                self._queue.task_done()
-                if queued is not None:
-                    dropped += 1
-            if dropped:
-                operations.increment("diagnostic_capture_dropped", value=dropped)
-                operations.increment("diagnostic_capture_shutdown_dropped", value=dropped)
+        with self._lifecycle_lock:
+            worker = self._worker
+            if worker is None:
+                return
+            if self._lifecycle is _CaptureLifecycle.ACCEPTING:
+                self._lifecycle = _CaptureLifecycle.DRAINING
             try:
                 self._queue.put_nowait(None)
             except queue.Full:
                 pass
+        await self._wait_for_worker(worker, deadline - interrupt_window)
+        if worker.is_alive():
+            with self._lifecycle_lock:
+                self._lifecycle = _CaptureLifecycle.STOPPING
+                if self._active_connection is not None:
+                    self._active_connection.interrupt()
+                dropped = 0
+                while True:
+                    try:
+                        queued = self._queue.get_nowait()
+                    except queue.Empty:
+                        break
+                    self._queue.task_done()
+                    if queued is not None:
+                        dropped += 1
+                try:
+                    self._queue.put_nowait(None)
+                except queue.Full:
+                    pass
+            if dropped:
+                operations.increment("diagnostic_capture_dropped", value=dropped)
+                operations.increment("diagnostic_capture_shutdown_dropped", value=dropped)
             await self._wait_for_worker(worker, deadline)
-        # ponytail: bounded in-process shutdown cannot stop a worker stalled
+        # NOTE: bounded in-process shutdown cannot stop a worker stalled
         # in filesystem open/commit; use a killable worker process if all
         # post-deadline storage activity must become impossible.
-        if not worker.is_alive():
-            self._worker = None
 
     async def _wait_for_worker(
         self,
@@ -251,7 +263,7 @@ class EncryptedDiagnosticCapture:
     ) -> None:
         consent = caller.diagnostic_consent
         now = datetime.now(UTC)
-        if consent is None or not consent.is_active(now) or not self._accepting:
+        if consent is None or not consent.is_active(now):
             return
         pending = _PendingCapture(
             capture_id=str(uuid.uuid4()),
@@ -274,9 +286,15 @@ class EncryptedDiagnosticCapture:
                 "request": request,
             },
         )
-        try:
-            self._queue.put_nowait(pending)
-        except queue.Full:
+        queue_full = False
+        with self._lifecycle_lock:
+            if self._lifecycle is not _CaptureLifecycle.ACCEPTING:
+                return
+            try:
+                self._queue.put_nowait(pending)
+            except queue.Full:
+                queue_full = True
+        if queue_full:
             operations.increment("diagnostic_capture_dropped")
             operations.increment("diagnostic_capture_queue_dropped")
             return
@@ -288,7 +306,7 @@ class EncryptedDiagnosticCapture:
                 try:
                     item = self._queue.get(timeout=_RETENTION_SWEEP_SECONDS)
                 except queue.Empty:
-                    if self._stop_requested.is_set():
+                    if self._worker_should_exit():
                         return
                     try:
                         self._cleanup_expired(datetime.now(UTC), worker_owned=True)
@@ -298,7 +316,7 @@ class EncryptedDiagnosticCapture:
                     continue
                 if item is None:
                     self._queue.task_done()
-                    if self._stop_requested.is_set() and self._queue.empty():
+                    if self._worker_should_exit():
                         return
                     continue
                 try:
@@ -314,19 +332,32 @@ class EncryptedDiagnosticCapture:
                         operations.increment("diagnostic_capture_shutdown_dropped")
                 except Exception:
                     operations.increment("diagnostic_capture_dropped")
-                    if self._shutdown_requested.is_set():
+                    if self._stopping_requested():
                         operations.increment("diagnostic_capture_shutdown_dropped")
                     else:
                         operations.increment("diagnostic_capture_storage_failed")
                         logger.exception("diagnostic_capture_storage_failed")
                 finally:
                     self._queue.task_done()
-                if self._stop_requested.is_set() and self._queue.empty():
+                if self._worker_should_exit():
                     return
         finally:
-            with self._connection_lock:
+            with self._lifecycle_lock:
                 if self._worker is threading.current_thread():
                     self._worker = None
+                    self._active_connection = None
+                    self._lifecycle = _CaptureLifecycle.STOPPED
+
+    def _worker_should_exit(self) -> bool:
+        with self._lifecycle_lock:
+            return (
+                self._lifecycle is not _CaptureLifecycle.ACCEPTING
+                and self._queue.empty()
+            )
+
+    def _stopping_requested(self) -> bool:
+        with self._lifecycle_lock:
+            return self._lifecycle is _CaptureLifecycle.STOPPING
 
     def _store(self, pending: _PendingCapture) -> tuple[str, int]:
         plaintext = json.dumps(
@@ -350,12 +381,12 @@ class EncryptedDiagnosticCapture:
         nonce = os.urandom(12)
         ciphertext = self._cipher.encrypt(nonce, plaintext, associated_data)
         stored_bytes = len(nonce) + len(ciphertext)
-        if self._shutdown_requested.is_set():
+        if self._stopping_requested():
             return "shutdown", 0
 
         connection = self._connect(worker_owned=True)
         try:
-            if self._shutdown_requested.is_set():
+            if self._stopping_requested():
                 return "shutdown", 0
             connection.execute("BEGIN IMMEDIATE")
             connection.execute(
@@ -375,7 +406,7 @@ class EncryptedDiagnosticCapture:
             if used_bytes + stored_bytes > self._daily_byte_budget:
                 connection.rollback()
                 return "budget", 0
-            if self._shutdown_requested.is_set():
+            if self._stopping_requested():
                 connection.rollback()
                 return "shutdown", 0
             connection.execute(
@@ -404,9 +435,12 @@ class EncryptedDiagnosticCapture:
                 """,
                 (day, stored_bytes),
             )
-            if self._shutdown_requested.is_set():
+            if self._stopping_requested():
                 connection.rollback()
                 return "shutdown", 0
+            # The preceding locked state read is the commit-admission point.
+            # sqlite3 has no atomic commit-vs-interrupt gate, so an admitted
+            # commit may outlive bounded close once it is in progress.
             connection.commit()
             return "stored", stored_bytes
         finally:
@@ -433,13 +467,8 @@ class EncryptedDiagnosticCapture:
                 self._release_active_connection(connection)
             connection.close()
 
-    def _interrupt_active_connection(self) -> None:
-        with self._connection_lock:
-            if self._active_connection is not None:
-                self._active_connection.interrupt()
-
     def _release_active_connection(self, connection: sqlite3.Connection) -> None:
-        with self._connection_lock:
+        with self._lifecycle_lock:
             if self._active_connection is connection:
                 self._active_connection = None
 
@@ -450,9 +479,9 @@ class EncryptedDiagnosticCapture:
             timeout=0 if worker_owned else 1,
         )
         if worker_owned:
-            with self._connection_lock:
+            with self._lifecycle_lock:
                 self._active_connection = connection
-                if self._shutdown_requested.is_set():
+                if self._lifecycle is _CaptureLifecycle.STOPPING:
                     connection.interrupt()
         try:
             connection.execute(

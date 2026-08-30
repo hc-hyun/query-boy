@@ -5,19 +5,23 @@ import json
 import shutil
 import sys
 import tomllib
+import urllib.error
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 import yaml
 
-from query_man.runtime.operator_shell import (
+from query_man.runtime.operator_backend import (
     LogQuery,
     OperatorSettings,
-    QueryManShell,
     RealOperatorBackend,
     _public_error,
+)
+from query_man.runtime.operator_shell import (
+    QueryManShell,
     run_main,
 )
 from tests.helpers import ROOT_DIRECTORY
@@ -305,7 +309,7 @@ def test_real_source_commands_read_git_yaml_without_secrets_or_network(
         pytest.fail("YAML source commands must not call HTTP")
 
     monkeypatch.setattr(
-        "query_man.runtime.operator_shell.urllib.request.urlopen",
+        "query_man.runtime.operator_backend.urllib.request.urlopen",
         fail_network,
     )
     backend = _real_backend(ROOT_DIRECTORY)
@@ -458,6 +462,160 @@ def test_nested_public_error_envelope_is_bounded() -> None:
     ) == ("SOURCE_NOT_FOUND", "Source not found.")
 
 
+def test_real_status_sends_bearer_only_to_operator_endpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = "operator-token-must-stay-private"
+    backend = RealOperatorBackend(
+        OperatorSettings(
+            root=tmp_path,
+            base_url="https://query-man.example",
+            operator_token=token,
+            compose_service="query-man",
+            diagnostic_database=None,
+            diagnostic_key=None,
+            diagnostic_key_id=None,
+        )
+    )
+    requests: list[tuple[str, str | None]] = []
+
+    class Response:
+        def __enter__(self) -> Response:
+            return self
+
+        def __exit__(self, *_arguments: object) -> None:
+            return None
+
+        def read(self, _limit: int) -> bytes:
+            return b'{"status":"ready"}'
+
+    def urlopen(request: Any, *, timeout: int) -> Response:
+        assert timeout == 10
+        requests.append((request.full_url, request.get_header("Authorization")))
+        if request.full_url.endswith("/ready"):
+            return Response()
+        raise urllib.error.HTTPError(
+            request.full_url,
+            403,
+            "Forbidden",
+            hdrs=None,
+            fp=io.BytesIO(b'{"error":{"code":"FORBIDDEN","message":"private"}}'),
+        )
+
+    monkeypatch.setattr(
+        "query_man.runtime.operator_backend.urllib.request.urlopen",
+        urlopen,
+    )
+
+    result = backend.status()
+
+    assert requests == [
+        ("https://query-man.example/ready", None),
+        ("https://query-man.example/admin/health", f"Bearer {token}"),
+    ]
+    assert result["operator_detail"] == "unauthorized"
+    assert token not in json.dumps(result, ensure_ascii=False)
+    assert "private" not in json.dumps(result, ensure_ascii=False)
+
+
+def test_real_logs_terminates_docker_process_when_reader_stops(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = _real_backend(tmp_path)
+    commands: list[list[str]] = []
+
+    class Process:
+        def __init__(self) -> None:
+            self.stdout = iter(["first line\n", "second line\n"])
+            self.stderr = io.StringIO("")
+            self.terminated = False
+
+        def poll(self) -> int | None:
+            return 0 if self.terminated else None
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+        def wait(self, timeout: int | None = None) -> int:
+            assert timeout in {None, 2}
+            return 0
+
+    process = Process()
+
+    def popen(command: list[str], **_arguments: object) -> Process:
+        commands.append(command)
+        return process
+
+    monkeypatch.setattr(
+        "query_man.runtime.operator_backend.subprocess.Popen",
+        popen,
+    )
+
+    lines = backend.logs(LogQuery(since="2h", limit=10, follow=True))
+    assert next(lines) == "first line"
+    lines.close()
+
+    assert commands == [[
+        "docker",
+        "compose",
+        "logs",
+        "--no-color",
+        "--since",
+        "2h",
+        "--tail",
+        "10",
+        "--follow",
+        "query-man",
+    ]]
+    assert process.terminated is True
+
+
+def test_container_diagnostic_command_does_not_expose_capture_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    key = "capture-key-must-stay-private"
+    backend = RealOperatorBackend(
+        OperatorSettings(
+            root=tmp_path,
+            base_url="http://127.0.0.1:3000",
+            operator_token=None,
+            compose_service="query-man",
+            diagnostic_database=tmp_path / "missing.sqlite3",
+            diagnostic_key=key,
+            diagnostic_key_id="key-2026-08",
+        )
+    )
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def run(command: list[str], **arguments: object) -> SimpleNamespace:
+        calls.append((command, arguments))
+        return SimpleNamespace(stdout='{"deleted":2}', returncode=0)
+
+    monkeypatch.setattr(
+        "query_man.runtime.operator_backend.subprocess.run",
+        run,
+    )
+
+    assert backend.diagnostic_purge("receipt-123") == 2
+    command, arguments = calls[0]
+    assert command == [
+        "docker",
+        "compose",
+        "exec",
+        "-T",
+        "query-man",
+        "qm",
+        "--internal-diag",
+        "purge",
+        "receipt-123",
+    ]
+    assert key not in " ".join(command)
+    assert arguments["timeout"] == 15
+
+
 def test_one_shot_help_does_not_start_prompt(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -466,7 +624,7 @@ def test_one_shot_help_does_not_start_prompt(
         pass
 
     monkeypatch.setattr(
-        "query_man.runtime.operator_shell.RealOperatorBackend",
+        "query_man.runtime.operator_backend.RealOperatorBackend",
         lambda _settings: Backend(),
     )
     monkeypatch.setattr(sys, "argv", ["qm", "help"])
@@ -482,7 +640,7 @@ def test_one_shot_incomplete_command_returns_nonzero(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setattr(
-        "query_man.runtime.operator_shell.RealOperatorBackend",
+        "query_man.runtime.operator_backend.RealOperatorBackend",
         lambda _settings: FakeBackend(),
     )
 
