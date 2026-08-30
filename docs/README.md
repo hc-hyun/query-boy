@@ -4,8 +4,9 @@
 
 현재 첫 오픈 범위는 [ADR 0025](decisions/0025-static-non-rls-first-launch.md), source·verified-query·budget
 authority는 [ADR 0030](decisions/0030-git-reviewed-yaml-source-authority.md)이 정합니다. 저장소 구현과
-로컬 검증은 끝났지만 실제 대상 환경 전환 `LAUNCH-02`는 남아 있습니다. Current profile은
-`development-issues`, `market-voc` 두 source만 제공하고 모든 RLS source를 차단합니다.
+로컬 검증은 끝났지만 실제 DB 환경 연결 `DBENV-01`, 인증 환경 연결 `AUTHENV-01`과 그 뒤의
+대상 환경 전환 `LAUNCH-02`는 남아 있습니다. Current profile은 `development-issues`, `market-voc`
+두 source만 제공하고 모든 RLS source를 차단합니다.
 Source의 개인정보 공개 경계는
 [ADR 0031](decisions/0031-no-pii-curated-view-boundary.md)을 따릅니다.
 Reader의 database `TEMP` 보유 여부를 source admission 조건으로 사용하지 않는 경계는

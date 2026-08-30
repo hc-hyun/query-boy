@@ -335,15 +335,18 @@ uv run pytest -m 'mcp_server and not soak' -s
 저장소 구현, local container 검증과 CI(자동 검증)는 완료됐습니다. 하지만 이것은 특정 운영 환경에
 실제로 배포했다는 뜻이 아닙니다.
 
-남은 `LAUNCH-02`는 대상 환경별 작업입니다.
+남은 작업은 대상 환경별 세 단계입니다. DB/authentication capability 구현과 실제 환경 연결을 같은
+일로 보지 않습니다.
 
-1. 운영 서버, 접근 권한과 운영 변경 기록 담당자를 정합니다.
-2. 암호화 통신, 인증 비밀값, DB 접속 정보, 백업과 이전 버전 복구 절차를 준비합니다.
-3. 실제 DB 구조·읽기 권한·PostgreSQL 설정과 RLS 0건을 확인하고, 배포 image의 내용 지문을 기록합니다.
-4. 실제 요청을 연결하기 전에 `/ready`와 승인 SQL 9개를 확인한 뒤, 요청을 연결하고 오류·DB 연결을 관찰합니다.
+1. `DBENV-01`: 실제 DB endpoint, TLS/secret, curated view와 reader inventory를 연결·검증합니다.
+2. `AUTHENV-01`: 인증 authority 하나를 선택하고 AuthBridge라면 audience/scope/CA와 실제 token을
+   연결·검증합니다.
+3. `LAUNCH-02`: 두 선행 작업이 완료된 exact artifact를 배포하고 `/ready`와 verified query 9개를 재확인한
+   뒤 traffic을 연결하고 오류·DB 연결을 관찰합니다.
 
-실행 순서와 중단 조건은 [운영 runbook](docs/operations.md)의 “Static Non-RLS First Launch”를
-따릅니다. 로컬 fixture 성공을 실제 운영 증거로 대신하지 않습니다.
+작업 경계, 실행 순서와 중단 조건은 [Active TODO](docs/development-todo.md)와
+[운영 runbook](docs/operations.md)의 “Static Non-RLS First Launch”를 따릅니다. 로컬 fixture 성공을
+실제 운영 증거로 대신하지 않습니다.
 
 ## 새 데이터베이스를 추가하려면
 

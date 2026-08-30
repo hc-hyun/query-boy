@@ -10,6 +10,8 @@ Status: Current — 현재 gate와 과거 repository 기록 조회 안내
 |---|---|
 | `LAUNCH-01-A` repository 구현 | Accepted; exact launch scope는 ADR 0025 |
 | `QB-YAML-SOURCE-AUTHORITY-20260829` repository removal | Accepted; exact authority는 ADR 0030 |
+| `DBENV-01` protected DB binding | 미실행; Active TODO |
+| `AUTHENV-01` protected authentication binding | 미실행; Active TODO |
 | `LAUNCH-02` protected deployment | 미실행; Active TODO |
 | 외부 Control DB inventory·보존·폐기 | 이 repository 작업에서 접근·변경·실행하지 않음; 별도 승인 필요 |
 

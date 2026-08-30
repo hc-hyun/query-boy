@@ -22,10 +22,11 @@ Query Man은 하나의 애플리케이션 process 안에서 여러 책임을 모
 | Query 결과 | exact seven result OID `20, 21, 23, 25, 1082, 1184, 1700`만 허용 |
 | Source authority | Git-reviewed `config/sources/*.yaml`, `config/verified-queries.yaml`, `config/budget-profiles.yaml` |
 | Authentication | Local/CI opaque bearer 기본; AuthBridge JWT resource server는 opt-in |
-| 남은 일 | 실제 대상 환경 전환 `LAUNCH-02` |
+| 남은 일 | 실제 DB 연결 `DBENV-01`, 인증 연결 `AUTHENV-01`, 대상 환경 전환 `LAUNCH-02` |
 
 저장소 구현·로컬 container·CI 통과는 실제 운영 배포 완료와 다릅니다. TLS, secret, backup,
-대상 DB inventory, artifact와 route를 확인한 protected environment 실행이 남아 있습니다.
+대상 DB·인증 binding을 먼저 확인한 뒤 exact artifact와 route를 다루는 protected environment 실행이
+남아 있습니다.
 
 ## 현재 실행 구조
 

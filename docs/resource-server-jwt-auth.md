@@ -116,17 +116,23 @@ Response body는 Query Man의 bounded JSON error envelope를 유지하며 valida
 Token 취득과 refresh는 Codex MCP client 또는 공용 company helper가 담당한다. Query Man에는 client
 secret이 필요하지 않으며 issuer, audience, endpoint scopes와 필요한 경우 role/group만 설정한다.
 
-## Rollout 확인
+## AUTHENV-01 Traffic-off 확인
+
+이 절은 구현 작업이나 production route가 아니라 실제 AuthBridge 환경 binding과 acceptance다.
+검증한 exact Git commit과 non-secret configuration을 evidence에 기록한다. Image를 사용했다면 그
+commit과 OCI revision label이 일치하는 image digest도 기록한다. Route는 `DBENV-01`도 완료된 뒤 별도
+승인된 `LAUNCH-02`에서 수행한다.
 
 1. AuthBridge에 Query Man 전용 audience와 scope mapper가 발급됐는지 확인한다.
 2. System trust 또는 승인된 CA bundle로 issuer와 `jwks_uri` HTTPS를 검증한다.
 3. Access token success와 ID token, refresh token, 다른 audience, expired token rejection을 traffic 밖에서
    확인한다.
 4. Signing key rotation에서 기존 `kid` cache와 새 `kid` 단일 refresh가 동작하는지 확인한다.
-5. 401/403 challenge, token 비로깅과 Codex/company helper refresh를 확인한 뒤 route한다.
+5. 401/403 challenge, token 비로깅과 Codex/company helper refresh를 확인하고 `AUTHENV-01` evidence를
+   남긴다. 이 단계에서는 route하지 않는다.
 
-실제 protected route/cutover는 target, artifact, AuthBridge mapper, TLS/secret, stop condition,
-rollback과 change-record owner가 있는 별도 실행 승인을 따른다.
+실제 protected route/cutover는 `DBENV-01`과 `AUTHENV-01` 완료 뒤 target, artifact, TLS/secret,
+stop condition, rollback과 change-record owner가 있는 `LAUNCH-02` 실행 승인을 따른다.
 
 ## 표준 참고
 

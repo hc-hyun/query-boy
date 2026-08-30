@@ -16,7 +16,8 @@ Status: current Git-reviewed YAML first-launch runbook
 현재 source·verified query·budget authority는 Git-reviewed YAML 하나뿐입니다. Runtime admin
 mutation, Control DB, hot reload과 source convergence 운영 절차는 제공하지 않습니다.
 정확한 결정 기준은 [ADR 0030](decisions/0030-git-reviewed-yaml-source-authority.md)입니다.
-실제 protected environment 전환은 [Active TODO](development-todo.md)의 `LAUNCH-02`입니다.
+실제 protected environment 작업은 [Active TODO](development-todo.md)의 DB 연결 `DBENV-01`, 인증 연결
+`AUTHENV-01`과 그 뒤의 배포·전환 `LAUNCH-02` 순서입니다.
 
 현재 application은 reviewed Git revision, pinned artifact와 외부 secret 설정으로 복구합니다. Source
 업무 데이터의 backup·restore는 각 source DB owner의 정책에 따릅니다. 남아 있는 과거 Control DB,
@@ -26,6 +27,9 @@ access scope, rollback과 change-record 책임을 정한 별도 protected-operat
 ## Static Non-RLS First Launch
 
 [ADR 0025](decisions/0025-static-non-rls-first-launch.md)의 first launch는 다음 exact profile만 대상으로 합니다.
+이 절은 `DBENV-01`과 `AUTHENV-01`에서 실제 DB·인증 binding을 완료한 뒤 실행하는 `LAUNCH-02`
+runbook입니다. DB DDL/reader/view, source manifest, AuthBridge mapper나 application code를 이 단계에서
+새로 구현하지 않고, 승인된 inventory를 traffic 밖에서 다시 검증합니다.
 
 - `development-issues`, `market-voc` 두 source
 - Git-reviewed `config/sources/*.yaml`, `config/verified-queries.yaml`, `config/budget-profiles.yaml`
@@ -60,6 +64,10 @@ artifact acceptance에서 시작하지 않습니다.
 Source YAML, budget/access policy, source DDL/view/function/operator/type/collation/extension, reader
 role/grant와 database/role/server setting을 승인 inventory와 비교합니다. YAML은 secret 값이
 아니라 환경 변수 이름만 포함해야 합니다.
+
+아래 Compose 명령은 repository/local fixture에서 artifact와 검사 경로를 재현하는 예시이며 protected
+DB 배포 명령이나 environment evidence가 아닙니다. 실제 target의 deploy, DB probe와 token acceptance
+명령은 `DBENV-01`·`AUTHENV-01` 실행 승인과 change record에서 exact 값으로 고정합니다.
 
 ```bash
 uv run qm source validate

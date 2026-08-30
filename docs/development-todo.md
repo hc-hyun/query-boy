@@ -1,6 +1,6 @@
 # Active Development TODO
 
-Status: Active — 현재 launch 작업은 `LAUNCH-02` 하나
+Status: Active — `DBENV-01`, `AUTHENV-01` 완료 후 `LAUNCH-02`
 
 이 문서는 실제로 지금 남은 일만 보여줍니다. 일정에 없는 주제는 checkbox 없이 아래 표에만
 요약합니다. 완료 이력과 과거 상세는 Git history에서 찾습니다.
@@ -22,60 +22,131 @@ source로 받습니다.
 | Source authority | Git-reviewed source·verified-query·budget YAML |
 | 개인정보 경계 | DB-owner-confirmed no-PII curated view |
 | Database | PostgreSQL 18, server/client UTF-8 |
+| Protected DB binding | 미실행; 현재 manifest는 development/loopback 기본값 |
+| Protected authentication binding | 미실행; 실제 환경 authority 미확정(AuthBridge 선택 시 mapper·CA도 미확정) |
 | RLS | 전면 차단 |
 | 결과 type | OID `20, 21, 23, 25, 1082, 1184, 1700` |
 | SQL policy | v3와 아홉 verified query |
 
 Repository implementation과 local acceptance는 protected environment 전환 권한이 아니다.
-쉽게 말하면 코드와 로컬 검사가 끝났어도 실제 운영 서버에 배포해도 된다는 승인은 아직 없습니다.
+DB adapter와 authentication verifier/policy 코드가 있다는 것은 실제 DB endpoint, reader secret 또는
+authentication authority가 환경에 연결됐다는 뜻이 아니다. 코드와 로컬 검사가 끝났어도 실제 운영
+서버에 배포해도 된다는 승인도 아직 없습니다.
 
 ## Protected Environment Execution
 
-- [ ] `LAUNCH-02`: 대상 환경에서 첫 오픈을 준비하고 승인·실행합니다.
+- [ ] `DBENV-01`: 승인된 source profile을 실제 protected DB 환경에 연결하고 검증합니다.
+- [ ] `AUTHENV-01`: 실제 환경의 authentication authority 하나를 연결하고 검증합니다.
+- [ ] `LAUNCH-02`: 위 두 환경 연결이 완료된 artifact를 배포하고 traffic을 전환합니다.
 
-해야 할 일을 네 단계로 줄이면 다음과 같습니다.
+작업 순서는 다음과 같습니다.
 
-1. 대상 서버·DB, 접근 권한과 변경 기록 책임자를 확정합니다.
-2. TLS, secret, backup과 직전 version rollback을 준비합니다.
-3. Authentication authority를 정합니다. AuthBridge를 선택하면 exact issuer, Query Man 전용
-   audience/scope mapper, CA trust와 client token refresh owner를 확인합니다.
-4. Source·DDL·reader role·PostgreSQL 설정·RLS 0건과 배포 image digest를 승인 inventory와 대조합니다.
-5. Traffic을 받기 전에 readiness와 아홉 verified query를 확인하고, route 뒤 오류·사용량·DB 연결을
-   관찰합니다.
+```text
+DBENV-01 ─┐
+           ├─> LAUNCH-02
+AUTHENV-01 ┘
+```
 
-정확한 명령, 기록 항목과 순서는 [Operations](operations.md#static-non-rls-first-launch)를 따릅니다.
-Repository fixture나 local container 결과를 실제 환경 증거로 대신하지 않습니다.
+`DBENV-01`과 `AUTHENV-01`은 이미 구현된 adapter를 실제 환경에 binding하는 선행 작업이다.
+`LAUNCH-02`는 이를 전제로 한 배포·acceptance·cutover이며 DB role/view, source inventory,
+authentication mapper 또는 application code를 현장에서 새로 구현하지 않는다. 필요한 capability나
+versioned configuration이 없으면 해당 작업을 중단하고 별도 repository change set으로 돌아간다.
+
+### DBENV-01: 실제 DB 환경 연결
+
+현재 두 source manifest는 `provenance.environment=development`, loopback host와 `ssl=false`를 기본으로
+한다. Host·port·password는 환경변수로 resolve할 수 있지만 두 source는 현재 같은 host/port 환경변수
+key를 공유한다. Database와 reader user, TLS enablement(`false`는 `disable`, `true`는 `verify-full`),
+allowed schema/relation kind와 semantic overlay는 reviewed manifest에 고정된다. Exact 공개 relation
+set은 승인된 DB DDL inventory와 metadata revision으로 검증한다.
+
+1. 대상 host·port·database·reader user, network path, TLS/CA, secret owner와 DBA를 확정한다.
+2. DBA가 no-PII curated view, 최소 권한 reader role/grant, PostgreSQL 18/UTF-8과 RLS 0건을 준비한다.
+3. Secret은 Git/YAML/image/log가 아닌 승인된 외부 store에서 주입한다.
+4. Source·DDL·view/function/operator/type/collation/extension, role/grant와 DB semantic setting을 승인
+   inventory와 대조하고 traffic 밖에서 metadata/reader policy probe와 아홉 verified query를 통과시킨다.
+5. Source checkout에서 검증했다면 exact Git commit과 clean/reviewed config provenance를 기록한다.
+   Application image를 사용했다면 OCI revision label이 그 commit과 일치하는 image digest를 기록한다.
+
+실제 대상이 현재 두 source의 database/user/view/TLS 의미와 다르거나, source별로 서로 다른 host/port
+환경변수 key가 필요하거나, 새 database/source라면 `DBENV-01`에서 manifest를 즉석 수정하지 않는다.
+[Source onboarding](source-extension-checklist.md)과 inventory 변경을 별도 승인·review한 뒤 이 작업을
+다시 시작한다. 실제 데이터가 정당하게 달라 verified result가 바뀌는 경우에도 자동 rebaseline하지
+않고 `config/verified-queries.yaml` 변경을 별도 승인·검증한다.
+
+### AUTHENV-01: 실제 인증 환경 연결
+
+JWT Discovery/JWKS, signature, issuer, audience, time, scope/role과 401/403 검증 코드는 구현돼 있다.
+이 작업은 인증 코드를 새로 만드는 것이 아니라 실제 환경의 authority와 Query Man 설정을 연결한다.
+
+1. OAuth, access-policy 또는 opaque API token 중 authority를 정확히 하나 선택한다.
+2. 모든 mode에서 non-secret configuration, secret/policy owner, 선택한 mode가 지원하는 permission의
+   성공, 잘못된 credential의 401과 credential 비로깅을 traffic 밖에서 확인한다. 선택한 mode가
+   표현하는 권한 제한은 거부되는 요청의 403도 확인한다. Legacy API token에 operator 성공을 요구하지
+   않는다.
+3. AuthBridge를 선택하면 exact issuer, Query Man 전용 audience와 query/MCP/operator scope mapper,
+   optional role/group, CA trust를 준비한다. Access token 취득·refresh는 Codex MCP client 또는 company
+   helper의 owner를 지정하며 Query Man은 client secret이나 refresh token을 저장하지 않는다.
+4. AuthBridge mode에서는 정상 access token과 위조·만료·다른 audience·ID/refresh token 거부,
+   unknown `kid`와 signing-key rotation을 실제 Discovery/JWKS에서 추가 확인한다.
+5. Source checkout에서 검증했다면 exact Git commit과 clean/reviewed config provenance를 기록한다.
+   Application image를 사용했다면 OCI revision label이 그 commit과 일치하는 image digest를 기록한다.
+
+실제 provider가 요구하는 authentication capability가 현재 구현에 없으면 mapper나 code를 현장에서
+우회하지 않고 별도 repository change와 acceptance를 승인받는다. OAuth와 diagnostic capture를 함께
+요구하는 환경도 현재 configuration contract 밖이므로 별도 설계 승인 전에는 중단한다.
+
+### LAUNCH-02: 배포와 traffic 전환
+
+`DBENV-01`과 `AUTHENV-01`의 exact inventory와 evidence가 완료되고 이후 변경되지 않은 상태에서만
+시작한다. Launch artifact의 commit/config/image digest가 선행 검증 artifact와 다르면 영향을 받은
+선행 acceptance를 다시 실행한다.
+
+1. 승인된 Git commit, OCI revision label이 그 commit과 일치하는 application image digest와 upstream
+   image digest를 고정한다.
+2. TLS, secret, backup, 직전 image/config/SQL policy와 rollback route를 재확인한다.
+3. Accepted 단일 replica를 traffic 밖에서 시작하고 exact readiness, 두 source, RLS 0건,
+   PostgreSQL 18/UTF-8, metadata revision, seven-OID corpus, 아홉 verified query와 인증 acceptance를
+   다시 확인한다.
+4. Old route를 닫고 신규 유입·active query·source connection을 drain한 뒤 accepted replica만 route한다.
+5. 오류·resource·DB connection을 관찰하고 실행 결과와 rollback 가능 상태를 environment evidence로
+   남긴다.
+
+공통 검증 항목과 순서는 [Operations](operations.md#static-non-rls-first-launch)를 따릅니다. 대상별
+deploy/probe 명령은 protected change record에서 exact 값으로 고정합니다. Repository fixture나 local
+container 결과를 실제 환경 증거로 대신하지 않습니다.
 
 ## 시작 전에 필요한 승인
 
-다음 내용이 들어간 실행 승인이 필요합니다.
+각 작업은 다음 내용을 특정한 protected-operation 실행 승인이 필요합니다.
 
-- 대상 환경과 접근 방법
-- 실행자와 change-record owner
-- 승인된 Git commit과 application/upstream image digest
-- TLS, secret, backup과 복구 확인 방법
-- 선택한 authentication authority; AuthBridge이면 audience/scope mapper, CA와 token refresh owner
-- Source·DB 설정 inventory
-- Traffic route와 관찰 방법
-- 즉시 중단할 조건과 rollback 순서
+- `DBENV-01`: 대상 DB와 접근 방법, DBA·secret/change-record owner, DDL/role/settings inventory,
+  TLS·backup, probe, 중단·복구 조건
+- `AUTHENV-01`: 선택한 단일 authority, 실행자/owner, 지원 permission과 negative test, credential 취급,
+  중단·복구 조건. AuthBridge이면 IAM 실행자, audience/scope/optional role·group mapper, CA와 client
+  token 취득·refresh owner
+- `LAUNCH-02`: 승인된 Git commit과 application/upstream image digest, 배포 실행자, route·관찰 방법,
+  직전 artifact와 rollback 순서, change-record owner
 
-Repository 문서나 procedure를 승인한 것만으로 실제 protected action까지 승인된 것은 아닙니다.
+하나의 change record에 묶더라도 세 작업의 scope, access, target과 stop condition을 각각 구분한다.
+Repository 문서나 한 작업의 procedure를 승인한 것만으로 다른 protected action까지 승인된 것은 아닙니다.
 
 ## 완료 조건
 
-다음이 모두 충족돼야 `LAUNCH-02`를 완료로 옮길 수 있습니다.
-
-- 승인한 exact artifact와 설정이 대상 환경에 배포됨
-- 두 source만 보이고 RLS source가 없음
-- `/ready`가 exact ready이며 PostgreSQL 18/UTF-8 검사가 통과함
-- 아홉 verified query와 현재 SQL policy가 통과함
-- AuthBridge 선택 시 access token 성공, ID/refresh/다른 audience/만료 token 거부, query/MCP/operator
-  scope와 signing-key rotation이 traffic 밖에서 통과함
-- Traffic 전환 뒤 오류·resource·connection 상태가 정상임
-- 실제 실행 결과, 담당자와 rollback 가능 상태를 immutable environment evidence로 남김
+- `DBENV-01`: 승인 inventory와 실제 DB가 일치하고, 두 source의 no-PII view·reader·TLS/secret·PG18/UTF-8·
+  RLS 0건과 metadata/reader probe를 통과함. 현재 승인된 아홉 verified-query entry의 exact metadata
+  revision, ordered columns, row count와 result hash를 검증 artifact와 함께 environment evidence로 남김
+- `AUTHENV-01`: authority가 하나뿐이고 선택 mode가 지원하는 permission 성공, 해당하는 권한 거부 403,
+  잘못된 credential 401과 비로깅을 통과함. AuthBridge를 선택하면 실제 positive/negative token·scope·
+  key rotation, CA/client owner와 검증 artifact도 environment evidence로 남김
+- `LAUNCH-02`: 승인한 exact artifact가 배포되고 `/ready`, 아홉 verified query, 현재 SQL policy와
+  DB/auth 재검증이 통과하며, traffic 뒤 오류·resource·connection 상태와 rollback 가능 상태를
+  immutable environment evidence로 남김
 
 ## 즉시 중단할 조건
 
+- `DBENV-01` 또는 `AUTHENV-01`이 미완료이거나 완료 뒤 inventory가 변경됨
+- 실제 대상이 current source inventory와 달라 새 source/config/code 변경이 필요함
 - Source, RLS, DDL, role, DB 설정 또는 image가 승인 inventory와 다름
 - Metadata revision이나 verified result hash가 다름
 - Readiness가 `degraded` 또는 `unavailable`
@@ -83,8 +154,11 @@ Repository 문서나 procedure를 승인한 것만으로 실제 protected action
 - SQL policy v2와 v3 process가 동시에 요청을 받음
 - Backup, rollback, 실행 책임이나 secret 취급이 불명확함
 - Authentication authority가 둘 이상 설정됐거나 AuthBridge audience/scope/CA/refresh 책임이 불명확함
+- OAuth와 diagnostic capture를 동시에 요구함
 
-중단 후 임의로 baseline을 넓히지 않습니다. 원인을 정리하고 변경 범위와 영향을 다시 승인받습니다.
+중단 후 LAUNCH 작업 안에서 DB DDL, source YAML, mapper나 application code를 즉석 변경해 baseline을
+넓히지 않습니다. 원인을 정리하고 해당 선행 작업 또는 repository change의 범위와 영향을 다시
+승인받습니다.
 
 ## 현재 일정에 없는 일
 

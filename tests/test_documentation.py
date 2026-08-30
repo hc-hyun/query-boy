@@ -64,7 +64,7 @@ REQUIRED_MODULE_HEADINGS = (
     "## 집중해서 읽을 범위",
 )
 
-EXPECTED_ACTIVE_TODO_IDS = ("LAUNCH-02",)
+EXPECTED_ACTIVE_TODO_IDS = ("DBENV-01", "AUTHENV-01", "LAUNCH-02")
 EXPECTED_PARKED_ID_RANGES = (
     "`RLS-01`~`RLS-03`",
     "`ENC-01`~`ENC-02`",
@@ -142,6 +142,8 @@ def test_active_todo_is_small_open_work_only() -> None:
     assert "- [x]" not in todo
     assert "LAUNCH-01-A" in todo
     assert "Repository implementation과 local acceptance는 protected environment 전환 권한이 아니다" in todo
+    assert "`DBENV-01`과 `AUTHENV-01`의 exact inventory와 evidence가 완료" in todo
+    assert "authentication mapper 또는 application code를 현장에서 새로 구현하지 않는다" in todo
     for heading in (
         "## Protected Environment Execution",
         "## 시작 전에 필요한 승인",
@@ -261,7 +263,8 @@ def test_current_navigation_documents_agree_on_launch_scope() -> None:
     assurance = documents["assurance"].read_text(encoding="utf-8")
     assert "단일 Query Man replica" in readme
     assert "exact seven result" in architecture
-    assert "LAUNCH-02" in operations
+    for task_id in EXPECTED_ACTIVE_TODO_IDS:
+        assert task_id in operations
     assert "20, 21, 23, 25, 1082, 1184, 1700" in assurance
     for heading in (
         "## 공통 제품 문서",
@@ -333,6 +336,9 @@ def test_consolidated_current_contracts_cover_archived_decisions() -> None:
         "60초 clock-skew allowance",
         "process-wide 30초 cooldown",
         "`authbridge`",
+        "`AUTHENV-01`",
+        "`LAUNCH-02`",
+        "이 단계에서는 route하지 않는다",
     ):
         assert fragment in jwt
 
@@ -509,7 +515,11 @@ def test_verification_uses_commit_provenance_and_external_protected_records() ->
     assert "uv run ruff check ." in index
     assert "uv run mypy src" in index
     assert "uv run pytest" in index
-    assert "LAUNCH-02" in index and "미실행" in index
+    for task_id in EXPECTED_ACTIVE_TODO_IDS:
+        assert re.search(
+            rf"\| `{re.escape(task_id)}` [^|]*\| [^|]*미실행",
+            index,
+        )
     assert "외부 Control DB inventory·보존·폐기" in index
     assert "append-only/immutable" in index
     assert "날짜별 PASS 요약 문서를 만들지 않습니다" in index
