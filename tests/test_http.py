@@ -988,6 +988,72 @@ async def test_executes_query_with_current_metadata_revision(
 
 
 @pytest.mark.asyncio
+async def test_query_request_metric_counts_authorized_attempts_only(
+    tmp_path: Path,
+) -> None:
+    source_id = "development-issues"
+    access_policy = _shared_access_policy(tmp_path)
+    query_headers = {"authorization": f"Bearer {_QUERY_A_TOKEN}"}
+    admin_headers = {"authorization": f"Bearer {_ADMIN_TOKEN}"}
+
+    async with client(
+        ReturningCatalog(minimal_development_snapshot()),
+        query_executor=RecordingQueryExecutor(),
+        access_policy=access_policy,
+    ) as session:
+        before_response = await session.get("/admin/metrics", headers=admin_headers)
+        context = await session.post(
+            "/meta",
+            headers=query_headers,
+            json={"source_id": source_id, "question": "문제 수"},
+        )
+        query_payload = {
+            "source_id": source_id,
+            "sql": "SELECT count(*) AS issue_count FROM ai.issue_overview",
+            "metadata_revision": context.json()["metadata_revision"],
+            "sql_policy_revision": context.json()["sql_policy_revision"],
+        }
+        succeeded = await session.post(
+            "/query",
+            headers=query_headers,
+            json=query_payload,
+        )
+        terminal_failure = await session.post(
+            "/query",
+            headers=query_headers,
+            json={
+                **query_payload,
+                "metadata_revision": f"sha256:{'0' * 64}",
+            },
+        )
+        unknown_source = await session.post(
+            "/query",
+            headers=query_headers,
+            json={**query_payload, "source_id": "not-registered"},
+        )
+        unauthenticated = await session.post("/query", json=query_payload)
+        after_response = await session.get("/admin/metrics", headers=admin_headers)
+
+    before = {
+        (metric["name"], metric.get("source_id")): metric["value"]
+        for metric in before_response.json()["metrics"]
+    }
+    after = {
+        (metric["name"], metric.get("source_id")): metric["value"]
+        for metric in after_response.json()["metrics"]
+    }
+    metric_key = ("query_request_started", source_id)
+    unknown_key = ("query_request_started", "not-registered")
+
+    assert succeeded.status_code == 200
+    assert terminal_failure.status_code == 409
+    assert unknown_source.status_code == 404
+    assert unauthenticated.status_code == 401
+    assert after.get(metric_key, 0) - before.get(metric_key, 0) == 2
+    assert after.get(unknown_key, 0) == before.get(unknown_key, 0)
+
+
+@pytest.mark.asyncio
 async def test_consented_http_requests_use_encrypted_capture_and_pseudonymous_audit(
     caplog: pytest.LogCaptureFixture,
     tmp_path: Path,

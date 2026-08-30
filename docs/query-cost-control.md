@@ -73,6 +73,22 @@ notification 동작이 없습니다.
 
 ## What Is Measured
 
+Authorized query가 application service에 들어오면 source별 `query_request_started` counter를 한 번
+증가시킨다. 이 값에는 성공뿐 아니라 revision mismatch, SQL reject, admission timeout과 실행 실패가
+포함되지만, authentication·source authorization에서 거부된 요청은 포함되지 않는다. Collector는 각
+replica의 누적 counter 증가량을 같은 시간 구간으로 합산한다.
+
+```text
+authorized request QPS = rate(query_request_started)
+execution-start QPS    = rate(query_execution_started)
+success QPS            = rate(query_execution_succeeded)
+overload QPS           = rate(query_queue_rejected)
+```
+
+Counter는 process restart 때 0으로 돌아가므로 collector가 reset을 처리해야 한다. 애플리케이션은
+time-window rate나 replica 합계를 계산하지 않으며 raw counter를 HPA 입력으로 직접 사용하지 않는다.
+QPS는 queue/elapsed latency, overload 비율과 database capacity를 함께 해석한다.
+
 각 성공 응답과 `query_succeeded` audit event는 다음 값을 같은 `query_id`와 fingerprint에
 연결한다.
 

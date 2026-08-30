@@ -51,6 +51,7 @@ class GatewayService:
         sql_policy_revision: str,
     ) -> dict[str, object]:
         self._require_source(caller, source_id, "query")
+        operations.increment("query_request_started", source_id)
         query_id = str(uuid.uuid4())
         self._capture_sql(caller, source_id, sql, query_id)
         logger.info(

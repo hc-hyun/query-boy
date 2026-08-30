@@ -185,9 +185,12 @@ ping하지 않습니다. Pool connection 공급 실패, PostgreSQL connection/se
 | `shutting_down` | 신규 작업을 받지 않음 | 503 |
 
 `degraded`는 HTTP 200이지만 launch acceptance의 exact readiness는 아닙니다. Counter는 process
-restart 때 초기화되며 public dashboard에 source label을 노출하지 않습니다. 별도 background DB probe나
-자동 query retry는 없습니다. 모든 source가 `unavailable`이라 load balancer가 일반 traffic을 막은 뒤에는
-operator/canary의 검증 query 또는 process restart로 회복을 확인해야 합니다.
+restart 때 초기화됩니다. QPS collector는 source별 `query_request_started` 증가량을 replica 전체에서
+합산하고 reset을 처리하며, public dashboard에는 source label을 노출하지 않습니다. Raw 누적값이나 QPS
+하나만 HPA 신호로 쓰지 않고 queue/elapsed latency, `query_queue_rejected` 비율과 DB capacity를 함께
+확인합니다. 별도 background DB probe나 자동 query retry는 없습니다. 모든 source가 `unavailable`이라
+load balancer가 일반 traffic을 막은 뒤에는 operator/canary의 검증 query 또는 process restart로 회복을
+확인해야 합니다.
 
 ## Local Container Operations
 

@@ -55,7 +55,8 @@ Inventory reconcile 때 query reporter는 아직 관찰된 장애가 없는 `hea
 startup probe 전까지 `initializing`이다. Query reporter 장애는 성공한 query `COMMIT`만 복구한다.
 이 process-wide sink는 허용된 cross-cutting dependency이며 core package의 독립 추출이나 별도 telemetry
 Protocol 주입을 약속하지 않는다. 일반 request path는 operations sink 실패 때문에 query cleanup을
-실패시키지 않는다.
+실패시키지 않는다. `/admin/metrics`의 source별 `query_request_started`는 authorization을 통과한 query
+요청의 process-local 누적값이며 collector가 replica별 증가량과 counter reset을 처리해 QPS로 변환한다.
 
 `build_app`은 production composition root다. `SourceRegistry.load`, concrete PostgreSQL catalog/query,
 Metadata service, Gateway/Delivery와 OAuth/capture adapter를 연결한다. Ordinary consumer에는 concrete
