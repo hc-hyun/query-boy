@@ -2,3 +2,5 @@ b763e10929d3d0556b7fdb5d2b8318f64b019aa6:tests/test_http.py:generic-api-key:121
 b763e10929d3d0556b7fdb5d2b8318f64b019aa6:tests/test_http.py:generic-api-key:122
 b763e10929d3d0556b7fdb5d2b8318f64b019aa6:tests/test_source_store.py:generic-api-key:1177
 b763e10929d3d0556b7fdb5d2b8318f64b019aa6:tests/test_source_store.py:generic-api-key:1327
+cecc215aa31f658a8cd51948f1c32fd062a23727:tests/test_managed_http.py:generic-api-key:130
+cecc215aa31f658a8cd51948f1c32fd062a23727:tests/test_managed_http.py:generic-api-key:131
