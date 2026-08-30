@@ -61,7 +61,8 @@ policy/compatibility identity다.
 
 Cache는 process-local이며 bounded TTL, single-flight refresh와 source epoch로 stale publish를 막는다.
 Invalidate 뒤 진행 중이던 old refresh가 새 cache value를 덮지 못한다. 실패한 refresh는 이전 snapshot을
-무기한 authoritative하게 만들지 않는다.
+무기한 authoritative하게 만들지 않는다. Fresh catalog refresh와 cache hit는 metadata reporter만
+갱신하며, 별도 pool을 쓰는 query 경로에서 관찰한 `unavailable` 상태를 덮지 않는다.
 
 ## Physical metadata와 context disclosure
 

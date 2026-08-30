@@ -47,16 +47,38 @@ _STRUCTURED_LOG_FIELDS = (
     "plan_nodes_limit",
 )
 
+_DATABASE_DEPENDENCY_LOGGER_PREFIXES = ("psycopg", "psycopg_pool")
+
+
+def _is_database_dependency_logger(name: str) -> bool:
+    return any(
+        name == prefix or name.startswith(f"{prefix}.")
+        for prefix in _DATABASE_DEPENDENCY_LOGGER_PREFIXES
+    )
+
+
 class SafeJsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
+        database_dependency = _is_database_dependency_logger(record.name)
         payload: dict[str, object] = {
             "timestamp": datetime.now(UTC).isoformat(),
             "level": record.levelname.lower(),
             "logger": record.name,
-            "event": redact(record.getMessage()),
+            "event": (
+                "database_dependency_log"
+                if database_dependency
+                else redact(record.getMessage())
+            ),
         }
         if record.exc_info is not None and record.exc_info[0] is not None:
             payload["exception_type"] = record.exc_info[0].__name__
+        if database_dependency:
+            return json.dumps(
+                payload,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
         for field in _STRUCTURED_LOG_FIELDS:
             if field not in record.__dict__:
                 continue
@@ -91,7 +113,8 @@ class OperationalState:
         self._lock = threading.RLock()
         self._counters: defaultdict[tuple[str, str | None], int] = defaultdict(int)
         self._totals: defaultdict[tuple[str, str | None], float] = defaultdict(float)
-        self._source_health: dict[str, str] = {}
+        self._source_metadata_health: dict[str, str] = {}
+        self._source_query_health: dict[str, str] = {}
         self._active_sources: set[str] | None = None
         self._component_health: dict[str, str] = {}
         self._accepting = True
@@ -100,7 +123,8 @@ class OperationalState:
         with self._lock:
             self._counters.clear()
             self._totals.clear()
-            self._source_health.clear()
+            self._source_metadata_health.clear()
+            self._source_query_health.clear()
             self._active_sources = None
             self._component_health.clear()
             self._accepting = True
@@ -118,14 +142,24 @@ class OperationalState:
         with self._lock:
             if self._active_sources is not None and source_id not in self._active_sources:
                 return
-            self._source_health[source_id] = status
+            self._source_metadata_health[source_id] = status
+
+    def set_source_query_health(self, source_id: str, status: str) -> None:
+        with self._lock:
+            if self._active_sources is not None and source_id not in self._active_sources:
+                return
+            self._source_query_health[source_id] = status
 
     def reconcile_sources(self, source_ids: Iterable[str]) -> None:
         active = set(source_ids)
         with self._lock:
             self._active_sources = active
-            self._source_health = {
-                source_id: self._source_health.get(source_id, "initializing")
+            self._source_metadata_health = {
+                source_id: self._source_metadata_health.get(source_id, "initializing")
+                for source_id in active
+            }
+            self._source_query_health = {
+                source_id: self._source_query_health.get(source_id, "healthy")
                 for source_id in active
             }
             self._counters = defaultdict(
@@ -157,21 +191,22 @@ class OperationalState:
         with self._lock:
             if not self._accepting:
                 return "shutting_down"
-            if not self._source_health:
+            source_health = self._aggregate_source_health()
+            if not source_health:
                 return "initializing" if self._active_sources is None else "unavailable"
             usable = any(
                 status in {"healthy", "stale"}
-                for status in self._source_health.values()
+                for status in source_health.values()
             )
             if not usable:
                 if all(
                     status == "initializing"
-                    for status in self._source_health.values()
+                    for status in source_health.values()
                 ):
                     return "initializing"
                 return "unavailable"
             if (
-                any(status != "healthy" for status in self._source_health.values())
+                any(status != "healthy" for status in source_health.values())
                 or any(status != "healthy" for status in self._component_health.values())
             ):
                 return "degraded"
@@ -203,10 +238,28 @@ class OperationalState:
             )
             return {
                 "accepting": self._accepting,
-                "sources": dict(sorted(self._source_health.items())),
+                "sources": dict(sorted(self._aggregate_source_health().items())),
                 "components": dict(sorted(self._component_health.items())),
                 "metrics": metrics,
             }
+
+    def _aggregate_source_health(self) -> dict[str, str]:
+        source_ids = set(self._source_metadata_health) | set(self._source_query_health)
+        return {
+            source_id: self._aggregate_source_status(source_id)
+            for source_id in source_ids
+        }
+
+    def _aggregate_source_status(self, source_id: str) -> str:
+        metadata_status = self._source_metadata_health.get(source_id)
+        query_status = self._source_query_health.get(source_id)
+        if "unavailable" in {metadata_status, query_status}:
+            return "unavailable"
+        if metadata_status == "stale":
+            return "stale"
+        if "initializing" in {metadata_status, query_status}:
+            return "initializing"
+        return "healthy"
 
 
 operations = OperationalState()

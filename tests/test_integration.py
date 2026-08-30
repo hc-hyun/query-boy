@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import os
@@ -22,6 +23,7 @@ from mcp.client.streamable_http import streamable_http_client
 from psycopg import AsyncConnection
 from psycopg.conninfo import make_conninfo
 from psycopg.rows import dict_row
+from psycopg_pool import PoolTimeout
 
 from query_man.assurance.verified import VerifiedQueryRegistry, create_result_hash
 from query_man.delivery.mcp_server import MCP_PROTOCOL_VERSION
@@ -44,6 +46,7 @@ from query_man.metadata.models import CatalogSnapshot
 from query_man.metadata.service import MetadataService
 from query_man.runtime.composition import build_app
 from query_man.runtime.config import RuntimeConfig
+from query_man.runtime.operations import SafeJsonFormatter, operations
 from query_man.source_catalog.models import SourceProfile
 from query_man.source_catalog.reader_policy import (
     ReaderSessionPolicyError,
@@ -289,6 +292,113 @@ async def test_rls_source_is_quarantined_for_every_tenant_before_pool_access() -
         assert executor._inflight == set()
     finally:
         await executor.close()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_closed_database_port_is_unavailable_and_redacts_dependency_log() -> None:
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+
+    closed_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    closed_socket.bind(("127.0.0.1", 0))
+    closed_port = int(closed_socket.getsockname()[1])
+    source = replace(
+        source,
+        connection=replace(
+            source.connection,
+            host="127.0.0.1",
+            port=closed_port,
+            database="leak-database-marker",
+            user="leak-user-marker",
+            password="leak-password-marker",
+            ssl=False,
+        ),
+        budget=replace(
+            source.budget,
+            query_queue_timeout_ms=250,
+            max_pool_size=1,
+            max_concurrent_queries=1,
+        ),
+    )
+    executor = PostgresQueryExecutor()
+    log_stream = io.StringIO()
+    log_handler = logging.StreamHandler(log_stream)
+    log_handler.setFormatter(SafeJsonFormatter())
+    dependency_logger = logging.getLogger("psycopg.pool")
+    previous_handlers = dependency_logger.handlers[:]
+    previous_level = dependency_logger.level
+    previous_propagate = dependency_logger.propagate
+    previous_disabled = dependency_logger.disabled
+    dependency_logger.handlers = [log_handler]
+    dependency_logger.setLevel(logging.WARNING)
+    dependency_logger.propagate = False
+    dependency_logger.disabled = False
+
+    operations.reset()
+    operations.reconcile_sources([source.source_id])
+    operations.set_source_health(source.source_id, "healthy")
+    operations.set_source_query_health(source.source_id, "healthy")
+    try:
+        assert operations.public_status() == "ready"
+
+        with pytest.raises(QueryUnavailableError) as caught:
+            await executor.execute(
+                source,
+                "SELECT 1",
+                "closed-port-revision",
+                ValidatedSql("pg_query:closed-port", (), (), ()),
+            )
+
+        assert caught.value.status_code == 503
+        assert caught.value.code == "QUERY_UNAVAILABLE"
+        assert caught.value.message == "The query could not be completed."
+        assert caught.value.details is None
+        assert isinstance(caught.value.__cause__, PoolTimeout)
+        assert operations.snapshot()["sources"] == {source.source_id: "unavailable"}
+        assert operations.public_status() == "unavailable"
+        assert not executor._semaphores[source.source_id].locked()
+    finally:
+        try:
+            await executor.close()
+        finally:
+            closed_socket.close()
+            log_handler.flush()
+            dependency_logger.handlers = previous_handlers
+            dependency_logger.setLevel(previous_level)
+            dependency_logger.propagate = previous_propagate
+            dependency_logger.disabled = previous_disabled
+            log_handler.close()
+            operations.reset()
+
+    assert executor._pools == {}
+    assert executor._active == {}
+    assert executor._inflight == set()
+    log_payloads = [json.loads(line) for line in log_stream.getvalue().splitlines()]
+    assert log_payloads
+    for payload in log_payloads:
+        assert payload == {
+            "event": "database_dependency_log",
+            "level": "warning",
+            "logger": "psycopg.pool",
+            "timestamp": payload["timestamp"],
+        }
+    bounded_payloads = [
+        {key: value for key, value in payload.items() if key != "timestamp"}
+        for payload in log_payloads
+    ]
+    bounded_log = json.dumps(bounded_payloads)
+    for sensitive in (
+        "127.0.0.1",
+        str(closed_port),
+        "leak-database-marker",
+        "leak-user-marker",
+        "leak-password-marker",
+        "connection refused",
+        "connection failed",
+        "error connecting",
+    ):
+        assert sensitive.casefold() not in bounded_log.casefold()
 
 
 @pytest.mark.integration

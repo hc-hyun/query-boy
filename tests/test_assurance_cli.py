@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import ast
+import io
+import logging
 import sys
 import tomllib
 from fnmatch import fnmatchcase
@@ -9,10 +11,18 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from psycopg import OperationalError
+from psycopg_pool import PoolTimeout
 
 import query_man.assurance.cli as assurance_cli
 from query_man.assurance.quality import QualityGateError, QualityReport
+from query_man.source_catalog.reader_policy import ReaderSessionPolicyError
 from tests.helpers import ROOT_DIRECTORY
+
+
+class _UnrenderableLogValue:
+    def __str__(self) -> str:
+        raise AssertionError("database dependency log content must not be rendered")
 
 
 def test_console_scripts_target_the_assurance_cli_composition_root() -> None:
@@ -91,6 +101,127 @@ def test_cli_root_argument_is_resolved_before_running(
     entrypoint()
 
     assert roots == [supplied.resolve()]
+
+
+@pytest.mark.parametrize(
+    ("command", "entrypoint", "runner_name", "logger_name", "database_error", "suppress"),
+    (
+        (
+            "query-man-evaluate",
+            assurance_cli.evaluate_main,
+            "_run_evaluation",
+            "psycopg.pool",
+            OperationalError(
+                "connection failed host=postgres.internal user=private_reader"
+            ),
+            False,
+        ),
+        (
+            "query-man-verify",
+            assurance_cli.verify_main,
+            "_run_verification",
+            "psycopg_pool.worker",
+            PoolTimeout("pool timed out for private-db.internal:5432"),
+            False,
+        ),
+        (
+            "query-man-evaluate",
+            assurance_cli.evaluate_main,
+            "_run_evaluation",
+            "psycopg.pool",
+            ReaderSessionPolicyError("reader policy exposed private-db"),
+            True,
+        ),
+    ),
+)
+def test_cli_maps_only_database_dependency_chains_and_never_renders_driver_logs(
+    command: str,
+    entrypoint: Any,
+    runner_name: str,
+    logger_name: str,
+    database_error: Exception,
+    suppress: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    async def fail(_root: Path) -> None:
+        try:
+            raise database_error
+        except Exception:
+            logging.getLogger(logger_name).warning(
+                "driver failure endpoint=%s detail=%s",
+                "private-db.internal:5432",
+                _UnrenderableLogValue(),
+                exc_info=True,
+            )
+            if suppress:
+                raise RuntimeError("database wrapper") from None
+            raise RuntimeError("database wrapper") from database_error
+
+    parent_logger = logging.getLogger(logger_name.split(".", 1)[0])
+    child_logger = logging.getLogger(logger_name)
+    root_logger = logging.getLogger()
+    original_factory = logging.getLogRecordFactory()
+    last_resort_stream = io.StringIO()
+    last_resort = logging.StreamHandler(last_resort_stream)
+    last_resort.setLevel(logging.WARNING)
+    monkeypatch.setattr(logging, "lastResort", last_resort)
+    monkeypatch.setattr(root_logger, "handlers", [])
+    monkeypatch.setattr(parent_logger, "handlers", [])
+    monkeypatch.setattr(parent_logger, "level", logging.ERROR)
+    monkeypatch.setattr(parent_logger, "propagate", True)
+    monkeypatch.setattr(parent_logger, "disabled", False)
+    monkeypatch.setattr(child_logger, "handlers", [])
+    monkeypatch.setattr(child_logger, "level", logging.NOTSET)
+    monkeypatch.setattr(child_logger, "propagate", True)
+    monkeypatch.setattr(child_logger, "disabled", False)
+    monkeypatch.setattr(assurance_cli, runner_name, fail)
+    monkeypatch.setattr(sys, "argv", [command, "--root", str(tmp_path)])
+
+    with pytest.raises(SystemExit) as captured:
+        entrypoint()
+
+    streams = capsys.readouterr()
+    assert captured.value.code == 1
+    assert captured.value.__cause__ is None
+    assert captured.value.__suppress_context__ is True
+    assert streams.out == ""
+    assert streams.err == (
+        '{"event": "database_dependency_log"}\n'
+        '{"error_code": "DATABASE_UNAVAILABLE", "status": "failed"}\n'
+    )
+    assert "private-db" not in streams.err
+    assert "driver failure" not in streams.err
+    assert last_resort_stream.getvalue() == ""
+    assert parent_logger.handlers == []
+    assert parent_logger.level == logging.ERROR
+    assert parent_logger.propagate is True
+    assert parent_logger.disabled is False
+    assert logging.getLogRecordFactory() is original_factory
+
+
+def test_cli_preserves_non_database_failure_behavior(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    async def fail(_root: Path) -> None:
+        raise RuntimeError("verified mismatch")
+
+    monkeypatch.setattr(assurance_cli, "_run_verification", fail)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["query-man-verify", "--root", str(tmp_path)],
+    )
+
+    with pytest.raises(RuntimeError, match="verified mismatch"):
+        assurance_cli.verify_main()
+
+    streams = capsys.readouterr()
+    assert streams.out == ""
+    assert streams.err == ""
 
 
 @pytest.mark.asyncio

@@ -35,9 +35,9 @@ override는 없다. 현재 `interactive` 값은
 |---|---|---|
 | SQL boundary | 단일 read-only statement, relation/function/operator allowlist | `QUERY_REJECTED`와 bounded reason code |
 | Plan admission | `total_cost`, 최대 plan rows, plan node 수 | `QUERY_PLAN_COST_EXCEEDED`, `QUERY_PLAN_ROWS_EXCEEDED`, `QUERY_PLAN_NODES_EXCEEDED` |
-| Time | statement 5s, transaction 8s, lock 250ms, queue 1s | `QUERY_TIMEOUT` 또는 `QUERY_OVERLOADED` |
+| Time | statement 5s, transaction 8s, lock 250ms, source admission queue 1s | `QUERY_TIMEOUT` 또는 `QUERY_OVERLOADED` |
 | Memory/temp/CPU shape | `work_mem=8MiB`, `temp_file_limit=64MiB`, parallel gather 0, JIT off | 적용값 재검증 실패 시 `QUERY_UNAVAILABLE` |
-| Capacity | replica/source당 query concurrency 2와 pool 2, reader role connection hard cap | queue/pool reject metric |
+| Capacity | replica/source당 query concurrency 2 이하, pool 2, reader role connection hard cap | semaphore 대기는 `query_queue_rejected`; connection 공급 실패는 `query_pool_exhausted`와 `QUERY_UNAVAILABLE` |
 | Result | 최대 1,000 rows와 compact JSON 1MiB | bounded rows와 `truncated=true` |
 | Intervention | `query_id`를 active source와 대조한 admin cancel | PostgreSQL cancel, rollback, cancel metric |
 
@@ -45,6 +45,13 @@ Plan admission은 명백히 큰 추정치를 실행 전에 거르는 첫 방어�
 실행 비용, lock과 I/O 변동을 모두 예측하지 못하므로 time/resource/capacity/result 경계를
 대체하지 않는다. 반대로 plan threshold를 통과했다는 사실은 query가 저렴하다는 보장이
 아니다.
+
+Budget validation은 `max_concurrent_queries <= max_pool_size`를 강제합니다. 따라서 허용 동시 실행 수를
+넘긴 요청은 pool 앞의 source semaphore에서 제한 시간 동안 기다린 뒤 `QUERY_OVERLOADED`(429)가 되고,
+semaphore를 통과했지만 pool이 connection을 공급하지 못한 경우는 DB dependency 실패로 보고 details 없는
+`QUERY_UNAVAILABLE`(503)가 됩니다. `max_pool_size`만 늘리는 변경은 허용되지만 실제 query 동시 처리량은
+`max_concurrent_queries`를 함께 올리기 전까지 늘지 않습니다. 반대로 concurrency만 pool보다 크게 설정한
+profile은 startup validation에서 fail-closed합니다.
 
 `work_mem`은 plan node와 동시 연산별로 소비되고 hash operation에는 PostgreSQL의
 `hash_mem_multiplier`도 적용될 수 있어 process 전체 메모리 상한과 같지 않다. 그래서 query
@@ -139,8 +146,10 @@ question/SQL 품질 조사용 별도 encrypted store다. 그
 
    Application reader와 query user에게 `pg_cancel_backend` 또는 Query Man cancel 권한을 주지
    않는다.
-4. `/admin/metrics`에서 같은 source의 queue, pool exhaustion, timeout, reject와 truncation
-   변화를 확인한다. `plan_summary`가 높은지와 실제 elapsed/I/O가 높은지는 별도로 판단한다.
+4. `/admin/metrics`에서 같은 source의 admission queue, pool connection 공급 실패, timeout, reject와
+   truncation 변화를 확인한다. `query_queue_rejected`는 요청 경쟁을, `query_pool_exhausted`는 DB/network,
+   reader 또는 connection 공급 경로를 먼저 조사해야 하는 dependency 실패를 뜻한다.
+   `plan_summary`가 높은지와 실제 elapsed/I/O가 높은지는 별도로 판단한다.
 5. 선택적으로 DBA가 `pg_stat_statements`를 운영한다. 이는 normalized statement의 장기
    calls/time/rows/shared block/temp block 집계를 제공하지만 Query Man `query_id` 또는 pglast
    fingerprint와 직접 연결되지 않는다. Gateway는 connection-local 고정 cursor 이름을 써
@@ -219,9 +228,9 @@ major version이나 object OID 변화에 걸친 stable application identifier가
    saturation도 통과시킨다. 이 검증은 source concurrency 2를 채운 상태의 세 번째 요청이
    `QUERY_OVERLOADED`, 5초 statement 상한을 넘긴 실행이 `QUERY_TIMEOUT`, 다른 source와
    후속 정상 query가 계속 성공하는지 확인한다.
-5. 그래도 profile 변경이 필요하면 concurrency를 포함한 최악 자원량과 reader connection
-   capacity를 review한다. Profile 변경은 metadata revision 재발행과 L2 verified-query baseline
-   재검증을 요구한다.
+5. 그래도 profile 변경이 필요하면 concurrency를 포함한 최악 자원량과 reader connection capacity를
+   review한다. Pool 여유만 늘릴 수 있지만 concurrency를 늘릴 때는 반드시 pool 이하로 유지한다. Profile
+   변경은 metadata revision 재발행과 L2 verified-query baseline 재검증을 요구한다.
 
 Source별 특별 숫자를 Python 분기나 manifest 임의 override로 넣지 않는다. 공통 workload가
 현재 profile과 다를 때만 중앙 profile을 추가하고 절대 schema bounds, representative load와

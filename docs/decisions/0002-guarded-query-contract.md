@@ -97,8 +97,8 @@ HTTP와 MCP response shape가 모순되므로 fetch 전에 fail-closed한다.
 | 404 | `QUERY_NOT_FOUND` | Operator의 허용 source 안에 활성 query가 없음 |
 | 408 | `QUERY_TIMEOUT` | 실행 deadline 초과 또는 취소 |
 | 409 | `METADATA_REVISION_MISMATCH` | SQL 생성에 사용한 metadata 또는 SQL policy revision이 현재 값과 다름 |
-| 429 | `QUERY_OVERLOADED` | Source concurrency/connection queue 상한 초과 |
-| 503 | `QUERY_UNAVAILABLE` | 비공개 database 또는 infrastructure 오류 |
+| 429 | `QUERY_OVERLOADED` | Source admission/concurrency queue 상한 초과 |
+| 503 | `QUERY_UNAVAILABLE` | Pool connection 공급 실패를 포함한 비공개 database 또는 infrastructure 오류 |
 
 AST가 승인하지 않은 operator construct를 식별할 수 있을 때 `QUERY_REJECTED`의 details에는
 기존 `reason_code`와 함께 bounded `rejected_construct`를 선택적으로 반환한다. 값은
@@ -145,6 +145,13 @@ Privilege, connection, server shutdown, 알 수 없는 SQLSTATE와 driver/serial
   간주하지 않는다.
 - Process-local semaphore는 단일 replica 안에서만 concurrency를 제한한다.
   `ponytail:` replica가 source quota를 공유해야 할 때 distributed limiter로 교체한다.
+- Budget은 `max_concurrent_queries <= max_pool_size`를 만족해야 한다. Pool capacity만 늘리는 것은
+  허용되지만 동시 실행량은 concurrency limit을 함께 올리기 전까지 바뀌지 않는다. Semaphore admission
+  timeout은 caller load인 `QUERY_OVERLOADED`로, admission 뒤 pool connection 공급 실패는
+  `QUERY_UNAVAILABLE`로 분류한다.
+- Pool connection과 PostgreSQL connection/session policy 실패는 source의 query health를
+  `unavailable`로 내린다. Metadata와 query는 별도 pool이므로 metadata 성공으로 이를 지우지 않고,
+  같은 query 경로의 성공한 `COMMIT`만 query health를 복구한다.
 - Function/operator의 resolved candidate와 volatility 검증은 ADR 0003을 따른다.
 - Reader UTC, canonical-time policy material, revision 전환과 business calendar 분리는
   [Guarded Query의 canonical-time identity](../modules/guarded-query/README.md#canonical-time-identity)를

@@ -108,6 +108,14 @@ class _Budget(_StrictModel):
     max_plan_rows: int = Field(ge=1, le=2_147_483_647)
     max_plan_nodes: int = Field(ge=1, le=100_000)
 
+    @model_validator(mode="after")
+    def require_pool_capacity_for_admitted_queries(self) -> _Budget:
+        if self.max_concurrent_queries > self.max_pool_size:
+            raise ValueError(
+                "max_concurrent_queries must be less than or equal to max_pool_size"
+            )
+        return self
+
 
 class _BudgetFile(_StrictModel):
     version: int

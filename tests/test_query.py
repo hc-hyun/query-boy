@@ -14,6 +14,7 @@ from query_man.errors import (
     MetadataRevisionMismatchError,
     MetadataUnavailableError,
     QueryInvalidError,
+    QueryOverloadedError,
     QueryRejectedError,
     QueryTimeoutError,
     QueryUnavailableError,
@@ -281,6 +282,18 @@ class _PhasePool:
     def connection(self, *, timeout: float) -> _ConnectionContext:
         assert timeout > 0
         return _ConnectionContext(self._connection)
+
+
+def _record_query_health(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[tuple[str, str]]:
+    events: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        operations,
+        "set_source_query_health",
+        lambda source_id, status: events.append((source_id, status)),
+    )
+    return events
 
 
 def _stub_internal_query_checks(
@@ -777,6 +790,7 @@ async def test_executor_discards_connection_policy_mismatch_before_begin_and_rec
 
     _stub_internal_query_checks(monkeypatch, "success", database_error)
     executor._get_pool = get_pool  # type: ignore[method-assign]
+    health_events = _record_query_health(monkeypatch)
     operations.reset()
     try:
         with pytest.raises(QueryUnavailableError) as captured:
@@ -807,6 +821,227 @@ async def test_executor_discards_connection_policy_mismatch_before_begin_and_rec
         assert result["rows"] == []
         assert recovered.events[0] == "begin"
         assert recovered.events[-1] == "commit"
+        assert health_events == [
+            (source.source_id, "unavailable"),
+            (source.source_id, "healthy"),
+        ]
+    finally:
+        await executor.close()
+        operations.reset()
+
+
+@pytest.mark.asyncio
+async def test_pool_timeout_is_unavailable_and_lowers_query_health(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+    executor = PostgresQueryExecutor()
+
+    class TimeoutConnectionContext:
+        async def __aenter__(self) -> object:
+            raise query_module.PoolTimeout("private database endpoint")
+
+        async def __aexit__(self, *_args: object) -> None:
+            pass
+
+    class TimeoutPool:
+        def connection(self, *, timeout: float) -> TimeoutConnectionContext:
+            assert timeout > 0
+            return TimeoutConnectionContext()
+
+    async def get_pool(_source: SourceProfile) -> TimeoutPool:
+        return TimeoutPool()
+
+    executor._get_pool = get_pool  # type: ignore[method-assign]
+    health_events = _record_query_health(monkeypatch)
+    operations.reset()
+    try:
+        with pytest.raises(QueryUnavailableError) as caught:
+            await executor.execute(
+                source,
+                "SELECT private_sql_literal",
+                "test-revision",
+                ValidatedSql("private-fingerprint", (), (), ()),
+            )
+
+        assert caught.value.status_code == 503
+        assert caught.value.code == "QUERY_UNAVAILABLE"
+        assert caught.value.details is None
+        assert "private" not in str(caught.value)
+        assert isinstance(caught.value.__cause__, query_module.PoolTimeout)
+        assert health_events == [(source.source_id, "unavailable")]
+        assert not executor._semaphores[source.source_id].locked()
+    finally:
+        await executor.close()
+        operations.reset()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "database_error",
+    [
+        query_module.PoolTimeout("private pool startup failure"),
+        errors.OperationalError("private pool connection failure"),
+        errors.InterfaceError("private pool lifecycle failure"),
+    ],
+)
+async def test_pool_creation_dependency_errors_are_mapped_and_lower_query_health(
+    database_error: Exception,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+    executor = PostgresQueryExecutor()
+
+    async def get_pool(_source: SourceProfile) -> object:
+        raise database_error
+
+    executor._get_pool = get_pool  # type: ignore[method-assign]
+    health_events = _record_query_health(monkeypatch)
+    operations.reset()
+    try:
+        with pytest.raises(QueryUnavailableError) as caught:
+            await executor.execute(
+                source,
+                "SELECT private_sql_literal",
+                "test-revision",
+                ValidatedSql("private-fingerprint", (), (), ()),
+            )
+
+        assert caught.value.status_code == 503
+        assert caught.value.details is None
+        assert caught.value.__cause__ is database_error
+        assert health_events == [(source.source_id, "unavailable")]
+        assert not executor._semaphores[source.source_id].locked()
+    finally:
+        await executor.close()
+        operations.reset()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "database_error",
+    [
+        errors.OperationalError("private database endpoint"),
+        errors.InterfaceError("private connection state"),
+    ],
+)
+async def test_connection_errors_lower_query_health(
+    database_error: errors.Error,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+    connection = _PhaseConnection("session", database_error)  # type: ignore[arg-type]
+    executor = PostgresQueryExecutor()
+
+    async def get_pool(_source: SourceProfile) -> _PhasePool:
+        return _PhasePool(connection)
+
+    _stub_internal_query_checks(
+        monkeypatch,
+        "success",
+        errors.InvalidParameterValue("unused"),
+    )
+    executor._get_pool = get_pool  # type: ignore[method-assign]
+    health_events = _record_query_health(monkeypatch)
+    operations.reset()
+    try:
+        with pytest.raises(QueryUnavailableError) as caught:
+            await executor.execute(
+                source,
+                "SELECT private_sql_literal",
+                "test-revision",
+                ValidatedSql("private-fingerprint", (), (), ()),
+            )
+
+        assert caught.value.status_code == 503
+        assert caught.value.details is None
+        assert caught.value.__cause__ is database_error
+        assert health_events == [(source.source_id, "unavailable")]
+        assert connection.rolled_back
+    finally:
+        await executor.close()
+        operations.reset()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "expected_error"),
+    [
+        (QueryInvalidError("QUERY_INVALID_CAST"), QueryInvalidError),
+        (QueryRejectedError("QUERY_PLAN_COST_EXCEEDED"), QueryRejectedError),
+        (ResultEncodingError("Unsupported PostgreSQL result type"), QueryUnavailableError),
+        (errors.InsufficientPrivilege("private relation"), QueryUnavailableError),
+        (TimeoutError(), QueryTimeoutError),
+        (errors.QueryCanceled(), QueryTimeoutError),
+    ],
+)
+async def test_caller_triggerable_failures_do_not_lower_query_health(
+    failure: Exception,
+    expected_error: type[Exception],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+    connection = _PhaseConnection(
+        "success",
+        errors.InvalidParameterValue("unused"),
+    )
+    executor = PostgresQueryExecutor()
+
+    async def get_pool(_source: SourceProfile) -> _PhasePool:
+        return _PhasePool(connection)
+
+    async def fail_execution(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise failure
+
+    executor._get_pool = get_pool  # type: ignore[method-assign]
+    executor._execute_connection = fail_execution  # type: ignore[method-assign]
+    health_events = _record_query_health(monkeypatch)
+    operations.reset()
+    try:
+        with pytest.raises(expected_error):
+            await executor.execute(
+                source,
+                "SELECT private_sql_literal",
+                "test-revision",
+                ValidatedSql("private-fingerprint", (), (), ()),
+            )
+
+        assert health_events == []
+    finally:
+        await executor.close()
+        operations.reset()
+
+
+@pytest.mark.asyncio
+async def test_semaphore_admission_timeout_remains_overloaded_without_health_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+    source = replace(
+        source,
+        budget=replace(source.budget, query_queue_timeout_ms=1),
+    )
+    executor = PostgresQueryExecutor()
+    executor._semaphores[source.source_id] = asyncio.Semaphore(0)
+    health_events = _record_query_health(monkeypatch)
+    operations.reset()
+    try:
+        with pytest.raises(QueryOverloadedError) as caught:
+            await executor.execute(
+                source,
+                "SELECT 1",
+                "test-revision",
+                ValidatedSql("private-fingerprint", (), (), ()),
+            )
+
+        assert caught.value.status_code == 429
+        assert caught.value.code == "QUERY_OVERLOADED"
+        assert health_events == []
     finally:
         await executor.close()
         operations.reset()

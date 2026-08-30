@@ -240,6 +240,42 @@ def test_loads_versioned_hard_session_budget() -> None:
     assert budget.temp_file_limit_kb == 65_536
     assert budget.max_parallel_workers_per_gather == 0
     assert budget.jit_enabled is False
+    assert budget.max_concurrent_queries == budget.max_pool_size == 2
+
+
+def test_budget_accepts_pool_capacity_above_query_concurrency(
+    tmp_path: Path,
+) -> None:
+    raw = yaml.safe_load(
+        (ROOT_DIRECTORY / "config" / "budget-profiles.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    raw["profiles"]["interactive"]["max_pool_size"] = 3
+    path = tmp_path / "budget-profiles.yaml"
+    path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+    budget = load_budget_profiles(path)["interactive"]
+
+    assert budget.max_pool_size == 3
+    assert budget.max_concurrent_queries == 2
+
+
+def test_rejects_query_concurrency_above_pool_capacity(tmp_path: Path) -> None:
+    raw = yaml.safe_load(
+        (ROOT_DIRECTORY / "config" / "budget-profiles.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    raw["profiles"]["interactive"]["max_concurrent_queries"] = 3
+    path = tmp_path / "budget-profiles.yaml"
+    path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+
+    with pytest.raises(
+        RegistryConfigurationError,
+        match="max_concurrent_queries must be less than or equal to max_pool_size",
+    ):
+        load_budget_profiles(path)
 
 
 @pytest.mark.parametrize(

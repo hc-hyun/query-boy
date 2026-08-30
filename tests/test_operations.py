@@ -7,6 +7,11 @@ import sys
 from query_man.runtime.operations import OperationalState, SafeJsonFormatter
 
 
+class _UnrenderableLogValue:
+    def __str__(self) -> str:
+        raise AssertionError("database dependency log message must not be rendered")
+
+
 def test_safe_json_formatter_redacts_secrets_literals_and_exception_details() -> None:
     formatter = SafeJsonFormatter()
     try:
@@ -76,6 +81,62 @@ def test_safe_json_formatter_emits_bounded_audit_fields_as_top_level_json() -> N
     assert payload["plan_total_cost"] == 42.5
 
 
+def test_safe_json_formatter_normalizes_database_dependency_logs_without_rendering() -> None:
+    formatter = SafeJsonFormatter()
+    driver_error = ConnectionError(
+        "could not connect host=10.20.30.40 user=reader dbname=private_db"
+    )
+    record = logging.LogRecord(
+        "psycopg.pool",
+        logging.WARNING,
+        __file__,
+        1,
+        "driver failure %s endpoint=postgres.internal:5432",
+        (_UnrenderableLogValue(),),
+        exc_info=(ConnectionError, driver_error, None),
+    )
+    record.source_id = "must-not-be-rendered"
+
+    payload = json.loads(formatter.format(record))
+    serialized = json.dumps(payload)
+
+    assert payload == {
+        "event": "database_dependency_log",
+        "exception_type": "ConnectionError",
+        "level": "warning",
+        "logger": "psycopg.pool",
+        "timestamp": payload["timestamp"],
+    }
+    for sensitive in (
+        "10.20.30.40",
+        "reader",
+        "private_db",
+        "postgres.internal",
+        "driver failure",
+        "must-not-be-rendered",
+    ):
+        assert sensitive not in serialized
+
+
+def test_safe_json_formatter_normalizes_psycopg_pool_logger_prefix() -> None:
+    formatter = SafeJsonFormatter()
+    record = logging.LogRecord(
+        "psycopg_pool.connection",
+        logging.ERROR,
+        __file__,
+        1,
+        "database connection failed",
+        (),
+        exc_info=None,
+    )
+
+    payload = json.loads(formatter.format(record))
+
+    assert payload["event"] == "database_dependency_log"
+    assert payload["logger"] == "psycopg_pool.connection"
+    assert payload["level"] == "error"
+
+
 def test_operational_state_hides_source_inventory_from_public_status() -> None:
     state = OperationalState()
     state.set_source_health("private-source", "unavailable")
@@ -91,11 +152,13 @@ def test_readiness_is_degraded_while_any_active_source_remains_usable() -> None:
 
     assert state.public_status() == "initializing"
     state.set_source_health("healthy-source", "healthy")
+    state.set_source_query_health("healthy-source", "healthy")
     state.set_source_health("unavailable-source", "unavailable")
     assert state.public_status() == "degraded"
 
     state.set_component_health("metadata_catalog", "unavailable")
     state.set_source_health("unavailable-source", "stale")
+    state.set_source_query_health("unavailable-source", "healthy")
     assert state.public_status() == "degraded"
 
     state.set_source_health("healthy-source", "unavailable")
@@ -107,13 +170,16 @@ def test_inventory_reconcile_removes_inactive_and_ignores_late_health_write() ->
     state = OperationalState()
     state.reconcile_sources(["active-source", "removed-source"])
     state.set_source_health("active-source", "healthy")
+    state.set_source_query_health("active-source", "healthy")
     state.set_source_health("removed-source", "stale")
+    state.set_source_query_health("removed-source", "healthy")
     state.increment("query_execution_started", "active-source")
     state.increment("query_execution_started", "removed-source")
     state.increment("catalog_refresh_failed")
 
     state.reconcile_sources(["active-source"])
     state.set_source_health("removed-source", "unavailable")
+    state.set_source_query_health("removed-source", "unavailable")
 
     assert state.snapshot()["sources"] == {"active-source": "healthy"}
     assert state.public_status() == "ready"
@@ -124,6 +190,39 @@ def test_inventory_reconcile_removes_inactive_and_ignores_late_health_write() ->
         ("query_execution_started", "active-source"),
         ("catalog_refresh_failed", None),
     }
+
+
+def test_source_health_keeps_metadata_and_query_failures_independent() -> None:
+    state = OperationalState()
+    state.reconcile_sources(["source"])
+
+    state.set_source_health("source", "healthy")
+    assert state.snapshot()["sources"] == {"source": "healthy"}
+    assert state.public_status() == "ready"
+
+    state.set_source_query_health("source", "unavailable")
+    state.set_source_health("source", "healthy")
+    assert state.snapshot()["sources"] == {"source": "unavailable"}
+    assert state.public_status() == "unavailable"
+
+    state.set_source_query_health("source", "healthy")
+    state.set_source_health("source", "stale")
+    assert state.snapshot()["sources"] == {"source": "stale"}
+    assert state.public_status() == "degraded"
+
+
+def test_query_health_reconcile_prunes_removed_sources_and_ignores_late_writes() -> None:
+    state = OperationalState()
+    state.reconcile_sources(["active-source", "removed-source"])
+    for source_id in ("active-source", "removed-source"):
+        state.set_source_health(source_id, "healthy")
+        state.set_source_query_health(source_id, "healthy")
+
+    state.reconcile_sources(["active-source"])
+    state.set_source_query_health("removed-source", "unavailable")
+
+    assert state.snapshot()["sources"] == {"active-source": "healthy"}
+    assert state.public_status() == "ready"
 
 
 def test_metric_snapshot_sorts_global_and_source_labels_together() -> None:

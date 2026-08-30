@@ -91,6 +91,8 @@ registry를 mutate하지 않는다.
 - Unknown field/version, duplicate ID, missing environment, forbidden schema와 RLS는 거부한다.
 - Password/DSN secret은 YAML, public projection, log와 error에 노출하지 않는다.
 - Allowed schema/relation kind와 resource budget은 prompt나 caller가 완화할 수 없다.
+- Budget은 `max_concurrent_queries <= max_pool_size`를 만족해야 하며 위반하면 startup validation에서
+  fail-closed한다. Pool을 늘리는 것은 허용하지만 query concurrency는 pool capacity를 넘을 수 없다.
 - Published DTO graph는 deep immutable하며 입력 alias mutation의 영향을 받지 않는다.
 - Reader connection/session policy는 DB query 전에 검증한다.
 - Database `TEMP` privilege만으로 source를 거부하거나 전역 revoke를 onboarding 조건으로 요구하지 않는다.

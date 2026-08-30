@@ -58,6 +58,16 @@ Offline CLI만 `SourceRegistry`, PostgreSQL catalog/query와 Metadata service co
 조립한다. Runtime authority selector나 Control DB는 사용하지 않는다. Cleanup은 production과 같은
 reader/cancel/rollback invariant를 보존한다.
 
+`query-man-evaluate`와 `query-man-verify`는 Runtime logging 설정에 의존하지 않고 실행 중에만
+PostgreSQL client logger 경계를 설치한다. `psycopg`/`psycopg_pool` warning은 message, argument와
+exception text를 렌더링하지 않고 stderr의 고정 JSON
+`{"event": "database_dependency_log"}`로 기록하며 command가 끝나면 기존 logger 설정을 복원한다.
+`psycopg.Error`, pool timeout 또는 reader session policy failure가 exception chain에 있으면 결과를
+stdout에 쓰지 않고 stderr에
+`{"error_code": "DATABASE_UNAVAILABLE", "status": "failed"}`를 쓴 뒤 exit 1로 종료한다. Config
+validation, quality gate와 verified-result mismatch처럼 DB dependency가 아닌 실패의 기존 output/exit
+의미는 바꾸지 않는다.
+
 ## Verified Query 회귀검사
 
 Verified query는 검토한 질문과 SQL을 다시 실행해 metadata·relation·결과가 달라졌는지 찾는

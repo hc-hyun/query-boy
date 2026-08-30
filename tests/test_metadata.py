@@ -23,6 +23,7 @@ from query_man.metadata.models import (
 from query_man.metadata.relevance import RankedRelation, SelectionReason
 from query_man.metadata.revision import create_metadata_revision
 from query_man.metadata.service import MetadataService, _to_relation_response
+from query_man.runtime.operations import operations
 from query_man.source_catalog.models import SourceProfile
 from query_man.source_catalog.registry import SourceRegistry
 from tests.helpers import column, load_test_registry, minimal_development_snapshot
@@ -181,6 +182,32 @@ async def test_source_outage_fails_closed_after_stale_limit_expires() -> None:
 
     with pytest.raises(MetadataUnavailableError):
         await service.get_context("development-issues", "최근 문제")
+
+
+@pytest.mark.asyncio
+async def test_metadata_refresh_does_not_overwrite_query_health() -> None:
+    clock = [1_000]
+    registry = load_test_registry()
+    service = MetadataService(
+        registry,
+        StaticCatalog(minimal_development_snapshot()),
+        cache_ttl_ms=10,
+        now=lambda: clock[0],
+    )
+    operations.reset()
+    operations.reconcile_sources(registry.source_ids())
+    try:
+        await service.get_published("development-issues")
+        operations.set_source_query_health("development-issues", "unavailable")
+
+        await service.get_published("development-issues")
+        assert operations.snapshot()["sources"]["development-issues"] == "unavailable"
+
+        clock[0] = 1_011
+        await service.get_published("development-issues")
+        assert operations.snapshot()["sources"]["development-issues"] == "unavailable"
+    finally:
+        operations.reset()
 
 
 @pytest.mark.asyncio

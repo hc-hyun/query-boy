@@ -356,8 +356,8 @@ class PostgresQueryExecutor:
         operations.increment("query_execution_started", source.source_id)
         active_query: _ActiveQuery | None = None
         try:
-            pool = await self._get_pool(source)
             try:
+                pool = await self._get_pool(source)
                 async with asyncio.timeout(source.budget.query_transaction_timeout_ms / 1000):
                     async with pool.connection(
                         timeout=source.budget.query_queue_timeout_ms / 1000
@@ -393,7 +393,8 @@ class PostgresQueryExecutor:
                                 self._active.pop(query_id, None)
             except PoolTimeout as error:
                 operations.increment("query_pool_exhausted", source.source_id)
-                raise QueryOverloadedError from error
+                operations.set_source_query_health(source.source_id, "unavailable")
+                raise QueryUnavailableError from error
             except TimeoutError as error:
                 operations.increment("query_timeout", source.source_id)
                 raise QueryTimeoutError from error
@@ -408,6 +409,14 @@ class PostgresQueryExecutor:
                 if reason is not None:
                     raise _QueryCancelledTimeoutError from error
                 raise QueryTimeoutError from error
+            except (
+                errors.OperationalError,
+                errors.InterfaceError,
+                ReaderSessionPolicyError,
+            ) as error:
+                operations.increment("query_failed", source.source_id)
+                operations.set_source_query_health(source.source_id, "unavailable")
+                raise QueryUnavailableError from error
             except QueryRejectedError:
                 operations.increment("query_rejected", source.source_id)
                 raise
@@ -635,6 +644,7 @@ class PostgresQueryExecutor:
                 except Exception:
                     pass
             await connection.execute("COMMIT")
+            operations.set_source_query_health(source.source_id, "healthy")
         except asyncio.CancelledError:
             await connection.cancel_safe(timeout=1)
             await _rollback_quietly(connection)

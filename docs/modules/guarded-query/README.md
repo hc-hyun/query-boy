@@ -85,6 +85,13 @@ render한다. Parser/driver/database 내부 error와 SQL literal은 공개하지
 read-only transaction, AST/plan admission, declared result OID 확인, bounded fetch, commit 또는
 cancel/rollback/cleanup이다. Client disconnect와 shutdown은 active backend query를 취소하고 rollback한다.
 
+Process-local semaphore 입장 대기 초과는 caller 부하로 분류해 `QUERY_OVERLOADED`(429)를 유지한다.
+Semaphore를 통과한 뒤 pool이 connection을 공급하지 못하거나 PostgreSQL connection/session policy가
+깨지면 details 없는 `QUERY_UNAVAILABLE`(503)로 분류하고 해당 source의 query health를
+`unavailable`로 내린다. 같은 query 경로의 성공한 `COMMIT`만 query health를 복구한다. SQL invalid/rejection,
+statement timeout, cancel과 unsupported result 같은 caller-triggerable/fail-closed 실패는 source health를
+내리지 않으며, 실패한 SQL을 자동으로 재실행하지 않는다.
+
 ## 소비 인터페이스와 전제
 
 | Provider | 소비 항목 | 전제 |
@@ -103,6 +110,8 @@ Delivery는 application/lifecycle interface만 소비하며 PostgreSQL executor 
 - Current metadata/SQL policy revision이 다르면 DB 접근 전에 fail-closed한다.
 - Row/byte/OID limit은 결과를 client에 보내기 전에 검사한다.
 - Timeout, cancel, disconnect, error와 shutdown은 rollback하고 pool connection을 반환한다.
+- Queue 과부하와 DB dependency 장애를 각각 429와 details 없는 503으로 구분하고, 성공한 commit 전에는
+  query health를 복구하지 않는다.
 - Credential, Authorization header, SQL literal과 내부 DB error를 응답/log에 기록하지 않는다.
 
 ## 모듈 내부 변경

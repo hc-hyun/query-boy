@@ -129,7 +129,8 @@ approval과 change record를 요구합니다.
 Application/audit log는 one-line JSON을 기록하며 SQL text, question, request body, bearer token,
 Authorization header, credential과 내부 DB error를 기록하지 않습니다. Query의 bounded
 identifier, duration, row/byte, truncation과 공개 error code만 남깁니다. Formatter는 token/secret
-assignment과 quoted SQL literal을 방어적으로 redact합니다.
+assignment과 quoted SQL literal을 방어적으로 redact합니다. `psycopg`/`psycopg_pool` dependency
+log는 driver message를 출력하지 않고 고정된 `database_dependency_log` event로 정규화합니다.
 
 PostgreSQL transaction-local `application_name=query-man:<query_id>`로 실행 중 activity와 audit를
 연결할 수 있습니다. 비용 조사는 [query cost runbook](query-cost-control.md)을 따릅니다.
@@ -169,8 +170,11 @@ rotation은 대상, 실행자, 출력 처리와 stop condition을 확인한 별�
 | `GET /admin/health` | Query Man operator | Source별 bounded health |
 | `GET /admin/metrics` | Query Man operator | Source/component health와 bounded counter/total snapshot |
 
-Startup은 YAML에 등록된 source별 metadata 경로를 병렬 probe합니다. Source health는 마지막
-metadata refresh/restore 결과이며 매 health 요청마다 DB를 ping한 결과가 아닙니다.
+Startup은 YAML에 등록된 source별 metadata 경로를 병렬 probe합니다. Source health는 마지막 metadata
+refresh 결과와 query 경로에서 관찰한 DB dependency 상태를 합쳐 계산하며, 매 health 요청마다 DB를
+ping하지 않습니다. Pool connection 공급 실패, PostgreSQL connection/session 오류는 해당 source를 즉시
+`unavailable`로 내립니다. Metadata와 query는 별도 pool을 사용하므로 metadata refresh 성공은 query
+장애를 덮지 않으며, 성공한 query `COMMIT`만 query 경로의 장애 상태를 복구합니다.
 
 | Status | Meaning | `/ready` HTTP |
 |---|---|---:|
@@ -181,7 +185,9 @@ metadata refresh/restore 결과이며 매 health 요청마다 DB를 ping한 결�
 | `shutting_down` | 신규 작업을 받지 않음 | 503 |
 
 `degraded`는 HTTP 200이지만 launch acceptance의 exact readiness는 아닙니다. Counter는 process
-restart 때 초기화되며 public dashboard에 source label을 노출하지 않습니다.
+restart 때 초기화되며 public dashboard에 source label을 노출하지 않습니다. 별도 background DB probe나
+자동 query retry는 없습니다. 모든 source가 `unavailable`이라 load balancer가 일반 traffic을 막은 뒤에는
+operator/canary의 검증 query 또는 process restart로 회복을 확인해야 합니다.
 
 ## Local Container Operations
 
@@ -206,7 +212,8 @@ Client disconnect는 실행 중 query를 cancel·rollback하며 DB timeout은 �
 |---|---|---|
 | Metadata refresh failure | source별 5분에 3회 또는 `stale` | `unavailable`이면 즉시 조사 |
 | Query reject | 10분 baseline의 3배 또는 20/min | 공격·오류 client 배포 확인 |
-| Queue pressure | 평균 queue가 timeout의 50% | 80% 또는 pool exhaustion 5회/5분 |
+| Query admission pressure | 평균 source semaphore queue가 timeout의 50% | 80% 또는 `query_queue_rejected` 발생 |
+| DB connection supply | `query_pool_exhausted` 1회 | 5회/5분이면 DB/network/reader와 pool 상태 조사 |
 | Timeout | source별 5분에 3회 | 5분 실행의 5% 초과 시 fingerprint/DB activity 확인 |
 | Truncation | 10분 성공의 10% | 25%면 질문·집계·limit 검토; limit 즉시 상향 금지 |
 | Forced shutdown cancel | 1회 | grace, 장기 query와 drain 순서 조사 |

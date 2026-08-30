@@ -667,6 +667,15 @@ async def test_public_readiness_hides_inventory_and_operator_metrics_are_detaile
         )
         degraded = await session.get("/ready")
         detailed = await session.get("/admin/health", headers=admin_headers)
+        operations.set_source_query_health("development-issues", "unavailable")
+        query_unavailable = await session.get("/ready")
+        operations.set_source_health("development-issues", "healthy")
+        still_unavailable = await session.get(
+            "/admin/health",
+            headers=admin_headers,
+        )
+        operations.set_source_query_health("development-issues", "healthy")
+        recovered = await session.get("/ready")
         operations.increment("metadata_refresh_succeeded")
         metrics = await session.get("/admin/metrics", headers=admin_headers)
 
@@ -677,6 +686,12 @@ async def test_public_readiness_hides_inventory_and_operator_metrics_are_detaile
     assert "development-issues" not in degraded.text
     assert detailed.json()["status"] == "degraded"
     assert detailed.json()["sources"]["development-issues"] == "healthy"
+    assert query_unavailable.status_code == 503
+    assert query_unavailable.json() == {"status": "unavailable"}
+    assert still_unavailable.json()["sources"]["development-issues"] == "unavailable"
+    assert still_unavailable.json()["status"] == "unavailable"
+    assert recovered.status_code == 200
+    assert recovered.json() == {"status": "degraded"}
     assert metrics.status_code == 200
     assert any(
         metric["name"] == "metadata_refresh_succeeded"

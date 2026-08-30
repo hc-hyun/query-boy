@@ -46,11 +46,16 @@ managed environment가 남아 있으면 조용히 무시하지 않고 startup co
 
 ## 제공 인터페이스와 소유 경계
 
-`OperationalState`의 `increment`, `observe`, `set_source_health`, `reconcile_sources`,
-`set_component_health`, `set_accepting`, `public_status`, `snapshot`이 domain/Delivery가 소비하는 operations
-interface다. 이 process-wide sink는 허용된 cross-cutting dependency이며 core package의 독립 추출이나
-별도 telemetry Protocol 주입을 약속하지 않는다. 일반 request path는 operations sink 실패 때문에 query
-cleanup을 실패시키지 않는다.
+`OperationalState`의 `increment`, `observe`, `set_source_health`, `set_source_query_health`,
+`reconcile_sources`, `set_component_health`, `set_accepting`, `public_status`, `snapshot`이 domain/Delivery가
+소비하는 operations interface다. Metadata reporter와 query reporter는 독립 상태를 기록해 한쪽의 성공이
+다른 쪽의 장애를 덮지 않는다. 외부·admin projection은 source별 집계 상태만 유지한다. 두 reporter 중
+하나라도 unavailable이면 unavailable, 아니면 metadata stale, initializing, healthy 순으로 집계한다.
+Inventory reconcile 때 query reporter는 아직 관찰된 장애가 없는 `healthy`로 시작하고, metadata reporter는
+startup probe 전까지 `initializing`이다. Query reporter 장애는 성공한 query `COMMIT`만 복구한다.
+이 process-wide sink는 허용된 cross-cutting dependency이며 core package의 독립 추출이나 별도 telemetry
+Protocol 주입을 약속하지 않는다. 일반 request path는 operations sink 실패 때문에 query cleanup을
+실패시키지 않는다.
 
 `build_app`은 production composition root다. `SourceRegistry.load`, concrete PostgreSQL catalog/query,
 Metadata service, Gateway/Delivery와 OAuth/capture adapter를 연결한다. Ordinary consumer에는 concrete
