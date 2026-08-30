@@ -3,6 +3,7 @@
 Status: Git-reviewed YAML source authority; first-launch inventory frozen by ADR 0025
 
 Source authority의 결정 기준은 [ADR 0030](decisions/0030-git-reviewed-yaml-source-authority.md)이다.
+개인정보 공개 경계는 [ADR 0031](decisions/0031-no-pii-curated-view-boundary.md)을 따른다.
 Source·verified query·budget의 유일한 authority는 각각 다음 Git-reviewed YAML이다.
 
 - `config/sources/*.yaml`
@@ -86,10 +87,17 @@ Manifest에는 host, port, database와 user 같은 운영 locator와 password �
 Password, token과 실제 secret은 Git, metadata, HTTP/MCP와 log에 넣지 않는다. Client나 AI model은
 DSN, schema, role 또는 source credential을 선택할 수 없다.
 
+Database `TEMP` privilege 부재는 source admission 요건이 아니다. `PUBLIC TEMP` 기본값이 있다는
+이유만으로 onboarding을 중단하거나 database-wide revoke를 요구하지 않는다. 이는 temporary table을
+사용자 query 기능으로 허용한다는 뜻이 아니며, `SELECT INTO`, DDL과 `pg_temp` relation은 계속 SQL
+정책에서 거부한다. [ADR 0032](decisions/0032-reader-temp-admission-relaxation.md)를 따른다.
+
 PostgreSQL catalog에서 type과 numeric precision/scale을 자동 수집한다. Table·column `COMMENT`는
 grain, 단위, 상태값, nullable 의미와 집계 주의를 설명하는 사람-readable metadata로 활용하되
-비신뢰 입력으로 검증한다. Comment의 PII 표시는 검토 정보일 뿐 노출 허가가 아니며,
-실제 보호는 curated view, reader grant, source policy와 검증이 강제한다.
+비신뢰 입력으로 검증한다. Query Man은 개인정보(PII)를 탐지·분류·마스킹하거나 column 단위로
+인가하지 않는다. DB owner가 개인정보를 제거했다고 확인한 reviewed curated view만 등록하며,
+정확한 view의 공개 범위가 불명확하면 onboarding을 중단한다. Comment나 manifest는 이 책임을
+대신하거나 노출을 허가하지 않는다.
 
 ## 조건에 따라 필요한 작업
 
@@ -97,8 +105,7 @@ grain, 단위, 상태값, nullable 의미와 집계 주의를 설명하는 사�
 
 - Physical catalog만으로 업무 의미가 충분하지 않을 때 grain, alias, 대표 시간, 승인된 join,
   measure와 predicate를 semantic overlay에 추가한다.
-- 복잡한 join이나 중복 집계 위험을 DB 안에서 안전하게 감춰야 할 때만 DB owner가 `ai` curated
-  view를 만든다.
+- 복잡한 join이나 중복 집계 위험이 있으면 DB owner가 필수 curated view 안에서 안전하게 감춘다.
 - 현재 일곱 결과 타입으로 답할 수 없는 실제 질문이 있으면 source 추가를 멈춘다. 먼저
   [parked `ENC-01`~`ENC-02`](development-todo.md#현재-일정에-없는-일)의 새 result policy, revision과
   migration 범위를 별도로 결정하고 승인받아야 한다.
@@ -113,6 +120,7 @@ grain, 단위, 상태값, nullable 의미와 집계 주의를 설명하는 사�
 다음 중 하나라도 있으면 publish나 route를 진행하지 않는다.
 
 - RLS source 또는 RLS에 의존하는 view
+- DB owner가 exact curated view에 개인정보가 없음을 확인하지 못함
 - PostgreSQL 18 또는 server/client/driver UTF-8 불일치
 - 지원 범위 밖 final result OID나 공개된 domain column
 - 설명할 수 없는 metadata revision 또는 결과 변화

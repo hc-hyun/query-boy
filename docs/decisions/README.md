@@ -2,19 +2,22 @@
 
 Status: Current — 현행 authority와 핵심 설계 방향의 압축본
 
-현재 tree에는 모든 구현 단계를 ADR로 남기지 않습니다. Exact authority 두 개와 owner README의
-요약만으로 안전하게 대체할 수 없는 세부 계약 다섯 개만 원문으로 유지하고, 나머지 방향은 이
-문서와 owner 문서에 둡니다.
+현재 tree에는 모든 구현 단계를 ADR로 남기지 않습니다. 현행 authority와 owner README의 요약만으로
+안전하게 대체할 수 없는 세부 계약만 원문으로 유지하고, 나머지 방향은 이 문서와 owner 문서에
+둡니다.
 
-## Exact authority
+## 현행 authority와 policy
 
 | 결정 | 정하는 범위 |
 |---|---|
 | [ADR 0025](0025-static-non-rls-first-launch.md) | 두 source, 단일 replica, PostgreSQL 18/UTF-8, RLS 차단, 일곱 result OID, SQL policy v3와 protected launch gate |
 | [ADR 0030](0030-git-reviewed-yaml-source-authority.md) | `config/sources/*.yaml`, `config/verified-queries.yaml`, `config/budget-profiles.yaml`의 Git-reviewed 단일 authority와 retired managed capability |
+| [ADR 0031](0031-no-pii-curated-view-boundary.md) | DB owner가 개인정보를 제거했다고 확인한 reviewed curated view만 제공하고 Query Man은 PII를 탐지·분류·마스킹하지 않는 공개 경계 |
+| [ADR 0032](0032-reader-temp-admission-relaxation.md) | Database `TEMP` 보유는 reader admission 조건이 아니며 사용자 SQL의 temporary relation·DDL 차단은 유지하는 경계 |
 
-둘이 겹치면 ADR 0030의 source-authority supersession을 적용하고 ADR 0025의 좁은 serving·safety·launch
-gate는 유지합니다. 실제 active 작업은 [Active TODO](../development-todo.md)만 기준으로 삼습니다.
+ADR 0025와 ADR 0030이 겹치면 ADR 0030의 source-authority supersession을 적용하고 ADR 0025의 좁은
+serving·safety·launch gate는 유지합니다. 실제 active 작업은
+[Active TODO](../development-todo.md)만 기준으로 삼습니다.
 
 ## 현행 세부 계약
 
@@ -23,11 +26,13 @@ gate는 유지합니다. 실제 active 작업은 [Active TODO](../development-to
 
 | 계약 | 읽는 경우 |
 |---|---|
-| [ADR 0001](0001-postgresql-ast-validation.md) | PostgreSQL AST grammar, function/operator/cast와 fingerprint 경계를 바꿀 때 |
+| [ADR 0001](0001-postgresql-ast-validation.md) | PostgreSQL AST grammar, function/operator/cast와 fingerprint 경계를 바꿀 때. Reader `TEMP` 부재 전제는 ADR 0032가 대체 |
 | [ADR 0002](0002-guarded-query-contract.md) | Query success/error, admission, result byte, cancel·rollback 의미를 바꿀 때 |
-| [ADR 0003](0003-reader-and-resolved-object-policy.md) | Reader/view-owner 권한, session policy와 DB-resolved object 검사를 바꿀 때 |
+| [ADR 0003](0003-reader-and-resolved-object-policy.md) | Reader/view-owner 권한, session policy와 DB-resolved object 검사를 바꿀 때. Database `TEMP` admission 요건은 ADR 0032가 대체 |
 | [ADR 0006](0006-mcp-transport-and-workflow.md) | MCP protocol/version/tool schema, validation error와 retry 경계를 바꿀 때 |
 | [ADR 0027](0027-consent-gated-diagnostic-capture.md) | Consent, encrypted persisted format, privacy·TTL·fail-open lifecycle을 바꿀 때 |
+| [ADR 0031](0031-no-pii-curated-view-boundary.md) | 개인정보 공개 책임과 no-PII curated-view admission 경계를 바꿀 때 |
+| [ADR 0032](0032-reader-temp-admission-relaxation.md) | Reader database `TEMP` admission과 temporary-object 안전 근거를 바꿀 때 |
 
 ## 핵심 방향
 
@@ -45,7 +50,8 @@ gate는 유지합니다. 실제 active 작업은 [Active TODO](../development-to
 - Source definition, verified query와 budget은 Git-reviewed YAML만 authority로 사용합니다. Runtime
   mutation, Control DB, hot reload 또는 fallback authority는 없습니다.
 - PostgreSQL catalog의 type·precision·scale은 사실로 수집하고 comment는 비신뢰 설명 데이터로
-  취급합니다. Comment나 prompt가 relation/PII 허용을 만들지 않습니다.
+  취급합니다. Query Man은 개인정보를 탐지·분류·마스킹하거나 column 단위로 인가하지 않습니다.
+  DB owner가 개인정보를 제거했다고 확인한 reviewed curated view만 등록하며 불명확하면 중단합니다.
 - Metadata는 immutable revision으로 발행하고 질문별 context를 bounded selection합니다. Client가
   낡은 metadata/SQL-policy revision을 보내면 실행 전에 fail-closed합니다.
 - Source DDL, view/function/operator/type/collation/extension과 semantic DB setting은 serving 중
@@ -66,6 +72,8 @@ gate는 유지합니다. 실제 active 작업은 [Active TODO](../development-to
 - 최소 권한 reader, timeout, concurrency, plan·row·byte limit, cancel·rollback과 client-disconnect
   cleanup을 유지합니다. SQL literal, credential, token과 내부 DB 오류는 공개하거나 일반 log에
   남기지 않습니다.
+- Database `TEMP` privilege 보유는 reader admission 조건이 아니지만 `SELECT INTO`, DDL,
+  `pg_temp` relation, multi-statement와 요청 간 temporary workspace는 계속 허용하지 않습니다.
 - HTTP와 MCP는 같은 application service와 source/authorization/query 경계를 사용합니다.
 - 인증 principal은 현재 active source를 같은 source-wide budget으로 조회합니다. Source별 사용자
   grant나 caller별 tier를 암묵적으로 만들지 않습니다.

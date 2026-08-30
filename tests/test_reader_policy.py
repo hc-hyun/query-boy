@@ -11,7 +11,9 @@ from query_man.source_catalog.reader_policy import (
     READER_CLIENT_ENCODING,
     ReaderSessionPolicyError,
     require_reader_connection_policy,
+    require_reader_session_policy,
 )
+from tests.helpers import load_test_registry
 
 
 class _ConnectionInfo:
@@ -42,6 +44,24 @@ class _NoSqlConnection:
     def execute(self, *_args: object, **_kwargs: object) -> None:
         self.execute_calls += 1
         raise AssertionError("connection policy must not execute SQL")
+
+
+class _PolicyCursor:
+    async def fetchone(self) -> dict[str, bool]:
+        return {"remaining_policy": True}
+
+
+class _PolicyConnection:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, tuple[object, ...]]] = []
+
+    async def execute(
+        self,
+        query: str,
+        params: tuple[object, ...],
+    ) -> _PolicyCursor:
+        self.calls.append((query, params))
+        return _PolicyCursor()
 
 
 def test_reader_connection_policy_interface_has_exact_approved_shape() -> None:
@@ -119,3 +139,19 @@ def test_reader_connection_policy_propagates_info_property_error_unchanged() -> 
 
     assert captured.value is expected
     assert connection.execute_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_reader_session_policy_does_not_probe_database_temp_privilege() -> None:
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+    connection = _PolicyConnection()
+
+    await require_reader_session_policy(connection, source)  # type: ignore[arg-type]
+
+    assert len(connection.calls) == 1
+    query, _params = connection.calls[0]
+    assert "has_database_privilege" not in query
+    assert "'TEMP'" not in query
+    assert "has_schema_privilege" in query
+    assert "temp_file_limit" in query

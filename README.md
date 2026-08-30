@@ -359,7 +359,8 @@ uv run pytest -m 'mcp_server and not soak' -s
 
 PostgreSQL table·column comment는 grain, 단위, 상태값과 주의사항을 설명하는
 human-readable metadata로 활용합니다. Type과 numeric precision/scale은 catalog에서 수집하고,
-PII 표시는 comment만 믿지 않고 curated view·reader grant·policy로 강제합니다.
+Query Man은 개인정보(PII)를 탐지·분류·마스킹하지 않습니다. DB owner가 개인정보를 제거했다고
+확인한 reviewed curated view와 최소 권한 reader만 source로 등록합니다.
 
 ## 문서 읽는 순서
 
@@ -372,6 +373,8 @@ PII 표시는 comment만 믿지 않고 curated view·reader grant·policy로 강
 | 전체 구조와 module 작업 범위 | [Architecture](docs/architecture.md), [Module index](docs/modules/README.md) |
 | 첫 오픈 결정과 정확한 제한 | [ADR 0025](docs/decisions/0025-static-non-rls-first-launch.md) |
 | Source·verified-query·budget authority | [ADR 0030](docs/decisions/0030-git-reviewed-yaml-source-authority.md) |
+| 개인정보 공개 경계 | [ADR 0031](docs/decisions/0031-no-pii-curated-view-boundary.md) |
+| Reader `TEMP` admission 경계 | [ADR 0032](docs/decisions/0032-reader-temp-admission-relaxation.md) |
 | AuthBridge API 인증 연동 | [Resource Server JWT Access Token 검증 계약](docs/resource-server-jwt-auth.md) |
 | 운영 배포·rollback·관측 절차 | [Operations](docs/operations.md) |
 | 지금 남은 일과 보류 주제 | [Active TODO](docs/development-todo.md) |

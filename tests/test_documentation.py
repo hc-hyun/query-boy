@@ -29,6 +29,18 @@ SOURCE_AUTHORITY_ADR = (
     / "decisions"
     / "0030-git-reviewed-yaml-source-authority.md"
 )
+PII_BOUNDARY_ADR = (
+    ROOT_DIRECTORY
+    / "docs"
+    / "decisions"
+    / "0031-no-pii-curated-view-boundary.md"
+)
+TEMP_ADMISSION_ADR = (
+    ROOT_DIRECTORY
+    / "docs"
+    / "decisions"
+    / "0032-reader-temp-admission-relaxation.md"
+)
 
 MODULE_NAMES = (
     "source-catalog",
@@ -194,6 +206,35 @@ def test_adr_0030_is_the_only_current_source_authority() -> None:
     assert not any(
         (ROOT_DIRECTORY / "docker" / "postgres" / "init" / "control-migrations").glob("*")
     )
+
+
+def test_adr_0031_moves_source_pii_boundary_to_db_owner_views() -> None:
+    adr = PII_BOUNDARY_ADR.read_text(encoding="utf-8")
+
+    assert "Status: Accepted" in adr
+    assert "Decision ID: `QB-NO-PII-VIEW-BOUNDARY-20260830`" in adr
+    assert "DB owner는 개인정보와 개인 민감정보를 제거한 reviewed curated view만" in adr
+    assert "탐지, 분류, masking/pseudonymization 또는 column 단위로" in adr
+    assert "verification 항목만 supersede한다" in adr
+    assert "Git-reviewed YAML authority" in adr
+    assert "Source manifest schema" in adr
+    assert "database\nDDL은 바뀌지 않는다" in adr
+
+
+def test_adr_0032_removes_only_database_temp_admission_check() -> None:
+    adr = TEMP_ADMISSION_ADR.read_text(encoding="utf-8")
+
+    assert "Status: Accepted" in adr
+    assert "Decision ID: `QB-READER-TEMP-RELAX-20260830`" in adr
+    assert "Reader가 database `TEMP` privilege를 보유하는지는 source admission 조건이 아니다" in adr
+    assert "[ADR 0003]" in adr
+    assert "[ADR 0001]" in adr
+    assert "`SELECT INTO`" in adr
+    assert "`pg_temp`" in adr
+    assert "Source manifest/YAML schema" in adr
+    assert "SQL policy\nrevision" in adr
+    assert "database DDL" in adr
+    assert "직접 사용하면 그 별도 session에서 temporary" in adr
 
 
 def test_current_navigation_documents_agree_on_launch_scope() -> None:

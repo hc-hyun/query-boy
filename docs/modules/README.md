@@ -55,8 +55,8 @@ Python 구현은 `src/query_man` 아래 `source_catalog`, `metadata`, `guarded_q
 - `qm source list|show|validate`는 local repository YAML을 사람이 읽을 수 있게 확인하는 read-only CLI다.
 - Source Catalog는 RLS manifest를 거부하며 PostgreSQL 18/UTF-8 reader 정책을 제공한다.
 - Metadata와 Guarded Query는 connection/session 정책을 fail-closed로 확인한다.
-- Metadata는 PostgreSQL comment, type, precision/scale 등 catalog 정보를 읽되 PII policy를 prompt나
-  comment만으로 강제하지 않는다.
+- Query Man은 개인정보(PII)를 탐지·분류·마스킹하지 않는다. DB owner가 개인정보를 제거했다고
+  확인한 reviewed curated view만 Source Catalog에 등록한다.
 - Guarded Query는 SQL policy v3와 exact seven result OID를 적용한다.
 - DSN password 같은 secret은 YAML/Git에 저장하지 않고 environment로 resolve한다.
 
@@ -164,8 +164,9 @@ Error symbol ownership은 다음과 같다.
 새 PostgreSQL source는 DB 연결 정보가 있다는 이유만으로 자동 등록하지 않는다. Source onboarding
 Skill이 plan을 만들고 사람이 승인한 다음 다음 artifact를 한 Git change set으로 review한다.
 
-1. DBA가 curated view, 최소 권한 reader, PostgreSQL `COMMENT ON` 기반 table/column 설명과 필요한 PII
-   보호를 준비한다. Comment에는 credential이나 실제 개인정보 값을 넣지 않는다.
+1. DBA가 개인정보를 제거한 curated view, 최소 권한 reader와 PostgreSQL `COMMENT ON` 기반
+   table/column 설명을 준비하고 exact view 공개 범위를 확인한다. Comment에는 credential이나 실제
+   개인정보 값을 넣지 않는다.
 2. `config/sources/<source-id>.yaml`에 source, connection environment key, allowed schema/relation kind,
    budget, semantic overlay와 provenance를 추가한다. Password 값은 외부 secret store/environment에 둔다.
 3. 필요하면 `config/budget-profiles.yaml`, `config/verified-queries.yaml`과 quality/security case를 같은

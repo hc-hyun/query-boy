@@ -99,9 +99,9 @@ Query Man은 source를 통째로 AI에게 보여주지 않습니다. 두 종류�
 DB comment는 비신뢰 설명 데이터로 취급하고 길이·제어 문자를 제한합니다. Comment 문장을 분석해
 join을 자동 승인하지 않습니다. 복잡한 join이나 여러 grain의 집계는 source DB owner가 `ai`
 schema의 curated view로 캡슐화합니다.
-Column type과 numeric precision/scale은 catalog에서 수집합니다. Comment의 PII 표시는 사람의
-검토를 돕는 정보일 뿐 노출 허가가 아니며, curated view·reader grant·source policy가 실제
-공개 범위를 강제합니다.
+Column type과 numeric precision/scale은 catalog에서 수집합니다. Query Man은 개인정보(PII)를
+탐지·분류·마스킹하거나 column 단위로 인가하지 않습니다. DB owner가 개인정보를 제거했다고 확인한
+reviewed curated view와 reader grant가 공개 범위를 정하며, 불명확한 source는 등록하지 않습니다.
 
 Metadata는 immutable revision으로 발행됩니다.
 
@@ -197,7 +197,8 @@ Source DB의 curated view와 최소 권한 reader
 장기 목표:
 
 - Source별 Python 분기 없이 여러 PostgreSQL database를 같은 안전 경계로 제공합니다.
-- 업무 의미가 필요한 DB에만 semantic overlay나 curated view를 추가합니다.
+- 모든 source의 공개 범위는 DB-owner curated view로 고정하고, 필요한 업무 의미만 semantic overlay에
+  추가합니다.
 - 보안과 resource policy를 prompt가 아니라 gateway와 PostgreSQL이 강제합니다.
 - Source·verified query·budget 변경은 하나의 Git review 흐름으로 추적합니다.
 
@@ -205,6 +206,8 @@ Source DB의 curated view와 최소 권한 reader
 
 - 현재 launch 범위: [ADR 0025](decisions/0025-static-non-rls-first-launch.md)
 - 현재 source authority: [ADR 0030](decisions/0030-git-reviewed-yaml-source-authority.md)
+- 현재 개인정보 공개 경계: [ADR 0031](decisions/0031-no-pii-curated-view-boundary.md)
+- 현재 reader `TEMP` admission 경계: [ADR 0032](decisions/0032-reader-temp-admission-relaxation.md)
 - 현재 physical package 구조: [module index](modules/README.md)
 - 핵심 방향과 세부 계약: [decision guide](decisions/README.md)
 - 정확한 모듈 owner와 interface: [module index](modules/README.md)

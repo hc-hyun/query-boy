@@ -50,7 +50,10 @@ Plan admission은 명백히 큰 추정치를 실행 전에 거르는 첫 방어�
 `hash_mem_multiplier`도 적용될 수 있어 process 전체 메모리 상한과 같지 않다. 그래서 query
 concurrency, parallel worker와 reader connection limit를 함께 제한한다. `temp_file_limit`은
 한 PostgreSQL process가 sort/hash 등에 만든 임시 파일 상한이며 명시적 temporary relation이나
-source storage quota를 뜻하지 않는다. Reader는 별도로 database TEMP 권한도 갖지 않는다.
+source storage quota를 뜻하지 않는다. Database `TEMP` privilege 보유는 reader admission 조건이
+아니지만, Query Man 사용자 SQL은 `SELECT INTO`, DDL과 `pg_temp` relation 접근을 계속 거부한다.
+Local/acceptance fixture의 `TEMP` revoke는 선택적 hardening이다. 자세한 경계는
+[ADR 0032](decisions/0032-reader-temp-admission-relaxation.md)를 따른다.
 
 현재 경계는 replica 전체의 distributed source quota, caller/tenant별 quota·fairness,
 user/organization별 tier, host cgroup CPU/memory quota와 일·월 통화 budget을 제공하지 않는다.

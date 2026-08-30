@@ -42,11 +42,6 @@ _READER_SESSION_POLICY_QUERY = """
       AND NOT role.rolreplication
       AND NOT role.rolbypassrls
       AND role.rolconnlimit > 0 AS restricted_role,
-    NOT pg_catalog.has_database_privilege(
-      session_user,
-      pg_catalog.current_database(),
-      'TEMP'
-    ) AS no_temp_privilege,
     NOT EXISTS (
       SELECT 1
       FROM pg_catalog.unnest(%s::text[]) AS schema_name

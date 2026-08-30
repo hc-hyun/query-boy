@@ -6,6 +6,10 @@
 authority는 [ADR 0030](decisions/0030-git-reviewed-yaml-source-authority.md)이 정합니다. 저장소 구현과
 로컬 검증은 끝났지만 실제 대상 환경 전환 `LAUNCH-02`는 남아 있습니다. Current profile은
 `development-issues`, `market-voc` 두 source만 제공하고 모든 RLS source를 차단합니다.
+Source의 개인정보 공개 경계는
+[ADR 0031](decisions/0031-no-pii-curated-view-boundary.md)을 따릅니다.
+Reader의 database `TEMP` 보유 여부를 source admission 조건으로 사용하지 않는 경계는
+[ADR 0032](decisions/0032-reader-temp-admission-relaxation.md)를 따릅니다.
 
 ## 독자별 시작점
 
@@ -54,6 +58,8 @@ Fixture 문서는 개발·CI 재현용입니다. 그 명령이나 결과를 prod
 - [현재 결정 요약](decisions/README.md): 핵심 방향, 상세 authority와 보류 주제
 - [ADR 0025](decisions/0025-static-non-rls-first-launch.md): exact first-launch profile
 - [ADR 0030](decisions/0030-git-reviewed-yaml-source-authority.md): Git-reviewed YAML 단일 authority
+- [ADR 0031](decisions/0031-no-pii-curated-view-boundary.md): no-PII curated-view 공개 경계
+- [ADR 0032](decisions/0032-reader-temp-admission-relaxation.md): reader `TEMP` admission 경계
 - [검증과 Git 기록 안내](verification/README.md): 현재 gate와 삭제한 과거 문서 조회 방법
 
 현재 tree에는 현행 authority, 실행 가능한 절차와 테스트에 필요한 설명만 둡니다. 과거 ADR,

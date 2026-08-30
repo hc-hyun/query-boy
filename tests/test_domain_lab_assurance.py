@@ -66,6 +66,16 @@ def test_domain_lab_quality_and_verified_artifacts_cover_every_new_view() -> Non
         DOMAIN_CONFIG / "quality-evaluation.yaml",
         set(manifests),
     )
+    clinical_overlay = manifests["clinical-operations"]["semantic_overlay"]
+    assert isinstance(clinical_overlay, dict)
+    clinical_rules = clinical_overlay["question_rules"]
+    assert isinstance(clinical_rules, list)
+    assert "CLINICAL_SYNTHETIC_ONLY" not in {
+        str(rule["code"]) for rule in clinical_rules
+    }
+    case_ids = {case.case_id for case in evaluation.cases}
+    assert "clinical-real-patient-unsupported" not in case_ids
+    assert "clinical-pending-value-unsupported" in case_ids
     assert len(evaluation.cases) == 20
     assert Counter(case.source_id for case in evaluation.cases) == {
         source_id: 4 for source_id in NEW_SOURCE_IDS

@@ -1,6 +1,7 @@
 # ADR 0003: Reader And Resolved Object Policy
 
-Status: Accepted; connection compatibility extended and RLS launch branch superseded by ADR 0025
+Status: Accepted; connection compatibility extended and RLS launch branch superseded by ADR 0025;
+database TEMP admission requirement superseded by ADR 0032
 
 Date: 2026-08-22
 
@@ -9,6 +10,8 @@ server/client UTF-8을 확인하는 no-SQL connection admission을 추가한다.
 read-only transaction과 resolved-object 정책은 그대로다. 다만 현재 launch에서는 모든 RLS source가
 bootstrap/injected/managed admission에서 선행 차단되므로 아래 `security_invoker`/trusted-context
 등록 branch는 preserved historical capability이며 serving 가능한 현재 절차가 아니다.
+[ADR 0032](0032-reader-temp-admission-relaxation.md)는 database `TEMP` privilege 부재 요건만 대체한다.
+Reader의 `TEMP` 보유 여부는 admission 조건이 아니며 나머지 privilege·session 정책은 유지한다.
 
 ## Context
 
@@ -22,7 +25,8 @@ overload가 선택될 가능성을 독립적으로 차단하지 못한다. Curat
 - Source login은 `NOSUPERUSER`, `NOCREATEDB`, `NOCREATEROLE`, `NOINHERIT`,
   `NOREPLICATION`, `NOBYPASSRLS`이고 자기 database `CONNECT`와 curated `ai` view의
   `SELECT`만 가진다.
-- Reader는 database `TEMP`, base schema `USAGE`, `ai` schema `CREATE`를 갖지 않는다.
+- Reader는 base schema `USAGE`와 `ai` schema `CREATE`를 갖지 않는다. Database `TEMP` privilege 보유는
+  admission 조건이 아니며 temporary relation을 사용자 기능으로 허용하지도 않는다.
 - 일반 curated view는 별도 `NOLOGIN` owner가 소유한다. Owner는 source base table의
   `SELECT`만 가지고 write 또는 role 관리 privilege를 갖지 않는다.
 - RLS가 필요한 source는 일반 owner-rights view를 사용하지 않는다. `security_invoker`

@@ -77,12 +77,25 @@ def test_onboarding_skill_has_no_executable_mutation_recipe() -> None:
     assert "every authenticated query principal" in content
     assert "`config/sources/*.yaml`" in content
     assert "`config/verified-queries.yaml`" in content
+    assert "0031-no-pii-curated-view-boundary.md" in content
+    assert "0032-reader-temp-admission-relaxation.md" in content
+    assert "Database `TEMP` privilege absence is not a reader admission requirement" in content
+    assert "Database `TEMP` possession by itself is not a reader-policy failure" in content
+    assert "allowed-schema `CREATE` denial" in content
     assert "exact change-set approval" in content
     assert "Do not fetch production inventory or connect" in content
     assert "Never emit executable `COMMENT ON` statements" in content
     assert "reviewed Git revert" in content
     assert "Control DB" not in content
     assert "managed mode" not in content
+    for retired_pii_workflow in (
+        "PII classification",
+        "PII review",
+        "masking/pseudonymization",
+        "sensitivity ownership",
+        "resolution of every PII decision",
+    ):
+        assert retired_pii_workflow not in content
 
 
 def test_onboarding_plan_format_preserves_all_handoff_boundaries() -> None:
@@ -124,10 +137,11 @@ def test_onboarding_comment_guidance_separates_description_from_policy() -> None
         "PostgreSQL catalog owns physical type",
         "source manifest owns structured grain",
         "A comment never authorizes or blocks",
-        "Never infer a final classification",
-        "removes it from the curated view",
+        "does not detect, classify, mask",
+        "removes personal or sensitive personal data",
+        "stop the onboarding plan",
         "within the current 2,000-character metadata bound",
-        "Do not say a comment\nwas applied",
+        "Do not say a comment was applied",
     ):
         assert required_boundary in guidance
 

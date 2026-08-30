@@ -8,6 +8,10 @@ Decision ID: `QB-YAML-SOURCE-AUTHORITY-20260829`
 
 Baseline: `7b4e717c7775ff262c716d36f6f172aadc162892`
 
+[ADR 0031](0031-no-pii-curated-view-boundary.md)은 이 문서의 comment 기반 PII-review guidance만
+대체한다. 현재 개인정보 공개 경계는 DB owner가 개인정보를 제거했다고 확인한 reviewed curated
+view이며 Query Man은 PII를 탐지·분류·마스킹하지 않는다.
+
 ## Context
 
 Query Man은 static YAML source와 별도로 Control DB 기반 managed source lifecycle을 구현해 보존해
@@ -35,10 +39,10 @@ authority 단순화와 무관하게 계속 강제해야 한다. Revision이 포�
   acceptance, 사용자 승인, repository review, 배포와 rollback 계획으로 진행한다.
 - Credential 값과 complete DSN은 Git, plan, log, metadata comment에 저장하지 않는다. YAML에는 기존
   외부 secret 경계가 해석할 식별자만 둔다.
-- PostgreSQL comment는 relation grain, column business meaning, null/derivation, semantic unit/scale와
-  PII 검토 상태를 설명할 수 있다. Physical type과 precision/scale은 PostgreSQL catalog 사실로
-  수집하며 prose에 중복하지 않는다. Comment는 untrusted text이고 allowlist, masking, grant 또는 PII
-  노출 승인을 대체하지 않는다.
+- PostgreSQL comment는 relation grain, column business meaning, null/derivation과 semantic unit/scale을
+  설명할 수 있다. Physical type과 precision/scale은 PostgreSQL catalog 사실로 수집하며 prose에
+  중복하지 않는다. Comment는 untrusted text이고 allowlist, masking, grant 또는 개인정보 노출 승인을
+  대체하지 않는다.
 
 ### Retired managed capability
 

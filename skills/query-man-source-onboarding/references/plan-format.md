@@ -21,17 +21,22 @@ content.
 
 Ask only questions that can change the plan: owner/contact, non-secret endpoint identity, migration reference,
 curated grain/columns, TLS/RLS, connection capacity, representative workload, existing profile fit, relation and
-column business descriptions, semantic unit/scale, sensitivity ownership and verified-result expectations. Do
-not ask for row samples, credential values, provider secret paths or per-user grants.
+column business descriptions, semantic unit/scale, DB-owner confirmation that exact curated views contain no
+personal or sensitive personal data, and verified-result expectations. Do not ask for row samples, credential
+values, provider secret paths or per-user grants.
 
 ## 4. DB-Owner Work
 
 Assign curated views, one grain per relation, least-privilege reader, base-table hiding, read-only limits,
-TLS/RLS, connection capacity and any masking/pseudonymization to the DB owner. Include the relation/column review
-required by [catalog comment guidance](comment-guidance.md). Keep PostgreSQL physical type and precision/scale
-separate from semantic unit or business scale. Mark unresolved PII classification `needs_owner`; comments never
-authorize exposure. Describe required evidence without DDL, arbitrary SQL text, passwords or secret-manager
-commands.
+TLS/RLS, connection capacity and removal of personal or sensitive personal data before view exposure to the DB
+owner. Include the relation/column review required by [catalog comment guidance](comment-guidance.md). Keep
+PostgreSQL physical type and precision/scale separate from semantic unit or business scale. Require confirmation
+of the exact no-PII view boundary; comments never authorize exposure. Describe required evidence without DDL,
+arbitrary SQL text, passwords or secret-manager commands.
+
+Do not require database `TEMP` privilege absence or a global `PUBLIC TEMP` revoke. Query Man still rejects
+temporary-relation SQL; database `TEMP` possession alone is not a stop condition. The allowed-schema `CREATE`
+denial remains required.
 
 ## 5. Proposed Git YAML Changes
 
@@ -49,8 +54,9 @@ may apply the proposal.
 Cover strict YAML validation, source-ID collision and endpoint-rebinding checks, traffic-off reader policy,
 bounded L0 catalog scope, L1 semantics, L2 reviewed results when required, supported result OIDs, exact metadata
 and SQL-policy revisions, hard limits, HTTP/MCP parity, pinned artifact readiness and secret/log non-disclosure.
-Record relation/column comment coverage, DB-owner review of suggested descriptions and resolution of every PII
-decision as pending evidence unless authoritative evidence was supplied.
+Record relation/column comment coverage, DB-owner review of suggested descriptions and confirmation that each
+exact curated view contains no personal or sensitive personal data as pending evidence unless authoritative
+evidence was supplied.
 
 ## 7. Deployment And Rollback
 
@@ -63,9 +69,12 @@ is not a runtime fallback. State that this Skill performed none of these actions
 
 At minimum stop for secret-bearing planning input, source-ID collision or endpoint rebinding, missing owner or
 migration provenance, unresolved grain/join/fanout, reader policy or TLS/RLS failure, insufficient connection
-capacity, no approved existing budget-profile fit, YAML/quality/verified-result failure, unresolved PII exposure,
-unsupported result type, user-specific access, automated mutation, missing exact change-set approval or missing
-protected deployment approval. Missing descriptions also stop publication when grain, null, unit/scale,
-derivation or aggregation meaning would otherwise be guessed.
+capacity, no approved existing budget-profile fit, YAML/quality/verified-result failure, personal or sensitive
+personal data in a curated view or missing DB-owner confirmation of its absence, unsupported result type,
+user-specific access, automated mutation, missing exact change-set approval or missing protected deployment
+approval. Missing descriptions also stop publication when grain, null, unit/scale, derivation or aggregation
+meaning would otherwise be guessed.
+
+Database `TEMP` possession by itself is not a reader-policy failure or stop condition.
 
 End by naming the human owner for every stop condition and repeat `mutation_count: 0`.

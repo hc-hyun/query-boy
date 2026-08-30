@@ -50,9 +50,9 @@ Runtime/Delivery/Guarded Query가 소비하는 application/lifecycle capability�
 
 Catalog column은 DB가 보고한 name, ordinal, data type, nullable, default, comment와 numeric/character
 형상 정보를 보존한다. `obj_description`/`col_description`로 읽은 comment는 control character와 bounded
-size policy를 적용한다. Comment는 업무 설명에 도움을 주지만 PII 허용, access control 또는 query
-safety authority가 아니다. PII 여부 같은 policy는 reviewed source/database policy에서 강제해야 하며
-실제 개인정보나 secret을 comment에 넣지 않는다.
+size policy를 적용한다. Comment는 업무 설명에 도움을 주지만 data classification, access control 또는
+query safety authority가 아니다. Query Man은 개인정보를 탐지·분류·마스킹하지 않으며, DB owner가
+개인정보를 제거한 curated view를 준비한다. Comment에는 실제 개인정보나 secret을 넣지 않는다.
 
 Metadata revision은 source policy, semantic overlay, validated catalog와 Guarded Query의 immutable SQL
 policy descriptor를 canonicalize한 SHA-256 identity다. 업무 row 변화만으로는 바뀌지 않지만 relation,
@@ -122,7 +122,8 @@ material을 보존한다면 이 규칙만으로 metadata revision을 임의 재�
 - Catalog 내부 오류, SQL literal, credential과 DSN을 public response/log에 노출하지 않는다.
 - Snapshot과 nested graph는 immutable하며 caller alias가 cache를 바꾸지 못한다.
 - Context는 current source epoch와 revision에서만 반환한다.
-- Comment/type/precision-scale 정보는 revision에 일관되게 반영하며 comment만으로 PII 안전을 추정하지 않는다.
+- Comment/type/precision-scale 정보는 revision에 일관되게 반영하며 comment를 data classification이나
+  access authority로 사용하지 않는다.
 - Persisted snapshot이나 managed rollback/fallback은 없다.
 
 ## 모듈 내부 변경

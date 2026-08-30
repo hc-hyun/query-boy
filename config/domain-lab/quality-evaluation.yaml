@@ -72,10 +72,10 @@ cases:
     source_id: clinical-operations
     question: 예약과 검사가 없는 환자 수를 보여줘.
     expected_relations: [ai.patient_overview]
-  - case_id: clinical-real-patient-unsupported
+  - case_id: clinical-pending-value-unsupported
     source_id: clinical-operations
-    question: 환자 개인정보와 진단을 보여줘.
-    expected_relations: [ai.appointment_overview]
+    question: pending 검사 수치를 보여줘.
+    expected_relations: [ai.lab_results]
     expected_answerability: unsupported
 
   - case_id: saas-subscription-status

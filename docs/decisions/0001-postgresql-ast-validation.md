@@ -4,6 +4,10 @@ Status: Accepted
 
 Date: 2026-08-22
 
+[ADR 0032](0032-reader-temp-admission-relaxation.md)는 아래 unqualified cast 안전 근거 중 reader의
+database `TEMP` privilege 부재 전제만 대체한다. 현재 admission은 `TEMP` 보유만으로 source를 거부하지
+않으며, 같은 gateway session에 temporary object를 만드는 실행 경로가 없다는 전제를 함께 사용한다.
+
 ## Context
 
 Query Man은 모델이 생성한 SQL을 신뢰할 수 없는 입력으로 취급한다. 문자열 prefix나
@@ -31,9 +35,9 @@ source에서 추출한 parser를 사용하는 `libpg_query`의 Python interface�
   operator `>=`, `<=`로 정규화해 syntax와 resolved-object 경계에서 같은 allowlist를 적용한다.
   `NOT BETWEEN`과 `SYMMETRIC` 변형은 별도 사용 사례가 검증될 때까지 거부한다.
 - Unqualified cast type은 흔한 `date`와 `text`만 허용한다. 나머지 승인 type은
-  `pg_catalog.<type>`으로 명시해야 한다. 실행 전에 reader의 TEMP 권한 부재와
-  `search_path=pg_catalog`을 재검증하므로 두 unqualified type이 user-defined type으로
-  해석되지 않는다.
+  `pg_catalog.<type>`으로 명시해야 한다. 실행 전에 `search_path=pg_catalog`을 재검증하고, 단일
+  `SelectStmt`·DDL/`SELECT INTO` 차단으로 같은 gateway session에서 temporary type을 만들 수 없게
+  하므로 두 unqualified type이 user-defined type으로 해석되지 않는다.
 - `rank`, `lag`, `lead`, `extract`에 더해 `dense_rank`, `percentile_cont`, `regexp_replace`,
   `position`, `jsonb_build_object`, `to_jsonb`를 일반 분석·문자열·JSON 사용 사례로 승인한다.
   이 함수들도 AST 이름 allowlist와 실행 시점의 `pg_proc` namespace·volatility·privilege

@@ -19,7 +19,7 @@ Password 값은 YAML에 저장하지 않고 manifest가 가리키는 environment
 - `SourceProfile`, connection, allowlist, provenance, semantic overlay와 budget DTO
 - `SourceReader`와 process-start `SourceRegistry` loading
 - PostgreSQL 18, UTF-8, no-SQL connection/session reader policy
-- Source onboarding Skill의 YAML pull-request plan과 secret/mutation 금지 경계
+- Source onboarding Skill의 YAML pull-request plan, no-PII curated-view handoff와 secret/mutation 금지 경계
 
 ## 소유하지 않는 책임
 
@@ -63,6 +63,9 @@ manifest alias를 통해 published profile을 바꿀 수 없다. `list()`는 cre
 Reader policy interface는 `require_reader_connection_policy`, `reader_session_budget_values`,
 `READER_SESSION_TIMEZONE_SETTER`, `READER_SESSION_BUDGET_SETTERS`다. Metadata와 Guarded Query는 pool
 checkout마다 connection 확인 후 read-only transaction과 transaction-local settings를 적용한다.
+Database `TEMP` privilege 보유 여부는 reader admission 조건이 아니다. Query Man 사용자 SQL의
+temporary relation/DDL 차단은 Guarded Query가 계속 소유하며, 자세한 경계는
+[ADR 0032](../../decisions/0032-reader-temp-admission-relaxation.md)를 따른다.
 
 Git YAML schema와 canonical source fields는 persisted/versioned format이다. `source_id`, allowed schemas,
 relation kinds, budget reference, semantic overlay와 provenance 의미를 바꾸면 consumer revision과 운영
@@ -87,6 +90,7 @@ registry를 mutate하지 않는다.
 - Allowed schema/relation kind와 resource budget은 prompt나 caller가 완화할 수 없다.
 - Published DTO graph는 deep immutable하며 입력 alias mutation의 영향을 받지 않는다.
 - Reader connection/session policy는 DB query 전에 검증한다.
+- Database `TEMP` privilege만으로 source를 거부하거나 전역 revoke를 onboarding 조건으로 요구하지 않는다.
 - Runtime hot reload, managed fallback 또는 DB-backed source mutation은 없다.
 
 ## 모듈 내부 변경

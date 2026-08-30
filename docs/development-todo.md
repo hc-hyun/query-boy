@@ -11,12 +11,16 @@ Status: Active — 현재 launch 작업은 `LAUNCH-02` 하나
 acceptance는 완료됐습니다.
 [ADR 0030](decisions/0030-git-reviewed-yaml-source-authority.md)에 따라 source·verified-query·budget의
 유일한 authority는 Git-reviewed YAML입니다.
+[ADR 0031](decisions/0031-no-pii-curated-view-boundary.md)에 따라 source data plane은 개인정보
+탐지·분류·마스킹 기능을 제공하지 않으며, DB owner가 개인정보를 제거했다고 확인한 curated view만
+source로 받습니다.
 
 | 항목 | 현재 값 |
 |---|---|
 | Source | `development-issues`, `market-voc` |
 | Runtime | 단일 Query Man replica |
 | Source authority | Git-reviewed source·verified-query·budget YAML |
+| 개인정보 경계 | DB-owner-confirmed no-PII curated view |
 | Database | PostgreSQL 18, server/client UTF-8 |
 | RLS | 전면 차단 |
 | 결과 type | OID `20, 21, 23, 25, 1082, 1184, 1700` |

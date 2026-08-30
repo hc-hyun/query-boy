@@ -44,7 +44,7 @@ Domain-lab catalog는 기존 `development-issues`, `market-voc`와 다음 다섯
 함께만 사용한다. `compose.scale.yaml`이나 기본/scale volume과 섞지 않는다.
 
 모든 데이터는 seed `2026082802`, 기준 시각 `2026-08-28T00:00:00Z`의 결정적 합성 데이터다.
-`clinical-operations`에는 실제 환자, PII, 진단 또는 처방이 없다.
+`clinical-operations`는 합성 예약·검사 운영 데이터만 제공하며 진단이나 처방은 제공하지 않는다.
 
 ## 데이터 규모
 
@@ -74,7 +74,7 @@ dimension 935건과 fact 10,000건, 총 10,935건이다.
 | Retail | 4개 통화(환율 없음), 취소, 부분·전체 반품/환불, 주문 없는 고객 1명, Unicode·apostrophe 상품명 |
 | Logistics | 스캔 없는 `CREATED` 운송장 1건, 같은 시각·순서 역전 스캔, 늦은 ingest, scan보다 이른 recorded 시각, 지연·분실·파손·주소·통관 예외 |
 | Energy | 음수 `net_kwh` 역송전, `MISSING` null과 실제 0의 구분, reset, Texas DST 반복 01시(-300/-360), 검침 없는 계량기, 진행 중·겹치는 정전 |
-| Clinical | 실제 PII가 없는 합성 코드, 취소와 노쇼, null인 pending 결과, corrected·critical 결과, 예약 없는 검사와 활동 없는 환자 |
+| Clinical | 합성 patient code, 취소와 노쇼, null인 pending 결과, corrected·critical 결과, 예약 없는 검사와 활동 없는 환자 |
 | SaaS | trial·pause·cancel·expire, 부분결제·credit·연체·0원 VOID, 사용량 0·overage, subscription 없는 invoice/usage와 구독 없는 tenant |
 
 반대로 분석 의미를 깨는 우연한 이상치는 성공 데이터로 인정하지 않는다. Loader는 FK와 exact count 외에도
@@ -259,9 +259,10 @@ WHERE table_schema = 'ai'
   AND udt_name NOT IN ('int2', 'int4', 'int8', 'text', 'date', 'timestamptz', 'numeric');
 ```
 
-각 reader로 자신의 database에 연결했을 때 `ai` view SELECT는 성공하고 private schema/table SELECT,
-TEMP, 다른 여섯 database CONNECT는 실패해야 한다. 오류 메시지나 credential을 외부 결과에 복사하지
-않는다.
+각 reader로 자신의 database에 연결했을 때 `ai` view SELECT는 성공하고 private schema/table SELECT와
+다른 여섯 database CONNECT는 실패해야 한다. 이 fixture는 선택적 hardening으로 `TEMP`를 revoke하므로
+temporary object 생성도 실패하지만, `TEMP` 부재는 일반 source admission 요건이 아니다. 오류 메시지나
+credential을 외부 결과에 복사하지 않는다.
 
 ### Catalog comment와 기존 volume 보강
 
@@ -271,9 +272,9 @@ PostgreSQL comment 117개와 manifest의 grain key, default time, alias, value h
 SQL 생성에서 추측하면 위험한 의미에만 사용한다. PostgreSQL이 보고하는 type과 precision/scale은 catalog
 fact이므로 comment에 반복하지 않는다.
 
-Comment의 합성·민감도 설명은 노출 허가나 PII 정책이 아니다. Curated view와 reader grant가 실제 공개
-범위를 정하며, 이 fixture 밖의 실제 개인·민감 데이터는 별도 owner 판정과 masking/exclusion 승인이
-없으면 onboarding하지 않는다.
+Query Man은 개인정보(PII)를 탐지·분류·마스킹하지 않는다. DB owner가 개인정보를 제거했다고 확인한
+reviewed curated view와 reader grant가 공개 범위를 정하며, 확인할 수 없는 source는 onboarding하지
+않는다. Comment는 이 책임을 대신하거나 노출을 허가하지 않는다.
 
 새 volume은 schema init에서 comment를 받는다. 기존 `query-man-domain-lab-postgres-data`를 보존할 때는
 marker를 먼저 검사하고 column comment만 재적용하는 다음 idempotent migration을 실행한다. 이 명령은

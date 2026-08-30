@@ -2,7 +2,7 @@
 
 Use this guide when reviewing the relations and columns that a proposed Query Man source would expose. It
 produces owner-reviewable documentation guidance, not executable database changes, a manifest extension, a
-personal-data scanner, or evidence that the source is safe to publish.
+data-classification scanner, or evidence that the source is safe to publish.
 
 ## Inputs And Trust Boundary
 
@@ -31,24 +31,18 @@ For every exposed column, check whether a reader can determine these facts witho
 - derivation or pre-aggregation meaning, when applicable;
 - `NULL`, zero or empty-value meaning when it can change an answer;
 - business unit, currency basis, percentage representation, timezone or other semantic scale when applicable;
-- whether grouping or summing across another dimension would be invalid; and
-- unresolved personal-data or sensitivity ownership.
+- whether grouping or summing across another dimension would be invalid.
 
 Do not duplicate `numeric(18,2)`, `varchar(50)` or similar physical declarations in a comment. Preserve them as
 catalog facts. A semantic scale such as "stored ratio 0.01 means one percent" or "amount follows the row currency"
 belongs in the suggested business description.
 
-## Personal Data And Sensitive Columns
+## No-PII Curated-View Contract
 
-Never infer a final classification from a column name or values. Mark an unresolved classification as
-`needs_owner`, name the accountable data owner and state what exposure decision is required. The AI may flag a
-name such as an email, phone, address, free-text body or stable person identifier as a review reason, but not as
-proof.
-
-Query Man currently has no structured column-level PII authorization enforced from comments. If a column is
-confirmed or plausibly contains personal or sensitive data and its exposure is not explicitly justified, keep the
-onboarding plan stopped until the DB owner removes it from the curated view or provides an approved masking or
-pseudonymization outcome. Do not propose a comment label as a substitute.
+Query Man does not detect, classify, mask, pseudonymize or column-authorize personal or sensitive personal data.
+The DB owner removes personal or sensitive personal data from the exact reviewed curated view before granting
+reader access and confirms that boundary. If the owner cannot confirm it, stop the onboarding plan. A comment,
+manifest field, column name or prompt never substitutes for the view boundary or authorizes exposure.
 
 ## Suggested Prose
 
@@ -73,5 +67,6 @@ Example planning row:
 | `ai.order_overview.net_amount` | `numeric(18,2)` | `needs_owner` | Net settled amount after refunds; aggregate only within the row currency. | Confirm null meaning and whether the amount is accounting revenue. |
 
 In Verification, record comment coverage as pending evidence, confirm that physical type is not duplicated as
-prose, and require DB-owner review of every suggested description and sensitivity decision. Do not say a comment
-was applied or a source passed because the Skill proposed wording.
+prose, and require DB-owner review of every suggested description. Verify the owner's no-PII confirmation as a
+separate view-boundary item. Do not say a comment was applied or a source passed because the Skill proposed
+wording.

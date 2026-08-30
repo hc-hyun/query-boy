@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 from psycopg import AsyncConnection, errors, sql
 from psycopg.conninfo import make_conninfo
 from psycopg.pq import TransactionStatus
+from psycopg.rows import dict_row
 
 from query_man.assurance.verified import create_result_hash
 from query_man.errors import (
@@ -39,6 +40,7 @@ from query_man.source_catalog.models import (
     SourceProfile,
     SourceProvenance,
 )
+from query_man.source_catalog.reader_policy import require_reader_session_policy
 from query_man.source_catalog.registry import SourceRegistry
 from tests.helpers import ROOT_DIRECTORY
 
@@ -388,6 +390,59 @@ async def test_disposable_source_database_cleans_up_after_body_failure() -> None
         assert await role_cursor.fetchone() == (0,)
     finally:
         await maintenance.close()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_reader_with_database_temp_privilege_passes_session_policy() -> None:
+    async with _disposable_source_database() as database:
+        admin = await AsyncConnection.connect(database.admin_dsn, autocommit=True)
+        try:
+            await admin.execute("CREATE SCHEMA analytics")
+            await admin.execute(
+                sql.SQL("GRANT USAGE ON SCHEMA analytics TO {}").format(
+                    sql.Identifier(database.reader_name)
+                )
+            )
+            await admin.execute(
+                sql.SQL("GRANT TEMPORARY ON DATABASE {} TO {}").format(
+                    sql.Identifier(database.name),
+                    sql.Identifier(database.reader_name),
+                )
+            )
+        finally:
+            await admin.close()
+
+        source = _source_profile(database, "reader-temp-admission", ("view",))
+        reader = await AsyncConnection.connect(
+            make_conninfo(
+                host="127.0.0.1",
+                port=database.port,
+                dbname=database.name,
+                user=database.reader_name,
+                password=database.reader_password,
+                sslmode="disable",
+            ),
+            autocommit=True,
+            row_factory=dict_row,
+        )
+        try:
+            privilege = await reader.execute(
+                "SELECT pg_catalog.has_database_privilege("
+                "session_user, pg_catalog.current_database(), 'TEMP'"
+                ") AS has_temp_privilege"
+            )
+            assert await privilege.fetchone() == {"has_temp_privilege": True}
+
+            await reader.execute(
+                "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY"
+            )
+            try:
+                await require_reader_session_policy(reader, source)
+            finally:
+                await reader.execute("ROLLBACK")
+        finally:
+            await reader.close()
 
 
 @pytest.mark.asyncio

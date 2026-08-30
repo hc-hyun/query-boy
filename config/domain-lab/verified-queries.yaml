@@ -316,7 +316,7 @@ queries:
   - query_id: clinical-appointment-status-counts
     source_id: clinical-operations
     question: 예약 상태별 예약 수를 보여줘.
-    metadata_revision: sha256:29e2fd0c4582e779d1dffca1dd1aa0f4b64e20862255549b7b4216b2ece312a2
+    metadata_revision: sha256:33b9dbc58a9e973126af58fc517194a33e25e4cfb72f29c878da0e2f9b7f1e00
     relations: [ai.appointment_overview]
     sql: >-
       SELECT appointment_status, count(*) AS appointment_count
@@ -331,7 +331,7 @@ queries:
   - query_id: clinical-lab-status-counts
     source_id: clinical-operations
     question: 검사 결과 상태별 검사 수를 보여줘.
-    metadata_revision: sha256:29e2fd0c4582e779d1dffca1dd1aa0f4b64e20862255549b7b4216b2ece312a2
+    metadata_revision: sha256:33b9dbc58a9e973126af58fc517194a33e25e4cfb72f29c878da0e2f9b7f1e00
     relations: [ai.lab_results]
     sql: >-
       SELECT result_status, count(*) AS lab_result_count
@@ -346,7 +346,7 @@ queries:
   - query_id: clinical-inactive-patient-counts
     source_id: clinical-operations
     question: 전체 합성 환자 수와 예약과 검사가 없는 환자 수를 보여줘.
-    metadata_revision: sha256:29e2fd0c4582e779d1dffca1dd1aa0f4b64e20862255549b7b4216b2ece312a2
+    metadata_revision: sha256:33b9dbc58a9e973126af58fc517194a33e25e4cfb72f29c878da0e2f9b7f1e00
     relations: [ai.patient_overview]
     sql: >-
       SELECT count(*) AS patient_count,
