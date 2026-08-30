@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import sqlite3
 import stat
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -170,6 +172,100 @@ async def test_expired_or_missing_consent_is_not_captured(tmp_path: Path) -> Non
     assert database.exists()
     assert decrypt_diagnostic_records(database, _KEY, "key-2026-08") == ()
     assert "diagnostic_capture_enqueued" not in _metrics()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_interrupts_cooperative_in_flight_capture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operations.reset()
+    capture = EncryptedDiagnosticCapture.from_base64(
+        tmp_path / "capture.sqlite3",
+        _KEY,
+        "key-2026-08",
+    )
+    loop = asyncio.get_running_loop()
+    store_started = threading.Event()
+    store_stopped = threading.Event()
+
+    def wait_for_shutdown(_pending: object) -> tuple[str, int]:
+        store_started.set()
+        if not capture._shutdown_requested.wait(timeout=1):
+            raise RuntimeError("Diagnostic shutdown was not requested")
+        store_stopped.set()
+        return "shutdown", 0
+
+    monkeypatch.setattr(capture, "_store", wait_for_shutdown)
+    capture.start()
+    capture.capture_question(_caller(), "development-issues", "private question")
+    async with asyncio.timeout(1):
+        while not store_started.is_set():  # noqa: ASYNC110
+            await asyncio.sleep(0.001)
+
+    started_at = loop.time()
+    await capture.close(200)
+
+    assert loop.time() - started_at < 0.5
+    assert store_stopped.is_set()
+    assert capture._worker is None
+    assert _metrics()["diagnostic_capture_shutdown_dropped"] == 1
+
+
+@pytest.mark.asyncio
+async def test_shutdown_does_not_leave_worker_waiting_on_sqlite_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operations.reset()
+    database = tmp_path / "capture.sqlite3"
+    capture = EncryptedDiagnosticCapture.from_base64(
+        database,
+        _KEY,
+        "key-2026-08",
+    )
+    capture.start()
+    worker_connect_started = threading.Event()
+    original_connect = capture._connect
+
+    def tracked_connect(*, worker_owned: bool = False) -> sqlite3.Connection:
+        if worker_owned:
+            worker_connect_started.set()
+        return original_connect(worker_owned=worker_owned)
+
+    monkeypatch.setattr(capture, "_connect", tracked_connect)
+    blocker = sqlite3.connect(database, timeout=0)
+    blocker.execute("BEGIN EXCLUSIVE")
+    elapsed = 0.0
+    worker_alive = True
+    active_connection_remained = True
+    try:
+        capture.capture_question(
+            _caller(),
+            "development-issues",
+            "private question",
+        )
+        async with asyncio.timeout(1):
+            while not worker_connect_started.is_set():  # noqa: ASYNC110
+                await asyncio.sleep(0.001)
+
+        loop = asyncio.get_running_loop()
+        started_at = loop.time()
+        await capture.close(200)
+        elapsed = loop.time() - started_at
+        worker = capture._worker
+        worker_alive = worker is not None and worker.is_alive()
+        active_connection_remained = capture._active_connection is not None
+    finally:
+        blocker.rollback()
+        blocker.close()
+        await capture.close(2_000)
+
+    assert elapsed < 0.5
+    assert worker_alive is False
+    assert active_connection_remained is False
+    assert decrypt_diagnostic_records(database, _KEY, "key-2026-08") == ()
+    assert _metrics()["diagnostic_capture_dropped"] == 1
 
 
 @pytest.mark.asyncio

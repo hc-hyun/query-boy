@@ -8,9 +8,11 @@ import hmac
 import json
 import logging
 import os
+import queue
 import re
 import sqlite3
 import stat
+import threading
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -84,10 +86,14 @@ class EncryptedDiagnosticCapture:
             b"query-man/diagnostic-capture/subject-key/v1",
             hashlib.sha256,
         ).digest()
-        self._queue: asyncio.Queue[_PendingCapture] = asyncio.Queue(
+        self._queue: queue.Queue[_PendingCapture | None] = queue.Queue(
             maxsize=DIAGNOSTIC_CAPTURE_QUEUE_SIZE
         )
-        self._worker: asyncio.Task[None] | None = None
+        self._worker: threading.Thread | None = None
+        self._stop_requested = threading.Event()
+        self._shutdown_requested = threading.Event()
+        self._connection_lock = threading.Lock()
+        self._active_connection: sqlite3.Connection | None = None
         self._accepting = False
 
     @classmethod
@@ -131,39 +137,73 @@ class EncryptedDiagnosticCapture:
         return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
 
     def start(self) -> None:
-        if self._worker is not None:
+        worker = self._worker
+        if worker is not None and worker.is_alive():
             return
         connection = self._connect()
         connection.close()
+        self._stop_requested.clear()
+        self._shutdown_requested.clear()
         self._accepting = True
-        self._worker = asyncio.create_task(self._run())
+        self._worker = threading.Thread(
+            target=self._run,
+            name="query-man-diagnostic-capture",
+            daemon=True,
+        )
+        self._worker.start()
 
     async def close(self, timeout_ms: int) -> None:
         self._accepting = False
         worker = self._worker
         if worker is None:
             return
+        timeout_seconds = max(0, timeout_ms) / 1_000
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_seconds
+        interrupt_window = min(0.1, timeout_seconds / 2)
+        self._stop_requested.set()
         try:
-            async with asyncio.timeout(max(0, timeout_ms) / 1_000):
-                await self._queue.join()
-        except TimeoutError:
+            self._queue.put_nowait(None)
+        except queue.Full:
+            pass
+        await self._wait_for_worker(worker, deadline - interrupt_window)
+        if worker.is_alive():
+            self._shutdown_requested.set()
+            self._interrupt_active_connection()
             dropped = 0
             while True:
                 try:
-                    self._queue.get_nowait()
-                except asyncio.QueueEmpty:
+                    queued = self._queue.get_nowait()
+                except queue.Empty:
                     break
                 self._queue.task_done()
-                dropped += 1
+                if queued is not None:
+                    dropped += 1
             if dropped:
                 operations.increment("diagnostic_capture_dropped", value=dropped)
                 operations.increment("diagnostic_capture_shutdown_dropped", value=dropped)
-        worker.cancel()
-        try:
-            await worker
-        except asyncio.CancelledError:
-            pass
-        self._worker = None
+            try:
+                self._queue.put_nowait(None)
+            except queue.Full:
+                pass
+            await self._wait_for_worker(worker, deadline)
+        # ponytail: bounded in-process shutdown cannot stop a worker stalled
+        # in filesystem open/commit; use a killable worker process if all
+        # post-deadline storage activity must become impossible.
+        if not worker.is_alive():
+            self._worker = None
+
+    async def _wait_for_worker(
+        self,
+        worker: threading.Thread,
+        deadline: float,
+    ) -> None:
+        loop = asyncio.get_running_loop()
+        while worker.is_alive():
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return
+            await asyncio.sleep(min(0.01, remaining))
 
     def capture_question(
         self,
@@ -236,40 +276,57 @@ class EncryptedDiagnosticCapture:
         )
         try:
             self._queue.put_nowait(pending)
-        except asyncio.QueueFull:
+        except queue.Full:
             operations.increment("diagnostic_capture_dropped")
             operations.increment("diagnostic_capture_queue_dropped")
             return
         operations.increment("diagnostic_capture_enqueued")
 
-    async def _run(self) -> None:
-        while True:
-            try:
-                pending = await asyncio.wait_for(
-                    self._queue.get(),
-                    timeout=_RETENTION_SWEEP_SECONDS,
-                )
-            except TimeoutError:
+    def _run(self) -> None:
+        try:
+            while True:
                 try:
-                    await asyncio.to_thread(self._cleanup_expired, datetime.now(UTC))
+                    item = self._queue.get(timeout=_RETENTION_SWEEP_SECONDS)
+                except queue.Empty:
+                    if self._stop_requested.is_set():
+                        return
+                    try:
+                        self._cleanup_expired(datetime.now(UTC), worker_owned=True)
+                    except Exception:
+                        operations.increment("diagnostic_capture_storage_failed")
+                        logger.exception("diagnostic_capture_retention_failed")
+                    continue
+                if item is None:
+                    self._queue.task_done()
+                    if self._stop_requested.is_set() and self._queue.empty():
+                        return
+                    continue
+                try:
+                    outcome, stored_bytes = self._store(item)
+                    if outcome == "stored":
+                        operations.increment("diagnostic_capture_stored")
+                        operations.observe("diagnostic_capture_bytes", stored_bytes)
+                    elif outcome == "budget":
+                        operations.increment("diagnostic_capture_dropped")
+                        operations.increment("diagnostic_capture_budget_dropped")
+                    else:
+                        operations.increment("diagnostic_capture_dropped")
+                        operations.increment("diagnostic_capture_shutdown_dropped")
                 except Exception:
-                    operations.increment("diagnostic_capture_storage_failed")
-                    logger.exception("diagnostic_capture_retention_failed")
-                continue
-            try:
-                outcome, stored_bytes = await asyncio.to_thread(self._store, pending)
-                if outcome == "stored":
-                    operations.increment("diagnostic_capture_stored")
-                    operations.observe("diagnostic_capture_bytes", stored_bytes)
-                else:
                     operations.increment("diagnostic_capture_dropped")
-                    operations.increment("diagnostic_capture_budget_dropped")
-            except Exception:
-                operations.increment("diagnostic_capture_dropped")
-                operations.increment("diagnostic_capture_storage_failed")
-                logger.exception("diagnostic_capture_storage_failed")
-            finally:
-                self._queue.task_done()
+                    if self._shutdown_requested.is_set():
+                        operations.increment("diagnostic_capture_shutdown_dropped")
+                    else:
+                        operations.increment("diagnostic_capture_storage_failed")
+                        logger.exception("diagnostic_capture_storage_failed")
+                finally:
+                    self._queue.task_done()
+                if self._stop_requested.is_set() and self._queue.empty():
+                    return
+        finally:
+            with self._connection_lock:
+                if self._worker is threading.current_thread():
+                    self._worker = None
 
     def _store(self, pending: _PendingCapture) -> tuple[str, int]:
         plaintext = json.dumps(
@@ -293,15 +350,23 @@ class EncryptedDiagnosticCapture:
         nonce = os.urandom(12)
         ciphertext = self._cipher.encrypt(nonce, plaintext, associated_data)
         stored_bytes = len(nonce) + len(ciphertext)
-        connection = self._connect()
+        if self._shutdown_requested.is_set():
+            return "shutdown", 0
+
+        connection = self._connect(worker_owned=True)
         try:
+            if self._shutdown_requested.is_set():
+                return "shutdown", 0
             connection.execute("BEGIN IMMEDIATE")
             connection.execute(
                 "DELETE FROM diagnostic_capture WHERE expires_at <= ?",
                 (pending.captured_at.isoformat(),),
             )
             day = pending.captured_at.date().isoformat()
-            connection.execute("DELETE FROM diagnostic_daily_usage WHERE day < ?", (day,))
+            connection.execute(
+                "DELETE FROM diagnostic_daily_usage WHERE day < ?",
+                (day,),
+            )
             row = connection.execute(
                 "SELECT stored_bytes FROM diagnostic_daily_usage WHERE day = ?",
                 (day,),
@@ -310,6 +375,9 @@ class EncryptedDiagnosticCapture:
             if used_bytes + stored_bytes > self._daily_byte_budget:
                 connection.rollback()
                 return "budget", 0
+            if self._shutdown_requested.is_set():
+                connection.rollback()
+                return "shutdown", 0
             connection.execute(
                 """
                 INSERT INTO diagnostic_capture(
@@ -336,15 +404,19 @@ class EncryptedDiagnosticCapture:
                 """,
                 (day, stored_bytes),
             )
+            if self._shutdown_requested.is_set():
+                connection.rollback()
+                return "shutdown", 0
             connection.commit()
             return "stored", stored_bytes
         finally:
+            self._release_active_connection(connection)
             connection.close()
 
-    def _cleanup_expired(self, now: datetime) -> None:
+    def _cleanup_expired(self, now: datetime, *, worker_owned: bool = False) -> None:
         if not self._database.exists():
             return
-        connection = self._connect()
+        connection = self._connect(worker_owned=worker_owned)
         try:
             connection.execute("BEGIN IMMEDIATE")
             connection.execute(
@@ -357,13 +429,37 @@ class EncryptedDiagnosticCapture:
             )
             connection.commit()
         finally:
+            if worker_owned:
+                self._release_active_connection(connection)
             connection.close()
 
-    def _connect(self) -> sqlite3.Connection:
+    def _interrupt_active_connection(self) -> None:
+        with self._connection_lock:
+            if self._active_connection is not None:
+                self._active_connection.interrupt()
+
+    def _release_active_connection(self, connection: sqlite3.Connection) -> None:
+        with self._connection_lock:
+            if self._active_connection is connection:
+                self._active_connection = None
+
+    def _connect(self, *, worker_owned: bool = False) -> sqlite3.Connection:
         _prepare_database_path(self._database)
-        connection = sqlite3.connect(self._database, timeout=1)
+        connection = sqlite3.connect(
+            self._database,
+            timeout=0 if worker_owned else 1,
+        )
+        if worker_owned:
+            with self._connection_lock:
+                self._active_connection = connection
+                if self._shutdown_requested.is_set():
+                    connection.interrupt()
         try:
-            connection.execute("PRAGMA busy_timeout=1000")
+            connection.execute(
+                "PRAGMA busy_timeout=0"
+                if worker_owned
+                else "PRAGMA busy_timeout=1000"
+            )
             connection.execute("PRAGMA journal_mode=DELETE")
             connection.execute("PRAGMA synchronous=FULL")
             version = int(connection.execute("PRAGMA user_version").fetchone()[0])
@@ -414,6 +510,8 @@ class EncryptedDiagnosticCapture:
             _verify_schema(connection)
             return connection
         except BaseException:
+            if worker_owned:
+                self._release_active_connection(connection)
             connection.close()
             raise
 
