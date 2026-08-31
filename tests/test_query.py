@@ -32,7 +32,7 @@ from query_man.guarded_query.sql_validation import SQL_POLICY_REVISION, Validate
 from query_man.metadata.models import CatalogSnapshot
 from query_man.metadata.service import MetadataService
 from query_man.runtime.operations import operations
-from query_man.source_catalog.models import SourceProfile
+from query_man.source_catalog.models import SourceProfile, SSLMode
 from query_man.source_catalog.reader_policy import ReaderSessionPolicyError
 from query_man.source_catalog.registry import SourceRegistry
 from tests.helpers import load_test_registry, minimal_development_snapshot
@@ -155,6 +155,10 @@ class _ConnectionInfo:
         return self._parameters.get(name)
 
 
+class _PGConnection:
+    ssl_in_use = False
+
+
 @dataclass(frozen=True)
 class _ResultColumn:
     name: str
@@ -206,6 +210,7 @@ class _PhaseConnection:
         self.closed = False
         self.events: list[str] = []
         self.info = info or _ConnectionInfo()
+        self.pgconn = _PGConnection()
         self.result_description = (
             (_ResultColumn("value", 20),) if description is None else description
         )
@@ -304,10 +309,13 @@ def _stub_internal_query_checks(
 ) -> None:
     original_connection_policy = query_module.require_reader_connection_policy
 
-    def require_connection_policy(connection: object) -> None:
+    def require_connection_policy(
+        connection: object,
+        sslmode: SSLMode,
+    ) -> None:
         if events is not None:
             events.append("connection_policy")
-        original_connection_policy(connection)  # type: ignore[arg-type]
+        original_connection_policy(connection, sslmode)  # type: ignore[arg-type]
 
     async def require_reader_policy(*_args: object) -> None:
         if events is not None:
@@ -1380,12 +1388,18 @@ async def test_executor_rejects_new_queries_after_drain_starts() -> None:
         )
 
 
+@pytest.mark.parametrize("sslmode", ("disable", "require", "verify-full"))
 @pytest.mark.asyncio
-async def test_query_pool_requests_the_launch_client_encoding(
+async def test_query_pool_requests_approved_connection_policy(
     monkeypatch: pytest.MonkeyPatch,
+    sslmode: str,
 ) -> None:
     source = load_test_registry().get("development-issues")
     assert source is not None
+    source = replace(
+        source,
+        connection=replace(source.connection, sslmode=sslmode),
+    )
     created: dict[str, object] = {}
 
     class FakePool:
@@ -1406,6 +1420,8 @@ async def test_query_pool_requests_the_launch_client_encoding(
         kwargs = created["kwargs"]
         assert isinstance(kwargs, dict)
         assert kwargs["client_encoding"] == "UTF8"
+        assert kwargs["sslmode"] == sslmode
+        assert kwargs["gssencmode"] == "disable"
     finally:
         await executor.close()
 
@@ -1421,6 +1437,7 @@ async def test_executor_distinguishes_operator_cancel_from_statement_timeout() -
 
     class FakeConnection:
         info = _ConnectionInfo()
+        pgconn = _PGConnection()
 
         async def cancel_safe(self, **options: int) -> None:
             assert options == {"timeout": 1}
@@ -1512,6 +1529,7 @@ async def test_drain_cancels_active_and_queued_admitted_queries() -> None:
 
     class FakeConnection:
         info = _ConnectionInfo()
+        pgconn = _PGConnection()
 
         async def cancel_safe(self, **options: int) -> None:
             assert options == {"timeout": 1}

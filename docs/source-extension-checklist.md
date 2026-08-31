@@ -4,6 +4,8 @@ Status: Git-reviewed YAML source authority; first-launch inventory frozen by ADR
 
 Source authority의 결정 기준은 [ADR 0030](decisions/0030-git-reviewed-yaml-source-authority.md)이다.
 개인정보 공개 경계는 [ADR 0031](decisions/0031-no-pii-curated-view-boundary.md)을 따른다.
+Source TLS mode와 manifest v3 migration은
+[ADR 0033](decisions/0033-explicit-source-tls-modes.md)을 따른다.
 Source·verified query·budget의 유일한 authority는 각각 다음 Git-reviewed YAML이다.
 
 - `config/sources/*.yaml`
@@ -78,14 +80,56 @@ float, UUID, array 등 다른 타입도 현재 final result 범위 밖이다. �
 |---|---|---|
 | Source database | PostgreSQL 18, server UTF-8, 최소 권한 `LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`, 유한 connection limit와 non-RLS curated view | DB와 읽기 계정 자체가 안전해야 한다. |
 | Source Catalog | Strict YAML manifest, credential 환경 변수 이름, 기존 budget profile, 필요한 semantic overlay, source projection과 공개 domain column 0개 | 등록 문서에 비밀이나 지원 밖 DB 타입이 없어야 한다. |
-| Metadata | Pool checkout에서 client UTF-8 요청, SQL 없는 PG18/server·client·driver UTF-8 검사, domain 사전 거부, bounded catalog와 revision publish | SQL을 만들기 전에 읽는 DB 지도가 정확하고 제한돼야 한다. |
-| Guarded Query | 실제·광고 final result OID가 `20, 21, 23, 25, 1082, 1184, 1700` 안인지, read-only transaction·limit·cancel·rollback | 안전한 SQL과 결과 타입만 제한 안에서 실행돼야 한다. |
+| Metadata | Pool checkout에서 client UTF-8 요청, SQL 없는 PG18/server·client·driver UTF-8 및 reviewed TLS state 검사, domain 사전 거부, bounded catalog와 revision publish | SQL을 만들기 전에 읽는 DB 지도와 transport가 정확하고 제한돼야 한다. |
+| Guarded Query | SQL 전 reviewed TLS state, 실제·광고 final result OID가 `20, 21, 23, 25, 1082, 1184, 1700` 안인지, read-only transaction·limit·cancel·rollback | 안전한 transport, SQL과 결과 타입만 제한 안에서 실행돼야 한다. |
 | Assurance | L0/L1/L2 품질, verified question/SQL/result expectation, unsupported OID와 drift negative case | 대표 질문의 답과 실패 경로가 회귀 시험을 통과해야 한다. |
 | Runtime/Delivery | 단일 replica, query-only identity, 정확한 readiness 응답, HTTP/MCP parity, pinned artifact와 stop/rollback 절차 | 검증한 한 개의 배포물이 같은 외부 동작을 제공하고 되돌릴 수 있어야 한다. |
 
 Manifest에는 host, port, database와 user 같은 운영 locator와 password 환경 변수 이름만 둔다.
 Password, token과 실제 secret은 Git, metadata, HTTP/MCP와 log에 넣지 않는다. Client나 AI model은
 DSN, schema, role 또는 source credential을 선택할 수 없다.
+
+### PostgreSQL TLS 연결 판단
+
+Source connection은 HTTP API나 Unix socket이 아니라 native PostgreSQL TCP endpoint여야 한다. 두 DB
+pool은 `gssencmode=disable`을 적용하므로 GSS-encrypted transport를 TLS mode의 대체 경로로 사용하지
+않는다. 이는 reviewed transport 위의 GSSAPI authentication을 금지한다는 뜻이 아니다. 전체 DSN과
+password는 onboarding 문서, issue, test 결과 또는 log에 남기지 않는다. 실제 대상 연결 probe는
+repository 변경 승인과 별도의 protected environment 실행 승인을 받은 DB owner/operator가 traffic
+밖에서 수행한다.
+
+Source manifest v3는 `connection.sslmode`를 필수로 요구한다. Runtime은 reviewed mode를 libpq에 항상
+명시하며 ambient `PGSSLMODE`나 libpq 기본값에 선택을 맡기지 않는다. 각 checkout은 SQL 전에 실제
+libpq TLS state가 reviewed mode와 일치하는지 검사하고 불일치하면 연결을 닫아 fail-closed한다.
+
+| Manifest 값 | Runtime `sslmode` | 보장하는 동작 |
+|---|---|---|
+| `sslmode: disable` | `disable` | TLS를 사용하지 않는다. |
+| `sslmode: require` | `require` | TLS를 요구하고 평문 fallback을 금지하지만 요청 hostname은 검증하지 않는다. |
+| `sslmode: verify-full` | `verify-full` | TLS, CA chain과 요청 hostname을 모두 검증한다. |
+
+`prefer`, `allow`, `verify-ca`, mode 생략과 version 2의 boolean `ssl`은 validation에서 거부한다. 특히
+`prefer`는 TLS 연결 실패 시 평문으로 fallback하고 server certificate나 hostname을 검증하지 않으므로
+source 추가를 통과시키는 우회로로 사용하지 않는다.
+
+Traffic 밖의 승인된 probe에서 `disable`은 DB에 거부되고, `require`는 reader 인증·조회에 성공하지만
+`verify-full`이 CA chain 또는 hostname 문제로 실패하면 `sslmode: require`를 compatibility exception으로
+제안할 수 있다. 다음 항목을 exact source inventory change set에 포함해 승인받기 전에는 source를
+publish하거나 route하지 않는다.
+
+- `require`가 필요한 대상과 이유, CA/hostname 실패 범주 및 DB owner 확인
+- 평문 fallback은 금지하지만 server hostname identity를 검증하지 못하는 보안 영향과 허용 범위
+- Exact 배포 환경의 root CA file과 `PGSSLROOTCERT` 입력 inventory. libpq는 root CA file이 있으면
+  `require`에서도 CA chain을 검증하므로 같은 artifact와 환경에서 재검증한다.
+- Manifest v3와 `sslmode: require`를 포함한 exact Git diff 및 source/reader consumer 영향
+- 이전 source inventory와 전체 application/config artifact rollback
+- traffic 밖 acceptance, 중단 조건과 CA/SAN 정비 후 `verify-full` 전환 조건
+
+Probe 결과에는 source ID, 시험한 mode별 성공·거부 결과와 sanitized failure 범주만 남긴다. 실제 DSN,
+password, certificate private key와 내부 database 오류를 복사하지 않는다. `require` 성공은 source 등록,
+해당 source inventory 또는 protected deployment 승인을 대신하지 않으며 probe DSN의 mode가 runtime
+설정을 override하지 않는다. 자세한 mode와 migration 경계는
+[ADR 0033](decisions/0033-explicit-source-tls-modes.md)을 따른다.
 
 Database `TEMP` privilege 부재는 source admission 요건이 아니다. `PUBLIC TEMP` 기본값이 있다는
 이유만으로 onboarding을 중단하거나 database-wide revoke를 요구하지 않는다. 이는 temporary table을
@@ -127,6 +171,7 @@ grain, 단위, 상태값, nullable 의미와 집계 주의를 설명하는 사�
 - 현재 static dataset의 [9개 verified query expectation](modules/assurance/README.md#verified-query-회귀검사)이나 새 source의 승인된
   verified result 실패
 - Reader privilege, DDL/settings inventory, image/config 또는 rollback이 불명확함
+- Manifest의 exact `sslmode`로 reader connection을 검증하지 못했거나 mode 선택 근거가 불명확함
 - SQL policy v2와 v3 process가 같은 serving fleet에 섞임
 - 정확한 inventory·배포 승인이나 protected environment 실행 승인이 없음
 
@@ -167,7 +212,8 @@ limit을 대신하지 않는다.
 - Source ID, owner, environment와 추가 이유
 - 공개할 curated view의 데이터 단위와 대표 질문
 - 선택한 기존 budget profile과 connection capacity
-- Reader/TLS/non-RLS, PostgreSQL 18/UTF-8 확인 결과
+- Reader/TLS/non-RLS, PostgreSQL 18/UTF-8 확인 결과. TLS는 시험한 mode별 성공·거부 결과와 sanitized
+  CA/hostname 실패 범주를 포함하되 DSN, credential과 내부 database 오류는 제외한다.
 - Metadata와 SQL policy revision, verified result와 HTTP/MCP 검증 계획
 - 배포 artifact, traffic 전환, 중단 조건과 rollback 계획
 - 확인하지 못한 항목과 각 항목을 결정할 담당자

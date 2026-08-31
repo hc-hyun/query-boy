@@ -8,6 +8,7 @@ import yaml
 from query_man.assurance.quality import QualityEvaluation
 from query_man.assurance.verified import VerifiedQueryRegistry
 from query_man.guarded_query.sql_validation import validate_sql
+from query_man.source_catalog.registry import SourceRegistry
 from tests.helpers import ROOT_DIRECTORY
 
 DOMAIN_CONFIG = ROOT_DIRECTORY / "config" / "domain-lab"
@@ -158,3 +159,26 @@ def test_domain_lab_preserves_base_source_manifests_byte_for_byte() -> None:
         assert (DOMAIN_CONFIG / "sources" / f"{source_id}.yaml").read_bytes() == (
             ROOT_DIRECTORY / "config" / "sources" / f"{source_id}.yaml"
         ).read_bytes()
+
+
+def test_domain_lab_source_manifests_pass_current_registry_schema() -> None:
+    source_ids = NEW_SOURCE_IDS | BASE_SOURCE_IDS
+    environment = {
+        "POSTGRES_PORT": "5432",
+        **{
+            f"{source_id.replace('-', '_').upper()}_READER_PASSWORD": "domain-lab-secret"
+            for source_id in source_ids
+        },
+    }
+
+    registry = SourceRegistry.load(
+        DOMAIN_CONFIG / "sources",
+        ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
+        environment,
+    )
+
+    assert registry.source_ids() == frozenset(source_ids)
+    for source_id in source_ids:
+        source = registry.get(source_id)
+        assert source is not None
+        assert source.connection.sslmode == "disable"

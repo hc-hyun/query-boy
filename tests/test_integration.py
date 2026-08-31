@@ -312,7 +312,7 @@ async def test_closed_database_port_is_unavailable_and_redacts_dependency_log() 
             database="leak-database-marker",
             user="leak-user-marker",
             password="leak-password-marker",
-            ssl=False,
+            sslmode="disable",
         ),
         budget=replace(
             source.budget,

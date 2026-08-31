@@ -347,7 +347,7 @@ def _source_profile(
             database=database.name,
             user=database.reader_name,
             password=database.reader_password,
-            ssl=False,
+            sslmode="disable",
         ),
         allowed_schemas=("analytics",),
         allowed_relation_kinds=tuple(allowed_relation_kinds),

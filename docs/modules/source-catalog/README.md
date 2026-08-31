@@ -11,7 +11,8 @@ validation해 immutable `SourceProfile`로 만든다. Runtime, Metadata, Guarded
 `SourceReader`만 소비한다. Source를 DB나 API에서 동적으로 추가·수정하는 writer는 없다.
 
 Password 값은 YAML에 저장하지 않고 manifest가 가리키는 environment key에서 resolve한다. RLS source,
-금지 schema, unknown field/version과 잘못된 reader 정책은 fail-closed한다.
+금지 schema, unknown field/version·TLS mode와 잘못된 reader 정책은 fail-closed한다. Source manifest v3는
+`sslmode`를 필수로 두고 `disable`, `require`, `verify-full`만 허용한다.
 
 ## 소유 책임
 
@@ -19,6 +20,7 @@ Password 값은 YAML에 저장하지 않고 manifest가 가리키는 environment
 - `SourceProfile`, connection, allowlist, provenance, semantic overlay와 budget DTO
 - `SourceReader`와 process-start `SourceRegistry` loading
 - PostgreSQL 18, UTF-8, no-SQL connection/session reader policy
+- 명시적 PostgreSQL TLS mode와 `require` compatibility exception 경계
 - Source onboarding Skill의 YAML pull-request plan, no-PII curated-view handoff와 secret/mutation 금지 경계
 
 ## 소유하지 않는 책임
@@ -70,6 +72,18 @@ Database `TEMP` privilege 보유 여부는 reader admission 조건이 아니다.
 temporary relation/DDL 차단은 Guarded Query가 계속 소유하며, 자세한 경계는
 [ADR 0032](../../decisions/0032-reader-temp-admission-relaxation.md)를 따른다.
 
+`ResolvedConnection.sslmode`는 reviewed manifest의 exact `disable`, `require`, `verify-full` 중 하나다.
+Metadata와 Guarded Query는 이를 libpq에 그대로 전달하며 `PGSSLMODE`나 libpq 기본값으로 mode 선택을
+넘기지 않는다. TCP host만 허용하고 두 pool은 `gssencmode=disable`을 적용해 Unix socket이나 GSS
+encryption이 reviewed TLS mode를 우회하지 못하게 한다. 공통 connection policy는 SQL 실행 전 실제
+libpq TLS 상태가 reviewed mode와 일치하지 않으면 checkout을 닫고 fail-closed한다. `prefer`와
+`allow`는 평문 fallback 때문에, `verify-ca`와 field 생략은 승인된 exact policy 밖이므로 manifest
+validation에서 거부한다. `gssencmode=disable`은 GSS-encrypted transport만 끄며 reviewed transport 위의
+GSSAPI authentication을 금지하지 않는다. `require`는 TLS와
+no-plaintext를 보장하지만 requested hostname을 검증하지 않는 명시적 compatibility exception이며,
+운영 inventory와 CA/SAN 개선 조건은
+[ADR 0033](../../decisions/0033-explicit-source-tls-modes.md)을 따른다.
+
 Git YAML schema와 canonical source fields는 persisted/versioned format이다. `source_id`, allowed schemas,
 relation kinds, budget reference, semantic overlay와 provenance 의미를 바꾸면 consumer revision과 운영
 절차를 함께 검토한다.
@@ -89,6 +103,8 @@ registry를 mutate하지 않는다.
 
 - `config/sources/*.yaml`과 budget YAML의 Git-reviewed revision만 source authority다.
 - Unknown field/version, duplicate ID, missing environment, forbidden schema와 RLS는 거부한다.
+- Source manifest v3는 `sslmode`를 필수로 요구하고 `disable`, `require`, `verify-full` 외 mode를 거부한다.
+- Connection host는 TCP endpoint여야 하며 Unix-domain·abstract socket path를 거부한다.
 - Password/DSN secret은 YAML, public projection, log와 error에 노출하지 않는다.
 - Allowed schema/relation kind와 resource budget은 prompt나 caller가 완화할 수 없다.
 - Budget은 `max_concurrent_queries <= max_pool_size`를 만족해야 하며 위반하면 startup validation에서
@@ -110,6 +126,7 @@ focused test 정리는 module 내부 변경이다. 새 abstraction보다 기존 
 - Source/budget YAML schema, version, field default와 environment resolution
 - Source ID, allowlist, semantic overlay, provenance, budget와 revision material 의미
 - RLS/reader PostgreSQL version·encoding·session policy
+- Source manifest version과 TLS mode, CA/hostname 검증 및 plaintext fallback policy
 - Git authority, onboarding review, deployment/restart와 secret procedure
 - Source writer, hot reload, DB authority 또는 다른 fallback 재도입
 

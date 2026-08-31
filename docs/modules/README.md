@@ -54,7 +54,8 @@ Python 구현은 `src/query_man` 아래 `source_catalog`, `metadata`, `guarded_q
 - Runtime은 `development-issues`, `market-voc` 두 non-RLS source와 단일 replica를 조립한다.
 - Runtime hot reload와 관리 API는 없다. 변경은 pull request review, 검증, 배포/재시작을 거쳐 반영한다.
 - `qm source list|show|validate`는 local repository YAML을 사람이 읽을 수 있게 확인하는 read-only CLI다.
-- Source Catalog는 RLS manifest를 거부하며 PostgreSQL 18/UTF-8 reader 정책을 제공한다.
+- Source Catalog는 RLS manifest를 거부하며 PostgreSQL 18/UTF-8 reader 정책과 manifest v3의 명시적
+  `disable`/`require`/`verify-full` TLS mode를 제공한다.
 - Metadata와 Guarded Query는 connection/session 정책을 fail-closed로 확인한다.
 - Query Man은 개인정보(PII)를 탐지·분류·마스킹하지 않는다. DB owner가 개인정보를 제거했다고
   확인한 reviewed curated view만 Source Catalog에 등록한다.

@@ -1,4 +1,4 @@
-version: 2
+version: 3
 
 source_id: saas-billing
 name: SaaS 구독·과금
@@ -15,7 +15,7 @@ connection:
   database: saas_billing
   user: saas_billing_reader
   password_env: SAAS_BILLING_READER_PASSWORD
-  ssl: false
+  sslmode: disable
 allowed_schemas: [ai]
 allowed_relation_kinds: [view]
 budget_profile: interactive

@@ -14,9 +14,11 @@ Status: Current — 현행 authority와 핵심 설계 방향의 압축본
 | [ADR 0030](0030-git-reviewed-yaml-source-authority.md) | `config/sources/*.yaml`, `config/verified-queries.yaml`, `config/budget-profiles.yaml`의 Git-reviewed 단일 authority와 retired managed capability |
 | [ADR 0031](0031-no-pii-curated-view-boundary.md) | DB owner가 개인정보를 제거했다고 확인한 reviewed curated view만 제공하고 Query Man은 PII를 탐지·분류·마스킹하지 않는 공개 경계 |
 | [ADR 0032](0032-reader-temp-admission-relaxation.md) | Database `TEMP` 보유는 reader admission 조건이 아니며 사용자 SQL의 temporary relation·DDL 차단은 유지하는 경계 |
+| [ADR 0033](0033-explicit-source-tls-modes.md) | Source manifest v3의 명시적 `disable`/`require`/`verify-full` transport policy와 migration·rollback 경계 |
 
 ADR 0025와 ADR 0030이 겹치면 ADR 0030의 source-authority supersession을 적용하고 ADR 0025의 좁은
-serving·safety·launch gate는 유지합니다. 실제 active 작업은
+serving·safety·launch gate는 유지합니다. Source manifest version과 reader TLS mode는 ADR 0033이
+ADR 0030의 기존 compatibility 문구를 대체합니다. 실제 active 작업은
 [Active TODO](../development-todo.md)만 기준으로 삼습니다.
 
 ## 현행 세부 계약
@@ -33,6 +35,7 @@ serving·safety·launch gate는 유지합니다. 실제 active 작업은
 | [ADR 0027](0027-consent-gated-diagnostic-capture.md) | Consent, encrypted persisted format, privacy·TTL·fail-open lifecycle을 바꿀 때 |
 | [ADR 0031](0031-no-pii-curated-view-boundary.md) | 개인정보 공개 책임과 no-PII curated-view admission 경계를 바꿀 때 |
 | [ADR 0032](0032-reader-temp-admission-relaxation.md) | Reader database `TEMP` admission과 temporary-object 안전 근거를 바꿀 때 |
+| [ADR 0033](0033-explicit-source-tls-modes.md) | Source TLS mode, CA/hostname 검증과 plaintext fallback 경계를 바꿀 때 |
 
 ## 핵심 방향
 

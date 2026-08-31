@@ -4,7 +4,7 @@ from typing import Any, Final
 
 from psycopg import AsyncConnection
 
-from query_man.source_catalog.models import SourceProfile
+from query_man.source_catalog.models import SourceProfile, SSLMode
 
 
 class ReaderSessionPolicyError(RuntimeError):
@@ -67,6 +67,7 @@ _READER_SESSION_POLICY_QUERY = """
 
 def require_reader_connection_policy(
     connection: AsyncConnection[Any],
+    sslmode: SSLMode,
 ) -> None:
     info = connection.info
     if (
@@ -74,6 +75,12 @@ def require_reader_connection_policy(
         or info.parameter_status("server_encoding") != READER_CLIENT_ENCODING
         or info.parameter_status("client_encoding") != READER_CLIENT_ENCODING
         or info.encoding != "utf-8"
+    ):
+        raise ReaderSessionPolicyError("Source reader connection policy mismatch")
+    pgconn = connection.pgconn
+    if (
+        sslmode not in ("disable", "require", "verify-full")
+        or pgconn.ssl_in_use != (sslmode != "disable")
     ):
         raise ReaderSessionPolicyError("Source reader connection policy mismatch")
 

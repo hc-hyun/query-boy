@@ -120,6 +120,9 @@ material을 보존한다면 이 규칙만으로 metadata revision을 임의 재�
 
 - Catalog는 allowed schema/relation kind와 metadata relation/column/response limit을 넘기지 않는다.
 - PostgreSQL 18, server/client UTF-8와 reader session policy를 query 전에 확인한다.
+- Source Catalog가 resolve한 exact `disable`/`require`/`verify-full` mode를 catalog pool의 libpq
+  `sslmode`로 전달하고 `gssencmode=disable`을 적용하며 ambient default로 재해석하지 않는다. SQL 전에
+  실제 TLS state가 reviewed mode와 일치하는지도 확인한다.
 - Catalog 내부 오류, SQL literal, credential과 DSN을 public response/log에 노출하지 않는다.
 - Snapshot과 nested graph는 immutable하며 caller alias가 cache를 바꾸지 못한다.
 - Context는 current source epoch와 revision에서만 반환한다.

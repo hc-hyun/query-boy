@@ -363,7 +363,10 @@ class PostgresQueryExecutor:
                         timeout=source.budget.query_queue_timeout_ms / 1000
                     ) as connection:
                         try:
-                            require_reader_connection_policy(connection)
+                            require_reader_connection_policy(
+                                connection,
+                                source.connection.sslmode,
+                            )
                         except ReaderSessionPolicyError:
                             try:
                                 await connection.close()
@@ -690,7 +693,8 @@ class PostgresQueryExecutor:
                     "dbname": connection.database,
                     "user": connection.user,
                     "password": connection.password,
-                    "sslmode": "verify-full" if connection.ssl else "disable",
+                    "sslmode": connection.sslmode,
+                    "gssencmode": "disable",
                     "application_name": f"query-man-query:{source.source_id}",
                     "connect_timeout": 2,
                     "client_encoding": READER_CLIENT_ENCODING,

@@ -21,6 +21,7 @@ For every plan, read only the current material needed to produce it:
 - [Git-reviewed YAML authority](../../docs/decisions/0030-git-reviewed-yaml-source-authority.md);
 - [no-PII curated-view boundary](../../docs/decisions/0031-no-pii-curated-view-boundary.md);
 - [reader TEMP admission boundary](../../docs/decisions/0032-reader-temp-admission-relaxation.md);
+- [explicit source TLS modes](../../docs/decisions/0033-explicit-source-tls-modes.md);
 - [static first-launch decision](../../docs/decisions/0025-static-non-rls-first-launch.md);
 - [source extension checklist](../../docs/source-extension-checklist.md);
 - [plan format](references/plan-format.md); and
@@ -74,14 +75,20 @@ precision/scale as catalog facts instead of duplicating them in free-text commen
 3. Require DB-owner evidence for a least-privilege reader, read-only limits, TLS/non-RLS posture, PostgreSQL and
    encoding compatibility, connection capacity and exact curated views that contain no personal or sensitive
    personal data. Describe outcomes; never draft DDL, arbitrary SQL or secret-manager commands.
+   Source manifest v3 requires an exact `sslmode` of `disable`, `require` or `verify-full`; never propose
+   `prefer`, `allow`, `verify-ca` or omission. Treat `require` as a no-plaintext but no-hostname-verification
+   compatibility exception that needs CA/SAN remediation and exact deployment CA inventory. Require a native
+   PostgreSQL TCP endpoint; Unix sockets and GSS-encrypted transport are not alternatives to the reviewed TLS
+   mode. GSSAPI authentication over that reviewed transport remains a separate concern and is not prohibited.
    Database `TEMP` privilege absence is not a reader admission requirement; do not prescribe a global `PUBLIC`
    revoke. User SQL still cannot create or access temporary relations, and the allowed-schema `CREATE` denial
    remains required.
 4. Select only an existing budget profile supported by the workload evidence. Otherwise stop for platform
    review instead of inventing or loosening a profile.
-5. Propose exact repository changes: one source manifest, only necessary verified-query entries, and a budget
-   configuration change only when separately approved. Include filenames, field-level values/placeholders and
-   explicit non-changes. Credential placeholders name environment variables, never values.
+5. Propose exact repository changes: one version 3 source manifest with a required reviewed `sslmode`, only
+   necessary verified-query entries, and a budget configuration change only when separately approved. Include
+   filenames, field-level values/placeholders and explicit non-changes. Credential placeholders name environment
+   variables, never values.
 6. State that activation exposes the source to every authenticated query principal under its source-wide budget.
    Do not invent per-user grants.
 7. Define traffic-off validation, relevant unit/integration gates, exact metadata and SQL-policy revision checks,

@@ -332,6 +332,22 @@ def test_blank_connection_host_environment_fails_closed() -> None:
         load_test_registry({**DUMMY_ENVIRONMENT, "QUERY_MAN_POSTGRES_HOST": " "})
 
 
+@pytest.mark.parametrize(
+    "host",
+    [
+        "/var/run/postgresql",
+        "@query-man",
+        "db.example,/var/run/postgresql",
+        "db.example,@query-man",
+        "db.example,",
+        "db.example, /var/run/postgresql",
+    ],
+)
+def test_non_tcp_connection_host_fails_closed(host: str) -> None:
+    with pytest.raises(RegistryConfigurationError, match="resolved an invalid host"):
+        load_test_registry({**DUMMY_ENVIRONMENT, "QUERY_MAN_POSTGRES_HOST": host})
+
+
 def test_duplicate_source_ids_are_rejected(tmp_path: Path) -> None:
     source = ROOT_DIRECTORY / "config" / "sources" / "development-issues.yaml"
     shutil.copy(source, tmp_path / "one.yaml")
@@ -346,7 +362,7 @@ def test_duplicate_source_ids_are_rejected(tmp_path: Path) -> None:
 
 def test_system_schemas_are_rejected(tmp_path: Path) -> None:
     (tmp_path / "system-test.yaml").write_text(
-        """version: 2
+        """version: 3
 source_id: system-test
 name: System Test
 description: Must not expose system catalogs
@@ -360,7 +376,7 @@ connection:
   database: postgres
   user: system_test_reader
   password_env: SYSTEM_TEST_READER_PASSWORD
-  ssl: false
+  sslmode: disable
 allowed_schemas: [pg_catalog]
 allowed_relation_kinds: [table]
 budget_profile: interactive
@@ -375,13 +391,85 @@ budget_profile: interactive
         )
 
 
-@pytest.mark.parametrize("version", [0, 1, 3])
-def test_rejects_non_v2_source_manifest(tmp_path: Path, version: int) -> None:
+@pytest.mark.parametrize("version", [0, 1, 2, 4])
+def test_rejects_non_v3_source_manifest(tmp_path: Path, version: int) -> None:
     raw = _development_manifest()
     raw["version"] = version
 
-    with pytest.raises(RegistryConfigurationError, match="version must be 2"):
+    with pytest.raises(RegistryConfigurationError, match="version must be 3"):
         _load_single_manifest(tmp_path, raw)
+
+
+@pytest.mark.parametrize("sslmode", ["disable", "require", "verify-full"])
+def test_accepts_supported_sslmode(tmp_path: Path, sslmode: str) -> None:
+    raw = _development_manifest()
+    connection = raw["connection"]
+    assert isinstance(connection, dict)
+    connection["sslmode"] = sslmode
+
+    source = _load_single_manifest(tmp_path, raw).get("development-issues")
+
+    assert source is not None
+    assert source.connection.sslmode == sslmode
+
+
+def test_requires_explicit_sslmode(tmp_path: Path) -> None:
+    raw = _development_manifest()
+    connection = raw["connection"]
+    assert isinstance(connection, dict)
+    connection.pop("sslmode")
+
+    with pytest.raises(RegistryConfigurationError, match="sslmode"):
+        _load_single_manifest(tmp_path, raw)
+
+
+@pytest.mark.parametrize(
+    "sslmode",
+    ["prefer", "allow", "verify-ca", "unknown", "REQUIRE", True, None],
+)
+def test_rejects_unsupported_sslmode(
+    tmp_path: Path,
+    sslmode: object,
+) -> None:
+    raw = _development_manifest()
+    connection = raw["connection"]
+    assert isinstance(connection, dict)
+    connection["sslmode"] = sslmode
+
+    with pytest.raises(RegistryConfigurationError, match="sslmode"):
+        _load_single_manifest(tmp_path, raw)
+
+
+def test_rejects_legacy_ssl_field(tmp_path: Path) -> None:
+    raw = _development_manifest()
+    connection = raw["connection"]
+    assert isinstance(connection, dict)
+    connection["ssl"] = False
+
+    with pytest.raises(RegistryConfigurationError, match="ssl"):
+        _load_single_manifest(tmp_path, raw)
+
+
+def test_sslmode_validation_error_does_not_expose_resolved_secret(
+    tmp_path: Path,
+) -> None:
+    raw = _development_manifest()
+    connection = raw["connection"]
+    assert isinstance(connection, dict)
+    connection["sslmode"] = "prefer"
+    secret = "sslmode-validation-secret-marker"
+
+    with pytest.raises(RegistryConfigurationError) as captured:
+        _load_single_manifest(
+            tmp_path,
+            raw,
+            environment={
+                **DUMMY_ENVIRONMENT,
+                "DEVELOPMENT_ISSUES_READER_PASSWORD": secret,
+            },
+        )
+
+    assert secret not in str(captured.value)
 
 
 def test_accepts_postgresql_identifier_boundary_in_source_fields(

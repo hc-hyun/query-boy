@@ -209,6 +209,7 @@ Source DB의 curated view와 최소 권한 reader
 - 현재 source authority: [ADR 0030](decisions/0030-git-reviewed-yaml-source-authority.md)
 - 현재 개인정보 공개 경계: [ADR 0031](decisions/0031-no-pii-curated-view-boundary.md)
 - 현재 reader `TEMP` admission 경계: [ADR 0032](decisions/0032-reader-temp-admission-relaxation.md)
+- 현재 source TLS mode: [ADR 0033](decisions/0033-explicit-source-tls-modes.md)
 - 현재 physical package 구조: [module index](modules/README.md)
 - 핵심 방향과 세부 계약: [decision guide](decisions/README.md)
 - 정확한 모듈 owner와 interface: [module index](modules/README.md)

@@ -282,9 +282,10 @@ async def _begin_catalog_transaction(
 
 async def _require_catalog_connection_policy(
     connection: AsyncConnection[Any],
+    source: SourceProfile,
 ) -> None:
     try:
-        require_reader_connection_policy(connection)
+        require_reader_connection_policy(connection, source.connection.sslmode)
     except ReaderSessionPolicyError:
         try:
             await connection.close()
@@ -302,7 +303,7 @@ class PostgresCatalog:
     async def load(self, source: SourceProfile) -> CatalogSnapshot:
         pool = await self._get_pool(source)
         async with pool.connection() as connection:
-            await _require_catalog_connection_policy(connection)
+            await _require_catalog_connection_policy(connection, source)
             try:
                 await _begin_catalog_transaction(connection, source)
                 cursor = await connection.execute(
@@ -369,7 +370,8 @@ class PostgresCatalog:
                     "dbname": connection.database,
                     "user": connection.user,
                     "password": connection.password,
-                    "sslmode": "verify-full" if connection.ssl else "disable",
+                    "sslmode": connection.sslmode,
+                    "gssencmode": "disable",
                     "application_name": f"query-man-meta:{source.source_id}",
                     "connect_timeout": 2,
                     "client_encoding": READER_CLIENT_ENCODING,

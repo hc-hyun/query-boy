@@ -10,6 +10,7 @@ QualityLevel = Literal["L0", "L1", "L2"]
 TenantIsolation = Literal["none", "rls"]
 SourceEnvironment = Literal["production", "staging", "development", "test"]
 AllowedRelationKind = Literal["table", "partitioned_table", "view", "materialized_view"]
+SSLMode = Literal["disable", "require", "verify-full"]
 
 
 @dataclass(frozen=True)
@@ -47,7 +48,7 @@ class ResolvedConnection:
     database: str
     user: str
     password: str
-    ssl: bool
+    sslmode: SSLMode
 
 
 @dataclass(frozen=True)

@@ -1,4 +1,4 @@
-version: 2
+version: 3
 
 source_id: parcel-logistics
 name: 택배 물류
@@ -15,7 +15,7 @@ connection:
   database: parcel_logistics
   user: parcel_logistics_reader
   password_env: PARCEL_LOGISTICS_READER_PASSWORD
-  ssl: false
+  sslmode: disable
 allowed_schemas: [ai]
 allowed_relation_kinds: [view]
 budget_profile: interactive

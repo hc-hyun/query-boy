@@ -31,6 +31,7 @@ from query_man.source_catalog.models import (
     SourceEnvironment,
     SourceProfile,
     SourceProvenance,
+    SSLMode,
     TenantIsolation,
 )
 
@@ -136,7 +137,7 @@ class _Connection(_StrictModel):
     database: Identifier
     user: Identifier
     password_env: EnvironmentVariableName
-    ssl: bool = False
+    sslmode: SSLMode
 
 
 class _Provenance(_StrictModel):
@@ -304,8 +305,8 @@ class _SourceFile(_StrictModel):
 
     @model_validator(mode="after")
     def valid_values(self) -> _SourceFile:
-        if self.version != 2:
-            raise ValueError("version must be 2")
+        if self.version != 3:
+            raise ValueError("version must be 3")
         allowed = {"table", "partitioned_table", "view", "materialized_view"}
         if any(kind not in allowed for kind in self.allowed_relation_kinds):
             raise ValueError("invalid relation kind")
@@ -412,7 +413,17 @@ def _resolve_source(
         raise RegistryConfigurationError(f"{path} requires environment variable {parsed.connection.password_env}")
     raw_host = environment.get(parsed.connection.host_env) if parsed.connection.host_env is not None else None
     host = parsed.connection.host if raw_host is None else raw_host.strip()
-    if not host or len(host) > 253:
+    host_items = tuple(item.strip() for item in host.split(","))
+    if (
+        not host
+        or len(host) > 253
+        or any(
+            not item
+            or item != raw_item
+            or item.startswith(("/", "@"))
+            for raw_item, item in zip(host.split(","), host_items, strict=True)
+        )
+    ):
         raise RegistryConfigurationError(f"{path} resolved an invalid host")
     raw_port = environment.get(parsed.connection.port_env) if parsed.connection.port_env is not None else None
     try:
@@ -439,7 +450,7 @@ def _resolve_source(
             database=parsed.connection.database,
             user=parsed.connection.user,
             password=password,
-            ssl=parsed.connection.ssl,
+            sslmode=parsed.connection.sslmode,
         ),
         allowed_schemas=tuple(parsed.allowed_schemas),
         allowed_relation_kinds=tuple(parsed.allowed_relation_kinds),  # type: ignore[arg-type]

@@ -11,6 +11,8 @@ Source의 개인정보 공개 경계는
 [ADR 0031](decisions/0031-no-pii-curated-view-boundary.md)을 따릅니다.
 Reader의 database `TEMP` 보유 여부를 source admission 조건으로 사용하지 않는 경계는
 [ADR 0032](decisions/0032-reader-temp-admission-relaxation.md)를 따릅니다.
+Source manifest v3의 명시적 PostgreSQL TLS mode와 `require` compatibility 경계는
+[ADR 0033](decisions/0033-explicit-source-tls-modes.md)을 따릅니다.
 
 ## 독자별 시작점
 
@@ -61,6 +63,7 @@ Fixture 문서는 개발·CI 재현용입니다. 그 명령이나 결과를 prod
 - [ADR 0030](decisions/0030-git-reviewed-yaml-source-authority.md): Git-reviewed YAML 단일 authority
 - [ADR 0031](decisions/0031-no-pii-curated-view-boundary.md): no-PII curated-view 공개 경계
 - [ADR 0032](decisions/0032-reader-temp-admission-relaxation.md): reader `TEMP` admission 경계
+- [ADR 0033](decisions/0033-explicit-source-tls-modes.md): source TLS mode와 manifest v3 migration 경계
 - [검증과 Git 기록 안내](verification/README.md): 현재 gate와 삭제한 과거 문서 조회 방법
 
 현재 tree에는 현행 authority, 실행 가능한 절차와 테스트에 필요한 설명만 둡니다. 과거 ADR,

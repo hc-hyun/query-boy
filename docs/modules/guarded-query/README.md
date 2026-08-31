@@ -107,6 +107,9 @@ Delivery는 application/lifecycle interface만 소비하며 PostgreSQL executor 
 - 외부 SQL은 실행 전에 AST와 allowlist를 통과한다.
 - Source/schema/relation/function/operator, result OID와 budgets는 gateway와 PostgreSQL에서 강제한다.
 - Transaction은 read-only이며 timezone, timeout, memory/temp, parallel/JIT policy를 transaction-local로 적용한다.
+- Source Catalog가 resolve한 exact `disable`/`require`/`verify-full` mode를 query pool의 libpq
+  `sslmode`로 전달하고 `gssencmode=disable`을 적용하며 ambient default로 재해석하지 않는다. SQL 전에
+  실제 TLS state가 reviewed mode와 일치하는지도 확인한다.
 - Current metadata/SQL policy revision이 다르면 DB 접근 전에 fail-closed한다.
 - Row/byte/OID limit은 결과를 client에 보내기 전에 검사한다.
 - Timeout, cancel, disconnect, error와 shutdown은 rollback하고 pool connection을 반환한다.

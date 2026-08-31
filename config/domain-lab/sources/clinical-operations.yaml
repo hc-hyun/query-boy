@@ -1,4 +1,4 @@
-version: 2
+version: 3
 
 source_id: clinical-operations
 name: 가상 임상 운영
@@ -15,7 +15,7 @@ connection:
   database: clinical_operations
   user: clinical_operations_reader
   password_env: CLINICAL_OPERATIONS_READER_PASSWORD
-  ssl: false
+  sslmode: disable
 allowed_schemas: [ai]
 allowed_relation_kinds: [view]
 budget_profile: interactive

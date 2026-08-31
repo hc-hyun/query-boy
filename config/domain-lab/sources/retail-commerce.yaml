@@ -1,4 +1,4 @@
-version: 2
+version: 3
 
 source_id: retail-commerce
 name: 리테일 커머스
@@ -15,7 +15,7 @@ connection:
   database: retail_commerce
   user: retail_commerce_reader
   password_env: RETAIL_COMMERCE_READER_PASSWORD
-  ssl: false
+  sslmode: disable
 allowed_schemas: [ai]
 allowed_relation_kinds: [view]
 budget_profile: interactive

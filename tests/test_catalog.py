@@ -133,8 +133,12 @@ async def test_catalog_load_checks_connection_before_existing_transaction_order(
         assert requested_source is source
         return Pool()
 
-    def accept_connection_policy(requested_connection: object) -> None:
+    def accept_connection_policy(
+        requested_connection: object,
+        requested_sslmode: object,
+    ) -> None:
         assert requested_connection is connection
+        assert requested_sslmode == source.connection.sslmode
         events.append("connection-policy")
 
     async def accept_session_policy(
@@ -218,8 +222,12 @@ async def test_catalog_connection_policy_mismatch_closes_without_sql_or_rollback
         assert requested_source is source
         return Pool()
 
-    def reject_connection_policy(requested_connection: object) -> None:
+    def reject_connection_policy(
+        requested_connection: object,
+        requested_sslmode: object,
+    ) -> None:
         assert requested_connection is connection
+        assert requested_sslmode == source.connection.sslmode
         raise marker
 
     catalog = PostgresCatalog()
@@ -279,8 +287,12 @@ async def test_catalog_connection_info_failure_preserves_transient_exception(
         assert requested_source is source
         return Pool()
 
-    def fail_connection_policy(requested_connection: object) -> None:
+    def fail_connection_policy(
+        requested_connection: object,
+        requested_sslmode: object,
+    ) -> None:
         assert requested_connection is connection
+        assert requested_sslmode == source.connection.sslmode
         raise failure
 
     catalog = PostgresCatalog()
@@ -323,6 +335,38 @@ async def test_catalog_pool_requests_approved_client_encoding(
     connection_kwargs = configuration["kwargs"]
     assert isinstance(connection_kwargs, dict)
     assert connection_kwargs["client_encoding"] == READER_CLIENT_ENCODING
+
+
+@pytest.mark.parametrize("sslmode", ["disable", "require", "verify-full"])
+@pytest.mark.asyncio
+async def test_catalog_pool_passes_resolved_sslmode_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+    sslmode: str,
+) -> None:
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+    source = replace(
+        source,
+        connection=replace(source.connection, sslmode=sslmode),
+    )
+    configuration: dict[str, object] = {}
+
+    class Pool:
+        def __init__(self, **values: object) -> None:
+            configuration.update(values)
+
+        async def open(self) -> None:
+            pass
+
+    monkeypatch.setattr(catalog_module, "AsyncConnectionPool", Pool)
+
+    catalog = PostgresCatalog()
+    await catalog._get_pool(source)
+
+    connection_kwargs = configuration["kwargs"]
+    assert isinstance(connection_kwargs, dict)
+    assert connection_kwargs["sslmode"] == sslmode
+    assert connection_kwargs["gssencmode"] == "disable"
 
 
 @pytest.mark.asyncio
@@ -382,8 +426,12 @@ async def test_catalog_limit_with_failed_rollback_never_serves_warm_stale(
         assert requested_connection is connection
         assert requested_source is source
 
-    def accept_connection_policy(requested_connection: object) -> None:
+    def accept_connection_policy(
+        requested_connection: object,
+        requested_sslmode: object,
+    ) -> None:
         assert requested_connection is connection
+        assert requested_sslmode == source.connection.sslmode
 
     monkeypatch.setattr(catalog, "_get_pool", get_pool)
     monkeypatch.setattr(

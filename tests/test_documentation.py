@@ -104,6 +104,7 @@ def test_current_tree_keeps_current_decisions_and_git_archive_pointer() -> None:
         "0025-static-non-rls-first-launch.md",
         "0027-consent-gated-diagnostic-capture.md",
         "0030-git-reviewed-yaml-source-authority.md",
+        "0033-explicit-source-tls-modes.md",
     }
     decision_files = {
         path.name for path in DECISION_DIRECTORY.glob("[0-9][0-9][0-9][0-9]-*.md")

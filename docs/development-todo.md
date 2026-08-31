@@ -54,10 +54,14 @@ versioned configuration이 없으면 해당 작업을 중단하고 별도 reposi
 
 ### DBENV-01: 실제 DB 환경 연결
 
-현재 두 source manifest는 `provenance.environment=development`, loopback host와 `ssl=false`를 기본으로
-한다. Host·port·password는 환경변수로 resolve할 수 있지만 두 source는 현재 같은 host/port 환경변수
-key를 공유한다. Database와 reader user, TLS enablement(`false`는 `disable`, `true`는 `verify-full`),
-allowed schema/relation kind와 semantic overlay는 reviewed manifest에 고정된다. Exact 공개 relation
+현재 두 source manifest는 `provenance.environment=development`, loopback host와
+`sslmode=disable`을 사용한다. Host·port·password는 환경변수로 resolve할 수 있지만 두 source는 현재
+같은 host/port 환경변수 key를 공유한다. Database와 reader user, required TLS mode(`disable`,
+`require`, `verify-full`), allowed schema/relation kind와 semantic overlay는 reviewed manifest에 고정된다.
+`prefer`, `allow`, `verify-ca`와 mode 생략은 거부한다. `require`의 no-plaintext·no-hostname-verification
+경계와 CA/SAN 개선 조건은 [ADR 0033](decisions/0033-explicit-source-tls-modes.md)을 따른다. Source는 TCP
+endpoint만 허용하고 pool은 `gssencmode=disable`로 reviewed TLS mode를 고정하며 SQL 전에 실제 TLS
+state를 확인한다. Exact 공개 relation
 set은 승인된 DB DDL inventory와 metadata revision으로 검증한다.
 
 1. 대상 host·port·database·reader user, network path, TLS/CA, secret owner와 DBA를 확정한다.

@@ -68,7 +68,7 @@ class FakeBackend:
         return {
             "authority": "yaml",
             "path": f"config/sources/{source_id}.yaml",
-            "manifest": {"version": 2, "source_id": source_id},
+            "manifest": {"version": 3, "source_id": source_id},
         }
 
     def source_validate(self) -> dict[str, object]:
@@ -271,7 +271,7 @@ def test_source_commands_render_yaml_and_cache_listed_sources() -> None:
 
     shown = yaml.safe_load(output.getvalue())
     assert shown["path"] == "config/sources/known-source.yaml"
-    assert shown["manifest"] == {"version": 2, "source_id": "known-source"}
+    assert shown["manifest"] == {"version": 3, "source_id": "known-source"}
     assert backend.source_calls == [("list",), ("show", "known-source")]
 
 

@@ -197,6 +197,21 @@ def test_revision_changes_with_execution_budget() -> None:
     )
 
 
+def test_revision_ignores_source_transport_mode() -> None:
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+    snapshot = minimal_development_snapshot()
+    changed = replace(
+        source,
+        connection=replace(source.connection, sslmode="require"),
+    )
+
+    assert create_metadata_revision(changed, snapshot) == create_metadata_revision(
+        source,
+        snapshot,
+    )
+
+
 def test_revision_ignores_source_provenance() -> None:
     source = load_test_registry().get("development-issues")
     assert source is not None

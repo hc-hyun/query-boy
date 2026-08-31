@@ -41,8 +41,10 @@ runbook입니다. DB DDL/reader/view, source manifest, AuthBridge mapper나 appl
 Repository 변경 승인은 실제 환경 실행 승인이 아닙니다. 실행 전 change record에 target,
 operator access, authentication authority, TLS/secret/backup, source·DDL·role/settings inventory,
 approved Git commit, upstream/application image digest, route, stop/rollback 조건과 책임자를
-기록합니다. AuthBridge를 선택하면 exact issuer, Query Man 전용 audience/scope mapper, CA
-trust와 client token 취득·refresh owner도 기록합니다.
+기록합니다. TLS inventory에는 source manifest v3의 exact `sslmode`, native PostgreSQL TCP endpoint,
+root CA/`PGSSLROOTCERT`, `require`의 hostname-risk 승인과 CA/SAN 개선 조건을 포함합니다. AuthBridge를
+선택하면 exact issuer, Query Man 전용 audience/scope mapper, CA trust와 client token 취득·refresh
+owner도 기록합니다.
 
 ### Artifact preparation
 
@@ -63,7 +65,9 @@ artifact acceptance에서 시작하지 않습니다.
 
 Source YAML, budget/access policy, source DDL/view/function/operator/type/collation/extension, reader
 role/grant와 database/role/server setting을 승인 inventory와 비교합니다. YAML은 secret 값이
-아니라 환경 변수 이름만 포함해야 합니다.
+아니라 환경 변수 이름만 포함해야 합니다. Source YAML은 exact v3 `sslmode`를 가져야 하며 `prefer`,
+`allow`, `verify-ca`와 생략은 중단 조건입니다. Runtime checkout이 `gssencmode=disable`과 reviewed
+mode에 맞는 실제 TLS state를 확인하는 artifact여야 합니다.
 
 아래 Compose 명령은 repository/local fixture에서 artifact와 검사 경로를 재현하는 예시이며 protected
 DB 배포 명령이나 environment evidence가 아닙니다. 실제 target의 deploy, DB probe와 token acceptance

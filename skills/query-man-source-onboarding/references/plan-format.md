@@ -19,11 +19,12 @@ content.
 
 ## 3. Missing Decisions
 
-Ask only questions that can change the plan: owner/contact, non-secret endpoint identity, migration reference,
-curated grain/columns, TLS/RLS, connection capacity, representative workload, existing profile fit, relation and
-column business descriptions, semantic unit/scale, DB-owner confirmation that exact curated views contain no
-personal or sensitive personal data, and verified-result expectations. Do not ask for row samples, credential
-values, provider secret paths or per-user grants.
+Ask only questions that can change the plan: owner/contact, non-secret native PostgreSQL TCP endpoint identity,
+migration reference, curated grain/columns, exact `disable`/`require`/`verify-full` TLS mode and its evidence, RLS,
+connection capacity, representative workload, existing profile fit, relation and column business descriptions,
+semantic unit/scale, DB-owner confirmation that exact curated views contain no personal or sensitive personal
+data, and verified-result expectations. Do not ask for row samples, credential values, provider secret paths or
+per-user grants.
 
 ## 4. DB-Owner Work
 
@@ -42,9 +43,12 @@ denial remains required.
 
 Name the exact `config/sources/<source-id>.yaml` addition or edit and any necessary
 `config/verified-queries.yaml` entries. List field-level proposed values, `unknown` decisions and credential
-environment-variable placeholders without values. Use an existing budget profile; list a budget configuration
-change only as a separately approved prerequisite. State explicit non-changes to Python source-specific logic,
-HTTP/MCP tools, access policy and unsupported RLS/result-type scope.
+environment-variable placeholders without values. Require manifest version 3 and one explicit `sslmode` from
+`disable`, `require` and `verify-full`; never propose `prefer`, `allow`, `verify-ca` or an omitted mode. A
+`require` proposal records its no-hostname-verification risk, exact deployment CA inventory and CA/SAN remediation
+condition. Use an existing budget profile; list a budget configuration change only as a separately approved
+prerequisite. State explicit non-changes to Python source-specific logic, HTTP/MCP tools, access policy and
+unsupported RLS/result-type scope.
 
 Do not edit files. End this section with the exact change-set approval required before a separate implementation
 may apply the proposal.
@@ -54,6 +58,8 @@ may apply the proposal.
 Cover strict YAML validation, source-ID collision and endpoint-rebinding checks, traffic-off reader policy,
 bounded L0 catalog scope, L1 semantics, L2 reviewed results when required, supported result OIDs, exact metadata
 and SQL-policy revisions, hard limits, HTTP/MCP parity, pinned artifact readiness and secret/log non-disclosure.
+For `require`, include the exact application artifact and root CA/`PGSSLROOTCERT` environment in traffic-off
+acceptance because libpq can validate the CA chain when a root CA file is present.
 Record relation/column comment coverage, DB-owner review of suggested descriptions and confirmation that each
 exact curated view contains no personal or sensitive personal data as pending evidence unless authoritative
 evidence was supplied.
@@ -74,6 +80,9 @@ personal data in a curated view or missing DB-owner confirmation of its absence,
 user-specific access, automated mutation, missing exact change-set approval or missing protected deployment
 approval. Missing descriptions also stop publication when grain, null, unit/scale, derivation or aggregation
 meaning would otherwise be guessed.
+
+An omitted or unsupported TLS mode, or a `require` proposal without reviewed hostname-risk acceptance and a
+CA/SAN remediation condition, is a stop condition.
 
 Database `TEMP` possession by itself is not a reader-policy failure or stop condition.
 

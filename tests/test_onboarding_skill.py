@@ -79,6 +79,13 @@ def test_onboarding_skill_has_no_executable_mutation_recipe() -> None:
     assert "`config/verified-queries.yaml`" in content
     assert "0031-no-pii-curated-view-boundary.md" in content
     assert "0032-reader-temp-admission-relaxation.md" in content
+    assert "0033-explicit-source-tls-modes.md" in content
+    assert "`disable`, `require` or `verify-full`" in content
+    assert "Source manifest v3 requires an exact `sslmode`" in content
+    assert "`prefer`, `allow`, `verify-ca` or omission" in content
+    assert "`require` as a no-plaintext but no-hostname-verification" in content
+    assert "native\n   PostgreSQL TCP endpoint" in content
+    assert "GSSAPI authentication over that reviewed transport remains a separate concern" in content
     assert "Database `TEMP` privilege absence is not a reader admission requirement" in content
     assert "Database `TEMP` possession by itself is not a reader-policy failure" in content
     assert "allowed-schema `CREATE` denial" in content

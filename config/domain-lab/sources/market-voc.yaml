@@ -1,4 +1,4 @@
-version: 2
+version: 3
 
 source_id: market-voc
 name: 시장 VOC
@@ -15,7 +15,7 @@ connection:
   database: market_voc
   user: market_voc_reader
   password_env: MARKET_VOC_READER_PASSWORD
-  ssl: false
+  sslmode: disable
 allowed_schemas:
   - ai
 allowed_relation_kinds:
