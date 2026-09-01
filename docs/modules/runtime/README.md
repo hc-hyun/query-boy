@@ -10,6 +10,9 @@ Runtime은 Git-reviewed YAML source authority를 한 번 load해 Source Catalog,
 Delivery를 production process로 조립한다. Configuration, startup/readiness, safe logging, diagnostic
 capture와 shutdown cleanup을 소유한다.
 
+Base `compose.yaml`은 application-only이며 source PostgreSQL을 provision하지 않는다. 재현 가능한
+로컬·CI source database는 명시적인 `compose.fixture.yaml` overlay만 소유한다.
+
 `qm source list|show|validate`는 repository YAML을 읽는 local read-only operator CLI다. Runtime에는
 source mode selector, Control DB, managed fallback, hot reload 또는 source mutation API가 없다. Retired
 managed environment가 남아 있으면 조용히 무시하지 않고 startup configuration error로 거부한다.
@@ -41,7 +44,7 @@ managed environment가 남아 있으면 조용히 무시하지 않고 startup co
 | [`runtime/diagnostic_capture.py`](../../../src/query_man/runtime/diagnostic_capture.py) | Consent-gated encrypted local capture lifecycle |
 | [`runtime/operator_shell.py`](../../../src/query_man/runtime/operator_shell.py) | `qm` UI, argument parsing, rendering과 entrypoint |
 | [`runtime/operator_backend.py`](../../../src/query_man/runtime/operator_backend.py) | Operator HTTP/Docker/diagnostic I/O, settings와 local YAML source loading |
-| [`compose.yaml`](../../../compose.yaml), [`Dockerfile`](../../../Dockerfile) | Serving artifact/topology |
+| [`compose.yaml`](../../../compose.yaml), [`compose.fixture.yaml`](../../../compose.fixture.yaml), [`Dockerfile`](../../../Dockerfile) | Application-only serving artifact와 explicit local/CI fixture topology |
 | [`test_runtime_config.py`](../../../tests/test_runtime_config.py), [`test_runtime_startup_cleanup.py`](../../../tests/test_runtime_startup_cleanup.py), [`test_operator_shell.py`](../../../tests/test_operator_shell.py) | Focused tests |
 
 ## 제공 인터페이스와 소유 경계
@@ -111,6 +114,7 @@ connection interrupt와 대기 항목 drop을 시도한 다음 다른 Runtime cl
 ## 불변조건
 
 - Git-reviewed YAML만 source authority이며 DB/managed/filesystem fallback 간 선택 모드는 없다.
+- Base serving topology는 source database를 provision하지 않으며 fixture DB는 explicit overlay에서만 시작한다.
 - Retired managed environment는 값이나 secret을 노출하지 않고 fail-closed한다.
 - RLS 또는 required inventory/capability/probe 실패는 listener readiness 전에 거부한다.
 - Startup partial failure와 shutdown은 owned resource를 정해진 순서로 leak 없이 정리한다.
@@ -149,9 +153,9 @@ Container/topology 변경은 container acceptance를, shutdown/socket 변경은 
 
 | 변경 | 먼저 읽을 범위 |
 |---|---|
-| Environment | `runtime/config.py`, `.env.example`, `test_runtime_config.py` |
+| Environment | `runtime/config.py`, `.env.example`, `.env.fixture.example`, `test_runtime_config.py` |
 | Composition/startup/shutdown cleanup | `runtime/composition.py`, `runtime/server.py`, provider lifecycle, `test_runtime_startup_cleanup.py`, `test_server.py` |
 | Operator CLI UI/parser | `runtime/operator_shell.py`, `test_operator_shell.py` |
 | Operator backend/I/O | `runtime/operator_backend.py`, SourceRegistry/VerifiedQueryRegistry, `test_operator_shell.py` |
 | Operations/logging | `runtime/operations.py`, direct consumer, focused test |
-| Server/container | `runtime/server.py`, `Dockerfile`, `compose.yaml`, operations guide와 acceptance |
+| Server/container | `runtime/server.py`, `Dockerfile`, `compose.yaml`, `compose.fixture.yaml`, operations guide와 acceptance |

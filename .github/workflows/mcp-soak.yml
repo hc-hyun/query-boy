@@ -27,7 +27,7 @@ jobs:
         run: uv sync --locked
       - name: Prepare deterministic PostgreSQL fixtures
         run: |
-          cp .env.example .env
+          cp .env.fixture.example .env
           docker compose up -d --wait --wait-timeout 120 postgres
           ./scripts/apply-db.sh
       - name: Build and start two MCP replicas

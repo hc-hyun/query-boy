@@ -2,7 +2,7 @@ name: query-man-scale-fixture
 
 services:
   postgres:
-    container_name: query-man-scale-fixture-postgres
+    container_name: voc-gen-database
     environment:
       QUERY_MAN_SCALE_FIXTURE: "1"
     command:

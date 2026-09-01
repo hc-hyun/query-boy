@@ -151,6 +151,7 @@ Fixture 자체의 row 수, 의미 분포, view metadata와 reader 권한까지 �
 사용합니다.
 
 ```bash
+test -f .env || cp .env.fixture.example .env
 docker compose up -d --wait postgres
 ./scripts/apply-db.sh
 ```

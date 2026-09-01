@@ -43,7 +43,9 @@ onboarding과 HA를 한 번에 완료하면 첫 오픈 범위와 일정이 불�
   배포입니다.
 - First-launch topology는 단일 Query Man replica입니다. `soak` profile과 두 번째 replica는
   acceptance fixture이며 serving topology가 아닙니다.
-- Base `compose.yaml`, `scripts/apply-db.sh`와 CI는 current two-source static path만 준비합니다.
+- Base `compose.yaml`은 application-only이며 source database를 provision하지 않습니다.
+  `compose.fixture.yaml`, `scripts/apply-db.sh`와 CI는 명시적인 local/acceptance two-source fixture만
+  준비합니다.
 
 ### 2. RLS quarantine
 

@@ -77,7 +77,7 @@ CRITICAL_NON_PYTHON_MAPPINGS = (
     "`config/sources/`, `config/budget-profiles.yaml`",
     "`config/access-policies*.yaml`",
     "`config/quality-evaluation.yaml`, `config/verified-queries.yaml`, `config/security-evaluation.yaml`",
-    "`Dockerfile`, `compose.yaml`, `.env.example`",
+    "`Dockerfile`, `compose.yaml`, `compose.fixture.yaml`, `.env*.example`",
     "`scripts/verify-container.sh`",
     "`.github/workflows/ci.yml`, `.github/workflows/mcp-soak.yml`",
     "`skills/query-man-text-to-sql/`",
@@ -435,6 +435,7 @@ def test_runtime_has_no_fixture_source_specialization() -> None:
 def test_container_inputs_are_immutable_and_revision_labeled() -> None:
     dockerfile = (ROOT_DIRECTORY / "Dockerfile").read_text(encoding="utf-8")
     compose = (ROOT_DIRECTORY / "compose.yaml").read_text(encoding="utf-8")
+    fixture = (ROOT_DIRECTORY / "compose.fixture.yaml").read_text(encoding="utf-8")
     workflow = (ROOT_DIRECTORY / ".github" / "workflows" / "ci.yml").read_text(
         encoding="utf-8"
     )
@@ -442,7 +443,7 @@ def test_container_inputs_are_immutable_and_revision_labeled() -> None:
     assert "COPY --from=ghcr.io/astral-sh/uv:0.9.18@sha256:" in dockerfile
     assert "ARG QUERY_MAN_VCS_REF" in dockerfile
     assert 'LABEL org.opencontainers.image.revision="${QUERY_MAN_VCS_REF}"' in dockerfile
-    assert len(re.findall(r"image: postgres:[^\n]+@sha256:[0-9a-f]{64}", compose)) == 1
+    assert len(re.findall(r"image: postgres:[^\n]+@sha256:[0-9a-f]{64}", fixture)) == 1
     assert 'payload == b\'{"status":"ready"}\'' in compose
     assert "QUERY_MAN_VCS_REF: ${{ github.sha }}" in workflow
     assert (
@@ -450,6 +451,23 @@ def test_container_inputs_are_immutable_and_revision_labeled() -> None:
         in workflow
     )
     assert 'test "$revision" = "$QUERY_MAN_VCS_REF"' in workflow
+
+
+def test_base_compose_does_not_provision_a_source_database() -> None:
+    compose = (ROOT_DIRECTORY / "compose.yaml").read_text(encoding="utf-8")
+    fixture = (ROOT_DIRECTORY / "compose.fixture.yaml").read_text(encoding="utf-8")
+    service_environment = (ROOT_DIRECTORY / ".env.example").read_text(encoding="utf-8")
+    fixture_environment = (ROOT_DIRECTORY / ".env.fixture.example").read_text(
+        encoding="utf-8"
+    )
+
+    assert "\n  postgres:\n" not in compose
+    assert "\n  postgres:\n" in fixture
+    assert "depends_on:" not in compose
+    for setting in ("POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD"):
+        assert setting not in service_environment
+        assert f"{setting}=" in fixture_environment
+    assert "COMPOSE_FILE=compose.yaml:compose.fixture.yaml" in fixture_environment
 
 
 def test_bounded_pytest_traceback_does_not_render_argument_secrets(
@@ -499,13 +517,14 @@ def test_traceback_probe() -> None:
 
 def test_ci_and_compose_use_only_the_yaml_authority() -> None:
     compose = (ROOT_DIRECTORY / "compose.yaml").read_text(encoding="utf-8")
+    fixture = (ROOT_DIRECTORY / "compose.fixture.yaml").read_text(encoding="utf-8")
     workflow = (ROOT_DIRECTORY / ".github" / "workflows" / "ci.yml").read_text(
         encoding="utf-8"
     )
 
     assert "name: query-man" in compose
     assert "QUERY_MAN_SOURCE_MODE" not in compose
-    assert "postgres-control-recovery-source" not in compose
+    assert "postgres-control-recovery-source" not in compose + fixture
     assert "managed-acceptance" not in workflow
     assert "--ignore=tests/test_managed" not in workflow
 

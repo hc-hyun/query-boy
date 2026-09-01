@@ -17,7 +17,7 @@ jobs:
         run: uv sync --locked
       - name: Start Git-reviewed YAML PostgreSQL fixtures
         run: |
-          cp .env.example .env
+          cp .env.fixture.example .env
           docker compose config --quiet
           docker compose up -d --wait postgres
           ./scripts/apply-db.sh
@@ -55,7 +55,7 @@ jobs:
         run: uv sync --locked
       - name: Start containerized HTTP and MCP runtime
         run: |
-          cp .env.example .env
+          cp .env.fixture.example .env
           docker compose config --quiet
           docker compose up -d --wait --wait-timeout 120 postgres
           ./scripts/apply-db.sh

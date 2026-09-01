@@ -8,6 +8,7 @@ compose=(
   docker compose
   --env-file .env
   --file compose.yaml
+  --file compose.fixture.yaml
   --file compose.domain-lab.yaml
 )
 

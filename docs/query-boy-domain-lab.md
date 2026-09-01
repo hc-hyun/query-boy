@@ -10,7 +10,7 @@ Change-sets: `QB-DOMAIN-LAB-20260828` (baseline `deef37a`),
 로컬 catalog에 노출한다. Full profile은 **다섯 도메인을 합쳐 fact 1,000,000건**이며 source마다
 1,000,000건이 아니다.
 
-이 문서는 로컬 disposable fixture 절차다. `compose.yaml`, 기본 두 source inventory,
+이 문서는 로컬 disposable fixture 절차다. Application-only `compose.yaml`, 기본 두 source inventory,
 `config/verified-queries.yaml`, 운영 migration이나 현재 source authority를 변경하지 않는다.
 
 ## 격리 경계와 source inventory
@@ -40,8 +40,8 @@ Domain-lab catalog는 기존 `development-issues`, `market-voc`와 다음 다섯
 
 기존 두 manifest와 기존 9개 verified-query contract는 domain-lab directory에 byte-for-byte 복사한다.
 신규 다섯 source는 공개 view마다 한 개씩 총 15개 contract를 추가해 모두 L2다. Domain-lab 전체는
-기존 9개와 신규 15개를 합쳐 24개 contract를 traffic 밖에서 검증한다. Overlay는 base Compose와
-함께만 사용한다. `compose.scale.yaml`이나 기본/scale volume과 섞지 않는다.
+기존 9개와 신규 15개를 합쳐 24개 contract를 traffic 밖에서 검증한다. Domain overlay는 base와
+`compose.fixture.yaml`을 함께 사용한다. `compose.scale.yaml`이나 기본/scale volume과 섞지 않는다.
 
 모든 데이터는 seed `2026082802`, 기준 시각 `2026-08-28T00:00:00Z`의 결정적 합성 데이터다.
 `clinical-operations`는 합성 예약·검사 운영 데이터만 제공하며 진단이나 처방은 제공하지 않는다.
@@ -96,6 +96,7 @@ ${EDITOR:-vi} .env
 docker compose \
   --env-file .env \
   --file compose.yaml \
+  --file compose.fixture.yaml \
   --file compose.domain-lab.yaml \
   config --quiet
 ```
@@ -110,6 +111,7 @@ Compose 2.24 이상의 `!override` 지원이 필요하다. Rendered config에는
 docker compose \
   --env-file .env \
   --file compose.yaml \
+  --file compose.fixture.yaml \
   --file compose.domain-lab.yaml \
   up -d --build --wait postgres
 
@@ -117,6 +119,7 @@ test "$(
   docker compose \
     --env-file .env \
     --file compose.yaml \
+    --file compose.fixture.yaml \
     --file compose.domain-lab.yaml \
     exec -T postgres \
     psql --username query_man_admin --dbname retail_commerce \
@@ -184,6 +187,7 @@ cd ../query-boy
 docker compose \
   --env-file .env \
   --file compose.yaml \
+  --file compose.fixture.yaml \
   --file compose.domain-lab.yaml \
   down -v --remove-orphans
 ```
@@ -214,6 +218,7 @@ Query Boy로 반출하지 말고 처음에는 `count`, 상태·지역·기간별
 docker compose \
   --env-file .env \
   --file compose.yaml \
+  --file compose.fixture.yaml \
   --file compose.domain-lab.yaml \
   exec -T postgres \
   psql --username query_man_admin --dbname retail_commerce --set=ON_ERROR_STOP=1 <<'SQL'
@@ -294,6 +299,7 @@ Full 또는 pilot load 뒤 app을 시작한다.
 docker compose \
   --env-file .env \
   --file compose.yaml \
+  --file compose.fixture.yaml \
   --file compose.domain-lab.yaml \
   up -d --build --wait query-man
 
@@ -301,6 +307,7 @@ test "$(
   docker compose \
     --env-file .env \
     --file compose.yaml \
+    --file compose.fixture.yaml \
     --file compose.domain-lab.yaml \
     exec -T query-man printenv QUERY_MAN_DOMAIN_LAB
 )" = "1"
@@ -362,6 +369,7 @@ End-to-end는 위 marker, count, privilege, `/sources`, `get_context.answerabili
 docker compose \
   --env-file .env \
   --file compose.yaml \
+  --file compose.fixture.yaml \
   --file compose.domain-lab.yaml \
   down --remove-orphans
 ```

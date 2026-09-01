@@ -3,15 +3,15 @@
 Status: Optional local fixture; production 사용 금지
 
 이 절차는 `voc-gen`이 만든 합성 데이터를 Query Boy의 기존 `market_voc` schema에 적재해 대량 조회를
-시험하기 위한 로컬 전용 절차다. `compose.yaml`과 `compose.scale.yaml`을 함께 사용할 때만 동작하며,
-기본 `query-man` project나 기본 PostgreSQL volume은 수정하지 않는다.
+시험하기 위한 로컬 전용 절차다. `compose.yaml`, `compose.fixture.yaml`, `compose.scale.yaml`을 함께
+사용할 때만 동작하며, 기본 `query-man` project나 기본 PostgreSQL volume은 수정하지 않는다.
 
 ## 격리 경계
 
 | 항목 | Scale fixture 값 |
 |---|---|
 | Compose project | `query-man-scale-fixture` |
-| PostgreSQL container | `query-man-scale-fixture-postgres` |
+| PostgreSQL container | `voc-gen-database` |
 | Query Man container | `query-man-scale-fixture-app` |
 | PostgreSQL volume | `query-man-scale-fixture-postgres-data` |
 | PostgreSQL host port | `${QUERY_MAN_SCALE_POSTGRES_PORT:-55433}` |
@@ -34,7 +34,8 @@ Query Boy root에서 로컬 `.env`를 먼저 준비한다. `compose.scale.yaml`�
 `!override` tag를 사용해 base host port를 scale port로 완전히 교체한다.
 
 ```bash
-export COMPOSE_FILE=compose.yaml:compose.scale.yaml
+test -f .env || cp .env.fixture.example .env
+export COMPOSE_FILE=compose.yaml:compose.fixture.yaml:compose.scale.yaml
 docker compose config --quiet
 docker compose up -d --wait postgres
 
@@ -123,6 +124,7 @@ base에서 재현하도록 scale project의 volume만 삭제한다.
 ```bash
 docker compose \
   --file compose.yaml \
+  --file compose.fixture.yaml \
   --file compose.scale.yaml \
   down -v --remove-orphans
 ```
@@ -237,6 +239,7 @@ Scale 적재는 별도 volume의 business row만 바꾸며 source manifest, meta
 ```bash
 docker compose \
   --file compose.yaml \
+  --file compose.fixture.yaml \
   --file compose.scale.yaml \
   down --remove-orphans
 ```
@@ -246,6 +249,7 @@ Pilot 폐기, full rollback 또는 완전 초기화는 같은 scale project에�
 ```bash
 docker compose \
   --file compose.yaml \
+  --file compose.fixture.yaml \
   --file compose.scale.yaml \
   down -v --remove-orphans
 
@@ -255,4 +259,4 @@ unset QUERY_BOY_DB_PASSWORD QUERY_BOY_DB_SSLMODE QUERY_BOY_DB_CONNECT_TIMEOUT
 ```
 
 기본 project에 대한 bare `docker compose down -v`를 rollback으로 사용하지 않는다. Scale-only 명령
-후 기본 fixture와 verified baseline은 그대로 남고, 필요하면 평소 `compose.yaml` 절차로 별도 실행한다.
+후 기본 fixture와 verified baseline은 그대로 남고, 필요하면 평소 base+fixture 절차로 별도 실행한다.

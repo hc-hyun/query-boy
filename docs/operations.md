@@ -24,6 +24,9 @@ mutation, Control DB, hot reload과 source convergence 운영 절차는 제공�
 backup, credential 또는 key는 이 runbook으로 폐기하지 않습니다. Exact inventory, retention, target,
 access scope, rollback과 change-record 책임을 정한 별도 protected-operation 승인이 필요합니다.
 
+Base `compose.yaml`은 application-only topology이며 source PostgreSQL을 provision하지 않습니다.
+`compose.fixture.yaml`은 로컬·CI에서만 쓰는 명시적 합성 source overlay입니다.
+
 ## Static Non-RLS First Launch
 
 [ADR 0025](decisions/0025-static-non-rls-first-launch.md)의 first launch는 다음 exact profile만 대상으로 합니다.
@@ -52,8 +55,9 @@ owner도 기록합니다.
 git status --short
 git rev-parse HEAD
 export QUERY_MAN_VCS_REF=<approved-40-hex-git-commit>
-docker compose config --quiet
-docker compose build --build-arg QUERY_MAN_VCS_REF="$QUERY_MAN_VCS_REF" query-man
+docker compose --file compose.yaml config --quiet
+docker compose --file compose.yaml build \
+  --build-arg QUERY_MAN_VCS_REF="$QUERY_MAN_VCS_REF" query-man
 docker image inspect query-man:local \
   --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}'
 ```
@@ -74,6 +78,7 @@ DB 배포 명령이나 environment evidence가 아닙니다. 실제 target의 de
 명령은 `DBENV-01`·`AUTHENV-01` 실행 승인과 change record에서 exact 값으로 고정합니다.
 
 ```bash
+test -f .env || cp .env.fixture.example .env
 uv run qm source validate
 docker compose up -d --wait postgres query-man
 ./scripts/verify-container.sh
@@ -199,14 +204,16 @@ load balancer가 일반 traffic을 막은 뒤에는 operator/canary의 검증 qu
 ## Local Container Operations
 
 ```bash
+test -f .env || cp .env.fixture.example .env
 docker compose up -d --wait postgres
 ./scripts/apply-db.sh
 docker compose up -d --build --wait query-man
 ./scripts/verify-container.sh
 ```
 
-Application port는 container `3000`, host loopback `${QUERY_MAN_PORT:-3000}`입니다. Token과 reader
-password는 `.env`에서 주입하고 image build context·Git·application log에 넣지 않습니다.
+`.env.fixture.example`의 `COMPOSE_FILE`이 base와 fixture overlay를 함께 선택합니다. Application port는
+container `3000`, host loopback `${QUERY_MAN_PORT:-3000}`입니다. Token과 reader password는 `.env`에서
+주입하고 image build context·Git·application log에 넣지 않습니다.
 Application container에 PostgreSQL administrator password를 전달하지 않습니다.
 
 MCP의 Host/Origin, content type, protocol version과 duplicate security header를 fail-closed로 검증합니다.

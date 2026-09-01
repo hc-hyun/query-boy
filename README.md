@@ -90,6 +90,13 @@ Source authority의 현재 결정은 [ADR 0030](docs/decisions/0030-git-reviewed
 
 ## 5분 로컬 실행
 
+기본 [`compose.yaml`](compose.yaml)은 Query Man application만 정의하며 PostgreSQL을 만들거나
+`POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`를 요구하지 않습니다. 배포 환경에서는 reviewed
+source manifest가 가리키는 외부 PostgreSQL endpoint와 reader secret만 연결합니다.
+
+아래 5분 절차는 실제 source가 없는 로컬·CI를 위해 [`compose.fixture.yaml`](compose.fixture.yaml)을
+추가해 합성 PostgreSQL source 두 개를 함께 실행합니다.
+
 ### 준비물
 
 - Docker와 Docker Compose
@@ -105,18 +112,24 @@ Python 3.14 image를 사용합니다.
 ### 1. 로컬 설정 만들기
 
 ```bash
-test -f .env || cp .env.example .env
+test -f .env || cp .env.fixture.example .env
 openssl rand -hex 32
 openssl rand -hex 32
 ```
 
 두 난수 결과를 각각 `.env`의 `QUERY_MAN_CODEX_MCP_TOKEN`과 `QUERY_MAN_OPERATOR_TOKEN`에 넣습니다.
-두 token은 서로 달라야 합니다. 기본 Compose가 사용하는 PostgreSQL과 current 두 reader의
+두 token은 서로 달라야 합니다. Fixture Compose가 사용하는 PostgreSQL과 current 두 reader의
 `replace-with-...` 값도 각각 로컬 전용 password로 바꿉니다.
 
+기존 `.env`를 계속 사용한다면 `COMPOSE_FILE=compose.yaml:compose.fixture.yaml`과
+`QUERY_MAN_POSTGRES_HOST=postgres`가 있는지 확인합니다. 이 두 값이 없으면 base는 의도대로
+application만 선택하며 `postgres` service를 만들지 않습니다.
+
 - `.env`는 Git에서 제외됩니다. commit하지 마세요.
-- `.env.example`은 로컬 Compose용 예시일 뿐 운영 비밀값 관리 방법이 아닙니다.
-- 기본 Compose는 loopback에만 port를 열며 TLS를 제공하지 않습니다.
+- `.env.fixture.example`의 `COMPOSE_FILE`이 application base와 local fixture overlay를 함께 선택합니다.
+- `.env.example`은 외부 source에 연결하는 application-only 환경 변수 목록이며 운영 비밀값 관리
+  방법이 아닙니다.
+- Local fixture Compose는 loopback에만 port를 열며 TLS를 제공하지 않습니다.
 
 ### 2. PostgreSQL과 Query Man 시작하기
 
@@ -161,7 +174,7 @@ docker compose logs -f query-man
 uv run qm
 ```
 
-기본 Compose에는 query token과 별도의 `QUERY_MAN_OPERATOR_TOKEN`이 필요합니다. `.env.example`에서 새
+Compose에는 query token과 별도의 `QUERY_MAN_OPERATOR_TOKEN`이 필요합니다. `.env.fixture.example`에서 새
 random token으로 바꾸고 application image를 다시 빌드해야 container의 access policy에도 반영됩니다.
 `qm source list/show/validate`는 현재 checkout의 source·verified-query·budget YAML을 조회·검증하는
 local read-only 명령입니다. Source 변경은 pull request와 배포로만 반영합니다.
@@ -245,7 +258,7 @@ docker compose down
 ## Query Man이 지키는 안전장치
 
 - 클라이언트가 DB host, DSN, database, role이나 비밀번호를 지정할 수 없습니다.
-- 기본 Compose에서는 bearer token으로 인증된 조회 caller만 source, metadata와 query API를 사용할 수
+- Local fixture Compose에서는 bearer token으로 인증된 조회 caller만 source, metadata와 query API를 사용할 수
   있습니다.
 - AuthBridge mode에서는 서명, 고정 algorithm, issuer, audience, 만료와 endpoint scope/role/group을
   검증하고 ID/refresh token을 거부합니다.
@@ -291,6 +304,7 @@ Module interface는 allowed dependency 안에서 provider가 보장하는 중요
 Host에서 개발하려면 PostgreSQL fixture만 실행하고 Python 환경을 준비합니다.
 
 ```bash
+test -f .env || cp .env.fixture.example .env
 docker compose stop query-man
 docker compose up -d --wait postgres
 uv sync --locked

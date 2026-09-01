@@ -117,7 +117,7 @@ YAML pull request와 DBA 작업 handoff를 만들 수 있지만 credential 접�
 | `config/sources/`, `config/budget-profiles.yaml` | Source Catalog | Git-reviewed YAML source authority와 versioned budget |
 | `config/access-policies*.yaml` | Delivery | Caller/source/scope policy |
 | `config/quality-evaluation.yaml`, `config/verified-queries.yaml`, `config/security-evaluation.yaml` | Assurance | Versioned acceptance data; source membership은 Git YAML과 일치해야 함 |
-| `Dockerfile`, `compose.yaml`, `.env.example` | Runtime | Serving artifact와 environment contract |
+| `Dockerfile`, `compose.yaml`, `compose.fixture.yaml`, `.env*.example` | Runtime | Application-only serving artifact, explicit local/CI fixture와 environment contract |
 | `scripts/verify-container.sh` | Assurance; Runtime consumer | Container acceptance |
 | `.github/workflows/ci.yml`, `.github/workflows/mcp-soak.yml` | Assurance | Repository gate와 soak; shared transition artifact |
 | `skills/query-man-text-to-sql/` | Delivery workflow | Query Man MCP만 사용하고 DB에 직접 접속하지 않음 |
