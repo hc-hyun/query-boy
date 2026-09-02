@@ -41,7 +41,7 @@ environment 작업은 [Operations](operations.md)의 별도 실행 승인과 sto
 - [Active TODO](development-todo.md): 승인돼 실제로 남은 작업과 보류 주제
 - [Assurance module](modules/assurance/README.md): 보안·통합·container·load·soak repository gate
 - [Source onboarding·extension checklist](source-extension-checklist.md): 새 DB 변경의 end-to-end 검토 기준
-- [Scale fixture](query-boy-scale-fixture.md), [domain lab](query-boy-domain-lab.md): 격리된 개발·검증용 DB fixture
+- [Domain lab](query-boy-domain-lab.md): 격리된 7-source 개발·검증용 DB 환경
 
 코드 작업은 module index에서 primary module 하나를 고른 뒤 해당 README의 `30초 요약`과
 `집중해서 읽을 범위`에서 시작합니다. Package `__init__.py`는 marker-only이며 interface를

@@ -45,7 +45,7 @@ source별 같은 두 파일만 가진다. 모든 manifest는 version 4,
 `allowed_relation_kinds: [view]`와 양의 `view_contract_version`을 사용한다. Reader-visible view는
 source/version marker를 가지며 Metadata가 semantic coverage, grain, description, default time과 참조
 column/type을 공개 전에 직접 검사한다. Domain overlay는 base와 `compose.fixture.yaml`을 함께
-사용한다. `compose.scale.yaml`이나 기본/scale volume과 섞지 않는다.
+사용한다. 다른 Compose project나 기본 volume과 섞지 않는다.
 
 모든 데이터는 seed `2026082802`, 기준 시각 `2026-08-28T00:00:00Z`의 결정적 합성 데이터다.
 `clinical-operations`는 합성 예약·검사 운영 데이터만 제공하며 진단이나 처방은 제공하지 않는다.
@@ -197,8 +197,8 @@ docker compose \
 ```
 
 이 명령은 domain-lab project가 소유한 PostgreSQL volume과 optional diagnostic volume만 삭제한다.
-기본 `query-man_postgres_data`나 scale fixture volume을 대상으로 bare `docker compose down -v`를
-실행하지 않는다. 그다음 [깨끗한 schema 시작과 marker 검사](#2-깨끗한-schema-시작과-marker-검사)를
+기본 `query-man_postgres_data`를 대상으로 bare `docker compose down -v`를 실행하지 않는다. 그다음
+[깨끗한 schema 시작과 marker 검사](#2-깨끗한-schema-시작과-marker-검사)를
 반복한다.
 
 ## 5. Full 100만 fact 적재
@@ -378,7 +378,7 @@ docker compose \
 ```
 
 Pilot 폐기, full rollback 또는 완전 초기화는 같은 명령에만 `-v`를 추가한다. 삭제되는 것은
-domain-lab project가 소유한 PostgreSQL 및 optional diagnostic volume이며 복구할 수 없다. 기본/scale
+domain-lab project가 소유한 PostgreSQL 및 optional diagnostic volume이며 복구할 수 없다. 기본
 project volume에는 영향이 없다. 마지막에는 loader connection을 shell에서 지운다.
 
 ```bash
