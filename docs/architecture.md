@@ -1,6 +1,6 @@
 # Query Man Architecture
 
-Status: 현재 구조 안내 — Git-reviewed YAML source authority, ADR 0025 static non-RLS first launch
+Status: 현재 구조 안내 — Git-reviewed source package authority, ADR 0025 static non-RLS first launch
 
 이 문서는 Query Man이 지금 어떻게 실행되는지 설명합니다. 정확한 Python interface는
 [모듈 안내](modules/README.md), 외부 API와 정책 의미는 해당 모듈 문서와
@@ -20,7 +20,7 @@ Query Man은 하나의 애플리케이션 process 안에서 여러 책임을 모
 | PostgreSQL | Major version 18, server/client UTF-8 |
 | RLS | 모든 RLS source를 실행 전에 거부 |
 | Query 결과 | exact seven result OID `20, 21, 23, 25, 1082, 1184, 1700`만 허용 |
-| Source authority | Git-reviewed `config/sources/*.yaml`, `config/verified-queries.yaml`, `config/budget-profiles.yaml` |
+| Source authority | Git-reviewed `config/sources/<source-id>/{source.yaml,views.sql}`와 `config/budget-profiles.yaml` |
 | Authentication | Local/CI opaque bearer 기본; AuthBridge JWT resource server는 opt-in |
 | 남은 일 | 실제 DB 연결 `DBENV-01`, 인증 연결 `AUTHENV-01`, 대상 환경 전환 `LAUNCH-02` |
 
@@ -122,7 +122,7 @@ metadata revision이 바뀌지는 않습니다.
 | Guarded Query | 보안 검색대 | SQL을 검사하고 제한 안에서 실행·취소·rollback |
 | Delivery | 현관 | 인증·인가 후 HTTP와 MCP로 같은 기능 제공 |
 | Runtime | 조립·운영 담당 | 실제 구현 연결, 설정, 시작, 상태·종료, encrypted capture와 `qm` operator shell |
-| Assurance | 검사소 | Metadata 품질과 verified query 결과 검증 |
+| Assurance | 검사소 | 보안·통합·container·load·soak repository gate |
 
 Core는 `src/query_man` 아래 `source_catalog`, `metadata`, `guarded_query`, `delivery`, `runtime`,
 `assurance`의 여섯 physical package로 나뉩니다. 모두 같은
@@ -147,9 +147,9 @@ entrypoint를 설명합니다. 모든 Python symbol을 inventory로 관리하거
 요구하지 않습니다. HTTP/MCP request·response, persisted DB/config 형식, revision/allowlist 정책과
 lifecycle invariant는 별도 변경 경계이며 의미를 바꾸려면 정확한 영향과 승인을 먼저 확인합니다.
 
-Production 구현 조립과 operator CLI는 Runtime, offline acceptance 조립은 Assurance CLI만
-수행합니다. Operator CLI의 `source list/show/validate`는 원격 admin API가 아니라
-현재 checkout의 YAML authority를 읽는 local read-only 명령입니다.
+Production 구현 조립과 operator CLI는 Runtime만 수행합니다. Operator CLI의
+`source list/show/validate`는 원격 admin API가 아니라 현재 checkout의 source package와 budget을 읽는
+local read-only 명령이며 `views.sql`을 실행하지 않습니다.
 
 ## 현재 첫 오픈에서 사용하지 않는 범위
 
@@ -173,10 +173,10 @@ Production 구현 조립과 operator CLI는 Runtime, offline acceptance 조립�
 
 ```text
 Source DB의 curated view와 최소 권한 reader
--> `config/sources/*.yaml`과 기존 budget 선택
--> Metadata 수집·revision
+-> `config/sources/<source-id>/{source.yaml,views.sql}`과 기존 budget 선택
+-> DB owner review와 DBA traffic-off apply
+-> Metadata marker·semantic 직접 admission과 revision
 -> Guarded Query의 SQL/result policy
--> Verified question과 결과
 -> Runtime artifact·배포·rollback
 ```
 
@@ -192,7 +192,7 @@ Source DB의 curated view와 최소 권한 reader
 - 검토된 두 source만 단일 replica에서 제공합니다.
 - PostgreSQL 18/UTF-8, non-RLS와 일곱 결과 OID를 fail-closed로 강제합니다.
 - HTTP와 MCP의 권한·metadata·query 결과가 같습니다.
-- 아홉 verified query와 container·보안 검증을 통과합니다.
+- View marker/권한, revision mismatch, security/integration/container 검증을 통과합니다.
 - 실제 환경에서는 별도 승인된 `LAUNCH-02` cutover와 rollback 증거를 남깁니다.
 
 장기 목표:
@@ -201,12 +201,13 @@ Source DB의 curated view와 최소 권한 reader
 - 모든 source의 공개 범위는 DB-owner curated view로 고정하고, 필요한 업무 의미만 semantic overlay에
   추가합니다.
 - 보안과 resource policy를 prompt가 아니라 gateway와 PostgreSQL이 강제합니다.
-- Source·verified query·budget 변경은 하나의 Git review 흐름으로 추적합니다.
+- Source의 `source.yaml`·`views.sql`과 budget 변경을 Git review 흐름으로 추적합니다.
 
 ## 결정과 상세 문서
 
 - 현재 launch 범위: [ADR 0025](decisions/0025-static-non-rls-first-launch.md)
-- 현재 source authority: [ADR 0030](decisions/0030-git-reviewed-yaml-source-authority.md)
+- 현재 source package와 admission: [ADR 0034](decisions/0034-source-view-package-and-direct-admission.md)
+- 현재 budget authority와 retired managed 경계: [ADR 0030](decisions/0030-git-reviewed-yaml-source-authority.md)
 - 현재 개인정보 공개 경계: [ADR 0031](decisions/0031-no-pii-curated-view-boundary.md)
 - 현재 reader `TEMP` admission 경계: [ADR 0032](decisions/0032-reader-temp-admission-relaxation.md)
 - 현재 source TLS mode: [ADR 0033](decisions/0033-explicit-source-tls-modes.md)
@@ -215,7 +216,7 @@ Source DB의 curated view와 최소 권한 reader
 - 정확한 모듈 owner와 interface: [module index](modules/README.md)
 - 현재 운영 전환: [operations](operations.md)
 - 예제 source와 질문: [MVP data](mvp.md)
-- 새 source 검토: [source onboarding·extension checklist](source-extension-checklist.md#이-문서는-언제-사용하나요)
+- 새 source 검토: [source onboarding·extension checklist](source-extension-checklist.md)
 - 지금 남은 작업: [active TODO](development-todo.md)
 
 ## Completion Tracking

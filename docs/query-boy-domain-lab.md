@@ -10,8 +10,9 @@ Change-sets: `QB-DOMAIN-LAB-20260828` (baseline `deef37a`),
 로컬 catalog에 노출한다. Full profile은 **다섯 도메인을 합쳐 fact 1,000,000건**이며 source마다
 1,000,000건이 아니다.
 
-이 문서는 로컬 disposable fixture 절차다. Application-only `compose.yaml`, 기본 두 source inventory,
-`config/verified-queries.yaml`, 운영 migration이나 현재 source authority를 변경하지 않는다.
+이 문서는 로컬 disposable fixture 절차다. Application-only `compose.yaml`, 기본 두 source package,
+운영 migration이나 현재 source authority를 변경하지 않는다. Source-selection corpus는 client
+workflow를 보는 독립 실험이며 source 공개, onboarding이나 protected launch 조건이 아니다.
 
 ## 격리 경계와 source inventory
 
@@ -38,10 +39,13 @@ Domain-lab catalog는 기존 `development-issues`, `market-voc`와 다음 다섯
 | `clinical-operations` | `clinical_operations` | `ai.appointment_overview`, `ai.lab_results`, `ai.patient_overview` |
 | `saas-billing` | `saas_billing` | `ai.subscription_overview`, `ai.invoice_overview`, `ai.usage_daily` |
 
-기존 두 manifest와 기존 9개 verified-query contract는 domain-lab directory에 byte-for-byte 복사한다.
-신규 다섯 source는 공개 view마다 한 개씩 총 15개 contract를 추가해 모두 L2다. Domain-lab 전체는
-기존 9개와 신규 15개를 합쳐 24개 contract를 traffic 밖에서 검증한다. Domain overlay는 base와
-`compose.fixture.yaml`을 함께 사용한다. `compose.scale.yaml`이나 기본/scale volume과 섞지 않는다.
+기존 두 source의 `source.yaml`+`views.sql`은
+`config/domain-lab/sources/<source-id>/`에 같은 공개면으로 복제하고, 신규 다섯 source도
+source별 같은 두 파일만 가진다. 모든 manifest는 version 4,
+`allowed_relation_kinds: [view]`와 양의 `view_contract_version`을 사용한다. Reader-visible view는
+source/version marker를 가지며 Metadata가 semantic coverage, grain, description, default time과 참조
+column/type을 공개 전에 직접 검사한다. Domain overlay는 base와 `compose.fixture.yaml`을 함께
+사용한다. `compose.scale.yaml`이나 기본/scale volume과 섞지 않는다.
 
 모든 데이터는 seed `2026082802`, 기준 시각 `2026-08-28T00:00:00Z`의 결정적 합성 데이터다.
 `clinical-operations`는 합성 예약·검사 운영 데이터만 제공하며 진단이나 처방은 제공하지 않는다.
@@ -271,9 +275,10 @@ credential을 외부 결과에 복사하지 않는다.
 
 ### Catalog comment와 기존 volume 보강
 
-신규 15개 view의 relation comment는 모두 grain과 핵심 집계 주의를 설명한다. 255개 공개 column은
-PostgreSQL comment 117개와 manifest의 grain key, default time, alias, value hint 또는 measure를 합쳐
-255/255가 설명된다. Comment는 합성 identifier, `NULL`/0, 통화·단위, 시간, preaggregation과 fanout처럼
+신규 15개 view의 relation comment는 exact contract marker 뒤에 grain과 핵심 집계 주의를 설명한다.
+255개 공개 column은 PostgreSQL comment 117개와 manifest의 grain key, default time, alias,
+value hint 또는 measure를 합쳐 255/255가 설명된다. Comment는 합성 identifier, `NULL`/0,
+통화·단위, 시간, preaggregation과 fanout처럼
 SQL 생성에서 추측하면 위험한 의미에만 사용한다. PostgreSQL이 보고하는 type과 precision/scale은 catalog
 fact이므로 comment에 반복하지 않는다.
 
@@ -281,15 +286,17 @@ Query Man은 개인정보(PII)를 탐지·분류·마스킹하지 않는다. DB 
 reviewed curated view와 reader grant가 공개 범위를 정하며, 확인할 수 없는 source는 onboarding하지
 않는다. Comment는 이 책임을 대신하거나 노출을 허가하지 않는다.
 
-새 volume은 schema init에서 comment를 받는다. 기존 `query-man-domain-lab-postgres-data`를 보존할 때는
-marker를 먼저 검사하고 column comment만 재적용하는 다음 idempotent migration을 실행한다. 이 명령은
-table row, view 정의, role, grant 또는 volume을 변경하지 않는다.
+새 volume은 schema init에서 view marker와 comment를 받는다. 기존
+`query-man-domain-lab-postgres-data`를 보존할 때는 lab marker를 먼저 검사하고 `views.sql`에서
+relation·column comment만 재적용하는 다음 idempotent local migration을 실행한다. 이 명령은 table
+row, view definition, role, grant 또는 volume을 변경하지 않는다.
 
 ```bash
 scripts/apply-domain-lab-comments.sh
 ```
 
-성공 결과는 database별 exact 공개 column/comment 수 `53/26`, `45/22`, `47/21`, `51/20`, `59/28`이다.
+성공 결과는 database별 exact 공개 column/comment 수 `53/26`, `45/22`, `47/21`, `51/20`, `59/28`이고
+공개 view 세 개의 source/version marker가 모두 일치한다.
 
 ## 7. Query Boy와 source-selection 검증
 
@@ -322,16 +329,11 @@ curl -sS "http://127.0.0.1:${QUERY_MAN_DOMAIN_PORT:-3101}/sources" \
 응답은 정확히 일곱 source를 보여야 한다. 기존 `verify-container.sh`는 기본 two-source inventory를
 검증하므로 domain-lab app에 그대로 사용하지 않는다.
 
-Domain-lab 전용 traffic-off gate는 marker가 명시된 경우에만 실행한다. Metadata relation/answerability
-20개와 기존·신규 verified query 24개를 실제 Catalog와 Guarded Query 경로로 검사한다.
-
-```bash
-QUERY_MAN_DOMAIN_LAB=1 uv run python scripts/verify-domain-lab.py
-```
-
-성공 결과는 relation accuracy와 answerability recall `1.0`, context 최대 `65,536` bytes 이하,
-`verified_count=24`, 신규 source별 verified count `3`이다. Expected result는 실행 결과로 자동 갱신하지
-않고 metadata revision, relation, column, row count와 hash 차이를 검토한다.
+각 source에 대해 `get_context`를 호출하면 Catalog가 reader-visible view를 동적으로 읽고 marker와
+semantic metadata를 직접 admission한다. Missing/mismatched marker, 누락 semantic relation, grain·description·
+default time 또는 존재하지 않는 참조 column/type이 있으면 `METADATA_UNAVAILABLE`이어야 하며 이전
+snapshot으로 우회하지 않아야 한다. 정상 context의 `metadata_revision`과
+`sql_policy_revision`을 그대로 쓴 작은 집계/query만 실행한다.
 
 Source 선택 검증 순서는 다음과 같다.
 
@@ -348,18 +350,19 @@ Source 선택 검증 순서는 다음과 같다.
 실패다. `배송 지연이 환불에 미친 영향`처럼 Logistics와 Retail의 cross-source join이 필요한 질문도
 clarification/unsupported로 남겨야 한다.
 
-Text-to-SQL skill과 corpus의 구조 gate는 다음처럼 실행한다.
+Text-to-SQL skill, source-selection corpus와 domain package의 정적 구조는 다음처럼 확인한다.
 
 ```bash
-uv run pytest tests/test_text_to_sql_skill.py tests/test_domain_lab_assurance.py -q
+uv run pytest tests/test_text_to_sql_skill.py tests/test_domain_lab_source_packages.py -q
 ```
 
 독립 blind catalog-only 평가에서 최초 corpus는 24/25였다. 실패한 `취소 후 재개율` 문구를 domain이
 드러나지 않는 `취소 후 다시 이용한 비율`로 고친 뒤 재평가가 clinical/SaaS clarification 기대값과
 일치해 최종 25/25였다. 이 숫자는 source label/description만 본 **catalog-only blind selection
 evaluation**이며 실제 PostgreSQL, metadata, MCP 또는 guarded-query end-to-end 성공률이 아니다.
-End-to-end는 위 marker, count, privilege, `/sources`, `get_context.answerability`, revision-bound query를
-별도로 통과해야 한다.
+이 corpus와 숫자는 source 공개 여부를 결정하지 않는다. End-to-end는 위 marker, count,
+privilege, `/sources`, `get_context.answerability`, revision-bound query를 별도로 확인한다. 이 local
+lab은 repository의 security, integration, base-container, bounded load·soak 검증을 대체하지 않는다.
 
 ## 종료와 reset
 

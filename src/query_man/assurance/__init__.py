@@ -1,1 +1,1 @@
-"""Offline quality and verification assurance."""
+"""Repository safety assurance boundary."""

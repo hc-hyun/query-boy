@@ -6,10 +6,9 @@ from types import MappingProxyType
 from typing import Literal
 
 RelationRole = Literal["event", "comment", "population", "dimension", "other"]
-QualityLevel = Literal["L0", "L1", "L2"]
 TenantIsolation = Literal["none", "rls"]
 SourceEnvironment = Literal["production", "staging", "development", "test"]
-AllowedRelationKind = Literal["table", "partitioned_table", "view", "materialized_view"]
+AllowedRelationKind = Literal["view"]
 SSLMode = Literal["disable", "require", "verify-full"]
 
 
@@ -197,10 +196,10 @@ class SourceProfile:
     connection: ResolvedConnection
     allowed_schemas: tuple[str, ...]
     allowed_relation_kinds: tuple[AllowedRelationKind, ...]
+    view_contract_version: int
     budget: BudgetProfile
     semantic_overlay: SemanticOverlay
     provenance: SourceProvenance
-    minimum_quality_level: QualityLevel = "L0"
     tenant_isolation: TenantIsolation = "none"
 
     def __post_init__(self) -> None:

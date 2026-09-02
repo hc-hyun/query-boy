@@ -10,7 +10,7 @@ Delivery는 caller를 인증·인가하고 Source Catalog, Metadata와 Guarded Q
 HTTP/MCP 계약으로 제공한다. OAuth2 bearer access token은 Discovery의 `jwks_uri`에서 받은 key로 로컬
 검증하며 issuer, audience, expiry와 endpoint scope/role을 함께 확인한다.
 
-Source 관리 API는 없다. Source inventory 변경은 Git YAML pull request로 수행하고 HTTP/MCP는 현재
+Source 관리 API는 없다. Source inventory 변경은 source-package pull request로 수행하고 HTTP/MCP는 현재
 Runtime에 load된 read-only source projection만 제공한다.
 
 ## 소유 책임
@@ -24,7 +24,7 @@ Runtime에 load된 read-only source projection만 제공한다.
 
 ## 소유하지 않는 책임
 
-- Source YAML/schema validation과 registry mutation
+- Source package/manifest schema validation과 registry mutation
 - Metadata catalog/revision implementation과 SQL validation/query executor
 - Runtime composition/readiness policy와 capture storage
 - Source admin/history/receipt/replica/usage API나 Control DB state transition
@@ -83,7 +83,7 @@ Diagnostic capture는 active server-side consent receipt가 있을 때만 질문
 
 | Provider | 소비 항목 | 전제 |
 |---|---|---|
-| Source Catalog | `SourceReader`와 `SourceNotFoundError` | Sanitized list/get만 사용; YAML/secret에 접근하지 않음 |
+| Source Catalog | `SourceReader`와 `SourceNotFoundError` | Sanitized list/get만 사용; source package file/secret에 직접 접근하지 않음 |
 | Metadata | Context/revision application behavior | Catalog private state를 읽지 않음 |
 | Guarded Query | Query/cancel/stop-accepting public behavior | SQL safety/error 이유를 transport에서 재정의하지 않음 |
 | Runtime | Operations/readiness와 capture adapter | Health projection은 Runtime state를 그대로 bounded rendering |

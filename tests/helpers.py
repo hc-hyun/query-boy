@@ -16,17 +16,10 @@ DUMMY_ENVIRONMENT = {
 
 
 def load_test_registry(environment: Mapping[str, str] = DUMMY_ENVIRONMENT) -> SourceRegistry:
-    registry = SourceRegistry.load(
+    return SourceRegistry.load(
         ROOT_DIRECTORY / "config" / "sources",
         ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
         environment,
-    )
-    return SourceRegistry(
-        [
-            replace(source, minimum_quality_level="L0")
-            for source_id in ["development-issues", "market-voc"]
-            if (source := registry.get(source_id)) is not None
-        ]
     )
 
 
@@ -49,6 +42,8 @@ def relation(
         columns=tuple(
             replace(item, ordinal=index) for index, item in enumerate(columns, 1)
         ),
+        view_contract_source="development-issues",
+        view_contract_version=1,
     )
 
 

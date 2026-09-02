@@ -6,9 +6,10 @@ Date: 2026-08-26
 
 Decision ID: `LAUNCH-01-A`
 
-Current interpretation: [ADR 0030](0030-git-reviewed-yaml-source-authority.md)이 이 문서의 managed
-authority·보존·활성화 조항을 supersede했습니다. 두 static source, PostgreSQL/encoding, RLS quarantine,
-result OID, SQL policy와 protected execution gate는 계속 current authority입니다.
+Current interpretation: [ADR 0030](0030-git-reviewed-yaml-source-authority.md)이 managed authority를,
+[ADR 0034](0034-source-view-package-and-direct-admission.md)가 flat source 형식과 source별 결과 gate를
+대체했습니다. 두 static source, PostgreSQL/encoding, RLS quarantine, result OID, SQL/revision/reader
+안전성과 privileged DDL freeze는 계속 current authority입니다.
 
 ## Context
 

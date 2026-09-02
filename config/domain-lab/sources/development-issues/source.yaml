@@ -1,12 +1,13 @@
-version: 3
+version: 4
 
 source_id: development-issues
 name: 개발 문제점
 description: 개발 및 검증 과정에서 발견한 문제, 원인, 대책과 댓글
+view_contract_version: 1
 provenance:
   owner: query-man
   environment: development
-  database_migration_ref: docker/postgres/init/10-development-issues-schema.sql
+  database_migration_ref: config/domain-lab/sources/development-issues/views.sql
 connection:
   host: 127.0.0.1
   host_env: QUERY_MAN_POSTGRES_HOST
@@ -21,7 +22,6 @@ allowed_schemas:
 allowed_relation_kinds:
   - view
 budget_profile: interactive
-minimum_quality_level: L2
 
 semantic_overlay:
   default_relation: ai.issue_overview

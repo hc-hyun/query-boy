@@ -12,17 +12,13 @@ from mcp.types import CallToolResult
 from psycopg import AsyncConnection
 from psycopg.conninfo import make_conninfo
 
-from query_man.assurance.verified import VerifiedQueryRegistry
 from tests.test_mcp_server import (
     McpServerSettings,
-    _assert_verified_result,
-    _contract,
     _mcp_client,
     _structured,
     _validate_loopback_mcp_url,
     mcp_server_settings,  # noqa: F401 -- shared pytest fixture
     suppress_http_client_request_logs,  # noqa: F401 -- shared autouse fixture
-    verified_queries,  # noqa: F401 -- shared pytest fixture
 )
 from tests.test_mcp_server_load import (
     _DEVELOPMENT_COUNT_SQL,
@@ -189,10 +185,7 @@ def _percentile(values: list[int], percentile: float) -> int:
 
 async def test_two_replicas_serve_exact_queries_with_unique_ids(
     mcp_replica_settings: tuple[McpServerSettings, McpServerSettings],
-    verified_queries: VerifiedQueryRegistry,  # noqa: F811 -- shared fixture
 ) -> None:
-    contract = _contract(verified_queries, "market-devices-without-voc")
-
     async def query_replica(settings: McpServerSettings) -> tuple[str, list[str]]:
         async with _mcp_client(settings) as client:
             tools = await client.list_tools()
@@ -209,30 +202,25 @@ async def test_two_replicas_serve_exact_queries_with_unique_ids(
                 sort_keys=True,
                 separators=(",", ":"),
             )
-            context = _structured(
-                await client.call_tool(
-                    "get_context",
-                    {"source_id": contract.source_id, "question": contract.question},
-                )
-            )
-            assert context["metadata_revision"] == contract.metadata_revision
+            metadata_revision = await _revision(client, _MARKET_SOURCE, "시장 VOC 수")
             results = await asyncio.gather(
                 *(
-                    client.call_tool(
-                        "query",
-                        {
-                            "source_id": contract.source_id,
-                            "sql": contract.sql,
-                            "metadata_revision": contract.metadata_revision,
-                            "sql_policy_revision": context["sql_policy_revision"],
-                        },
+                    _measured_query(
+                        client,
+                        source_id=_MARKET_SOURCE,
+                        sql=_MARKET_COUNT_SQL,
+                        metadata_revision=metadata_revision,
                     )
                     for _ in range(8)
                 )
             )
-            return tool_contract, [
-                _assert_verified_result(result, contract) for result in results
-            ]
+            query_ids: list[str] = []
+            for result, _elapsed_ms in results:
+                _assert_exact_count(result, column="voc_count", count=1_200)
+                query_id = _structured(result)["query_id"]
+                assert isinstance(query_id, str) and query_id
+                query_ids.append(query_id)
+            return tool_contract, query_ids
 
     started = time.monotonic()
     replica_results = await asyncio.gather(

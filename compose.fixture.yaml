@@ -23,8 +23,10 @@ services:
       - postgres_data:/var/lib/postgresql
       - ./docker/postgres/init/01-source-bootstrap.sh:/docker-entrypoint-initdb.d/01-source-bootstrap.sh:ro
       - ./docker/postgres/init/10-development-issues-schema.sql:/docker-entrypoint-initdb.d/10-development-issues-schema.sql:ro
+      - ./config/sources/development-issues/views.sql:/query-man-source-views/development-issues.sql:ro
       - ./docker/postgres/init/20-development-issues-seed.sql:/docker-entrypoint-initdb.d/20-development-issues-seed.sql:ro
       - ./docker/postgres/init/30-market-voc-schema.sql:/docker-entrypoint-initdb.d/30-market-voc-schema.sql:ro
+      - ./config/sources/market-voc/views.sql:/query-man-source-views/market-voc.sql:ro
       - ./docker/postgres/init/40-market-voc-seed.sql:/docker-entrypoint-initdb.d/40-market-voc-seed.sql:ro
       - ./scripts/validate-static-fixtures.sh:/docker-entrypoint-initdb.d/45-validate-static-fixtures.sh:ro
       - ./docker/postgres/init/90-validate-mvp.sql:/query-man-fixtures/90-validate-mvp.sql:ro

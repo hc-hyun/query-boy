@@ -16,10 +16,6 @@ from typing import Any, Protocol
 import yaml
 from dotenv import load_dotenv
 
-from query_man.assurance.verified import (
-    VerifiedQueryConfigurationError,
-    VerifiedQueryRegistry,
-)
 from query_man.runtime.diagnostic_capture import (
     purge_diagnostic_consent,
     query_diagnostic_records,
@@ -202,63 +198,58 @@ class RealOperatorBackend:
                     process.wait()
 
     def source_list(self) -> dict[str, object]:
-        registry, manifests = _load_yaml_sources(self._settings.root)
+        registry, manifests = _load_source_packages(self._settings.root)
         sources: list[dict[str, object]] = []
         for source_id in sorted(registry.source_ids()):
             source = registry.get(source_id)
             if source is None:
-                raise OperatorShellError("YAML source 목록을 만들 수 없습니다.")
+                raise OperatorShellError("Source package 목록을 만들 수 없습니다.")
             path, _document = manifests[source_id]
             sources.append(
                 {
-                    "path": _root_relative(path, self._settings.root),
+                    "package_path": _root_relative(path.parent, self._settings.root),
+                    "source_manifest": _root_relative(path, self._settings.root),
+                    "views_sql": _root_relative(path.parent / "views.sql", self._settings.root),
                     "source_id": source.source_id,
                     "name": source.name,
                     "description": source.description,
                     "owner": source.provenance.owner,
                     "environment": source.provenance.environment,
+                    "view_contract_version": source.view_contract_version,
                     "budget_profile": source.budget.name,
-                    "minimum_quality_level": source.minimum_quality_level,
                 }
             )
         return {
-            "authority": "yaml",
+            "authority": "source-package",
             "source_count": len(sources),
             "sources": sources,
         }
 
     def source_show(self, source_id: str) -> dict[str, object]:
-        _registry, manifests = _load_yaml_sources(self._settings.root)
+        _registry, manifests = _load_source_packages(self._settings.root)
         current = manifests.get(source_id)
         if current is None:
-            raise OperatorShellError(f"YAML source를 찾을 수 없습니다: {source_id}")
+            raise OperatorShellError(f"Source package를 찾을 수 없습니다: {source_id}")
         path, document = current
         return {
-            "authority": "yaml",
-            "path": _root_relative(path, self._settings.root),
+            "authority": "source-package",
+            "package_path": _root_relative(path.parent, self._settings.root),
+            "source_manifest": _root_relative(path, self._settings.root),
+            "views_sql": _root_relative(path.parent / "views.sql", self._settings.root),
             "manifest": document,
         }
 
     def source_validate(self) -> dict[str, object]:
-        registry, _manifests = _load_yaml_sources(self._settings.root)
-        verified_path = self._settings.root / "config" / "verified-queries.yaml"
-        try:
-            VerifiedQueryRegistry.load(verified_path, set(registry.source_ids()))
-        except VerifiedQueryConfigurationError as error:
-            raise OperatorShellError(
-                "YAML verified query 설정 검증에 실패했습니다. "
-                "config/verified-queries.yaml을 확인하세요."
-            ) from error
+        registry, _manifests = _load_source_packages(self._settings.root)
         source_ids = sorted(registry.source_ids())
         return {
             "status": "valid",
-            "authority": "yaml",
+            "authority": "source-package",
             "source_directory": "config/sources",
+            "package_layout": "config/sources/<source-id>/{source.yaml,views.sql}",
             "budget_file": "config/budget-profiles.yaml",
-            "verified_query_file": "config/verified-queries.yaml",
             "source_count": len(source_ids),
             "source_ids": source_ids,
-            "verified_query_document": "valid",
             "live_database_checked": False,
         }
 
@@ -469,9 +460,15 @@ def _public_error(payload: bytes) -> tuple[str, str]:
 
 def _load_document(path: Path) -> dict[str, object]:
     try:
+        if path.is_symlink() or path.parent.is_symlink():
+            raise OperatorShellError(
+                "입력 파일은 1 MiB 이하 regular non-symlink file이어야 합니다."
+            )
         size = path.stat().st_size
         if not path.is_file() or size > _MAX_DOCUMENT_BYTES:
-            raise OperatorShellError("입력 파일은 1 MiB 이하 regular file이어야 합니다.")
+            raise OperatorShellError(
+                "입력 파일은 1 MiB 이하 regular non-symlink file이어야 합니다."
+            )
         document = yaml.safe_load(path.read_text(encoding="utf-8"))
     except OperatorShellError:
         raise
@@ -482,12 +479,12 @@ def _load_document(path: Path) -> dict[str, object]:
     return document
 
 
-def _load_yaml_sources(
+def _load_source_packages(
     root: Path,
 ) -> tuple[SourceRegistry, dict[str, tuple[Path, dict[str, object]]]]:
     root = root.resolve()
     source_directory = root / "config" / "sources"
-    files = _source_yaml_files(source_directory)
+    files = _source_manifest_files(source_directory)
     documents = [(path, _load_document(path)) for path in files]
     validation_environment: dict[str, str] = {}
     for _path, document in documents:
@@ -504,38 +501,38 @@ def _load_yaml_sources(
         )
     except RegistryConfigurationError as error:
         raise OperatorShellError(
-            "YAML source 설정 검증에 실패했습니다. "
+            "Source package 설정 검증에 실패했습니다. "
             "config/sources와 config/budget-profiles.yaml을 확인하세요."
         ) from error
 
-    current_files = _source_yaml_files(source_directory)
+    current_files = _source_manifest_files(source_directory)
     current_documents = [(path, _load_document(path)) for path in current_files]
     if current_documents != documents:
         raise OperatorShellError(
-            "YAML source 설정이 검증 중 변경되었습니다. 다시 시도하세요."
+            "Source package가 검증 중 변경되었습니다. 다시 시도하세요."
         )
 
     manifests: dict[str, tuple[Path, dict[str, object]]] = {}
     for path, document in documents:
         source_id = document.get("source_id")
         if not isinstance(source_id, str):
-            raise OperatorShellError("검증된 YAML source ID를 읽을 수 없습니다.")
+            raise OperatorShellError("검증된 source package ID를 읽을 수 없습니다.")
         manifests[source_id] = (path, document)
     if frozenset(manifests) != registry.source_ids():
-        raise OperatorShellError("검증된 YAML source 목록이 일치하지 않습니다.")
+        raise OperatorShellError("검증된 source package 목록이 일치하지 않습니다.")
     return registry, manifests
 
 
-def _source_yaml_files(source_directory: Path) -> list[Path]:
+def _source_manifest_files(source_directory: Path) -> list[Path]:
     try:
         return sorted(
             path
-            for path in source_directory.iterdir()
-            if path.is_file() and path.suffix.lower() in {".yaml", ".yml"}
+            for path in source_directory.glob("*/source.yaml")
+            if path.is_file()
         )
     except OSError as error:
         raise OperatorShellError(
-            "YAML source 설정을 읽을 수 없습니다. config/sources를 확인하세요."
+            "Source package를 읽을 수 없습니다. config/sources를 확인하세요."
         ) from error
 
 
@@ -543,7 +540,7 @@ def _root_relative(path: Path, root: Path) -> str:
     try:
         return path.relative_to(root.resolve()).as_posix()
     except ValueError as error:
-        raise OperatorShellError("YAML source 경로가 repository root 밖에 있습니다.") from error
+        raise OperatorShellError("Source package 경로가 repository root 밖에 있습니다.") from error
 
 
 def _run_local_diagnostic(

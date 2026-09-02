@@ -4,7 +4,7 @@ import asyncio
 import json
 import re
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from query_man.errors import MetadataUnavailableError, SourceNotFoundError
@@ -22,7 +22,6 @@ from query_man.metadata.models import (
     CatalogSnapshot,
     PreparedMetadata,
 )
-from query_man.metadata.quality_level import QualityLevelReport, assess_quality_level
 from query_man.metadata.relevance import (
     RankedRelation,
     RelationRetrievalIndex,
@@ -30,7 +29,10 @@ from query_man.metadata.relevance import (
     normalize_business_text,
     select_ranked_relations,
 )
-from query_man.metadata.revision import create_metadata_revision
+from query_man.metadata.revision import (
+    create_metadata_revision,
+    create_view_structure_signature,
+)
 from query_man.runtime.operations import operations
 from query_man.source_catalog.models import (
     BusinessTermDefinition,
@@ -63,7 +65,6 @@ class MetadataService:
         max_stale_ms: int = 300_000,
         refresh_retry_ms: int = 5_000,
         now: Callable[[], int] | None = None,
-        verified_revisions: Mapping[str, frozenset[str]] | None = None,
     ) -> None:
         self._registry = registry
         self._catalog = catalog
@@ -71,18 +72,17 @@ class MetadataService:
         self._max_stale_ms = max_stale_ms
         self._refresh_retry_ms = refresh_retry_ms
         self._now = now or (lambda: time.monotonic_ns() // 1_000_000)
-        self._verified_revisions = verified_revisions
         self._cache: dict[str, _CacheEntry] = {}
         self._refreshes: dict[tuple[str, int], asyncio.Task[PreparedMetadata]] = {}
         self._source_epochs: dict[str, int] = {}
         self._retrieval_indexes: dict[tuple[str, str], RelationRetrievalIndex] = {}
+        self._view_structure_signatures: dict[tuple[str, int], str] = {}
 
     async def get_context(self, source_id: str, question: str, max_objects: int = 2) -> dict[str, object]:
         source = self._registry.get(source_id)
         if source is None:
             raise SourceNotFoundError
         prepared, stale = await self._get_prepared(source)
-        quality = self._require_quality(source, prepared)
         index_key = (source.source_id, prepared.revision)
         retrieval = self._retrieval_indexes.get(index_key)
         if retrieval is None:
@@ -125,7 +125,6 @@ class MetadataService:
             "metadata_revision": prepared.revision,
             "sql_policy_revision": SQL_POLICY_REVISION,
             "snapshot_status": "stale" if stale else "fresh",
-            "quality_level": quality.level,
             "sql_capabilities": {
                 "functions": sorted(DEFAULT_ALLOWED_FUNCTIONS),
                 "cast_types": sorted(DEFAULT_ALLOWED_TYPES),
@@ -173,7 +172,6 @@ class MetadataService:
         if source is None:
             raise SourceNotFoundError
         prepared, _stale = await self._get_prepared(source)
-        self._require_quality(source, prepared)
         return prepared
 
     async def close(self) -> None:
@@ -235,19 +233,35 @@ class MetadataService:
         operations.increment("metadata_refresh_started", source.source_id)
         snapshot = await self._catalog.load(source)
         issues = _validate_snapshot(source, snapshot)
+        signature_key = (source.source_id, source.view_contract_version)
+        structure_signature = create_view_structure_signature(snapshot)
+        accepted_signature = self._view_structure_signatures.get(signature_key)
+        if (
+            accepted_signature is not None
+            and accepted_signature != structure_signature
+        ):
+            issues.append(
+                "View structure changed without a view contract version change."
+            )
         if issues:
             operations.increment("metadata_validation_rejected", source.source_id)
             operations.set_source_health(source.source_id, "unavailable")
             raise MetadataUnavailableError({"contract_violations": issues})
         candidate = PreparedMetadata(snapshot, create_metadata_revision(source, snapshot))
-        try:
-            self._require_quality(source, candidate)
-        except MetadataUnavailableError:
-            operations.increment("metadata_validation_rejected", source.source_id)
-            operations.set_source_health(source.source_id, "unavailable")
-            raise
         self._require_current(source, epoch)
         self._require_compatible(source, candidate)
+        current_signature = self._view_structure_signatures.get(signature_key)
+        if current_signature is not None and current_signature != structure_signature:
+            operations.increment("metadata_validation_rejected", source.source_id)
+            operations.set_source_health(source.source_id, "unavailable")
+            raise MetadataUnavailableError(
+                {
+                    "contract_violations": [
+                        "View structure changed without a view contract version change."
+                    ]
+                }
+            )
+        self._view_structure_signatures[signature_key] = structure_signature
         self._cache_value(source.source_id, candidate)
         operations.increment("metadata_refresh_succeeded", source.source_id)
         operations.set_source_health(source.source_id, "healthy")
@@ -261,23 +275,6 @@ class MetadataService:
             expires_at=loaded_at + self._cache_ttl_ms,
             next_refresh_at=loaded_at + self._cache_ttl_ms,
         )
-
-    def _require_quality(
-        self,
-        source: SourceProfile,
-        value: PreparedMetadata,
-    ) -> QualityLevelReport:
-        report = assess_quality_level(
-            source,
-            value.snapshot,
-            value.revision,
-            self._verified_revisions or {},
-        )
-        if self._verified_revisions is not None and not report.publishable:
-            raise MetadataUnavailableError(
-                {"contract_violations": list(report.violations)}
-            )
-        return report
 
     def _require_current(self, source: SourceProfile, epoch: int) -> None:
         if (
@@ -298,8 +295,30 @@ def _validate_snapshot(source: SourceProfile, snapshot: CatalogSnapshot) -> list
     issues: list[str] = []
     if not snapshot.relations:
         return ["No selectable relations were discovered in the allowed schemas."]
+    relation_names = [relation.qualified_name for relation in snapshot.relations]
+    if len(set(relation_names)) != len(relation_names):
+        issues.append("Catalog contains duplicate relations.")
     relations = {relation.qualified_name: relation for relation in snapshot.relations}
     for structure_relation in snapshot.relations:
+        if (
+            structure_relation.schema not in source.allowed_schemas
+            or structure_relation.kind not in source.allowed_relation_kinds
+        ):
+            issues.append(
+                "Catalog relation is outside the source allowlist: "
+                f"{structure_relation.qualified_name}"
+            )
+        if structure_relation.kind == "view":
+            if structure_relation.view_contract_source != source.source_id:
+                issues.append(
+                    "View contract source does not match the source: "
+                    f"{structure_relation.qualified_name}"
+                )
+            if structure_relation.view_contract_version != source.view_contract_version:
+                issues.append(
+                    "View contract version does not match the source: "
+                    f"{structure_relation.qualified_name}"
+                )
         if source.tenant_isolation == "rls" and not structure_relation.security_invoker:
             issues.append(
                 f"RLS relation is not a security-invoker view: {structure_relation.qualified_name}"
@@ -379,6 +398,30 @@ def _validate_snapshot(source: SourceProfile, snapshot: CatalogSnapshot) -> list
             relation = relations.get(predicate.relation)
             if relation is None or not any(column.name == predicate.column for column in relation.columns):
                 issues.append(f"Business predicate targets a missing column: {predicate.relation}.{predicate.column}")
+    semantic_names = [
+        semantic.relation for semantic in source.semantic_overlay.relations
+    ]
+    if len(set(semantic_names)) != len(semantic_names):
+        issues.append("Semantic metadata contains duplicate relations.")
+    semantics = {
+        semantic.relation: semantic for semantic in source.semantic_overlay.relations
+    }
+    for relation in snapshot.relations:
+        relation_semantic = semantics.get(relation.qualified_name)
+        if relation_semantic is None:
+            issues.append(
+                f"Missing semantic metadata: {relation.qualified_name}"
+            )
+            continue
+        if relation_semantic.grain is None:
+            issues.append(f"Missing grain: {relation.qualified_name}")
+        if not (relation_semantic.description or relation.comment):
+            issues.append(f"Missing description: {relation.qualified_name}")
+        if (
+            relation_semantic.role in {"event", "comment", "population"}
+            and not relation_semantic.default_time_column
+        ):
+            issues.append(f"Missing default time: {relation.qualified_name}")
     return issues
 
 

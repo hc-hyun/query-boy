@@ -39,7 +39,7 @@ disconnect와 shutdown에도 cancel·rollback·connection cleanup을 보장한�
 ## 제공 인터페이스와 소유 경계
 
 `QueryService.query(...)`, `QueryExecutor`와 Delivery lifecycle용 `DeliveryQueryExecutor`가 public Python
-interface다. Concrete `PostgresQueryExecutor` 조립은 Runtime과 offline Assurance CLI만 수행한다.
+interface다. Concrete `PostgresQueryExecutor` 조립은 Runtime만 수행한다.
 
 `validate_sql`은 single read-only statement, approved relation/function/operator/type, bounded bytes와
 current SQL policy를 강제한다. `SQL_POLICY_REVISION`과 canonical material은 Metadata revision이 소비하는
@@ -72,9 +72,9 @@ revision에 들어가며 stale token은 executor 진입 전에 fail-closed합니
 Transport UTC와 한국 업무 달력은 별개입니다. `ai.issue_overview.discovered_on`은
 `(discovered_at AT TIME ZONE 'Asia/Seoul')::date`, `ai.voc_overview.received_on`은
 `(received_at AT TIME ZONE 'Asia/Seoul')::date`이고 월별 VOC SQL은 SELECT/GROUP BY 모두
-`date_trunc('month', received_at, 'Asia/Seoul')`을 사용합니다. 이 의미가 바뀌면 두 source의 metadata
-revision과 9개 verified query를 함께 재검토합니다. 과거 managed coordinated-cutover 절차는 retired됐고
-현재 rollout/rollback은 ADR 0025와 Operations를 따릅니다.
+`date_trunc('month', received_at, 'Asia/Seoul')`을 사용합니다. 공개 view 정의나 output이 바뀌면
+`view_contract_version`을 올리고 metadata revision, SQL policy와 관련 integration을 함께 검토합니다.
+현재 rollout/rollback은 ADR 0025, ADR 0034와 Operations를 따릅니다.
 
 Application result는 stable `columns`, `rows`, `row_count`, `metadata_revision`, truncation/limit 정보로
 구성한다. `QueryRejectedError`, `QueryInvalidError`, `QueryOverloadedError`, `QueryTimeoutError`,
@@ -145,6 +145,6 @@ Connection, cancel, disconnect 또는 PostgreSQL type 경계를 바꾸면 integr
 |---|---|
 | SQL syntax/policy | `sql_validation.py`, security corpus, `test_sql_validation.py` |
 | Execution/admission/cancel | `query.py`, Delivery/Runtime direct consumer, `test_query.py`, integration disconnect test |
-| Result type/encoding | `result_encoding.py`, verified hash consumer, `test_result_encoding.py` |
+| Result type/encoding | `result_encoding.py`, Delivery consumer, `test_result_encoding.py` |
 | Revision | Metadata revision producer/consumer와 `test_revision.py` |
 | Diagnostic SQL | `diagnostics.py`, capture adapter/direct tests |

@@ -25,7 +25,6 @@ from psycopg.conninfo import make_conninfo
 from psycopg.rows import dict_row
 from psycopg_pool import PoolTimeout
 
-from query_man.assurance.verified import VerifiedQueryRegistry, create_result_hash
 from query_man.delivery.mcp_server import MCP_PROTOCOL_VERSION
 from query_man.errors import (
     QueryInvalidError,
@@ -224,34 +223,6 @@ async def test_live_catalog_maps_golden_questions() -> None:
             assert all(not item["indexes"] for item in response["relations"])
             assert str(response["metadata_revision"]).startswith("sha256:")
     finally:
-        await catalog.close()
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_live_verified_queries_match_revision_relations_and_results() -> None:
-    load_dotenv(ROOT_DIRECTORY / ".env")
-    required = ["DEVELOPMENT_ISSUES_READER_PASSWORD", "MARKET_VOC_READER_PASSWORD"]
-    if any(not os.environ.get(name) for name in required):
-        pytest.skip("local reader credentials are not configured")
-
-    registry = SourceRegistry.load(
-        ROOT_DIRECTORY / "config" / "sources",
-        ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
-    )
-    verified = VerifiedQueryRegistry.load(
-        ROOT_DIRECTORY / "config" / "verified-queries.yaml",
-        {source["source_id"] for source in registry.list()},
-    )
-    catalog = PostgresCatalog()
-    executor = PostgresQueryExecutor()
-    metadata = MetadataService(registry, catalog, cache_ttl_ms=30_000)
-    service = QueryService(registry, metadata, executor)
-    try:
-        results = await verified.verify_all(metadata, service)
-        assert len(results) == 9
-    finally:
-        await executor.close()
         await catalog.close()
 
 
@@ -1064,7 +1035,7 @@ async def test_modern_mcp_disconnect_cancels_query_before_client_session_closes(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_streamable_http_mcp_runs_all_golden_queries() -> None:
+async def test_streamable_http_mcp_runs_deterministic_query_smoke_workflow() -> None:
     load_dotenv(ROOT_DIRECTORY / ".env")
     required = ["DEVELOPMENT_ISSUES_READER_PASSWORD", "MARKET_VOC_READER_PASSWORD"]
     if any(not os.environ.get(name) for name in required):
@@ -1074,9 +1045,23 @@ async def test_streamable_http_mcp_runs_all_golden_queries() -> None:
         ROOT_DIRECTORY / "config" / "sources",
         ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
     )
-    verified = VerifiedQueryRegistry.load(
-        ROOT_DIRECTORY / "config" / "verified-queries.yaml",
-        {source["source_id"] for source in registry.list()},
+    smoke_cases = (
+        (
+            "development-issues",
+            "전체 개발 문제 건수를 보여줘",
+            "SELECT count(*) AS issue_count FROM ai.issue_overview",
+            ("ai.issue_overview",),
+            ["issue_count"],
+            [{"issue_count": 600}],
+        ),
+        (
+            "market-voc",
+            "전체 시장 VOC 수를 보여줘",
+            "SELECT count(*) AS voc_count FROM ai.voc_overview",
+            ("ai.voc_overview",),
+            ["voc_count"],
+            [{"voc_count": 1_200}],
+        ),
     )
     runtime = RuntimeConfig(
         host="127.0.0.1",
@@ -1140,32 +1125,34 @@ async def test_streamable_http_mcp_runs_all_golden_queries() -> None:
                 "get_context",
                 "query",
             ]
-            for contract in verified.queries:
-                source = registry.get(contract.source_id)
+            metadata_revisions: dict[str, str] = {}
+            for source_id, question, sql, relations, columns, rows in smoke_cases:
+                source = registry.get(source_id)
                 assert source is not None
                 context = await client.call_tool(
                     "get_context",
-                    {"source_id": contract.source_id, "question": contract.question},
+                    {"source_id": source_id, "question": question},
                 )
                 context_body = context.structured_content
                 assert context_body is not None
-                assert context_body["quality_level"] == "L2"
                 assert {"extract", "lag", "lead", "rank"} <= set(
                     context_body["sql_capabilities"]["functions"]  # type: ignore[index]
                 )
                 assert len(json.dumps(context_body, default=str).encode()) <= (
                     source.budget.max_metadata_response_bytes
                 )
-                assert context_body["metadata_revision"] == contract.metadata_revision
+                metadata_revision = context_body["metadata_revision"]
+                assert isinstance(metadata_revision, str)
+                metadata_revisions[source_id] = metadata_revision
                 assert [relation["name"] for relation in context_body["relations"]] == list(  # type: ignore[index]
-                    contract.relations
+                    relations
                 )
                 result = await client.call_tool(
                     "query",
                     {
-                        "source_id": contract.source_id,
-                        "sql": contract.sql,
-                        "metadata_revision": contract.metadata_revision,
+                        "source_id": source_id,
+                        "sql": sql,
+                        "metadata_revision": metadata_revision,
                         "sql_policy_revision": context_body["sql_policy_revision"],
                     },
                 )
@@ -1173,11 +1160,10 @@ async def test_streamable_http_mcp_runs_all_golden_queries() -> None:
                 assert result_body is not None
                 assert result_body["result_bytes"] <= source.budget.max_result_bytes
                 assert result_body["row_count"] <= source.budget.max_result_rows
-                assert result_body["row_count"] == contract.expected.row_count
-                columns = tuple(result_body["columns"])  # type: ignore[arg-type]
-                assert create_result_hash(columns, result_body["rows"]) == (  # type: ignore[arg-type]
-                    contract.expected.result_hash
-                )
+                assert result_body["columns"] == columns
+                assert result_body["rows"] == rows
+                assert result_body["row_count"] == len(rows)
+                assert result_body["truncated"] is False
 
             unsupported = await client.call_tool(
                 "get_context",
@@ -1194,11 +1180,12 @@ async def test_streamable_http_mcp_runs_all_golden_queries() -> None:
                 "needs_clarification"
             )
 
+            source_id, question, sql, _relations, columns, rows = smoke_cases[0]
             mismatch = await client.call_tool(
                 "query",
                 {
-                    "source_id": verified.queries[0].source_id,
-                    "sql": verified.queries[0].sql,
+                    "source_id": source_id,
+                    "sql": sql,
                     "metadata_revision": f"sha256:{'0' * 64}",
                     "sql_policy_revision": SQL_POLICY_REVISION,
                 },
@@ -1209,25 +1196,25 @@ async def test_streamable_http_mcp_runs_all_golden_queries() -> None:
             refreshed = await client.call_tool(
                 "get_context",
                 {
-                    "source_id": verified.queries[0].source_id,
-                    "question": verified.queries[0].question,
+                    "source_id": source_id,
+                    "question": question,
                 },
             )
             assert refreshed.structured_content["metadata_revision"] == (  # type: ignore[index]
-                verified.queries[0].metadata_revision
+                metadata_revisions[source_id]
             )
             retried = await client.call_tool(
                 "query",
                 {
-                    "source_id": verified.queries[0].source_id,
-                    "sql": verified.queries[0].sql,
+                    "source_id": source_id,
+                    "sql": sql,
                     "metadata_revision": refreshed.structured_content["metadata_revision"],  # type: ignore[index]
                     "sql_policy_revision": refreshed.structured_content["sql_policy_revision"],  # type: ignore[index]
                 },
             )
-            assert retried.structured_content["row_count"] == (  # type: ignore[index]
-                verified.queries[0].expected.row_count
-            )
+            assert retried.structured_content["columns"] == columns  # type: ignore[index]
+            assert retried.structured_content["rows"] == rows  # type: ignore[index]
+            assert retried.structured_content["row_count"] == len(rows)  # type: ignore[index]
     finally:
         server.should_exit = True
         try:

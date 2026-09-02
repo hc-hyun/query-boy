@@ -5,7 +5,7 @@ on:
   push:
 
 jobs:
-  yaml-authority:
+  source-package:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -15,7 +15,7 @@ jobs:
           enable-cache: true
       - name: Install locked environment
         run: uv sync --locked
-      - name: Start Git-reviewed YAML PostgreSQL fixtures
+      - name: Start Git-reviewed source-package PostgreSQL fixtures
         run: |
           cp .env.fixture.example .env
           docker compose config --quiet
@@ -27,11 +27,8 @@ jobs:
           uv run ruff check src/query_man/runtime --select C901 --config "lint.mccabe.max-complexity=19"
           uv run mypy src
           uv run pytest -m 'not integration and not load and not soak and not mcp_server'
-      - name: Database, retrieval and golden checks
-        run: |
-          uv run pytest -m 'integration and not load and not soak and not mcp_server'
-          uv run query-man-evaluate
-          uv run query-man-verify
+      - name: Database and integration checks
+        run: uv run pytest -m 'integration and not load and not soak and not mcp_server'
       - name: Bounded load check
         run: uv run pytest -m load tests/test_load.py
       - name: Stop fixtures

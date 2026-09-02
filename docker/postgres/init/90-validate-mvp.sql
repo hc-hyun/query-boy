@@ -47,10 +47,20 @@ BEGIN
     RAISE EXCEPTION 'development comment chronology violations: %', actual_count;
   END IF;
 
-  IF has_table_privilege(
-    'development_issues_reader',
-    'development.issues',
-    'SELECT'
+  IF EXISTS (
+    SELECT 1
+    FROM unnest(ARRAY[
+      'development.users',
+      'development.product_models',
+      'development.test_units',
+      'development.issues',
+      'development.issue_comments'
+    ]) AS base_relation(name)
+    WHERE has_table_privilege(
+      'development_issues_reader',
+      base_relation.name,
+      'SELECT'
+    )
   ) THEN
     RAISE EXCEPTION 'development reader unexpectedly has base-table SELECT';
   END IF;
@@ -137,6 +147,62 @@ BEGIN
     RAISE EXCEPTION 'development view-owner role attributes violate policy';
   END IF;
 
+  IF NOT has_schema_privilege(
+    'development_issues_view_owner',
+    'development',
+    'USAGE'
+  )
+     OR has_schema_privilege(
+       'development_issues_view_owner',
+       'development',
+       'CREATE'
+     )
+     OR has_schema_privilege(
+       'development_issues_view_owner',
+       'ai',
+       'CREATE'
+     ) THEN
+    RAISE EXCEPTION 'development view-owner schema privileges violate policy';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM unnest(ARRAY[
+      'development.users',
+      'development.product_models',
+      'development.test_units',
+      'development.issues',
+      'development.issue_comments'
+    ]) AS base_relation(name)
+    WHERE NOT has_table_privilege(
+      'development_issues_view_owner',
+      base_relation.name,
+      'SELECT'
+    )
+       OR has_table_privilege(
+         'development_issues_view_owner',
+         base_relation.name,
+         'INSERT'
+       )
+       OR has_table_privilege(
+         'development_issues_view_owner',
+         base_relation.name,
+         'UPDATE'
+       )
+       OR has_table_privilege(
+         'development_issues_view_owner',
+         base_relation.name,
+         'DELETE'
+       )
+       OR has_table_privilege(
+         'development_issues_view_owner',
+         base_relation.name,
+         'TRUNCATE'
+       )
+  ) THEN
+    RAISE EXCEPTION 'development view-owner base-table privileges violate policy';
+  END IF;
+
   IF has_table_privilege(
     'development_issues_reader',
     'public.pg_stat_statements',
@@ -147,6 +213,36 @@ BEGIN
 
   IF obj_description('ai.issue_overview'::regclass, 'pg_class') IS NULL THEN
     RAISE EXCEPTION 'ai.issue_overview is missing relation metadata';
+  END IF;
+
+  SELECT count(*) INTO actual_count
+  FROM pg_catalog.pg_class AS relation
+  JOIN pg_catalog.pg_namespace AS namespace
+    ON namespace.oid = relation.relnamespace
+  WHERE namespace.nspname = 'ai'
+    AND relation.relkind = 'v';
+  IF actual_count <> 3 THEN
+    RAISE EXCEPTION 'development source expected 3 curated views, got %', actual_count;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_class AS relation
+    JOIN pg_catalog.pg_namespace AS namespace
+      ON namespace.oid = relation.relnamespace
+    WHERE namespace.nspname = 'ai'
+      AND relation.relkind = 'v'
+      AND (
+        pg_catalog.split_part(
+          pg_catalog.obj_description(relation.oid, 'pg_class'),
+          E'\n',
+          1
+        ) IS DISTINCT FROM 'query-man:source=development-issues;view-contract=1'
+        OR pg_catalog.pg_get_userbyid(relation.relowner)
+          <> 'development_issues_view_owner'
+      )
+  ) THEN
+    RAISE EXCEPTION 'development curated-view marker or owner mismatch';
   END IF;
 END;
 $$;
@@ -235,7 +331,21 @@ BEGIN
     RAISE EXCEPTION 'market product chronology violations: %', actual_count;
   END IF;
 
-  IF has_table_privilege('market_voc_reader', 'voc.cases', 'SELECT') THEN
+  IF EXISTS (
+    SELECT 1
+    FROM unnest(ARRAY[
+      'voc.users',
+      'voc.product_models',
+      'voc.devices',
+      'voc.cases',
+      'voc.case_comments'
+    ]) AS base_relation(name)
+    WHERE has_table_privilege(
+      'market_voc_reader',
+      base_relation.name,
+      'SELECT'
+    )
+  ) THEN
     RAISE EXCEPTION 'market VOC reader unexpectedly has base-table SELECT';
   END IF;
 
@@ -305,6 +415,62 @@ BEGIN
     RAISE EXCEPTION 'market VOC view-owner role attributes violate policy';
   END IF;
 
+  IF NOT has_schema_privilege(
+    'market_voc_view_owner',
+    'voc',
+    'USAGE'
+  )
+     OR has_schema_privilege(
+       'market_voc_view_owner',
+       'voc',
+       'CREATE'
+     )
+     OR has_schema_privilege(
+       'market_voc_view_owner',
+       'ai',
+       'CREATE'
+     ) THEN
+    RAISE EXCEPTION 'market VOC view-owner schema privileges violate policy';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM unnest(ARRAY[
+      'voc.users',
+      'voc.product_models',
+      'voc.devices',
+      'voc.cases',
+      'voc.case_comments'
+    ]) AS base_relation(name)
+    WHERE NOT has_table_privilege(
+      'market_voc_view_owner',
+      base_relation.name,
+      'SELECT'
+    )
+       OR has_table_privilege(
+         'market_voc_view_owner',
+         base_relation.name,
+         'INSERT'
+       )
+       OR has_table_privilege(
+         'market_voc_view_owner',
+         base_relation.name,
+         'UPDATE'
+       )
+       OR has_table_privilege(
+         'market_voc_view_owner',
+         base_relation.name,
+         'DELETE'
+       )
+       OR has_table_privilege(
+         'market_voc_view_owner',
+         base_relation.name,
+         'TRUNCATE'
+       )
+  ) THEN
+    RAISE EXCEPTION 'market VOC view-owner base-table privileges violate policy';
+  END IF;
+
   IF has_table_privilege(
     'market_voc_reader',
     'public.pg_stat_statements',
@@ -315,6 +481,36 @@ BEGIN
 
   IF obj_description('ai.voc_overview'::regclass, 'pg_class') IS NULL THEN
     RAISE EXCEPTION 'ai.voc_overview is missing relation metadata';
+  END IF;
+
+  SELECT count(*) INTO actual_count
+  FROM pg_catalog.pg_class AS relation
+  JOIN pg_catalog.pg_namespace AS namespace
+    ON namespace.oid = relation.relnamespace
+  WHERE namespace.nspname = 'ai'
+    AND relation.relkind = 'v';
+  IF actual_count <> 3 THEN
+    RAISE EXCEPTION 'market VOC source expected 3 curated views, got %', actual_count;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_class AS relation
+    JOIN pg_catalog.pg_namespace AS namespace
+      ON namespace.oid = relation.relnamespace
+    WHERE namespace.nspname = 'ai'
+      AND relation.relkind = 'v'
+      AND (
+        pg_catalog.split_part(
+          pg_catalog.obj_description(relation.oid, 'pg_class'),
+          E'\n',
+          1
+        ) IS DISTINCT FROM 'query-man:source=market-voc;view-contract=1'
+        OR pg_catalog.pg_get_userbyid(relation.relowner)
+          <> 'market_voc_view_owner'
+      )
+  ) THEN
+    RAISE EXCEPTION 'market VOC curated-view marker or owner mismatch';
   END IF;
 END;
 $$;

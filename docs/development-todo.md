@@ -9,8 +9,8 @@ Status: Active — `DBENV-01`, `AUTHENV-01` 완료 후 `LAUNCH-02`
 
 [ADR 0025](decisions/0025-static-non-rls-first-launch.md)의 `LAUNCH-01-A` repository 구현과 local
 acceptance는 완료됐습니다.
-[ADR 0030](decisions/0030-git-reviewed-yaml-source-authority.md)에 따라 source·verified-query·budget의
-유일한 authority는 Git-reviewed YAML입니다.
+[ADR 0034](decisions/0034-source-view-package-and-direct-admission.md)에 따라 source authority는 source별
+`source.yaml`과 `views.sql` package입니다. Budget은 ADR 0030의 Git-reviewed YAML을 유지합니다.
 [ADR 0031](decisions/0031-no-pii-curated-view-boundary.md)에 따라 source data plane은 개인정보
 탐지·분류·마스킹 기능을 제공하지 않으며, DB owner가 개인정보를 제거했다고 확인한 curated view만
 source로 받습니다.
@@ -19,14 +19,14 @@ source로 받습니다.
 |---|---|
 | Source | `development-issues`, `market-voc` |
 | Runtime | 단일 Query Man replica |
-| Source authority | Git-reviewed source·verified-query·budget YAML |
+| Source authority | Git-reviewed source package와 budget YAML |
 | 개인정보 경계 | DB-owner-confirmed no-PII curated view |
 | Database | PostgreSQL 18, server/client UTF-8 |
 | Protected DB binding | 미실행; 현재 manifest는 development/loopback 기본값 |
 | Protected authentication binding | 미실행; 실제 환경 authority 미확정(AuthBridge 선택 시 mapper·CA도 미확정) |
 | RLS | 전면 차단 |
 | 결과 type | OID `20, 21, 23, 25, 1082, 1184, 1700` |
-| SQL policy | v3와 아홉 verified query |
+| SQL policy | v3와 exact seven result OID |
 
 Repository implementation과 local acceptance는 protected environment 전환 권한이 아니다.
 DB adapter와 authentication verifier/policy 코드가 있다는 것은 실제 DB endpoint, reader secret 또는
@@ -68,15 +68,16 @@ set은 승인된 DB DDL inventory와 metadata revision으로 검증한다.
 2. DBA가 no-PII curated view, 최소 권한 reader role/grant, PostgreSQL 18/UTF-8과 RLS 0건을 준비한다.
 3. Secret은 Git/YAML/image/log가 아닌 승인된 외부 store에서 주입한다.
 4. Source·DDL·view/function/operator/type/collation/extension, role/grant와 DB semantic setting을 승인
-   inventory와 대조하고 traffic 밖에서 metadata/reader policy probe와 아홉 verified query를 통과시킨다.
+   inventory와 대조하고 traffic 밖에서 marker/source/version, exact view privilege, Metadata direct
+   admission, reader policy와 security/integration probe를 통과시킨다.
 5. Source checkout에서 검증했다면 exact Git commit과 clean/reviewed config provenance를 기록한다.
    Application image를 사용했다면 OCI revision label이 그 commit과 일치하는 image digest를 기록한다.
 
 실제 대상이 현재 두 source의 database/user/view/TLS 의미와 다르거나, source별로 서로 다른 host/port
 환경변수 key가 필요하거나, 새 database/source라면 `DBENV-01`에서 manifest를 즉석 수정하지 않는다.
 [Source onboarding](source-extension-checklist.md)과 inventory 변경을 별도 승인·review한 뒤 이 작업을
-다시 시작한다. 실제 데이터가 정당하게 달라 verified result가 바뀌는 경우에도 자동 rebaseline하지
-않고 `config/verified-queries.yaml` 변경을 별도 승인·검증한다.
+다시 시작한다. Public view definition/output/security/grant가 달라지면 DB 현장에서 즉석 수정하지 않고
+source package의 `view_contract_version`, 모든 view marker와 `views.sql` 변경을 별도 승인·검증한다.
 
 ### AUTHENV-01: 실제 인증 환경 연결
 
@@ -110,8 +111,8 @@ JWT Discovery/JWKS, signature, issuer, audience, time, scope/role과 401/403 검
    image digest를 고정한다.
 2. TLS, secret, backup, 직전 image/config/SQL policy와 rollback route를 재확인한다.
 3. Accepted 단일 replica를 traffic 밖에서 시작하고 exact readiness, 두 source, RLS 0건,
-   PostgreSQL 18/UTF-8, metadata revision, seven-OID corpus, 아홉 verified query와 인증 acceptance를
-   다시 확인한다.
+   PostgreSQL 18/UTF-8, view marker/권한, Metadata와 SQL revision, seven-OID corpus, security/integration과
+   인증 acceptance를 다시 확인한다.
 4. Old route를 닫고 신규 유입·active query·source connection을 drain한 뒤 accepted replica만 route한다.
 5. 오류·resource·DB connection을 관찰하고 실행 결과와 rollback 가능 상태를 environment evidence로
    남긴다.
@@ -138,12 +139,12 @@ Repository 문서나 한 작업의 procedure를 승인한 것만으로 다른 pr
 ## 완료 조건
 
 - `DBENV-01`: 승인 inventory와 실제 DB가 일치하고, 두 source의 no-PII view·reader·TLS/secret·PG18/UTF-8·
-  RLS 0건과 metadata/reader probe를 통과함. 현재 승인된 아홉 verified-query entry의 exact metadata
-  revision, ordered columns, row count와 result hash를 검증 artifact와 함께 environment evidence로 남김
+  RLS 0건, marker/source/version, exact owner/ACL, dynamic column과 metadata/reader probe를 통과함.
+  해당 artifact와 결과를 environment evidence로 남김
 - `AUTHENV-01`: authority가 하나뿐이고 선택 mode가 지원하는 permission 성공, 해당하는 권한 거부 403,
   잘못된 credential 401과 비로깅을 통과함. AuthBridge를 선택하면 실제 positive/negative token·scope·
   key rotation, CA/client owner와 검증 artifact도 environment evidence로 남김
-- `LAUNCH-02`: 승인한 exact artifact가 배포되고 `/ready`, 아홉 verified query, 현재 SQL policy와
+- `LAUNCH-02`: 승인한 exact artifact가 배포되고 `/ready`, marker/revision/safety probe, 현재 SQL policy와
   DB/auth 재검증이 통과하며, traffic 뒤 오류·resource·connection 상태와 rollback 가능 상태를
   immutable environment evidence로 남김
 
@@ -152,7 +153,7 @@ Repository 문서나 한 작업의 procedure를 승인한 것만으로 다른 pr
 - `DBENV-01` 또는 `AUTHENV-01`이 미완료이거나 완료 뒤 inventory가 변경됨
 - 실제 대상이 current source inventory와 달라 새 source/config/code 변경이 필요함
 - Source, RLS, DDL, role, DB 설정 또는 image가 승인 inventory와 다름
-- Metadata revision이나 verified result hash가 다름
+- Marker/source/version, view definition/owner/ACL 또는 metadata revision이 승인 inventory와 다름
 - Readiness가 `degraded` 또는 `unavailable`
 - 지원하지 않는 결과 type이 노출됨
 - SQL policy v2와 v3 process가 동시에 요청을 받음
@@ -172,8 +173,8 @@ Repository 문서나 한 작업의 procedure를 승인한 것만으로 다른 pr
 | ID | 주제 | 현재 상태와 다시 시작하는 조건 |
 |---|---|---|
 | `RLS-01`~`RLS-03` | RLS serving | 모든 RLS source를 DB 접근 전에 차단합니다. 실제 source 요구와 recursive policy/dependency attestation, migration, cross-tenant acceptance와 protected cutover의 정확한 승인이 필요합니다. |
-| `ENC-01`~`ENC-02` | Result type 확대 | OID `20, 21, 23, 25, 1082, 1184, 1700`만 허용합니다. 이 범위로 답할 수 없는 실제 질문과 lossless encoding, SQL policy v4+, verified migration·rollback 승인이 필요합니다. |
-| `DBAUTH-01`~`DBAUTH-03` | DB-backed source authority | Git-reviewed YAML만 authority입니다. 새 authority·persisted format·credential/admin 경계, explicit import, dual-authority 없는 cutover와 backup/rollback을 새로 승인해야 합니다. 과거 managed code를 암묵적으로 복원하지 않습니다. |
+| `ENC-01`~`ENC-02` | Result type 확대 | OID `20, 21, 23, 25, 1082, 1184, 1700`만 허용합니다. 이 범위로 답할 수 없는 실제 질문과 lossless encoding, SQL policy v4+, migration·rollback 승인이 필요합니다. |
+| `DBAUTH-01`~`DBAUTH-03` | DB-backed source authority | Git-reviewed source package와 budget만 authority입니다. 새 authority·persisted format·credential/admin 경계, explicit import, dual-authority 없는 cutover와 backup/rollback을 새로 승인해야 합니다. 과거 managed code를 암묵적으로 복원하지 않습니다. |
 | `COST-01`~`COST-05` | DB-native 비용·경보 | Query resource limit는 이미 강제하지만 통화 비용·authoritative usage collector는 없습니다. 실제 운영 요구와 monitoring 권한·retention·aggregate 의미를 승인하고 base evidence가 생긴 뒤 alert threshold를 별도 결정합니다. |
 | `TRACE-01`~`TRACE-04` | Workflow trace | 현재 request/MCP/query ID로 부족한 실제 correlation 요구와 header trust, redaction·cardinality, retry/disconnect acceptance 범위를 승인해야 합니다. |
 
@@ -192,5 +193,5 @@ limit을 대신할 수 없습니다. 실제 요구 없이 chargeback, distribute
 - Protected environment evidence/change record는 승인된 기록 시스템에 append-only/immutable하게
   보존합니다. Repository의 과거 서술 문서는 archive baseline을 남긴 뒤 current tree에서 정리할 수
   있지만 Git history를 rewrite하지 않습니다.
-- 최소 repository gate는 Ruff, mypy와 full pytest입니다. DB·release 경계는 관련 integration과
-  container·verified-query acceptance까지 실행합니다.
+- 최소 repository gate는 Ruff, mypy와 full pytest입니다. DB·release 경계는 관련 security,
+  integration, container, bounded load와 soak까지 실행합니다.

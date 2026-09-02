@@ -131,6 +131,155 @@ async def test_rejects_semantic_overlay_drift() -> None:
         await service.get_context("development-issues", "최근 문제")
 
 
+@pytest.mark.asyncio
+async def test_requires_complete_semantic_metadata_before_publication() -> None:
+    registry = load_test_registry()
+    source = registry.get("development-issues")
+    assert source is not None
+    snapshot = minimal_development_snapshot()
+    semantics = source.semantic_overlay.relations
+    first = semantics[0]
+    cases = (
+        (
+            replace(
+                source,
+                semantic_overlay=replace(
+                    source.semantic_overlay,
+                    relations=(first, first, *semantics[1:]),
+                ),
+            ),
+            snapshot,
+            "duplicate relations",
+        ),
+        (
+            replace(
+                source,
+                semantic_overlay=replace(
+                    source.semantic_overlay,
+                    relations=semantics[1:],
+                ),
+            ),
+            snapshot,
+            "Missing semantic metadata",
+        ),
+        (
+            replace(
+                source,
+                semantic_overlay=replace(
+                    source.semantic_overlay,
+                    relations=(replace(first, grain=None), *semantics[1:]),
+                ),
+            ),
+            snapshot,
+            "Missing grain",
+        ),
+        (
+            replace(
+                source,
+                semantic_overlay=replace(
+                    source.semantic_overlay,
+                    relations=(
+                        replace(first, description=None),
+                        *semantics[1:],
+                    ),
+                ),
+            ),
+            replace(
+                snapshot,
+                relations=(
+                    replace(snapshot.relations[0], comment=None),
+                    *snapshot.relations[1:],
+                ),
+            ),
+            "Missing description",
+        ),
+        (
+            replace(
+                source,
+                semantic_overlay=replace(
+                    source.semantic_overlay,
+                    relations=(
+                        replace(first, default_time_column=None),
+                        *semantics[1:],
+                    ),
+                ),
+            ),
+            snapshot,
+            "Missing default time",
+        ),
+    )
+
+    for incomplete_source, current_snapshot, expected in cases:
+        service = MetadataService(
+            SourceRegistry([incomplete_source]),
+            StaticCatalog(current_snapshot),
+        )
+        with pytest.raises(MetadataUnavailableError) as captured:
+            await service.get_published(source.source_id)
+        assert any(
+            expected in violation
+            for violation in captured.value.details["contract_violations"]
+        )
+
+
+@pytest.mark.asyncio
+async def test_requires_exact_view_contract_comment_source_and_version() -> None:
+    registry = load_test_registry()
+    source = registry.get("development-issues")
+    assert source is not None
+    snapshot = minimal_development_snapshot()
+    relation = snapshot.relations[0]
+    mismatches = (
+        replace(relation, view_contract_source="another-source"),
+        replace(
+            relation,
+            view_contract_version=source.view_contract_version + 1,
+        ),
+        replace(
+            relation,
+            view_contract_source=None,
+            view_contract_version=None,
+        ),
+    )
+
+    for mismatch in mismatches:
+        current = replace(
+            snapshot,
+            relations=(mismatch, *snapshot.relations[1:]),
+        )
+        service = MetadataService(registry, StaticCatalog(current))
+        with pytest.raises(MetadataUnavailableError) as captured:
+            await service.get_published(source.source_id)
+        assert any(
+            "View contract" in violation
+            for violation in captured.value.details["contract_violations"]
+        )
+
+
+@pytest.mark.asyncio
+async def test_rejects_catalog_relations_outside_source_allowlist() -> None:
+    registry = load_test_registry()
+    source = registry.get("development-issues")
+    assert source is not None
+    snapshot = minimal_development_snapshot()
+    snapshot = replace(
+        snapshot,
+        relations=(
+            replace(snapshot.relations[0], kind="table"),
+            *snapshot.relations[1:],
+        ),
+    )
+    service = MetadataService(registry, StaticCatalog(snapshot))
+
+    with pytest.raises(MetadataUnavailableError) as captured:
+        await service.get_published(source.source_id)
+
+    assert any(
+        "outside the source allowlist" in violation
+        for violation in captured.value.details["contract_violations"]
+    )
+
+
 @pytest.mark.parametrize("failure_type", [RuntimeError, ValueError])
 @pytest.mark.asyncio
 async def test_returns_stale_revision_after_refresh_failure(
@@ -222,6 +371,144 @@ async def test_fails_closed_on_drift_even_with_cache() -> None:
 
 
 @pytest.mark.asyncio
+async def test_same_view_contract_version_rejects_structure_drift_without_stale() -> None:
+    snapshot = minimal_development_snapshot()
+    relation = snapshot.relations[0]
+    changed = replace(
+        snapshot,
+        relations=(
+            replace(
+                relation,
+                columns=(
+                    replace(relation.columns[0], data_type="numeric"),
+                    *relation.columns[1:],
+                ),
+            ),
+            *snapshot.relations[1:],
+        ),
+    )
+    catalog = SnapshotSequenceCatalog([snapshot, changed])
+    service = MetadataService(
+        load_test_registry(),
+        catalog,
+        cache_ttl_ms=0,
+        now=lambda: 1_000,
+    )
+    await service.get_published("development-issues")
+
+    with pytest.raises(MetadataUnavailableError) as captured:
+        await service.get_published("development-issues")
+
+    assert captured.value.details == {
+        "contract_violations": [
+            "View structure changed without a view contract version change."
+        ]
+    }
+    assert catalog.load_count == 2
+
+
+@pytest.mark.asyncio
+async def test_view_contract_marker_drift_never_returns_warm_stale() -> None:
+    snapshot = minimal_development_snapshot()
+    changed = replace(
+        snapshot,
+        relations=(
+            replace(snapshot.relations[0], view_contract_source="another-source"),
+            *snapshot.relations[1:],
+        ),
+    )
+    catalog = SnapshotSequenceCatalog([snapshot, changed])
+    service = MetadataService(
+        load_test_registry(),
+        catalog,
+        cache_ttl_ms=0,
+        now=lambda: 1_000,
+    )
+    await service.get_published("development-issues")
+
+    with pytest.raises(MetadataUnavailableError) as captured:
+        await service.get_published("development-issues")
+
+    assert any(
+        "View contract source" in violation
+        for violation in captured.value.details["contract_violations"]
+    )
+    assert catalog.load_count == 2
+
+
+@pytest.mark.asyncio
+async def test_comment_change_rotates_request_revision_without_structure_rejection() -> None:
+    snapshot = minimal_development_snapshot()
+    changed = replace(
+        snapshot,
+        relations=(
+            replace(snapshot.relations[0], comment="개선된 사람용 설명"),
+            *snapshot.relations[1:],
+        ),
+    )
+    service = MetadataService(
+        load_test_registry(),
+        SnapshotSequenceCatalog([snapshot, changed]),
+        cache_ttl_ms=0,
+        now=lambda: 1_000,
+    )
+
+    first = await service.get_published("development-issues")
+    second = await service.get_published("development-issues")
+
+    assert second.revision != first.revision
+
+
+@pytest.mark.asyncio
+async def test_new_view_contract_version_accepts_reviewed_structure_change() -> None:
+    registry = load_test_registry()
+    first_source = registry.get("development-issues")
+    assert first_source is not None
+    first_snapshot = minimal_development_snapshot()
+    second_source = replace(
+        first_source,
+        view_contract_version=first_source.view_contract_version + 1,
+    )
+    changed_relation = first_snapshot.relations[0]
+    changed_relation = replace(
+        changed_relation,
+        view_contract_version=second_source.view_contract_version,
+        columns=(
+            *changed_relation.columns,
+            replace(
+                column("reviewed_attribute"),
+                ordinal=len(changed_relation.columns) + 1,
+            ),
+        ),
+    )
+    second_snapshot = replace(
+        first_snapshot,
+        relations=tuple(
+            replace(
+                relation,
+                view_contract_version=second_source.view_contract_version,
+            )
+            if relation.qualified_name != changed_relation.qualified_name
+            else changed_relation
+            for relation in first_snapshot.relations
+        ),
+    )
+    reader = MutableSourceReader(first_source)
+    catalog = SnapshotSequenceCatalog([first_snapshot, second_snapshot])
+    service = MetadataService(reader, catalog)
+    first = await service.get_published(first_source.source_id)
+
+    reader.source = second_source
+    service.invalidate(second_source.source_id)
+    second = await service.get_published(second_source.source_id)
+
+    assert second.revision != first.revision
+    assert "reviewed_attribute" in {
+        current.name for current in second.snapshot.relations[0].columns
+    }
+
+
+@pytest.mark.asyncio
 async def test_invalidated_refresh_cannot_replace_new_profile_metadata() -> None:
     registry = load_test_registry()
     first_source = registry.get("development-issues")
@@ -236,11 +523,7 @@ async def test_invalidated_refresh_cannot_replace_new_profile_metadata() -> None
         minimal_development_snapshot(),
         minimal_development_snapshot(),
     )
-    service = MetadataService(
-        reader,
-        catalog,
-        verified_revisions={},
-    )
+    service = MetadataService(reader, catalog)
 
     old_refresh = asyncio.create_task(service.get_published(first_source.source_id))
     await catalog.first_started.wait()
@@ -263,11 +546,7 @@ async def test_cached_metadata_must_match_current_source_contract() -> None:
     first_source = registry.get("development-issues")
     assert first_source is not None
     reader = MutableSourceReader(first_source)
-    service = MetadataService(
-        reader,
-        StaticCatalog(minimal_development_snapshot()),
-        verified_revisions={},
-    )
+    service = MetadataService(reader, StaticCatalog(minimal_development_snapshot()))
     first = await service.get_published(first_source.source_id)
     second_source = replace(
         first_source,
@@ -303,6 +582,7 @@ async def test_exposes_deterministic_sql_capabilities_from_validation_policy() -
         "cast_types": sorted(DEFAULT_ALLOWED_TYPES),
         "unqualified_cast_types": sorted(DEFAULT_ALLOWED_UNQUALIFIED_TYPES),
     }
+    assert "quality_level" not in response
     assert response["sql_policy_revision"] == SQL_POLICY_REVISION
     assert {
         "date_part",

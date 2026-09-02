@@ -10,13 +10,15 @@ accepted ADR이 기준이고, 이 문서는 개념을 쉽게 이해하기 위한
 | Query Man | AI나 사용자가 만든 SQL을 검사하고, 허용된 PostgreSQL 데이터만 제한 안에서 조회하는 관문입니다. AI 모델 자체는 포함하지 않습니다. |
 | Source | Query Man이 조회 대상으로 다루는 데이터 한 묶음입니다. 보통 PostgreSQL database 하나와 연결되지만, 사용자는 접속 주소 대신 Source ID만 봅니다. |
 | Source ID | Source를 가리키는 공개 이름입니다. 예: `market-voc`. 비밀번호나 DB 주소가 아닙니다. |
-| Source manifest | Git에서 review하는 `config/sources/*.yaml`입니다. Source의 위치, reader 이름, 허용 schema, 제한과 업무 설명을 적고 실제 비밀번호는 넣지 않습니다. |
+| Source package | Git에서 review하는 `config/sources/<source-id>/` 폴더입니다. `source.yaml`과 `views.sql` 두 파일만 둡니다. |
+| Source manifest | Source package의 `source.yaml`입니다. Source의 위치, reader 이름, 허용 schema, 제한과 업무 설명을 적고 실제 비밀번호는 넣지 않습니다. |
+| Desired view SQL | Source package의 `views.sql`입니다. DB owner가 검토한 Query Man 전용 view, comment와 최소 권한을 정의하지만 Runtime은 실행하지 않습니다. |
+| View contract version | `source.yaml`과 모든 공개 view comment가 공유하는 양의 정수입니다. 공개 view 구조가 바뀌면 올리며 Git SQL과 live DB의 byte 동일성을 증명하는 hash는 아닙니다. |
 | Curated view | 원본 table을 AI 조회에 적합하도록 DB owner가 정리해 공개한 읽기 전용 view입니다. Query Man은 현재 `ai` schema의 승인된 view를 사용합니다. |
 | Grain | 결과 한 행이 무엇 하나를 뜻하는지 나타냅니다. 예: “VOC 한 건”, “판매 기기 한 대”. |
 | Fanout | 서로 다른 grain을 잘못 join해 같은 사실이 여러 번 복제되는 문제입니다. 합계나 건수가 부풀 수 있습니다. |
 | Semantic overlay | DB 이름만으로 알 수 없는 업무 의미를 보충하는 설정입니다. 별칭, grain, 안전한 join과 상태 판정 같은 내용만 둡니다. |
 | Seed / fixture | 개발과 검증을 위해 반복해서 같은 상태로 만들 수 있는 예제 데이터·DB입니다. 실제 운영 데이터가 아닙니다. |
-| Golden question | 제품이 반드시 제대로 답해야 하는 대표 질문입니다. 현재 두 source에 아홉 개가 있습니다. |
 
 ## 접속과 실행
 
@@ -46,19 +48,17 @@ accepted ADR이 기준이고, 이 문서는 개념을 쉽게 이해하기 위한
 | Metadata revision | 특정 source의 metadata와 그 의미·제한이 정확히 어느 버전인지 나타내는 내용 지문입니다. 보통 업무 row가 추가·수정되는 것만으로는 바뀌지 않습니다. |
 | SQL policy revision | 전체 애플리케이션이 허용하는 SQL 문법, 함수, operator, 결과 type과 canonical 정책 버전의 내용 지문입니다. Source별 metadata revision과 별개입니다. |
 | Revision mismatch | Context를 받은 뒤 metadata나 SQL 정책이 바뀌어, 낡은 정보로 만든 SQL을 실행할 수 없는 상태입니다. Context를 다시 받아야 합니다. |
-| Verified query | 대표 질문·SQL·예상 결과를 묶은 회귀 시험입니다. 사용자 query 허용 목록이 아닙니다. |
 | Fingerprint | SQL literal을 노출하지 않으면서 같은 형태의 query를 식별하는 지문입니다. |
 | Pseudonymous subject | 환경별 secret key로 caller·tenant를 HMAC해 일반 audit에서 직접 식별자를 대신하는 값입니다. 같은 key에서는 연결 가능하므로 익명 사용자를 뜻하지 않습니다. |
 | Diagnostic consent / capture | 만료 가능한 server-side 동의 receipt가 있을 때만 질문 원문과 literal-free SQL을 일반 log와 분리된 최대 7일 암호화 저장소에 남기는 진단 기능입니다. |
 | Canonical encoding | 같은 결과가 언제나 같은 byte 표현과 hash를 만들도록 값 표현을 고정하는 규칙입니다. |
 | Invariant | 구현이 바뀌어도 반드시 참이어야 하는 조건입니다. 예: 실패한 query가 rollback되고 secret이 응답에 나오지 않음. |
-| L0 / L1 / L2 | Source metadata 품질 단계입니다. L0는 기본 catalog, L1은 업무 설명·grain 보강, L2는 현재 revision의 verified query까지 통과한 상태입니다. |
 
 ## 실행 모드와 운영
 
 | 용어 | 쉽게 말하면 |
 |---|---|
-| Git-reviewed YAML authority | `config/sources/*.yaml`, `config/verified-queries.yaml`, `config/budget-profiles.yaml`이 source·verified query·제한을 결정하는 유일한 기준인 방식입니다. 변경은 review·test·배포로 반영합니다. |
+| Git-reviewed source authority | `config/sources/<source-id>/source.yaml`과 `views.sql`, `config/budget-profiles.yaml`이 source와 제한을 결정하는 기준인 방식입니다. 변경은 review·test·DBA 적용·배포로 반영합니다. |
 | Static launch | Git에서 검토한 두 source와 단일 replica를 배포물에 고정한 현재 첫 오픈 범위입니다. 실행 중 새 source를 추가하지 않습니다. |
 | Replica | 같은 Query Man 애플리케이션을 실행하는 process 한 개입니다. 현재 first launch 계획은 단일 replica입니다. |
 | Freshness / stale | Metadata가 얼마나 최근 것인지 나타냅니다. `stale`은 마지막 정상 snapshot은 있지만 신선도 기준을 넘었다는 뜻입니다. |

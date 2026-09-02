@@ -51,10 +51,13 @@ class CatalogRelation:
     comment: str | None = None
     estimated_rows: int | None = None
     definition_hash: str | None = None
+    view_contract_source: str | None = None
+    view_contract_version: int | None = None
     primary_key: tuple[str, ...] = field(default_factory=tuple)
     foreign_keys: tuple[CatalogForeignKey, ...] = field(default_factory=tuple)
     indexes: tuple[CatalogIndex, ...] = field(default_factory=tuple)
     security_invoker: bool = False
+    security_barrier: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "columns", tuple(self.columns))

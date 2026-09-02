@@ -1,12 +1,13 @@
-version: 3
+version: 4
 
 source_id: retail-commerce
 name: 리테일 커머스
 description: 온라인·매장 주문, 주문 상품, 결제, 반품·환불과 고객 구매 이력
+view_contract_version: 1
 provenance:
   owner: query-man-domain-lab
   environment: development
-  database_migration_ref: docker/postgres/domain-lab/retail-commerce-schema.sql
+  database_migration_ref: config/domain-lab/sources/retail-commerce/views.sql
 connection:
   host: 127.0.0.1
   host_env: QUERY_MAN_POSTGRES_HOST
@@ -19,7 +20,6 @@ connection:
 allowed_schemas: [ai]
 allowed_relation_kinds: [view]
 budget_profile: interactive
-minimum_quality_level: L2
 
 semantic_overlay:
   default_relation: ai.order_overview

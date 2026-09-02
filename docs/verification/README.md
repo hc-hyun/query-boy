@@ -10,6 +10,7 @@ Status: Current — 현재 gate와 과거 repository 기록 조회 안내
 |---|---|
 | `LAUNCH-01-A` repository 구현 | Accepted; exact launch scope는 ADR 0025 |
 | `QB-YAML-SOURCE-AUTHORITY-20260829` repository removal | Accepted; exact authority는 ADR 0030 |
+| `SOURCE-VIEW-01` source package/direct admission | Accepted; exact format와 procedure는 ADR 0034 |
 | `DBENV-01` protected DB binding | 미실행; Active TODO |
 | `AUTHENV-01` protected authentication binding | 미실행; Active TODO |
 | `LAUNCH-02` protected deployment | 미실행; Active TODO |
@@ -26,13 +27,13 @@ uv run mypy src
 uv run pytest
 ```
 
-DB catalog/query 경계는 관련 integration lane을, container·release 경계는 container acceptance와
-`uv run query-man-verify`를 추가합니다. 정확한 범위는
+DB catalog/query 경계는 security/integration lane을, container·release 경계는 container acceptance,
+bounded load와 soak를 추가합니다. 정확한 범위는
 [활성 개발 지침](../development-guidelines.md#tests)과 primary module README가 정합니다.
 
-Verified query의 format, 비교 순서와 rollback은
-[Assurance module](../modules/assurance/README.md#verified-query-회귀검사)을 따릅니다. 현재 first-launch
-profile의 exact acceptance 항목은 [ADR 0025](../decisions/0025-static-non-rls-first-launch.md)에 있습니다.
+Source package와 view apply/rollback은
+[ADR 0034](../decisions/0034-source-view-package-and-direct-admission.md), repository gate ownership은
+[Assurance module](../modules/assurance/README.md)을 따릅니다.
 
 ## protected environment evidence
 

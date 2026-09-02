@@ -8,6 +8,10 @@ Decision ID: `QB-NO-PII-VIEW-BOUNDARY-20260830`
 
 Baseline: `1ff390ab67df215181810a84ac8b2ca8570eceee`
 
+Current interpretation: [ADR 0034](0034-source-view-package-and-direct-admission.md)의 source-local
+`views.sql`과 직접 metadata admission을 사용합니다. 이 문서의 DB-owner-confirmed no-PII 경계는
+유효하고, 과거 source별 결과 artifact 절차만 대체됐습니다.
+
 ## Context
 
 Query Man의 query 경로는 relation allowlist와 reader grant를 강제하지만, curated view 안의 column을

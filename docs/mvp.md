@@ -1,4 +1,4 @@
-# 첫 오픈 예제 데이터와 검증 질문
+# 첫 오픈 예제 데이터와 대표 질문
 
 Status: 현재 ADR 0025 static two-source launch dataset
 
@@ -7,7 +7,9 @@ Status: 현재 ADR 0025 static two-source launch dataset
 
 현재 범위는 [ADR 0025](decisions/0025-static-non-rls-first-launch.md)의 단일 replica,
 PostgreSQL 18/UTF-8, non-RLS launch profile이며 source authority는
-[ADR 0030](decisions/0030-git-reviewed-yaml-source-authority.md)의 Git YAML입니다.
+[ADR 0034](decisions/0034-source-view-package-and-direct-admission.md)의 source별
+`config/sources/<source-id>/source.yaml`+`views.sql` package입니다. Budget은 계속
+[ADR 0030](decisions/0030-git-reviewed-yaml-source-authority.md)의 Git-reviewed YAML을 따릅니다.
 
 ## 먼저 알아둘 말
 
@@ -17,7 +19,7 @@ PostgreSQL 18/UTF-8, non-RLS launch profile이며 source authority는
 | Grain | 한 행이 나타내는 단위. 예: 문제 한 건, 댓글 한 건, 기기 한 대 |
 | Fanout | 다른 grain을 잘못 join해 같은 사실이 여러 번 복제되는 문제 |
 | Seed | 다시 실행해도 같은 결과를 만드는 예제 데이터 |
-| Golden question | 제품 변경 뒤에도 같은 의미와 결과를 유지해야 하는 대표 질문 |
+| 대표 질문 | 예제 데이터의 의미와 그레인을 이해하기 위한 사용 예시 |
 
 더 많은 용어는 [공통 용어 사전](glossary.md)을 참고하세요.
 
@@ -117,7 +119,7 @@ device_overview      = 판매 기기 한 대
 이 의미는 DB comment와 semantic overlay에 기록됩니다. `get_context`는 질문과 관련된 view와
 column만 골라 제공합니다.
 
-## 아홉 가지 Golden Questions
+## 아홉 가지 대표 질문
 
 Development issues:
 
@@ -134,20 +136,14 @@ Market VOC:
 4. 제조 lot별 전체 VOC 중 배터리 및 과열 VOC 비율을 비교해줘.
 5. 지역과 월별 미해결 VOC 추이를 보여줘.
 
-각 질문의 SQL, relation과 예상 결과는
-[`config/verified-queries.yaml`](../config/verified-queries.yaml)에 있습니다. 이것은 사용자가 실행할 수
-있는 SQL 허용 목록이 아니라 변경 뒤 결과가 달라지지 않았는지 확인하는 회귀 시험입니다.
+이 질문은 데이터를 설명하는 예시이지 source package의 추가 artifact나 공개 조건이
+아닙니다. Query 생명주기와 결과 encoding에 필요한 결정적 SQL은 각 test fixture 안에서만
+관리합니다.
 
 ## 직접 확인하기
 
-처음 실행하는 절차는 [프로젝트 README](../README.md#5분-로컬-실행)를 따릅니다. Database와
-application이 준비된 뒤 아홉 질문의 exact revision·column·row·hash를 확인하려면 실행합니다.
-
-```bash
-uv run query-man-verify
-```
-
-Fixture 자체의 row 수, 의미 분포, view metadata와 reader 권한까지 다시 적용·검사하려면 다음을
+처음 실행하는 절차는 [프로젝트 README](../README.md#5분-로컬-실행)를 따릅니다. Fixture의
+base schema, source-local view, seed, row 수, marker와 reader 권한을 다시 적용·검사하려면 다음을
 사용합니다.
 
 ```bash
@@ -156,21 +152,25 @@ docker compose up -d --wait postgres
 ./scripts/apply-db.sh
 ```
 
-`apply-db.sh`는 현재 Git YAML inventory의 두 source fixture만 준비합니다. Source 추가나 definition
-변경은 별도 YAML review, traffic-off 검증과 배포 승인을 거칩니다.
+`apply-db.sh`는 현재 Git source package의 두 fixture만 준비합니다. `get_context`가 candidate
+metadata를 만들 때 reader-visible view marker와 semantic overlay를 직접 검사하고, 불일치하면
+stale snapshot으로 우회하지 않습니다. Source 추가나 view definition 변경은
+[source 확장 checklist](source-extension-checklist.md)의 DB owner review, traffic-off apply와 별도 실행
+승인을 거칩니다.
 
 ## 안전 정책은 어디서 보나
 
 이 문서는 데이터 설명만 담당합니다.
 
 - 현재 source, PostgreSQL·RLS·결과 type 제한: [ADR 0025](decisions/0025-static-non-rls-first-launch.md)
+- Source package, view marker와 direct admission: [ADR 0034](decisions/0034-source-view-package-and-direct-admission.md)
 - SQL 검사와 실행: [Guarded Query module](modules/guarded-query/README.md)
 - HTTP/MCP 외부 API: [Delivery module](modules/delivery/README.md)
-- Verified result 검사: [Assurance module의 verified-query 절](modules/assurance/README.md#verified-query-회귀검사)
+- Security, integration, container, load·soak 검증: [Assurance module](modules/assurance/README.md)
 
 ## MVP Exit Criteria
 
 두 source, 최소 권한 reader, 결정적 seed, grain별 curated view, metadata retrieval, guarded query,
-HTTP/MCP와 아홉 verified question의 repository 구현은 완료됐습니다. 현재 검증 방법과 삭제한 과거
-기록은 [검증과 Git 기록](verification/README.md)에서 확인합니다. 실제 환경 전환 완료를 뜻하지는
-않습니다.
+HTTP/MCP와 direct metadata admission의 repository 구현은 완료됐습니다. Security, integration,
+container, bounded load·soak가 유지되며 현재 검증 방법과 삭제한 과거 기록은
+[검증과 Git 기록](verification/README.md)에서 확인합니다. 실제 환경 전환 완료를 뜻하지는 않습니다.

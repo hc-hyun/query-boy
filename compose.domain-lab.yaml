@@ -22,6 +22,7 @@ services:
     volumes:
       - ./docker/postgres/domain-lab/46-domain-lab-bootstrap.sh:/docker-entrypoint-initdb.d/46-domain-lab-bootstrap.sh:ro
       - ./docker/postgres/domain-lab:/query-man-domain-lab:ro
+      - ./config/domain-lab/sources:/query-man-domain-lab-sources:ro
 
   query-man:
     container_name: query-man-domain-lab-app

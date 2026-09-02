@@ -14,6 +14,7 @@ from query_man.source_catalog.models import SourceProfile
 def create_metadata_revision(source: SourceProfile, catalog: CatalogSnapshot) -> str:
     value = {
         "source_id": source.source_id,
+        "view_contract_version": source.view_contract_version,
         "canonical_time_policy": CANONICAL_TIME_POLICY_MATERIAL,
         "allowed_schemas": source.allowed_schemas,
         "allowed_relation_kinds": source.allowed_relation_kinds,
@@ -32,6 +33,7 @@ def create_metadata_revision(source: SourceProfile, catalog: CatalogSnapshot) ->
                 "comment": relation.comment,
                 "definition_hash": relation.definition_hash,
                 **({"security_invoker": True} if relation.security_invoker else {}),
+                **({"security_barrier": True} if relation.security_barrier else {}),
                 **(
                     {"primary_key": _ordered_names(relation.primary_key)}
                     if relation.primary_key
@@ -82,6 +84,39 @@ def create_metadata_revision(source: SourceProfile, catalog: CatalogSnapshot) ->
         ],
     }
     canonical = json.dumps(_canonicalize(value), ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    return f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()}"
+
+
+def create_view_structure_signature(catalog: CatalogSnapshot) -> str:
+    value = {
+        "relations": [
+            {
+                "schema": relation.schema,
+                "name": relation.name,
+                "kind": relation.kind,
+                "definition_hash": relation.definition_hash,
+                "security_invoker": relation.security_invoker,
+                "security_barrier": relation.security_barrier,
+                "columns": [
+                    {
+                        "position": position,
+                        "name": column.name,
+                        "ordinal": column.ordinal,
+                        "data_type": column.data_type,
+                        "nullable": column.nullable,
+                    }
+                    for position, column in enumerate(relation.columns, 1)
+                ],
+            }
+            for relation in catalog.relations
+        ]
+    }
+    canonical = json.dumps(
+        _canonicalize(value),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
     return f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()}"
 
 

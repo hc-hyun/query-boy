@@ -1,6 +1,6 @@
 # Operations Guide
 
-Status: current Git-reviewed YAML first-launch runbook
+Status: current Git-reviewed source-package first-launch runbook
 
 이 문서는 목적에 맞는 절만 읽습니다. 낯선 말은 [용어 사전](glossary.md)을 참고하세요.
 
@@ -8,14 +8,15 @@ Status: current Git-reviewed YAML first-launch runbook
 |---|---|
 | 실제 첫 오픈 준비·전환 | [Static Non-RLS First Launch](#static-non-rls-first-launch) |
 | AuthBridge bearer 인증 준비 | [Resource Server JWT 계약](resource-server-jwt-auth.md) |
-| 상태·log·diagnostic·source YAML 조회 | [Interactive Operator Shell](#interactive-operator-shell) |
+| 상태·log·diagnostic·source package 조회 | [Interactive Operator Shell](#interactive-operator-shell) |
 | Core health·metric·alert 조사 | [Health](#health-and-metrics), [Alert](#alert-policy) |
 | 로컬 Compose와 MCP 확인 | [Local Container Operations](#local-container-operations) |
 | 안전한 process 종료 | [Graceful Shutdown](#graceful-shutdown) |
 
-현재 source·verified query·budget authority는 Git-reviewed YAML 하나뿐입니다. Runtime admin
+현재 source authority는 Git-reviewed source package, budget authority는 Git-reviewed YAML뿐입니다. Runtime admin
 mutation, Control DB, hot reload과 source convergence 운영 절차는 제공하지 않습니다.
-정확한 결정 기준은 [ADR 0030](decisions/0030-git-reviewed-yaml-source-authority.md)입니다.
+정확한 source 결정 기준은 [ADR 0034](decisions/0034-source-view-package-and-direct-admission.md), budget과
+retired managed 경계는 [ADR 0030](decisions/0030-git-reviewed-yaml-source-authority.md)입니다.
 실제 protected environment 작업은 [Active TODO](development-todo.md)의 DB 연결 `DBENV-01`, 인증 연결
 `AUTHENV-01`과 그 뒤의 배포·전환 `LAUNCH-02` 순서입니다.
 
@@ -35,16 +36,16 @@ runbook입니다. DB DDL/reader/view, source manifest, AuthBridge mapper나 appl
 새로 구현하지 않고, 승인된 inventory를 traffic 밖에서 다시 검증합니다.
 
 - `development-issues`, `market-voc` 두 source
-- Git-reviewed `config/sources/*.yaml`, `config/verified-queries.yaml`, `config/budget-profiles.yaml`
+- Git-reviewed `config/sources/<source-id>/{source.yaml,views.sql}`, `config/budget-profiles.yaml`
 - PostgreSQL 18, server/client UTF-8, RLS source 0개
 - final result OID `20, 21, 23, 25, 1082, 1184, 1700`
-- SQL policy v3와 repository의 9개 verified query
+- SQL policy v3, metadata/view contract admission과 repository security/integration/container gate
 - 단일 Query Man replica, private Docker network와 loopback listener
 
 Repository 변경 승인은 실제 환경 실행 승인이 아닙니다. 실행 전 change record에 target,
 operator access, authentication authority, TLS/secret/backup, source·DDL·role/settings inventory,
 approved Git commit, upstream/application image digest, route, stop/rollback 조건과 책임자를
-기록합니다. TLS inventory에는 source manifest v3의 exact `sslmode`, native PostgreSQL TCP endpoint,
+기록합니다. TLS inventory에는 source manifest v4의 exact `sslmode`, native PostgreSQL TCP endpoint,
 root CA/`PGSSLROOTCERT`, `require`의 hostname-risk 승인과 CA/SAN 개선 조건을 포함합니다. AuthBridge를
 선택하면 exact issuer, Query Man 전용 audience/scope mapper, CA trust와 client token 취득·refresh
 owner도 기록합니다.
@@ -67,9 +68,9 @@ artifact acceptance에서 시작하지 않습니다.
 
 ### Traffic-off acceptance
 
-Source YAML, budget/access policy, source DDL/view/function/operator/type/collation/extension, reader
-role/grant와 database/role/server setting을 승인 inventory와 비교합니다. YAML은 secret 값이
-아니라 환경 변수 이름만 포함해야 합니다. Source YAML은 exact v3 `sslmode`를 가져야 하며 `prefer`,
+Source package, budget/access policy, source DDL/view/function/operator/type/collation/extension, reader
+role/grant와 database/role/server setting을 승인 inventory와 비교합니다. Manifest는 secret 값이
+아니라 환경 변수 이름만 포함해야 합니다. Source manifest는 exact v4 `sslmode`를 가져야 하며 `prefer`,
 `allow`, `verify-ca`와 생략은 중단 조건입니다. Runtime checkout이 `gssencmode=disable`과 reviewed
 mode에 맞는 실제 TLS state를 확인하는 artifact여야 합니다.
 
@@ -82,24 +83,46 @@ test -f .env || cp .env.fixture.example .env
 uv run qm source validate
 docker compose up -d --wait postgres query-man
 ./scripts/verify-container.sh
-uv run query-man-verify
 ```
 
-Exact readiness, 두 source, RLS 0개, PostgreSQL 18/UTF-8, metadata revision, 9/9 verified query,
-seven-OID positive/negative와 HTTP/MCP parity를 모두 확인합니다. AuthBridge를 선택하면 JWT
+Exact readiness, 두 source, RLS 0개, PostgreSQL 18/UTF-8, view marker/source/version, direct semantic
+admission, metadata/SQL revision mismatch, seven-OID positive/negative와 HTTP/MCP parity를 모두
+확인합니다. AuthBridge를 선택하면 JWT
 access token 서명·issuer·audience·exp/nbf·scope/role를 Discovery의 `jwks_uri`로 로컬
 검증하고 ID token, refresh token, 다른 audience와 만료 token을 거부합니다. JWKS는 cache하되
 알 수 없는 `kid`가 오면 한 번 갱신합니다. Authorization header와 token을 log에 남기지
 않습니다.
 
-`degraded`, inventory/RLS/result type/revision/hash drift, mixed SQL policy, rollback 미검증은
+`degraded`, inventory/RLS/result type mismatch, 설명되지 않은 definition/revision drift, mixed SQL policy,
+rollback 미검증은
 stop condition입니다.
+
+### Source view apply boundary
+
+Repository review는 protected database의 DDL 실행 승인이 아닙니다. Source의 `views.sql`을 적용하려면
+DB owner가 exact output과 no-PII를 확인하고, DBA가 exact target/access, traffic freeze, stop condition,
+rollback artifact와 append-only change-record owner를 별도로 승인받아야 합니다.
+
+Traffic을 끈 뒤 current view definition, comment, owner, ACL과 dependency를 보존합니다. DBA는 reader가
+아닌 migration authority로 exact database에서 `ON_ERROR_STOP`, bounded lock과 transaction을 사용해
+source package의 `views.sql`만 적용합니다. Runtime과 application container에는 SQL execution hook이나
+administrator credential을 주지 않습니다.
+
+Apply 뒤 모든 reader-visible view의 marker/source/version, output column name/order/type/nullability,
+security option, owner와 ACL을 확인합니다. Reader는 exact view만 SELECT할 수 있고 base schema/table,
+CREATE와 DML은 거부돼야 합니다. Missing dependency, incompatible replacement, marker mismatch,
+unexpected view, broad/default privilege, timeout 또는 unexplained drift면 route를 열지 않습니다.
+
+Rollback은 traffic을 계속 차단한 채 previous source/application artifact와 previous view definition,
+comment, owner/ACL을 함께 복구합니다. 호환되지 않는 column remove/name/type 변경은 forward apply 전에
+별도 reviewed down SQL이 있어야 합니다. Base table, business row, secret과 role을 자동 drop/delete하지
+않습니다.
 
 ### Cutover and rollback
 
 Old route를 닫고 신규 유입, active query와 source connection을 drain한 뒤 accepted single
 replica만 route합니다. Rollback은 route 차단 → new replica drain → 직전 image/config/SQL
-policy와 source inventory 복구 → readiness/verified baseline 확인 → route 순서입니다. 실제
+policy와 source inventory 복구 → readiness와 marker/revision/safety probe 확인 → route 순서입니다. 실제
 결과는 승인된 environment change record에 append-only/immutable하게 남깁니다. Repository에는
 날짜별 PASS 문서를 만들지 않고 exact commit과 CI provenance만 연결합니다.
 
@@ -110,7 +133,7 @@ uv run qm
 ```
 
 `status`, `logs`, `diag`는 runtime 상태·log·동의 기반 diagnostic capture를 다룹니다. `source`는
-현재 checkout의 local YAML을 읽는 read-only 명령입니다.
+현재 checkout의 local source package와 budget을 읽는 read-only 명령입니다.
 
 ```text
 qm> status
@@ -121,9 +144,9 @@ qm> source show market-voc
 qm> source validate
 ```
 
-`source list/show/validate`는 server, DB 또는 repository를 변경하지 않습니다. 현재 파일의 strict
-schema, source ID 충돌, verified query 참조와 budget profile 참조를 검사하는 로컬 도구입니다.
-Source 변경은 YAML pull request와 배포로만 반영합니다.
+`source list/show/validate`는 server, DB 또는 repository를 변경하지 않고 `views.sql`을 실행하지
+않습니다. Exact two-file layout, manifest schema, source ID 충돌과 budget profile 참조를 검사합니다.
+Source 변경은 package pull request, 필요한 DBA apply와 배포로만 반영합니다.
 
 `logs`의 기본 window/limit는 30분/50건이고 최대 31일/1,000건입니다. `diag list`는 기본 1시간/20건,
 최대 7일/100건입니다. 모든 출력은 bounded하며 secret, token, raw request body와 내부 DB 오류를
@@ -179,7 +202,7 @@ rotation은 대상, 실행자, 출력 처리와 stop condition을 확인한 별�
 | `GET /admin/health` | Query Man operator | Source별 bounded health |
 | `GET /admin/metrics` | Query Man operator | Source/component health와 bounded counter/total snapshot |
 
-Startup은 YAML에 등록된 source별 metadata 경로를 병렬 probe합니다. Source health는 마지막 metadata
+Startup은 source package manifest에 등록된 source별 metadata 경로를 병렬 probe합니다. Source health는 마지막 metadata
 refresh 결과와 query 경로에서 관찰한 DB dependency 상태를 합쳐 계산하며, 매 health 요청마다 DB를
 ping하지 않습니다. Pool connection 공급 실패, PostgreSQL connection/session 오류는 해당 source를 즉시
 `unavailable`로 내립니다. Metadata와 query는 별도 pool을 사용하므로 metadata refresh 성공은 query

@@ -1,4 +1,4 @@
 interface:
   display_name: "Query Man Source Onboarding"
-  short_description: "Plan approval-gated PostgreSQL YAML onboarding"
-  default_prompt: "Use $query-man-source-onboarding to review this PostgreSQL source and prepare a non-mutating Git YAML owner/admin handoff."
+  short_description: "Plan approval-gated PostgreSQL source onboarding"
+  default_prompt: "Use $query-man-source-onboarding to review this PostgreSQL source and prepare a non-mutating Git source-package owner/DBA handoff."

@@ -19,11 +19,17 @@ Keep these authorities separate:
 - Curated views and reader grants own the current column-exposure boundary. A comment never authorizes or blocks
   access.
 
+Every reader-visible view comment starts with the exact source/version marker required by ADR 0034 and continues
+on the next line with a non-empty human description. Treat the marker as machine contract text, not as the
+business description. All public view markers use the source-level `view_contract_version`; do not claim that the
+marker proves the live definition is identical to Git.
+
 ## Review Every Exposed Object
 
-For each curated relation, check that its comment states the row grain and the most important interpretation
-caveat. Add the representative/default time meaning, inclusion or exclusion boundary, and join or aggregation
-warning when those facts are material. Do not treat prose about a join as an approved semantic join.
+For each discovered curated view, require one exact semantic relation entry and check that its comment states the
+row grain and the most important interpretation caveat. Event, comment and population relations also need a
+default time column. Add the representative/default time meaning, inclusion or exclusion boundary, and join or
+aggregation warning when those facts are material. Do not treat prose about a join as an approved semantic join.
 
 For every exposed column, check whether a reader can determine these facts without guessing:
 
@@ -50,7 +56,7 @@ Suggested comments must be concise declarative business descriptions. Do not inc
 internal database errors, imperative instructions, publication commands, access claims or executable recipes.
 Keep each suggestion within the current 2,000-character metadata bound.
 
-Place a compact comment review inside the plan's DB-Owner Work section. Report relation and column coverage, then
+Place a compact comment review inside the plan's Owner And DBA Handoff section. Report relation and column coverage, then
 list only missing or problematic objects with:
 
 - qualified relation and optional column;

@@ -244,7 +244,7 @@ def test_invalid_diagnostic_capture_key_is_not_disclosed() -> None:
 def test_rejects_retired_source_authority_settings(setting: str) -> None:
     secret = "retired-setting-value-that-must-not-be-disclosed"
 
-    with pytest.raises(ValueError, match="Git-reviewed YAML") as captured:
+    with pytest.raises(ValueError, match="Git-reviewed source packages") as captured:
         load_runtime_config({setting: secret}, ROOT_DIRECTORY)
 
     assert setting in str(captured.value)

@@ -29,7 +29,7 @@ _QUICK_GUIDE = """바로 사용할 수 있는 명령:
   status                 현재 상태 확인
   logs                   최근 로그 50줄
   diag                   상세 진단 조회 안내
-  source                 Git/YAML source 목록
+  source                 Git source package 목록
   help                    전체 사용법
   exit                    종료
 """
@@ -95,17 +95,17 @@ class QueryManShell(cmd.Cmd):
   diag show <capture-id> --reason <ticket>
   diag purge <receipt-id> --reason <ticket>
 
-Git/YAML source:
-  source                         YAML source 목록
-  source show <source-id>        Git에 저장된 manifest 조회
-  source validate                manifest, budget, verified 설정 검증
+Git source package:
+  source                         Source package 목록
+  source show <source-id>        Git에 저장된 source manifest 조회
+  source validate                manifest, budget, directory layout 검증
 
 기타:
   clear                          화면 정리
   exit                           종료
 
-Tab을 누르면 명령과 하위 명령을 자동완성합니다. Source 변경은 YAML을 수정해
-Git review로 반영합니다. 입력이 부족하면 실행하지 않고 예시를 보여줍니다.
+Tab을 누르면 명령과 하위 명령을 자동완성합니다. Source 변경은 `source.yaml`과
+`views.sql`을 함께 Git review로 반영합니다. 입력이 부족하면 실행하지 않고 예시를 보여줍니다.
 """.rstrip()
         )
 
@@ -318,7 +318,7 @@ Git review로 반영합니다. 입력이 부족하면 실행하지 않고 예시
         return _matches(text, ["--since", "--limit", "--reason", "--yes"])
 
     def do_source(self, argument: str) -> None:
-        """Git으로 관리하는 YAML source 설정을 조회하고 검증합니다."""
+        """Git으로 관리하는 source package를 조회하고 검증합니다."""
 
         tokens = self._tokens(argument)
         if not tokens:

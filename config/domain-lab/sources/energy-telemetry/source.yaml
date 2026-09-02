@@ -1,12 +1,13 @@
-version: 3
+version: 4
 
 source_id: energy-telemetry
 name: 에너지 계측
 description: 스마트 계량기의 전력 사용·발전·역송전 시계열, 검침 품질과 정전
+view_contract_version: 1
 provenance:
   owner: query-man-domain-lab
   environment: development
-  database_migration_ref: docker/postgres/domain-lab/energy-telemetry-schema.sql
+  database_migration_ref: config/domain-lab/sources/energy-telemetry/views.sql
 connection:
   host: 127.0.0.1
   host_env: QUERY_MAN_POSTGRES_HOST
@@ -19,7 +20,6 @@ connection:
 allowed_schemas: [ai]
 allowed_relation_kinds: [view]
 budget_profile: interactive
-minimum_quality_level: L2
 
 semantic_overlay:
   default_relation: ai.meter_readings

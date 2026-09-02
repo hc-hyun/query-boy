@@ -10,7 +10,6 @@ from contextlib import AsyncExitStack, asynccontextmanager
 
 from fastapi import FastAPI
 
-from query_man.assurance.verified import VerifiedQueryRegistry
 from query_man.delivery.access import AccessPolicy
 from query_man.delivery.app import build_http_app
 from query_man.delivery.authentication import (
@@ -169,17 +168,12 @@ def build_app(
         catalog,
         ("load", "close"),
     )
-    verified_revisions = VerifiedQueryRegistry.load(
-        runtime_config.source_directory.parent / "verified-queries.yaml",
-        set(registry.source_ids()),
-    ).revision_map()
     metadata = MetadataService(
         registry,
         catalog,
         cache_ttl_ms=runtime_config.metadata_cache_ttl_ms,
         max_stale_ms=runtime_config.metadata_max_stale_ms,
         refresh_retry_ms=runtime_config.metadata_retry_delay_ms,
-        verified_revisions=verified_revisions,
     )
     query_executor = PostgresQueryExecutor() if query_executor is None else query_executor
     _require_runtime_capabilities(

@@ -8,6 +8,9 @@ Decision ID: `QB-SOURCE-TLS-MODES-20260831`
 
 Baseline: `0e488cbaf75f2c8e25080179eb9e381d3f0aeaf4`
 
+Current interpretation: [ADR 0034](0034-source-view-package-and-direct-admission.md)가 manifest format을
+version 4 source package로 대체합니다. 이 문서의 exact `sslmode`와 transport 검증 의미는 유지됩니다.
+
 This decision supersedes only ADR 0030's compatibility statement that preserved the then-current source manifest
 version and reader transport policy. Git-reviewed YAML remains the sole source authority and all other ADR 0030
 boundaries remain in force.

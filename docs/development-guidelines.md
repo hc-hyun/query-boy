@@ -66,8 +66,9 @@ owner별 여섯 physical package로 나뉜다. 논리 module의 owner, 현재 le
   interface/code/test만 추가로 읽는다. 보안 경계는 module 경계에서 조사를 중단할 이유가 되지 않는다.
 - Allowed dependency 안에서 owner leaf module의 public API를 소비하고 underscore private symbol이나
   provider table에 직접 의존하지 않는다. 모든 public symbol을 문서 목록에 등록할 필요는 없지만,
-  중요한 동작과 안정된 entrypoint는 provider README에 설명한다. Production server 조립은 Runtime,
-  offline acceptance 조립은 Assurance CLI entrypoint만 수행한다.
+  중요한 동작과 안정된 entrypoint는 provider README에 설명한다. Production server의 concrete
+  implementation은 Runtime만 조립한다. Assurance owner 경계는 root tests/scripts/CI의 repository
+  safety gate이며 production 경로를 그대로 검증한다.
 - 현재 shared transition file을 수정하면 module index에 표시된 관련 owner 문서를 읽고 영향받는 동작만
   함께 변경한다. Shared file 정리와 무관한 업무 변경을 한 diff에 섞지 않는다.
 - Shared transition file과 공통 interface/governance 문서는 single-writer로 다룬다. 병렬 agent가
@@ -214,7 +215,7 @@ Root [agent router](../AGENTS.md#non-negotiable-safety)의 안전 불변조건�
 - Cyclomatic complexity는 숫자를 낮추기 위한 helper 분리를 요구하지 않는다. 기존 hotspot보다 나빠지는
   것을 막는 module별 ratchet으로 사용하고 transaction·lock·cleanup의 한 흐름을 우선 보존한다.
 - 완료 전 최소한 `uv run ruff check .`, `uv run mypy src`, `uv run pytest`를 실행한다. DB 경계를
-  변경하면 해당 CI lane의 integration test와 container·verified-query acceptance도 실행한다.
+  변경하면 해당 CI lane의 security/integration test와 container, bounded load·soak도 실행한다.
 
 ## Documentation And Handoff
 

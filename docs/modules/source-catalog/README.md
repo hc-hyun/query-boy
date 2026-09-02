@@ -6,45 +6,52 @@ Status: Physical package boundary active
 
 ### 30초 요약
 
-Source Catalog는 Git에서 review한 `config/sources/*.yaml`과 `config/budget-profiles.yaml`을 strict
-validation해 immutable `SourceProfile`로 만든다. Runtime, Metadata, Guarded Query와 Delivery는
-`SourceReader`만 소비한다. Source를 DB나 API에서 동적으로 추가·수정하는 writer는 없다.
+Source Catalog는 Git에서 review한 source package와 budget YAML을 strict validation해 immutable
+`SourceProfile`로 만든다. Source 하나는 정확히 다음 두 파일이다.
 
-Password 값은 YAML에 저장하지 않고 manifest가 가리키는 environment key에서 resolve한다. RLS source,
-금지 schema, unknown field/version·TLS mode와 잘못된 reader 정책은 fail-closed한다. Source manifest v3는
-`sslmode`를 필수로 두고 `disable`, `require`, `verify-full`만 허용한다.
+```text
+config/sources/<source-id>/
+  source.yaml
+  views.sql
+```
+
+Manifest는 version 4이며 `view_contract_version`을 필수로 갖고 공개 relation 종류는 view만 허용한다.
+Registry는 두 파일의 이름·위치와 YAML을 검사하지만 SQL 내용을 해석하거나 실행하지 않는다. Runtime,
+Metadata, Guarded Query와 Delivery는 `SourceReader`만 소비하며 실행 중 source writer나 fallback authority는
+없다.
 
 ## 소유 책임
 
-- Source manifest와 budget profile YAML schema/version/validation
+- Source package의 exact directory/file layout와 manifest version 4 validation
 - `SourceProfile`, connection, allowlist, provenance, semantic overlay와 budget DTO
 - `SourceReader`와 process-start `SourceRegistry` loading
 - PostgreSQL 18, UTF-8, no-SQL connection/session reader policy
 - 명시적 PostgreSQL TLS mode와 `require` compatibility exception 경계
-- Source onboarding Skill의 YAML pull-request plan, no-PII curated-view handoff와 secret/mutation 금지 경계
+- Source onboarding의 package 변경 plan과 DB/data owner·DBA handoff
 
 ## 소유하지 않는 책임
 
-- PostgreSQL catalog 수집, comment/type/precision-scale 해석과 metadata revision
-- SQL AST validation, plan admission, query 실행/cancel/rollback
+- `views.sql` 실행, DB role/credential 생성, traffic 전환과 protected rollback
+- PostgreSQL catalog 수집, view marker 해석, metadata admission과 revision
+- SQL AST validation, query 실행/cancel/rollback
 - HTTP/MCP 인증·인가와 operator CLI rendering
-- DB DDL, reader credential 생성·저장, protected 배포
-- Control DB, generation, mutation receipt, hot reload 또는 runtime source writer
+- PII 탐지·분류·마스킹 또는 DB owner의 no-PII 확인 대행
+- Control DB, hot reload, runtime source writer 또는 SQL migration hook
 
 ## 현재 코드 위치
 
 | 위치 | 책임 |
 |---|---|
 | [`source_catalog/models.py`](../../../src/query_man/source_catalog/models.py) | Immutable source, budget, semantic/provenance DTO |
-| [`source_catalog/registry.py`](../../../src/query_man/source_catalog/registry.py) | Strict YAML parser, validator, `SourceReader`, `SourceRegistry` |
+| [`source_catalog/registry.py`](../../../src/query_man/source_catalog/registry.py) | Exact package와 strict YAML validation, `SourceReader` |
 | [`source_catalog/reader_policy.py`](../../../src/query_man/source_catalog/reader_policy.py) | PostgreSQL connection/session policy |
-| [`config/sources/`](../../../config/sources/) | Git-reviewed source manifests |
+| [`config/sources/`](../../../config/sources/) | Source별 `source.yaml`과 desired `views.sql` |
 | [`config/budget-profiles.yaml`](../../../config/budget-profiles.yaml) | Versioned query/metadata budgets |
-| [`test_registry.py`](../../../tests/test_registry.py), [`test_reader_policy.py`](../../../tests/test_reader_policy.py) | Focused behavior and interface tests |
+| [`test_registry.py`](../../../tests/test_registry.py), [`test_reader_policy.py`](../../../tests/test_reader_policy.py) | Focused behavior tests |
 
 ## 제공 인터페이스와 소유 경계
 
-`source_catalog.models`의 immutable DTO와 `source_catalog.registry.SourceReader`가 다른 runtime module에
+`source_catalog.models`의 immutable DTO와 `source_catalog.registry.SourceReader`가 내부 consumer에
 제공되는 interface다.
 
 ```python
@@ -54,98 +61,73 @@ class SourceReader(Protocol):
     def source_ids(self) -> frozenset[str]: ...
 ```
 
-`SourceRegistry.load(source_directory, budget_file, environment)`는 Runtime과 offline Assurance가
-사용하는 composition capability다. 반환 graph는 tuple과 read-only mapping으로 고정하며 호출자가
-manifest alias를 통해 published profile을 바꿀 수 없다. `list()`는 credential/host/database/user를
-노출하지 않는 summary만 반환한다.
+`SourceRegistry.load(source_directory, budget_file, environment)`는 각 immediate child directory를 source
+후보로 읽는다. Directory 이름과 `source_id`가 같고 regular non-symlink `source.yaml`, `views.sql`만
+있어야 한다. Flat YAML, `.yml`, unknown file, nested directory와 구 format fallback은 없다.
 
-`RegistryConfigurationError`는 YAML, environment resolution과 validation 실패를 대표한다.
+`source.yaml`은 `allowed_relation_kinds: [view]`, 양의 정수 `view_contract_version`, 같은 package의
+`views.sql`을 가리키는 `provenance.database_migration_ref`를 요구한다. `views.sql`의 존재를 확인하되
+애플리케이션이 내용을 읽거나 실행하는 capability로 만들지 않는다.
+
+`RegistryConfigurationError`는 package, YAML, environment resolution과 validation 실패를 대표한다.
 `SourceNotFoundError`의 domain 의미도 Source Catalog가 소유하며 external envelope는 Delivery가 소유한다.
 
-`source_catalog.reader_policy`의 public API는 reader connection 확인, session policy 검증, canonical
-client encoding/timezone과 transaction-local budget 값을 제공한다. 현재 Metadata와 Guarded Query는
-`require_reader_connection_policy`, `require_reader_session_policy`, `reader_session_budget_values`,
-`ReaderSessionPolicyError`와 관련 setting 상수를 pool checkout마다 사용한다. 이 목록은 symbol registry가
-아니며 안정된 policy behavior가 interface다. 두 consumer는 connection 확인 후 read-only transaction과
-transaction-local settings를 적용한다.
-Database `TEMP` privilege 보유 여부는 reader admission 조건이 아니다. Query Man 사용자 SQL의
-temporary relation/DDL 차단은 Guarded Query가 계속 소유하며, 자세한 경계는
-[ADR 0032](../../decisions/0032-reader-temp-admission-relaxation.md)를 따른다.
-
-`ResolvedConnection.sslmode`는 reviewed manifest의 exact `disable`, `require`, `verify-full` 중 하나다.
-Metadata와 Guarded Query는 이를 libpq에 그대로 전달하며 `PGSSLMODE`나 libpq 기본값으로 mode 선택을
-넘기지 않는다. TCP host만 허용하고 두 pool은 `gssencmode=disable`을 적용해 Unix socket이나 GSS
-encryption이 reviewed TLS mode를 우회하지 못하게 한다. 공통 connection policy는 SQL 실행 전 실제
-libpq TLS 상태가 reviewed mode와 일치하지 않으면 checkout을 닫고 fail-closed한다. `prefer`와
-`allow`는 평문 fallback 때문에, `verify-ca`와 field 생략은 승인된 exact policy 밖이므로 manifest
-validation에서 거부한다. `gssencmode=disable`은 GSS-encrypted transport만 끄며 reviewed transport 위의
-GSSAPI authentication을 금지하지 않는다. `require`는 TLS와
-no-plaintext를 보장하지만 requested hostname을 검증하지 않는 명시적 compatibility exception이며,
-운영 inventory와 CA/SAN 개선 조건은
-[ADR 0033](../../decisions/0033-explicit-source-tls-modes.md)을 따른다.
-
-Git YAML schema와 canonical source fields는 persisted/versioned format이다. `source_id`, allowed schemas,
-relation kinds, budget reference, semantic overlay와 provenance 의미를 바꾸면 consumer revision과 운영
-절차를 함께 검토한다.
+Reader policy API는 canonical client encoding/timezone, connection과 transaction-local session budget
+검사를 제공한다. Metadata와 Guarded Query는 pool checkout마다 이를 적용한다. `sslmode`는 exact
+`disable`, `require`, `verify-full` 중 하나이며 TCP와 실제 libpq transport state가 일치하지 않으면
+연결을 닫고 fail-closed한다. Database `TEMP` privilege 보유 여부는 admission 조건이 아니지만 사용자
+SQL의 DDL과 temporary relation은 Guarded Query가 계속 차단한다.
 
 ## 소비 인터페이스와 전제
 
-| Provider | 소비 항목 | 전제 |
+| Consumer | 소비 항목 | 전제 |
 |---|---|---|
-| Runtime | YAML/budget path와 environment | 올바른 repository revision을 선택하고 startup failure를 ready로 숨기지 않음 |
-| Metadata | Catalog/type/revision behavior | Source Catalog가 DB catalog 의미를 추측하지 않음 |
-| Assurance | Verified/quality artifact membership | Source ID가 Git YAML inventory와 정확히 일치함 |
-
-Delivery, Metadata와 Guarded Query는 `SourceReader`를 주입받는다. 이들은 YAML을 직접 재해석하거나
-registry를 mutate하지 않는다.
+| Runtime | Package/budget path, environment와 source projection | Startup failure를 ready로 숨기지 않고 SQL을 실행하지 않음 |
+| Metadata | Source profile, semantic overlay와 reader policy | View marker·catalog·revision은 Metadata가 검증 |
+| Guarded Query | Allowlist, budget, connection과 reader policy | Source 파일을 직접 다시 해석하지 않음 |
+| Delivery | `SourceReader`의 public source inventory | Credential/locator를 외부에 노출하지 않음 |
 
 ## 불변조건
 
-- `config/sources/*.yaml`과 budget YAML의 Git-reviewed revision만 source authority다.
-- Unknown field/version, duplicate ID, missing environment, forbidden schema와 RLS는 거부한다.
-- Source manifest v3는 `sslmode`를 필수로 요구하고 `disable`, `require`, `verify-full` 외 mode를 거부한다.
-- Connection host는 TCP endpoint여야 하며 Unix-domain·abstract socket path를 거부한다.
-- Password/DSN secret은 YAML, public projection, log와 error에 노출하지 않는다.
-- Allowed schema/relation kind와 resource budget은 prompt나 caller가 완화할 수 없다.
-- Budget은 `max_concurrent_queries <= max_pool_size`를 만족해야 하며 위반하면 startup validation에서
-  fail-closed한다. Pool을 늘리는 것은 허용하지만 query concurrency는 pool capacity를 넘을 수 없다.
-- Published DTO graph는 deep immutable하며 입력 alias mutation의 영향을 받지 않는다.
-- Reader connection/session policy는 DB query 전에 검증한다.
-- Database `TEMP` privilege만으로 source를 거부하거나 전역 revoke를 onboarding 조건으로 요구하지 않는다.
-- Runtime hot reload, managed fallback 또는 DB-backed source mutation은 없다.
+- Source authority는 `config/sources/<source-id>/{source.yaml,views.sql}`와 budget YAML의 reviewed revision이다.
+- Source directory에는 정확히 두 regular non-symlink file만 존재한다.
+- Manifest version은 4, relation kind는 view만, `view_contract_version`은 양의 정수다.
+- Password 값은 Git/YAML에 없고 manifest가 지정한 environment key에서만 resolve한다.
+- Unknown field/version, duplicate ID, directory/source mismatch, forbidden schema, RLS와 invalid TLS mode를 거부한다.
+- Profile graph는 immutable이며 caller가 YAML alias나 mutable collection으로 바꾸지 못한다.
+- Runtime은 `views.sql`을 해석·실행하지 않고 administrator credential을 받지 않는다.
+- Reader는 PostgreSQL 18/UTF-8와 reviewed transport/session policy를 만족하지 않으면 fail-closed한다.
 
 ## 모듈 내부 변경
 
-공개 shape와 YAML/reader-policy 의미를 보존하는 private parser helper, error wording, internal iteration과
-focused test 정리는 module 내부 변경이다. 새 abstraction보다 기존 strict model과 plain function을
-우선한다.
+위 persisted/policy 의미를 보존하는 parser helper, immutable collection 구현, error formatting과 focused
+test 정리는 내부 변경이다. Provider와 직접 consumer를 같은 change set에서 함께 수정·검증할 수 있다.
 
 ## 사용자 승인이 필요한 경계 변경
 
-- Sanitized source projection과 `SourceNotFoundError` public 의미
-- Source/budget YAML schema, version, field default와 environment resolution
-- Source ID, allowlist, semantic overlay, provenance, budget와 revision material 의미
-- RLS/reader PostgreSQL version·encoding·session policy
-- Source manifest version과 TLS mode, CA/hostname 검증 및 plaintext fallback policy
-- Git authority, onboarding review, deployment/restart와 secret procedure
-- Source writer, hot reload, DB authority 또는 다른 fallback 재도입
+- Source package/manifest 또는 budget persisted format와 compatibility
+- `view_contract_version`, allowlist, semantic overlay나 provenance 의미
+- TLS/reader/session admission과 fail-closed 결과
+- Source authority, runtime reload/writer/fallback 또는 DDL execution capability
+- DB/data owner, DBA와 Runtime 사이의 ownership/protected procedure
+
+Protected DB 적용은 repository 변경 승인과 별도로 exact target, access, traffic freeze, stop condition,
+rollback artifact와 change-record owner의 실행 승인이 필요하다.
 
 ## 검증
 
 ```bash
-uv run pytest tests/test_registry.py tests/test_reader_policy.py tests/test_revision.py
-uv run pytest tests/test_assurance_cli.py tests/test_operator_shell.py tests/test_runtime_config.py
+uv run pytest tests/test_registry.py tests/test_reader_policy.py tests/test_operator_shell.py
 ```
 
-Source 추가는 `qm source validate`와 전체 gate를 통과해야 한다. 실제 DB 대상이면 catalog/query
-integration도 수행하며 protected credential/DDL/deploy는 별도 실행 승인을 받는다.
+Source/fixture 변경은 Metadata, integration, container와 static privilege 검증도 실행한다.
 
 ## 집중해서 읽을 범위
 
 | 변경 | 먼저 읽을 범위 |
 |---|---|
-| Manifest, budget, semantic validation | `source_catalog/models.py`, `registry.py`, sample YAML, `test_registry.py` |
-| Reader connection/session policy | `reader_policy.py`, Metadata/Guarded Query direct consumer, `test_reader_policy.py` |
-| Metadata revision 영향 | `metadata/revision.py`, `test_revision.py` |
-| Onboarding workflow | `skills/query-man-source-onboarding/`, source onboarding docs, `test_onboarding_skill.py` |
-| Runtime/CLI loading | `runtime/config.py`, `composition.py`, `operator_shell.py`와 focused tests |
+| Package/manifest | `models.py`, `registry.py`, source package, `test_registry.py` |
+| Reader/TLS/session | `reader_policy.py`, Metadata/Guarded Query consumer, `test_reader_policy.py` |
+| Semantic overlay/budget | `models.py`, source YAML, Metadata validation/revision tests |
+| Desired view SQL | ADR 0034, source package, fixture wiring, Metadata marker/admission tests |
+| Onboarding | source extension checklist, onboarding Skill과 its tests |

@@ -22,8 +22,9 @@ source는 [활성 개발 지침](docs/development-guidelines.md)이다. Primary 
 5. External/persisted/policy/lifecycle/ownership/procedure 의미를 바꿔야 하면
    구현을 멈추고 아래 승인 trigger와 [상세 절차](docs/development-guidelines.md#승인-규칙)를 따른다.
 
-현재 launch authority는 [ADR 0025](docs/decisions/0025-static-non-rls-first-launch.md), source·verified-query·budget
-authority는 [ADR 0030](docs/decisions/0030-git-reviewed-yaml-source-authority.md)의 Git-reviewed YAML이고 실제 active
+현재 launch authority는 [ADR 0025](docs/decisions/0025-static-non-rls-first-launch.md), source package
+authority는 [ADR 0034](docs/decisions/0034-source-view-package-and-direct-admission.md), budget authority는
+[ADR 0030](docs/decisions/0030-git-reviewed-yaml-source-authority.md)의 Git-reviewed YAML이다. 실제 active
 작업은 [development TODO](docs/development-todo.md)에서 확인한다. 삭제한 과거 roadmap·verification은
 [Git 기록 안내](docs/verification/README.md)의 archive commit에서만 읽고 현재 serving 범위로 해석하지 않는다.
 

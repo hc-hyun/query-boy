@@ -19,8 +19,6 @@ from mcp.client import Client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.types import CallToolResult
 
-from query_man.assurance.quality import QualityEvaluation
-from query_man.assurance.verified import VerifiedQuery, VerifiedQueryRegistry, create_result_hash
 from query_man.delivery.mcp_server import MCP_PROTOCOL_VERSION
 from query_man.guarded_query.sql_validation import SQL_POLICY_REVISION
 from tests.helpers import ROOT_DIRECTORY
@@ -77,6 +75,34 @@ _CURRENT_VERSION_HANDSHAKE_REQUEST = {
 class McpServerSettings:
     url: str
     token: str = field(repr=False)
+
+
+@dataclass(frozen=True)
+class QueryFixture:
+    source_id: str
+    question: str
+    sql: str
+    relations: tuple[str, ...]
+    columns: tuple[str, ...]
+    rows: tuple[dict[str, object], ...]
+
+
+_DEVELOPMENT_QUERY = QueryFixture(
+    source_id="development-issues",
+    question="전체 개발 문제 건수를 보여줘",
+    sql="SELECT count(*) AS issue_count FROM ai.issue_overview",
+    relations=("ai.issue_overview",),
+    columns=("issue_count",),
+    rows=({"issue_count": 600},),
+)
+_MARKET_QUERY = QueryFixture(
+    source_id="market-voc",
+    question="전체 시장 VOC 수를 보여줘",
+    sql="SELECT count(*) AS voc_count FROM ai.voc_overview",
+    relations=("ai.voc_overview",),
+    columns=("voc_count",),
+    rows=({"voc_count": 1_200},),
+)
 
 
 class BearerAuth(httpx2.Auth):
@@ -136,22 +162,6 @@ def _validate_loopback_mcp_url(url: str) -> None:
         pytest.fail("MCP server tests require an uncredentialed loopback http:// URL ending in /mcp")
 
 
-@pytest.fixture(scope="module")
-def quality_evaluation() -> QualityEvaluation:
-    return QualityEvaluation.load(
-        ROOT_DIRECTORY / "config" / "quality-evaluation.yaml",
-        _KNOWN_SOURCES,
-    )
-
-
-@pytest.fixture(scope="module")
-def verified_queries() -> VerifiedQueryRegistry:
-    return VerifiedQueryRegistry.load(
-        ROOT_DIRECTORY / "config" / "verified-queries.yaml",
-        _KNOWN_SOURCES,
-    )
-
-
 @asynccontextmanager
 async def _mcp_client(settings: McpServerSettings) -> AsyncIterator[Client]:
     async with (
@@ -201,18 +211,14 @@ def _argument_issue(path: str, reason_code: str, message: str) -> dict[str, str]
     return {"path": path, "reason_code": reason_code, "message": message}
 
 
-def _contract(verified: VerifiedQueryRegistry, query_id: str) -> VerifiedQuery:
-    return next(query for query in verified.queries if query.query_id == query_id)
-
-
-def _assert_verified_result(result: CallToolResult, contract: VerifiedQuery) -> str:
+def _assert_query_result(result: CallToolResult, contract: QueryFixture) -> str:
     assert result.is_error is False
     body = _structured(result)
     assert body["status"] == "ok"
     assert body["truncated"] is False
-    assert tuple(body["columns"]) == contract.expected.columns
-    assert body["row_count"] == contract.expected.row_count
-    assert create_result_hash(tuple(body["columns"]), body["rows"]) == (contract.expected.result_hash)
+    assert tuple(body["columns"]) == contract.columns
+    assert body["row_count"] == len(contract.rows)
+    assert body["rows"] == list(contract.rows)
     query_id = body["query_id"]
     assert isinstance(query_id, str) and query_id
     return query_id
@@ -220,9 +226,8 @@ def _assert_verified_result(result: CallToolResult, contract: VerifiedQuery) -> 
 
 async def test_tools_and_revision_refresh_workflow(
     mcp_server_settings: McpServerSettings,
-    verified_queries: VerifiedQueryRegistry,
 ) -> None:
-    contract = _contract(verified_queries, "market-devices-without-voc")
+    contract = _MARKET_QUERY
     async with _mcp_client(mcp_server_settings) as client:
         tools = await client.list_tools()
         assert [tool.name for tool in tools.tools] == [
@@ -263,7 +268,6 @@ async def test_tools_and_revision_refresh_workflow(
                 {"source_id": contract.source_id, "question": contract.question},
             )
         )
-        assert context["metadata_revision"] == contract.metadata_revision
         assert [relation["name"] for relation in context["relations"]] == list(contract.relations)
 
         mismatched = await client.call_tool(
@@ -284,7 +288,7 @@ async def test_tools_and_revision_refresh_workflow(
                 {"source_id": contract.source_id, "question": contract.question},
             )
         )
-        assert refreshed["metadata_revision"] == contract.metadata_revision
+        assert refreshed["metadata_revision"] == context["metadata_revision"]
         retried = await client.call_tool(
             "query",
             {
@@ -294,104 +298,7 @@ async def test_tools_and_revision_refresh_workflow(
                 "sql_policy_revision": refreshed["sql_policy_revision"],
             },
         )
-        _assert_verified_result(retried, contract)
-
-
-async def test_all_quality_evaluation_cases_through_mcp(
-    mcp_server_settings: McpServerSettings,
-    quality_evaluation: QualityEvaluation,
-) -> None:
-    relation_failures: list[str] = []
-    answerability_failures: list[str] = []
-    answerability_count = 0
-    context_sizes: list[int] = []
-
-    async with _mcp_client(mcp_server_settings) as client:
-        for case in quality_evaluation.cases:
-            response = await client.call_tool(
-                "get_context",
-                {"source_id": case.source_id, "question": case.question},
-            )
-            assert response.is_error is False, case.case_id
-            body = _structured(response)
-            actual_relations = tuple(relation["name"] for relation in body["relations"])
-            if actual_relations != case.expected_relations:
-                relation_failures.append(case.case_id)
-            if case.expected_answerability is not None:
-                answerability_count += 1
-                if body["answerability"]["status"] != case.expected_answerability:
-                    answerability_failures.append(case.case_id)
-            context_sizes.append(
-                len(
-                    json.dumps(
-                        body,
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    ).encode()
-                )
-            )
-
-    assert not relation_failures
-    assert not answerability_failures
-    relation_accuracy = 1 - (len(relation_failures) / len(quality_evaluation.cases))
-    answerability_recall = 1 - (len(answerability_failures) / answerability_count if answerability_count else 0)
-    assert relation_accuracy >= quality_evaluation.gates.min_relation_accuracy
-    assert answerability_recall >= quality_evaluation.gates.min_answerability_recall
-    assert max(context_sizes) <= quality_evaluation.gates.max_context_bytes
-    print(
-        json.dumps(
-            {
-                "event": "mcp_quality_summary",
-                "cases": len(quality_evaluation.cases),
-                "relation_accuracy": relation_accuracy,
-                "answerability_recall": answerability_recall,
-                "max_context_bytes": max(context_sizes),
-            },
-            sort_keys=True,
-        )
-    )
-
-
-async def test_all_verified_query_contracts_through_mcp(
-    mcp_server_settings: McpServerSettings,
-    verified_queries: VerifiedQueryRegistry,
-) -> None:
-    observed_query_ids: set[str] = set()
-    async with _mcp_client(mcp_server_settings) as client:
-        for contract in verified_queries.queries:
-            context_result = await client.call_tool(
-                "get_context",
-                {"source_id": contract.source_id, "question": contract.question},
-            )
-            assert context_result.is_error is False, contract.query_id
-            context = _structured(context_result)
-            assert context["metadata_revision"] == contract.metadata_revision, contract.query_id
-            assert tuple(relation["name"] for relation in context["relations"]) == (contract.relations), (
-                contract.query_id
-            )
-
-            result = await client.call_tool(
-                "query",
-                {
-                    "source_id": contract.source_id,
-                    "sql": contract.sql,
-                    "metadata_revision": contract.metadata_revision,
-                    "sql_policy_revision": context["sql_policy_revision"],
-                },
-            )
-            observed_query_ids.add(_assert_verified_result(result, contract))
-
-    assert len(observed_query_ids) == len(verified_queries.queries)
-    print(
-        json.dumps(
-            {
-                "event": "mcp_verified_summary",
-                "contracts": len(verified_queries.queries),
-                "unique_query_ids": len(observed_query_ids),
-            },
-            sort_keys=True,
-        )
-    )
+        _assert_query_result(retried, contract)
 
 
 async def test_raw_transport_security_and_protocol_boundaries(
@@ -746,20 +653,25 @@ async def test_query_policy_rejections_are_structured_and_bounded(
 
 async def test_same_client_handles_bounded_concurrent_query_batch(
     mcp_server_settings: McpServerSettings,
-    verified_queries: VerifiedQueryRegistry,
 ) -> None:
-    contract = _contract(verified_queries, "market-devices-without-voc")
-    arguments = {
-        "source_id": contract.source_id,
-        "sql": contract.sql,
-        "metadata_revision": contract.metadata_revision,
-        "sql_policy_revision": SQL_POLICY_REVISION,
-    }
+    contract = _MARKET_QUERY
     started = time.monotonic()
     async with _mcp_client(mcp_server_settings) as client:
+        context = _structured(
+            await client.call_tool(
+                "get_context",
+                {"source_id": contract.source_id, "question": contract.question},
+            )
+        )
+        arguments = {
+            "source_id": contract.source_id,
+            "sql": contract.sql,
+            "metadata_revision": context["metadata_revision"],
+            "sql_policy_revision": context["sql_policy_revision"],
+        }
         results = await asyncio.gather(*(client.call_tool("query", arguments) for _ in range(24)))
 
-    query_ids = [_assert_verified_result(result, contract) for result in results]
+    query_ids = [_assert_query_result(result, contract) for result in results]
     assert len(set(query_ids)) == len(query_ids)
     bodies = [_structured(result) for result in results]
     print(
@@ -779,7 +691,7 @@ async def test_same_client_handles_bounded_concurrent_query_batch(
 
 async def _run_independent_session(
     settings: McpServerSettings,
-    contract: VerifiedQuery,
+    contract: QueryFixture,
 ) -> str:
     async with _mcp_client(settings) as client:
         listed = _structured(await client.call_tool("list_sources", {}))
@@ -790,28 +702,23 @@ async def _run_independent_session(
                 {"source_id": contract.source_id, "question": contract.question},
             )
         )
-        assert context["metadata_revision"] == contract.metadata_revision
         assert tuple(relation["name"] for relation in context["relations"]) == contract.relations
         result = await client.call_tool(
             "query",
             {
                 "source_id": contract.source_id,
                 "sql": contract.sql,
-                "metadata_revision": contract.metadata_revision,
+                "metadata_revision": context["metadata_revision"],
                 "sql_policy_revision": context["sql_policy_revision"],
             },
         )
-        return _assert_verified_result(result, contract)
+        return _assert_query_result(result, contract)
 
 
 async def test_independent_sessions_are_isolated_and_exact(
     mcp_server_settings: McpServerSettings,
-    verified_queries: VerifiedQueryRegistry,
 ) -> None:
-    contracts = (
-        _contract(verified_queries, "development-recent-model-issues"),
-        _contract(verified_queries, "market-devices-without-voc"),
-    )
+    contracts = (_DEVELOPMENT_QUERY, _MARKET_QUERY)
     started = time.monotonic()
     query_ids = await asyncio.gather(
         *(_run_independent_session(mcp_server_settings, contracts[index % 2]) for index in range(8))

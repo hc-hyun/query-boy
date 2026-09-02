@@ -83,6 +83,82 @@ def test_static_launch_domain_guard_uses_declared_catalog_type_kind() -> None:
     assert PostgresCatalog(reject_domain_columns=True)._reject_domain_columns is True
 
 
+def test_view_comment_contract_marker_is_parsed_and_not_disclosed() -> None:
+    builders = catalog_module._rows_to_relations(
+        [
+            {
+                "schema_name": "ai",
+                "relation_name": "issue_overview",
+                "relation_kind": "v",
+                "relation_comment": (
+                    "query-man:source=development-issues;view-contract=17\n"
+                    "개발 문제 1건을 나타내는 공개 뷰"
+                ),
+                "view_definition_hash": "definition-digest",
+                "security_invoker": True,
+                "security_barrier": True,
+                "estimated_rows": None,
+                "ordinal": 1,
+                "column_name": "issue_id",
+                "data_type": "bigint",
+                "is_not_null": True,
+                "column_comment": None,
+            }
+        ]
+    )
+
+    relation = builders[0].freeze()
+
+    assert relation.view_contract_source == "development-issues"
+    assert relation.view_contract_version == 17
+    assert relation.comment == "개발 문제 1건을 나타내는 공개 뷰"
+    assert "query-man:" not in relation.comment
+    assert relation.security_invoker is True
+    assert relation.security_barrier is True
+
+
+@pytest.mark.parametrize(
+    "comment",
+    [
+        "human description only",
+        "query-man:source=Development-Issues;view-contract=1",
+        "query-man:source=development-issues;view-contract=0",
+        "query-man:source=development-issues;view-contract=01",
+        "query-man:source=development-issues;view-contract=1;extra=true",
+        " query-man:source=development-issues;view-contract=1",
+    ],
+)
+def test_view_comment_contract_marker_is_strict(comment: str) -> None:
+    with pytest.raises(
+        _CatalogValidationError,
+        match="View comment has an invalid contract marker",
+    ):
+        catalog_module._parse_view_comment(comment)
+
+
+@pytest.mark.parametrize(
+    "comment",
+    [
+        "query-man:source=development-issues;view-contract=1",
+        "query-man:source=development-issues;view-contract=1\n",
+        "query-man:source=development-issues;view-contract=1\n   ",
+    ],
+)
+def test_view_comment_requires_human_description(comment: str) -> None:
+    with pytest.raises(
+        _CatalogValidationError,
+        match="View comment requires a human description",
+    ):
+        catalog_module._parse_view_comment(comment)
+
+
+def test_catalog_query_collects_both_view_security_options() -> None:
+    normalized_query = " ".join(catalog_module.CATALOG_QUERY.casefold().split())
+
+    assert "security_invoker=true" in normalized_query
+    assert "security_barrier=true" in normalized_query
+
+
 
 
 @pytest.mark.asyncio

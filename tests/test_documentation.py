@@ -29,6 +29,12 @@ SOURCE_AUTHORITY_ADR = (
     / "decisions"
     / "0030-git-reviewed-yaml-source-authority.md"
 )
+SOURCE_VIEW_ADR = (
+    ROOT_DIRECTORY
+    / "docs"
+    / "decisions"
+    / "0034-source-view-package-and-direct-admission.md"
+)
 PII_BOUNDARY_ADR = (
     ROOT_DIRECTORY
     / "docs"
@@ -76,7 +82,7 @@ EXPECTED_PARKED_ID_RANGES = (
 CRITICAL_NON_PYTHON_MAPPINGS = (
     "`config/sources/`, `config/budget-profiles.yaml`",
     "`config/access-policies*.yaml`",
-    "`config/quality-evaluation.yaml`, `config/verified-queries.yaml`, `config/security-evaluation.yaml`",
+    "`config/security-evaluation.yaml`",
     "`Dockerfile`, `compose.yaml`, `compose.fixture.yaml`, `.env*.example`",
     "`scripts/verify-container.sh`",
     "`.github/workflows/ci.yml`, `.github/workflows/mcp-soak.yml`",
@@ -105,6 +111,7 @@ def test_current_tree_keeps_current_decisions_and_git_archive_pointer() -> None:
         "0027-consent-gated-diagnostic-capture.md",
         "0030-git-reviewed-yaml-source-authority.md",
         "0033-explicit-source-tls-modes.md",
+        "0034-source-view-package-and-direct-admission.md",
     }
     decision_files = {
         path.name for path in DECISION_DIRECTORY.glob("[0-9][0-9][0-9][0-9]-*.md")
@@ -180,22 +187,23 @@ def test_adr_0025_is_the_narrow_current_launch_authority() -> None:
     ):
         assert f"`{type_name}` | {oid}" in adr
     assert "SQL policy version은 2에서 3으로" in adr
-    assert "9개 query를 새 SQL policy로 전부 재실행" in adr
+    assert "0034-source-view-package-and-direct-admission.md" in adr
     assert "protected execution" in adr
 
     assert sql_validation_module._SQL_POLICY_VERSION == 3
     assert sql_validation_module.SQL_POLICY_REVISION in adr
     assert {
-        path.stem for path in (ROOT_DIRECTORY / "config" / "sources").glob("*.yaml")
+        path.name
+        for path in (ROOT_DIRECTORY / "config" / "sources").iterdir()
+        if path.is_dir()
     } == {"development-issues", "market-voc"}
 
 
-def test_adr_0030_is_the_only_current_source_authority() -> None:
+def test_adr_0030_retains_budget_and_retired_managed_boundaries() -> None:
     adr = SOURCE_AUTHORITY_ADR.read_text(encoding="utf-8")
     assert "Status: Accepted" in adr
     assert "Decision ID: `QB-YAML-SOURCE-AUTHORITY-20260829`" in adr
-    assert "config/sources/*.yaml" in adr
-    assert "config/verified-queries.yaml" in adr
+    assert "0034-source-view-package-and-direct-admission.md" in adr
     assert "config/budget-profiles.yaml" in adr
     assert "fail-closed" in adr
     assert "Control DB" in adr
@@ -211,6 +219,36 @@ def test_adr_0030_is_the_only_current_source_authority() -> None:
     )
 
 
+def test_adr_0034_is_the_current_source_package_and_admission_authority() -> None:
+    adr = SOURCE_VIEW_ADR.read_text(encoding="utf-8")
+
+    for fragment in (
+        "Status: Accepted",
+        "Decision ID: `SOURCE-VIEW-01`",
+        "config/sources/<source-id>/",
+        "source.yaml",
+        "views.sql",
+        "version 4",
+        "view_contract_version",
+        "allowed_relation_kinds",
+        "query-man:source=<source-id>;view-contract=<positive integer>",
+        "직접 admission",
+        "metadata_revision",
+        "sql_policy_revision",
+        "Runtime은 이를 열거나 실행하지 않으며",
+        "별도 authorization",
+    ):
+        assert fragment in adr
+
+    source_root = ROOT_DIRECTORY / "config" / "sources"
+    assert all(
+        {path.name for path in directory.iterdir()} == {"source.yaml", "views.sql"}
+        for directory in source_root.iterdir()
+    )
+    assert not (ROOT_DIRECTORY / "config" / "quality-evaluation.yaml").exists()
+    assert not (ROOT_DIRECTORY / "config" / "verified-queries.yaml").exists()
+
+
 def test_adr_0031_moves_source_pii_boundary_to_db_owner_views() -> None:
     adr = PII_BOUNDARY_ADR.read_text(encoding="utf-8")
 
@@ -218,10 +256,8 @@ def test_adr_0031_moves_source_pii_boundary_to_db_owner_views() -> None:
     assert "Decision ID: `QB-NO-PII-VIEW-BOUNDARY-20260830`" in adr
     assert "DB owner는 개인정보와 개인 민감정보를 제거한 reviewed curated view만" in adr
     assert "탐지, 분류, masking/pseudonymization 또는 column 단위로" in adr
-    assert "verification 항목만 supersede한다" in adr
-    assert "Git-reviewed YAML authority" in adr
-    assert "Source manifest schema" in adr
-    assert "database\nDDL은 바뀌지 않는다" in adr
+    assert "0034-source-view-package-and-direct-admission.md" in adr
+    assert "DB-owner-confirmed no-PII 경계" in adr
 
 
 def test_adr_0032_removes_only_database_temp_admission_check() -> None:
@@ -241,27 +277,29 @@ def test_adr_0032_removes_only_database_temp_admission_check() -> None:
 
 
 def test_current_navigation_documents_agree_on_launch_scope() -> None:
-    documents = {
+    launch_documents = {
         "README": ROOT_DIRECTORY / "README.md",
         "docs index": ROOT_DIRECTORY / "docs" / "README.md",
         "architecture": ARCHITECTURE,
         "module index": MODULE_INDEX,
         "operations": ROOT_DIRECTORY / "docs" / "operations.md",
-        "assurance": MODULE_INDEX.parent / "assurance" / "README.md",
         "TODO": DEVELOPMENT_TODO,
     }
-    for label, path in documents.items():
+    for label, path in launch_documents.items():
         content = path.read_text(encoding="utf-8")
         assert "0025-static-non-rls-first-launch.md" in content, label
+        assert "0034-source-view-package-and-direct-admission.md" in content, label
         assert "development-issues" in content, label
         assert "market-voc" in content, label
         assert "RLS" in content, label
 
-    readme = documents["README"].read_text(encoding="utf-8")
-    docs_index = documents["docs index"].read_text(encoding="utf-8")
-    architecture = documents["architecture"].read_text(encoding="utf-8")
-    operations = documents["operations"].read_text(encoding="utf-8")
-    assurance = documents["assurance"].read_text(encoding="utf-8")
+    readme = launch_documents["README"].read_text(encoding="utf-8")
+    docs_index = launch_documents["docs index"].read_text(encoding="utf-8")
+    architecture = launch_documents["architecture"].read_text(encoding="utf-8")
+    operations = launch_documents["operations"].read_text(encoding="utf-8")
+    assurance = (MODULE_INDEX.parent / "assurance" / "README.md").read_text(
+        encoding="utf-8"
+    )
     assert "단일 Query Man replica" in readme
     assert "exact seven result" in architecture
     for task_id in EXPECTED_ACTIVE_TODO_IDS:
@@ -301,7 +339,8 @@ def test_consolidated_current_contracts_cover_archived_decisions() -> None:
         "valid·ready·non-partial",
         "max_context_columns_per_relation` 기본값은 40",
         "`column_count`, `returned_column_count`, `columns_truncated`",
-        "`L2`: L1 + source와 **현재 metadata revision**",
+        "exact one-to-one coverage",
+        "같은 process에서 같은 source/version",
     ):
         assert fragment in metadata
 
@@ -414,6 +453,38 @@ def test_internal_interface_flexibility_keeps_material_change_categories_explici
     for path in terminology_paths:
         content = path.read_text(encoding="utf-8")
         assert re.search(r"(?i)module\s+contract|모듈\s*간의?\s*계약", content) is None, path
+
+
+def test_current_docs_use_source_package_and_direct_admission_terms_only() -> None:
+    current_paths = (
+        ROOT_DIRECTORY / "README.md",
+        ROOT_DIRECTORY / "AGENTS.md",
+        ROOT_DIRECTORY / "docs" / "README.md",
+        ROOT_DIRECTORY / "docs" / "architecture.md",
+        ROOT_DIRECTORY / "docs" / "glossary.md",
+        ROOT_DIRECTORY / "docs" / "operations.md",
+        ROOT_DIRECTORY / "docs" / "development-todo.md",
+        ROOT_DIRECTORY / "docs" / "source-extension-checklist.md",
+        MODULE_INDEX,
+        *(MODULE_INDEX.parent / name / "README.md" for name in MODULE_NAMES),
+    )
+    retired_terms = (
+        "minimum_quality_level",
+        "quality_level",
+        "quality-evaluation",
+        "verified-queries",
+        "query-man-evaluate",
+        "query-man-verify",
+        "`L0`",
+        "`L1`",
+        "`L2`",
+        "config/sources/*.yaml",
+    )
+
+    for path in current_paths:
+        content = path.read_text(encoding="utf-8")
+        for term in retired_terms:
+            assert term not in content, f"{path.relative_to(ROOT_DIRECTORY)}: {term}"
 
 
 def test_runtime_has_no_fixture_source_specialization() -> None:

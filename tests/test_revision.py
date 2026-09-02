@@ -10,7 +10,11 @@ from query_man.metadata.models import (
     CatalogForeignKey,
     CatalogIndex,
 )
-from query_man.metadata.revision import _canonicalize, create_metadata_revision
+from query_man.metadata.revision import (
+    _canonicalize,
+    create_metadata_revision,
+    create_view_structure_signature,
+)
 from tests.helpers import load_test_registry, minimal_development_snapshot
 
 
@@ -132,7 +136,7 @@ def test_revision_matches_canonical_time_policy_golden() -> None:
     assert source is not None
 
     assert create_metadata_revision(source, minimal_development_snapshot()) == (
-        "sha256:6cc893fe5c58917428771ba848d70393b7432848e4c2bd16224b0e0602d20c96"
+        "sha256:698c3ea4bbaa8c24438eb8d3c7238ec21321f5ce3f0df6ccd40e0fe8edbcd8d6"
     )
 
 
@@ -194,6 +198,200 @@ def test_revision_changes_with_execution_budget() -> None:
     assert create_metadata_revision(source, snapshot) != create_metadata_revision(
         stricter,
         snapshot,
+    )
+
+
+def test_revision_changes_with_view_contract_version() -> None:
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+    snapshot = minimal_development_snapshot()
+
+    assert create_metadata_revision(source, snapshot) != create_metadata_revision(
+        replace(source, view_contract_version=source.view_contract_version + 1),
+        snapshot,
+    )
+
+
+def test_revision_changes_with_view_security_options() -> None:
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+    snapshot = minimal_development_snapshot()
+    secured = replace(
+        snapshot,
+        relations=(
+            replace(snapshot.relations[0], security_barrier=True),
+            *snapshot.relations[1:],
+        ),
+    )
+
+    assert create_metadata_revision(source, snapshot) != create_metadata_revision(
+        source,
+        secured,
+    )
+
+
+def test_view_structure_signature_tracks_exact_query_surface() -> None:
+    snapshot = minimal_development_snapshot()
+    relation = snapshot.relations[0]
+    first_column = relation.columns[0]
+    second_column = relation.columns[1]
+    baseline = create_view_structure_signature(snapshot)
+    variants = (
+        replace(snapshot, relations=snapshot.relations[1:]),
+        replace(
+            snapshot,
+            relations=(
+                replace(relation, name=f"{relation.name}_renamed"),
+                *snapshot.relations[1:],
+            ),
+        ),
+        replace(
+            snapshot,
+            relations=(
+                replace(relation, kind="materialized_view"),
+                *snapshot.relations[1:],
+            ),
+        ),
+        replace(
+            snapshot,
+            relations=(
+                replace(relation, definition_hash="changed-definition"),
+                *snapshot.relations[1:],
+            ),
+        ),
+        replace(
+            snapshot,
+            relations=(
+                replace(
+                    relation,
+                    columns=(
+                        replace(first_column, name=f"{first_column.name}_renamed"),
+                        *relation.columns[1:],
+                    ),
+                ),
+                *snapshot.relations[1:],
+            ),
+        ),
+        replace(
+            snapshot,
+            relations=(
+                replace(
+                    relation,
+                    columns=tuple(reversed(relation.columns)),
+                ),
+                *snapshot.relations[1:],
+            ),
+        ),
+        replace(
+            snapshot,
+            relations=(
+                replace(
+                    relation,
+                    columns=(
+                        replace(first_column, ordinal=second_column.ordinal),
+                        replace(second_column, ordinal=first_column.ordinal),
+                        *relation.columns[2:],
+                    ),
+                ),
+                *snapshot.relations[1:],
+            ),
+        ),
+        replace(
+            snapshot,
+            relations=(
+                replace(
+                    relation,
+                    columns=(
+                        replace(first_column, data_type="numeric"),
+                        *relation.columns[1:],
+                    ),
+                ),
+                *snapshot.relations[1:],
+            ),
+        ),
+        replace(
+            snapshot,
+            relations=(
+                replace(
+                    relation,
+                    columns=(
+                        replace(first_column, nullable=False),
+                        *relation.columns[1:],
+                    ),
+                ),
+                *snapshot.relations[1:],
+            ),
+        ),
+        replace(
+            snapshot,
+            relations=(
+                replace(relation, security_invoker=True),
+                *snapshot.relations[1:],
+            ),
+        ),
+        replace(
+            snapshot,
+            relations=(
+                replace(relation, security_barrier=True),
+                *snapshot.relations[1:],
+            ),
+        ),
+    )
+
+    assert all(
+        create_view_structure_signature(variant) != baseline
+        for variant in variants
+    )
+
+
+def test_view_structure_signature_ignores_descriptive_and_planner_metadata() -> None:
+    snapshot = minimal_development_snapshot()
+    relation = snapshot.relations[0]
+    descriptive = replace(
+        snapshot,
+        relations=(
+            replace(
+                relation,
+                comment="새로운 사람용 설명",
+                primary_key=(relation.columns[0].name,),
+                indexes=(
+                    CatalogIndex(
+                        (relation.columns[0].name,),
+                        unique=True,
+                        primary=True,
+                    ),
+                ),
+            ),
+            *snapshot.relations[1:],
+        ),
+    )
+
+    assert create_view_structure_signature(descriptive) == (
+        create_view_structure_signature(snapshot)
+    )
+
+
+def test_comment_contract_marker_is_not_context_revision_material() -> None:
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+    snapshot = minimal_development_snapshot()
+    marker_only = replace(
+        snapshot,
+        relations=(
+            replace(
+                snapshot.relations[0],
+                view_contract_source="another-source",
+                view_contract_version=999,
+            ),
+            *snapshot.relations[1:],
+        ),
+    )
+
+    assert create_metadata_revision(source, marker_only) == (
+        create_metadata_revision(source, snapshot)
+    )
+    assert create_view_structure_signature(marker_only) == (
+        create_view_structure_signature(snapshot)
     )
 
 

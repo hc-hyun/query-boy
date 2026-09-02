@@ -217,7 +217,7 @@ def load_runtime_config(
     if retired_settings:
         raise ValueError(
             "Retired source-authority settings are no longer supported; "
-            "Git-reviewed YAML is the only source authority. Remove: "
+            "Git-reviewed source packages are the only source authority. Remove: "
             + ", ".join(retired_settings)
         )
     for optional_name in (

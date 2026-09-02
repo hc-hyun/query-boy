@@ -27,7 +27,7 @@ Query Man 자체에 자연어를 SQL로 바꾸는 AI 모델이 들어 있는 것
 | MCP | AI 도구가 source 목록, context와 query 기능을 호출하는 통신 방식입니다. |
 | RLS | PostgreSQL이 사용자나 tenant별로 볼 수 있는 행을 제한하는 기능입니다. 현재 첫 오픈에서는 지원하지 않습니다. |
 | Replica | 실행 중인 Query Man 서버 인스턴스 하나입니다. 첫 오픈 계획과 검증 범위는 하나입니다. |
-| Git-reviewed YAML | `config/sources/*.yaml`을 review·test한 뒤 배포물이 시작할 때 읽는 방식입니다. |
+| Git-reviewed source package | Source별 `source.yaml`과 `views.sql`을 함께 review하고, Runtime은 manifest만 해석하며 DBA가 SQL을 별도 적용하는 방식입니다. |
 | Fixture | 로컬·CI 테스트를 위해 만든 DB와 데이터입니다. 실제 운영 DB와 구분합니다. |
 
 이 밖의 `grain`, `revision`, `OID` 같은 말은
@@ -58,7 +58,7 @@ Query Man 자체에 자연어를 SQL로 바꾸는 AI 모델이 들어 있는 것
 | DB 접근 | `ai` schema의 검토된 view, 읽기 전용 계정 | 원본 table이나 쓰기 SQL에 접근하지 않습니다. |
 | RLS | 모든 RLS source 차단 | 행 단위 권한을 사용하는 DB는 이번 첫 오픈에서 제공하지 않습니다. |
 | 결과 column | 정수 3종, text, date, timezone timestamp, numeric | 그 밖의 결과 타입은 결과 행을 가져오기 전에 거부합니다. |
-| Source 설정 | Git-reviewed source·verified-query·budget YAML | `config/sources/*.yaml`, `config/verified-queries.yaml`, `config/budget-profiles.yaml`이 authority입니다. 변경에는 review·test·재배포가 필요합니다. |
+| Source 설정 | Git-reviewed source package와 budget | `config/sources/<source-id>/{source.yaml,views.sql}`와 `config/budget-profiles.yaml`이 authority입니다. 변경에는 review·검증·필요한 DBA 적용·재배포가 필요합니다. |
 
 Boolean은 SQL의 조건식이나 중간 계산에는 사용할 수 있지만 최종 결과 column으로 반환할 수
 없습니다. 내부적으로 허용하는 정확한 PostgreSQL type 번호와 정책은 ADR 0025에 기록돼 있습니다.
@@ -75,7 +75,7 @@ Boolean은 SQL의 조건식이나 중간 계산에는 사용할 수 있지만 �
 `LAUNCH-01-A`입니다. 현재 검증 방법과 과거 기록은
 [검증 안내](docs/verification/README.md), 운영까지 남은 일은 [개발 TODO](docs/development-todo.md)에서
 확인할 수 있습니다.
-Source authority의 현재 결정은 [ADR 0030](docs/decisions/0030-git-reviewed-yaml-source-authority.md)입니다.
+Source authority의 현재 결정은 [ADR 0034](docs/decisions/0034-source-view-package-and-direct-admission.md)입니다.
 
 ## 제공 데이터
 
@@ -92,7 +92,7 @@ Source authority의 현재 결정은 [ADR 0030](docs/decisions/0030-git-reviewed
 
 기본 [`compose.yaml`](compose.yaml)은 Query Man application만 정의하며 PostgreSQL을 만들거나
 `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`를 요구하지 않습니다. 배포 환경에서는 reviewed
-source manifest가 가리키는 외부 PostgreSQL endpoint와 reader secret만 연결합니다.
+source package의 manifest가 가리키는 외부 PostgreSQL endpoint와 reader secret만 연결합니다.
 
 아래 5분 절차는 실제 source가 없는 로컬·CI를 위해 [`compose.fixture.yaml`](compose.fixture.yaml)을
 추가해 합성 PostgreSQL source 두 개를 함께 실행합니다.
@@ -176,8 +176,9 @@ uv run qm
 
 Compose에는 query token과 별도의 `QUERY_MAN_OPERATOR_TOKEN`이 필요합니다. `.env.fixture.example`에서 새
 random token으로 바꾸고 application image를 다시 빌드해야 container의 access policy에도 반영됩니다.
-`qm source list/show/validate`는 현재 checkout의 source·verified-query·budget YAML을 조회·검증하는
-local read-only 명령입니다. Source 변경은 pull request와 배포로만 반영합니다.
+`qm source list/show/validate`는 현재 checkout의 source package 구조·manifest와 budget을 조회·검증하는
+local read-only 명령입니다. SQL을 실행하지 않으며 Source 변경은 pull request, 필요한 DBA 적용과
+배포로만 반영합니다.
 
 AuthBridge를 쓰는 배포는 opaque token 대신 [Resource Server JWT Access Token 검증 계약](docs/resource-server-jwt-auth.md)을
 선택할 수 있습니다. 이때 Query Man은 JWT access token을 로컬 검증하며 client secret이나 refresh token을
@@ -289,7 +290,7 @@ monolith입니다.
 | Guarded Query | 보안 검색대 | SQL을 검사하고 제한된 read-only transaction으로 실행·취소·rollback합니다. |
 | Delivery | 현관 | Caller를 인증하고 같은 기능을 HTTP와 MCP로 제공합니다. |
 | Runtime | 조립·운영 담당 | 다른 module을 연결하고 설정, 시작·종료, health와 container 실행을 관리합니다. |
-| Assurance | 검사소 | 품질 질문, verified query, 통합·container 테스트로 전체 흐름을 검증합니다. |
+| Assurance | 검사소 | 보안 corpus, 통합·container·load·soak 테스트로 전체 흐름을 검증합니다. |
 
 Module 하나를 수정할 때는 repository 전체를 먼저 읽지 말고
 [module index](docs/modules/README.md)에서 담당 module, 읽을 코드·테스트와 사용 가능한 interface를
@@ -317,14 +318,6 @@ uv run ruff check .
 uv run ruff check src/query_man/runtime --select C901 --config "lint.mccabe.max-complexity=19"
 uv run mypy src
 uv run pytest
-```
-
-기본 두 source의 PostgreSQL과 결과 기준은 CI의 `core-static` DB selector를 따라 확인하고 다음
-두 acceptance를 실행합니다.
-
-```bash
-uv run query-man-evaluate
-uv run query-man-verify
 ```
 
 전체 integration 경계는 기본 두 source fixture를 준비한 뒤 같은 repository gate의 integration
@@ -355,8 +348,8 @@ uv run pytest -m 'mcp_server and not soak' -s
 1. `DBENV-01`: 실제 DB endpoint, TLS/secret, curated view와 reader inventory를 연결·검증합니다.
 2. `AUTHENV-01`: 인증 authority 하나를 선택하고 AuthBridge라면 audience/scope/CA와 실제 token을
    연결·검증합니다.
-3. `LAUNCH-02`: 두 선행 작업이 완료된 exact artifact를 배포하고 `/ready`와 verified query 9개를 재확인한
-   뒤 traffic을 연결하고 오류·DB 연결을 관찰합니다.
+3. `LAUNCH-02`: 두 선행 작업이 완료된 exact artifact를 배포하고 `/ready`, view marker/권한,
+   revision·HTTP/MCP safety probe를 재확인한 뒤 traffic을 연결하고 오류·DB 연결을 관찰합니다.
 
 작업 경계, 실행 순서와 중단 조건은 [Active TODO](docs/development-todo.md)와
 [운영 runbook](docs/operations.md)의 “Static Non-RLS First Launch”를 따릅니다. 로컬 fixture 성공을
@@ -365,14 +358,14 @@ uv run pytest -m 'mcp_server and not soak' -s
 ## 새 데이터베이스를 추가하려면
 
 현재 첫 오픈은 두 source만 승인했습니다. 아래
-[source onboarding과 extension checklist](docs/source-extension-checklist.md#이-문서는-언제-사용하나요)에서
+[source onboarding과 extension checklist](docs/source-extension-checklist.md)에서
 추가하려는 DB가 현재 static 경로에 맞는지와 end-to-end 영향을 함께 확인합니다. 새 DB에는 PostgreSQL
 18/UTF-8, RLS를 사용하지 않는 검토된 view와 읽기 전용 계정이 필요합니다. 업무 의미·사용량 제한·결과
-타입을 검토하고 품질 질문과 승인 SQL을 통과한 뒤, 변경 승인을 받아 다시 배포합니다.
+타입을 검토하고 Metadata 직접 admission과 repository gate를 통과한 뒤, 변경 승인을 받아 다시 배포합니다.
 
 현재 module interface 안에서 처리할 수 있다면 source별 Python 분기를 추가하지 않습니다. Source
-추가·변경은 `config/sources/*.yaml`과 관련 verified-query/budget YAML을 같은 review에서
-검증한 뒤 재배포합니다.
+추가·변경은 `config/sources/<source-id>/source.yaml`과 `views.sql`을 같은 review에서 검증합니다.
+DB owner가 output/no-PII를 확인하고 DBA가 별도 승인 아래 적용한 뒤 재배포합니다.
 
 PostgreSQL table·column comment는 grain, 단위, 상태값과 주의사항을 설명하는
 human-readable metadata로 활용합니다. Type과 numeric precision/scale은 catalog에서 수집하고,
@@ -389,7 +382,8 @@ Query Man은 개인정보(PII)를 탐지·분류·마스킹하지 않습니다. 
 | 현재 제공 데이터와 예제 | [MVP 데이터 안내](docs/mvp.md) |
 | 전체 구조와 module 작업 범위 | [Architecture](docs/architecture.md), [Module index](docs/modules/README.md) |
 | 첫 오픈 결정과 정확한 제한 | [ADR 0025](docs/decisions/0025-static-non-rls-first-launch.md) |
-| Source·verified-query·budget authority | [ADR 0030](docs/decisions/0030-git-reviewed-yaml-source-authority.md) |
+| Source package와 직접 admission | [ADR 0034](docs/decisions/0034-source-view-package-and-direct-admission.md) |
+| Budget YAML과 retired managed 경계 | [ADR 0030](docs/decisions/0030-git-reviewed-yaml-source-authority.md) |
 | 개인정보 공개 경계 | [ADR 0031](docs/decisions/0031-no-pii-curated-view-boundary.md) |
 | Reader `TEMP` admission 경계 | [ADR 0032](docs/decisions/0032-reader-temp-admission-relaxation.md) |
 | AuthBridge API 인증 연동 | [Resource Server JWT Access Token 검증 계약](docs/resource-server-jwt-auth.md) |

@@ -25,7 +25,7 @@ Query Man이 직접 통제하는 대상은 query가 소비할 수 있는 databas
 
 `config/budget-profiles.yaml`의 budget schema `version: 2` profile을 모든 source에 같은 순서로
 적용한다. 이는 source manifest schema version과 별도로 versioned되는 schema다. `budget_profile`은
-유일한 resource tier이며 관리자가 source마다 기존 profile 하나를 선택한다. 같은 source의
+유일한 resource profile이며 관리자가 source마다 기존 profile 하나를 선택한다. 같은 source의
 모든 query 사용자는 같은 profile 정의를 쓴다. 별도 `cost_tier`나 caller/user/organization
 override는 없다. 현재 `interactive` 값은
 [`config/budget-profiles.yaml`](../config/budget-profiles.yaml)에 고정하고
@@ -59,7 +59,7 @@ concurrency, parallel worker와 reader connection limit를 함께 제한한다. 
 한 PostgreSQL process가 sort/hash 등에 만든 임시 파일 상한이며 명시적 temporary relation이나
 source storage quota를 뜻하지 않는다. Database `TEMP` privilege 보유는 reader admission 조건이
 아니지만, Query Man 사용자 SQL은 `SELECT INTO`, DDL과 `pg_temp` relation 접근을 계속 거부한다.
-Local/acceptance fixture의 `TEMP` revoke는 선택적 hardening이다. 자세한 경계는
+Local fixture의 `TEMP` revoke는 선택적 hardening이다. 자세한 경계는
 [ADR 0032](decisions/0032-reader-temp-admission-relaxation.md)를 따른다.
 
 현재 경계는 replica 전체의 distributed source quota, caller/tenant별 quota·fairness,
@@ -238,7 +238,7 @@ major version이나 object OID 변화에 걸친 stable application identifier가
    materialized view를 검토한다.
 3. Production에서 무제한 `EXPLAIN ANALYZE`를 실행하지 않는다. 격리 replica나 대표 fixture로
    결과 정확성, plan과 부하를 재검증한다.
-4. Verified query, `uv run query-man-verify`, integration과
+4. 변경 의도를 담은 test-local 결정적 SQL, integration과
    `uv run pytest -m 'load and not mcp_server' -s`를 통과시킨다. Compose MCP 경계를 바꾸면
    `uv run pytest -m 'mcp_server and not soak' -s`의 실제 server
    saturation도 통과시킨다. 이 검증은 source concurrency 2를 채운 상태의 세 번째 요청이
@@ -246,7 +246,8 @@ major version이나 object OID 변화에 걸친 stable application identifier가
    후속 정상 query가 계속 성공하는지 확인한다.
 5. 그래도 profile 변경이 필요하면 concurrency를 포함한 최악 자원량과 reader connection capacity를
    review한다. Pool 여유만 늘릴 수 있지만 concurrency를 늘릴 때는 반드시 pool 이하로 유지한다. Profile
-   변경은 metadata revision 재발행과 L2 verified-query baseline 재검증을 요구한다.
+   변경은 metadata revision을 정상적으로 바꾸며 security, integration, container, representative load와
+   soak를 다시 확인한다.
 
 Source별 특별 숫자를 Python 분기나 manifest 임의 override로 넣지 않는다. 공통 workload가
 현재 profile과 다를 때만 중앙 profile을 추가하고 절대 schema bounds, representative load와

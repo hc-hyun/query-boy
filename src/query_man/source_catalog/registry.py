@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping, Sequence
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Annotated, Protocol
 
 import yaml
@@ -23,7 +23,6 @@ from query_man.source_catalog.models import (
     GrainDefinition,
     JoinDefinition,
     MeasureDefinition,
-    QualityLevel,
     QuestionRule,
     RelationSemantic,
     ResolvedConnection,
@@ -290,26 +289,25 @@ class _SemanticOverlay(_StrictModel):
 
 
 class _SourceFile(_StrictModel):
-    version: int
+    version: int = Field(strict=True)
     source_id: StableSlug
     name: ShortText
     description: Description
     provenance: _Provenance
     connection: _Connection
     allowed_schemas: list[Identifier] = Field(min_length=1, max_length=20)
-    allowed_relation_kinds: list[str] = Field(default_factory=lambda: ["view"], min_length=1, max_length=4)
+    allowed_relation_kinds: list[str] = Field(min_length=1, max_length=1)
+    view_contract_version: int = Field(strict=True, ge=1)
     budget_profile: Identifier
-    minimum_quality_level: QualityLevel = "L0"
     tenant_isolation: TenantIsolation = "none"
     semantic_overlay: _SemanticOverlay = Field(default_factory=_SemanticOverlay)
 
     @model_validator(mode="after")
     def valid_values(self) -> _SourceFile:
-        if self.version != 3:
-            raise ValueError("version must be 3")
-        allowed = {"table", "partitioned_table", "view", "materialized_view"}
-        if any(kind not in allowed for kind in self.allowed_relation_kinds):
-            raise ValueError("invalid relation kind")
+        if self.version != 4:
+            raise ValueError("version must be 4")
+        if self.allowed_relation_kinds != ["view"]:
+            raise ValueError("allowed_relation_kinds must be exactly [view]")
         if self.tenant_isolation == "rls":
             raise ValueError("RLS sources are not supported")
         return self
@@ -337,23 +335,62 @@ class SourceRegistry:
         env = os.environ if environment is None else environment
         budgets = load_budget_profiles(budget_file)
         try:
-            files = sorted(
-                path
-                for path in source_directory.iterdir()
-                if path.is_file() and path.suffix.lower() in {".yaml", ".yml"}
-            )
+            source_paths = sorted(source_directory.iterdir())
         except OSError as error:
             raise RegistryConfigurationError(f"Cannot read {source_directory}: {error}") from error
-        if not files:
-            raise RegistryConfigurationError(f"No source manifests found in {source_directory.resolve()}")
+        if not source_paths:
+            raise RegistryConfigurationError(f"No source directories found in {source_directory.resolve()}")
         sources: list[SourceProfile] = []
         seen: set[str] = set()
-        for path in files:
-            parsed = _parse_model(path, _SourceFile)
+        for source_path in source_paths:
+            if source_path.is_symlink() or not source_path.is_dir():
+                raise RegistryConfigurationError(
+                    f"Unexpected source entry: {source_path.resolve()}"
+                )
+            try:
+                source_files = sorted(source_path.iterdir())
+            except OSError as error:
+                raise RegistryConfigurationError(
+                    f"Cannot read {source_path}: {error}"
+                ) from error
+            if (
+                {path.name for path in source_files} != {"source.yaml", "views.sql"}
+                or any(path.is_symlink() or not path.is_file() for path in source_files)
+            ):
+                raise RegistryConfigurationError(
+                    f"{source_path} must contain exactly source.yaml and views.sql"
+                )
+            manifest_path = source_path / "source.yaml"
+            parsed = _parse_model(manifest_path, _SourceFile)
+            if source_path.name != parsed.source_id:
+                raise RegistryConfigurationError(
+                    f"{manifest_path} source_id must match directory name {source_path.name}"
+                )
+            try:
+                config_index = max(
+                    index
+                    for index, part in enumerate(source_path.parts)
+                    if part == "config"
+                )
+            except ValueError as error:
+                raise RegistryConfigurationError(
+                    f"{manifest_path} source package must be below config"
+                ) from error
+            expected_migration_ref = PurePosixPath(
+                *source_path.parts[config_index:],
+                "views.sql",
+            )
+            migration_ref = PurePosixPath(
+                parsed.provenance.database_migration_ref
+            )
+            if migration_ref != expected_migration_ref:
+                raise RegistryConfigurationError(
+                    f"{manifest_path} database_migration_ref must reference sibling views.sql"
+                )
             if parsed.source_id in seen:
                 raise RegistryConfigurationError(f"Duplicate source_id: {parsed.source_id}")
             seen.add(parsed.source_id)
-            sources.append(_resolve_source(parsed, budgets, env, path))
+            sources.append(_resolve_source(parsed, budgets, env, manifest_path))
         return cls(sources)
 
     def list(self) -> list[dict[str, str]]:
@@ -454,6 +491,7 @@ def _resolve_source(
         ),
         allowed_schemas=tuple(parsed.allowed_schemas),
         allowed_relation_kinds=tuple(parsed.allowed_relation_kinds),  # type: ignore[arg-type]
+        view_contract_version=parsed.view_contract_version,
         budget=budget,
         semantic_overlay=overlay,
         provenance=SourceProvenance(
@@ -461,7 +499,6 @@ def _resolve_source(
             environment=parsed.provenance.environment,
             database_migration_ref=parsed.provenance.database_migration_ref,
         ),
-        minimum_quality_level=parsed.minimum_quality_level,
         tenant_isolation=parsed.tenant_isolation,
     )
 

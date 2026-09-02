@@ -1,12 +1,13 @@
-version: 3
+version: 4
 
 source_id: parcel-logistics
 name: 택배 물류
 description: 운송장, 출발·도착 권역, 허브 추적 스캔, 배송 약속·지연·분실·파손
+view_contract_version: 1
 provenance:
   owner: query-man-domain-lab
   environment: development
-  database_migration_ref: docker/postgres/domain-lab/parcel-logistics-schema.sql
+  database_migration_ref: config/domain-lab/sources/parcel-logistics/views.sql
 connection:
   host: 127.0.0.1
   host_env: QUERY_MAN_POSTGRES_HOST
@@ -19,7 +20,6 @@ connection:
 allowed_schemas: [ai]
 allowed_relation_kinds: [view]
 budget_profile: interactive
-minimum_quality_level: L2
 
 semantic_overlay:
   default_relation: ai.shipment_overview

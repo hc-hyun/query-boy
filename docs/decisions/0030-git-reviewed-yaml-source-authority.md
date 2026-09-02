@@ -8,6 +8,10 @@ Decision ID: `QB-YAML-SOURCE-AUTHORITY-20260829`
 
 Baseline: `7b4e717c7775ff262c716d36f6f172aadc162892`
 
+Current interpretation: [ADR 0034](0034-source-view-package-and-direct-admission.md)가 flat source manifest와
+별도 source 결과 artifact authority를 `config/sources/<source-id>/{source.yaml,views.sql}`로
+대체합니다. Budget YAML authority와 retired managed capability는 계속 유효합니다.
+
 [ADR 0031](0031-no-pii-curated-view-boundary.md)은 이 문서의 comment 기반 PII-review guidance만
 대체한다. 현재 개인정보 공개 경계는 DB owner가 개인정보를 제거했다고 확인한 reviewed curated
 view이며 Query Man은 PII를 탐지·분류·마스킹하지 않는다.

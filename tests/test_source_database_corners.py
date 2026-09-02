@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
 import secrets
 import sys
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
+from typing import Any, cast
 
 import pytest
 from dotenv import load_dotenv
@@ -18,9 +20,7 @@ from psycopg.conninfo import make_conninfo
 from psycopg.pq import TransactionStatus
 from psycopg.rows import dict_row
 
-from query_man.assurance.verified import create_result_hash
 from query_man.errors import (
-    MetadataRevisionMismatchError,
     MetadataUnavailableError,
     QueryInvalidError,
     QueryRejectedError,
@@ -35,6 +35,8 @@ from query_man.metadata.service import MetadataService
 from query_man.source_catalog.models import (
     AllowedRelationKind,
     BudgetProfile,
+    GrainDefinition,
+    RelationSemantic,
     ResolvedConnection,
     SemanticOverlay,
     SourceProfile,
@@ -51,6 +53,17 @@ _DATABASE_NAME = re.compile(rf"^{_DATABASE_PREFIX}[0-9a-f]{{32}}$")
 _READER_NAME = re.compile(rf"^{_READER_PREFIX}[0-9a-f]{{32}}$")
 _VIEW_OWNER_NAME = re.compile(rf"^{_VIEW_OWNER_PREFIX}[0-9a-f]{{32}}$")
 _READER_TIMEZONES = ("UTC", "Asia/Seoul", "America/New_York")
+_VIEW_CONTRACT_VERSION = 1
+
+
+def create_result_hash(columns: tuple[str, ...], rows: object) -> str:
+    encoded = json.dumps(
+        {"columns": columns, "rows": rows},
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
 
 
 _BUDGET = BudgetProfile(
@@ -80,14 +93,40 @@ _BUDGET = BudgetProfile(
     max_plan_nodes=64,
 )
 
-_EMPTY_SEMANTIC_OVERLAY = SemanticOverlay(
-    default_relation=None,
-    relations=(),
-    joins=(),
-    business_terms=(),
-    question_rules=(),
-    composition_hints=(),
-)
+_CORNER_SEMANTIC_GRAINS: Mapping[str, Mapping[str, str]] = {
+    "wide": {"analytics.wide_records": "record_id"},
+    "temporal": {"analytics.temporal_records": "event_id"},
+    "live-drift": {"analytics.live_records": "record_id"},
+    "limit-relations": {
+        "analytics.bounded_0": "record_id",
+        "analytics.bounded_1": "record_id",
+    },
+    "limit-columns": {"analytics.bounded_columns": "record_id"},
+    "limit-structures": {"analytics.bounded_structures": "record_id"},
+    "warm-limit-drift": {"analytics.initial_records": "record_id"},
+    "json-edges": {"analytics.json_edges": "record_id"},
+    "time-edges": {"analytics.time_edges": "record_id"},
+    "collation-edges": {"analytics.collation_edges": "record_id"},
+    "hidden-collation": {
+        "analytics.hidden_collation_projection": "record_id"
+    },
+    "function-drift": {"analytics.function_semantics": "enabled"},
+    "operator-drift": {"analytics.operator_semantics": "enabled"},
+    "extreme-scalars": {"analytics.driver_extremes": "record_id"},
+    "domain-output": {"analytics.domain_projection": "value"},
+    "semantic-guc-edges": {
+        "analytics.search_semantics": "matches",
+        "analytics.semantic_edges": "record_id",
+    },
+    "planner-order-edges": {"analytics.aggregate_edges": "record_id"},
+    "driver-edges": {"analytics.driver_edges": "record_id"},
+    "exotic-edges": {"analytics.exotic_edges": "record_id"},
+    "multibyte": {"analytics.multibyte_records": "record_id"},
+    "structures": {
+        "analytics.activity_by_month": "event_id",
+        "analytics.empty_activity_summary": "category",
+    },
+}
 
 
 @dataclass(frozen=True)
@@ -330,15 +369,79 @@ async def _disposable_source_database(
             raise BaseExceptionGroup("Disposable source cleanup failed", cleanup_errors)
 
 
+def _corner_source_id(
+    database: _DisposableSourceDatabase,
+    case_name: str,
+) -> str:
+    return f"corner-{case_name}-{database.name[-8:]}"
+
+
+def _corner_semantic_overlay(case_name: str) -> SemanticOverlay:
+    grains = _CORNER_SEMANTIC_GRAINS.get(case_name, {})
+    return SemanticOverlay(
+        default_relation=None,
+        relations=tuple(
+            RelationSemantic(
+                relation=relation_name,
+                role="other",
+                description="Disposable component-test relation.",
+                aliases=(),
+                grain=GrainDefinition(
+                    name=f"{relation_name} test grain",
+                    description="Stable key used only by the disposable corner fixture.",
+                    key_columns=(grain_column,),
+                ),
+                default_time_column=None,
+                use_for=(),
+                column_aliases={},
+                value_hints={},
+                measures=(),
+            )
+            for relation_name, grain_column in grains.items()
+        ),
+        joins=(),
+        business_terms=(),
+        question_rules=(),
+        composition_hints=(),
+    )
+
+
+async def _set_view_contract_comment(
+    connection: AsyncConnection[Any],
+    database: _DisposableSourceDatabase,
+    case_name: str,
+    qualified_name: str,
+    description: str,
+) -> None:
+    schema_name, relation_name = qualified_name.split(".", 1)
+    comment = (
+        f"query-man:source={_corner_source_id(database, case_name)};"
+        f"view-contract={_VIEW_CONTRACT_VERSION}\n{description}"
+    )
+    await connection.execute(
+        sql.SQL("COMMENT ON VIEW {}.{} IS {}").format(
+            sql.Identifier(schema_name),
+            sql.Identifier(relation_name),
+            sql.Literal(comment),
+        )
+    )
+
+
 def _source_profile(
     database: _DisposableSourceDatabase,
     case_name: str,
-    allowed_relation_kinds: Sequence[AllowedRelationKind],
+    allowed_relation_kinds: Sequence[str],
     *,
     budget: BudgetProfile = _BUDGET,
 ) -> SourceProfile:
+    # Non-view kinds remain confined to disposable catalog/executor component
+    # corners. Version-4 SourceRegistry admission still accepts only ``view``.
+    test_relation_kinds = cast(
+        tuple[AllowedRelationKind, ...],
+        tuple(allowed_relation_kinds),
+    )
     return SourceProfile(
-        source_id=f"corner-{case_name}-{database.name[-8:]}",
+        source_id=_corner_source_id(database, case_name),
         name=f"Corner fixture: {case_name}",
         description="Disposable PostgreSQL source used only by integration acceptance.",
         connection=ResolvedConnection(
@@ -350,9 +453,10 @@ def _source_profile(
             sslmode="disable",
         ),
         allowed_schemas=("analytics",),
-        allowed_relation_kinds=tuple(allowed_relation_kinds),
+        allowed_relation_kinds=test_relation_kinds,
+        view_contract_version=_VIEW_CONTRACT_VERSION,
         budget=budget,
-        semantic_overlay=_EMPTY_SEMANTIC_OVERLAY,
+        semantic_overlay=_corner_semantic_overlay(case_name),
         provenance=SourceProvenance(
             owner="assurance-test",
             environment="test",
@@ -599,8 +703,12 @@ async def test_wide_curated_view_bounds_context_and_denies_sensitive_base_table(
             await admin.execute(
                 sql.SQL("GRANT SELECT ON analytics.wide_records TO {}").format(sql.Identifier(database.reader_name))
             )
-            await admin.execute(
-                "COMMENT ON VIEW analytics.wide_records IS 'Curated 63-column operational record view.'"
+            await _set_view_contract_comment(
+                admin,
+                database,
+                "wide",
+                "analytics.wide_records",
+                "Curated 63-column operational record view.",
             )
             for name in attribute_names[:-1]:
                 await admin.execute(
@@ -786,6 +894,13 @@ async def test_temporal_results_are_canonical_across_reader_timezones(
             await admin.execute(
                 sql.SQL("GRANT SELECT ON analytics.temporal_records TO {}").format(sql.Identifier(database.reader_name))
             )
+            await _set_view_contract_comment(
+                admin,
+                database,
+                "temporal",
+                "analytics.temporal_records",
+                "Curated temporal result-encoding fixture.",
+            )
         finally:
             await admin.close()
 
@@ -949,7 +1064,7 @@ async def test_temporal_results_are_canonical_across_reader_timezones(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_live_view_definition_drift_reissues_revision_before_query() -> None:
+async def test_live_view_definition_drift_without_version_bump_fails_closed() -> None:
     async with _disposable_source_database() as database:
         admin = await AsyncConnection.connect(database.admin_dsn, autocommit=True)
         try:
@@ -990,6 +1105,13 @@ async def test_live_view_definition_drift_reissues_revision_before_query() -> No
                     sql.Identifier(database.reader_name)
                 )
             )
+            await _set_view_contract_comment(
+                admin,
+                database,
+                "live-drift",
+                "analytics.live_records",
+                "Curated live-definition drift fixture.",
+            )
         finally:
             await admin.close()
 
@@ -1000,7 +1122,6 @@ async def test_live_view_definition_drift_reissues_revision_before_query() -> No
         )
         try:
             original = await metadata.get_published(source.source_id)
-            original_hash = original.snapshot.relations[0].definition_hash
 
             admin = await AsyncConnection.connect(database.admin_dsn, autocommit=True)
             try:
@@ -1011,32 +1132,21 @@ async def test_live_view_definition_drift_reissues_revision_before_query() -> No
             finally:
                 await admin.close()
 
-            with pytest.raises(MetadataRevisionMismatchError):
+            with pytest.raises(MetadataUnavailableError) as unavailable:
                 await query.query(
                     source.source_id,
                     "SELECT record_id, label FROM analytics.live_records ORDER BY record_id",
                     original.revision,
                     SQL_POLICY_REVISION,
                 )
-
-            current = await metadata.get_published(source.source_id)
-            assert current.revision != original.revision
-            assert current.snapshot.relations[0].definition_hash != original_hash
-            result = await query.query(
-                source.source_id,
-                "SELECT record_id, label FROM analytics.live_records ORDER BY record_id",
-                current.revision,
-                SQL_POLICY_REVISION,
-            )
-            _assert_canonical_result(
-                result,
-                current.revision,
-                ["record_id", "label"],
-                [
-                    {"record_id": 1, "label": "alpha-v2"},
-                    {"record_id": 2, "label": "beta-v2"},
-                ],
-            )
+            assert unavailable.value.details == {
+                "contract_violations": [
+                    "View structure changed without a view contract version change."
+                ]
+            }
+            with pytest.raises(MetadataUnavailableError):
+                await metadata.get_published(source.source_id)
+            assert not executor._pools
         finally:
             await executor.close()
             await catalog.close()
@@ -1825,6 +1935,13 @@ async def test_enc_01_characterizes_hidden_view_collation_dependency_gap() -> No
                     "GRANT SELECT ON analytics.hidden_collation_projection TO {}"
                 ).format(sql.Identifier(database.reader_name))
             )
+            await _set_view_contract_comment(
+                admin,
+                database,
+                "hidden-collation",
+                "analytics.hidden_collation_projection",
+                "Curated hidden-collation dependency fixture.",
+            )
 
             source = _source_profile(database, "hidden-collation", ("view",))
             catalog, executor, metadata, query = _open_services(
@@ -1878,6 +1995,13 @@ async def test_enc_01_characterizes_hidden_view_collation_dependency_gap() -> No
                     sql.SQL(
                         "GRANT SELECT ON analytics.hidden_collation_projection TO {}"
                     ).format(sql.Identifier(database.reader_name))
+                )
+                await _set_view_contract_comment(
+                    admin,
+                    database,
+                    "hidden-collation",
+                    "analytics.hidden_collation_projection",
+                    "Curated hidden-collation dependency fixture.",
                 )
 
                 metadata.invalidate(source.source_id)
@@ -2164,6 +2288,13 @@ async def test_enc_01_characterizes_custom_function_body_revision_gap() -> None:
                     sql.Identifier(database.reader_name)
                 )
             )
+            await _set_view_contract_comment(
+                admin,
+                database,
+                "function-drift",
+                "analytics.function_semantics",
+                "Curated hidden-function dependency fixture.",
+            )
 
             source = _source_profile(database, "function-drift", ("view",))
             catalog, executor, metadata, query = _open_services(
@@ -2357,6 +2488,13 @@ async def test_enc_01_characterizes_custom_operator_binding_revision_gap() -> No
                     sql.Identifier(database.reader_name)
                 )
             )
+            await _set_view_contract_comment(
+                admin,
+                database,
+                "operator-drift",
+                "analytics.operator_semantics",
+                "Curated hidden-operator dependency fixture.",
+            )
 
             initial_operator_cursor = await admin.execute(
                 """
@@ -2491,6 +2629,13 @@ async def test_enc_01_characterizes_custom_operator_binding_revision_gap() -> No
                     sql.SQL(
                         "GRANT SELECT ON analytics.operator_semantics TO {}"
                     ).format(sql.Identifier(database.reader_name))
+                )
+                await _set_view_contract_comment(
+                    admin,
+                    database,
+                    "operator-drift",
+                    "analytics.operator_semantics",
+                    "Curated hidden-operator dependency fixture.",
                 )
 
                 rebound_operator_cursor = await admin.execute(
@@ -2675,6 +2820,13 @@ async def test_rls_source_requires_base_policy_drift_to_preserve_isolation(
                 sql.SQL("GRANT SELECT ON analytics.tenant_records TO {}").format(
                     sql.Identifier(database.reader_name)
                 )
+            )
+            await _set_view_contract_comment(
+                admin,
+                database,
+                "rls-policy-drift",
+                "analytics.tenant_records",
+                "Curated tenant-isolation fixture.",
             )
 
             source = replace(
@@ -3146,6 +3298,13 @@ async def test_enc_01_characterizes_domain_and_enum_row_description_oids() -> No
                     sql.Identifier(database.reader_name)
                 )
             )
+            await _set_view_contract_comment(
+                admin,
+                database,
+                "domain-output",
+                "analytics.domain_projection",
+                "Curated domain-output rejection fixture.",
+            )
             cursor = await admin.execute(
                 "SELECT 'integer'::regtype::oid, 'integer[]'::regtype::oid, "
                 "'analytics.positive_integer[]'::regtype::oid, "
@@ -3271,6 +3430,13 @@ async def test_enc_01_characterizes_public_query_semantic_guc_drift() -> None:
                 sql.SQL("GRANT SELECT ON analytics.search_semantics TO {}").format(
                     sql.Identifier(database.reader_name)
                 )
+            )
+            await _set_view_contract_comment(
+                admin,
+                database,
+                "semantic-guc-edges",
+                "analytics.search_semantics",
+                "Curated semantic-setting dependency fixture.",
             )
         finally:
             active_error = sys.exception()
@@ -3624,7 +3790,7 @@ async def test_enc_01_characterizes_planner_order_sensitive_aggregates() -> None
             index_revision, index_results = await read_public_results()
             # ponytail: defect characterization; aggregate input order is not
             # revision material, so planner defaults can change exact public
-            # values and verified hashes with identical data and SQL.
+            # values and deterministic hashes with identical data and SQL.
             assert index_revision == sequence_revision
             assert index_results == {
                 "float_sum": (

@@ -6,14 +6,14 @@ Status: Physical package boundary active
 
 ### 30초 요약
 
-Runtime은 Git-reviewed YAML source authority를 한 번 load해 Source Catalog, Metadata, Guarded Query와
+Runtime은 Git-reviewed source package와 budget authority를 한 번 load해 Source Catalog, Metadata, Guarded Query와
 Delivery를 production process로 조립한다. Configuration, startup/readiness, safe logging, diagnostic
 capture와 shutdown cleanup을 소유한다.
 
 Base `compose.yaml`은 application-only이며 source PostgreSQL을 provision하지 않는다. 재현 가능한
 로컬·CI source database는 명시적인 `compose.fixture.yaml` overlay만 소유한다.
 
-`qm source list|show|validate`는 repository YAML을 읽는 local read-only operator CLI다. Runtime에는
+`qm source list|show|validate`는 repository source package와 budget을 읽는 local read-only operator CLI다. Runtime에는
 source mode selector, Control DB, managed fallback, hot reload 또는 source mutation API가 없다. Retired
 managed environment가 남아 있으면 조용히 무시하지 않고 startup configuration error로 거부한다.
 
@@ -29,7 +29,7 @@ managed environment가 남아 있으면 조용히 무시하지 않고 startup co
 
 ## 소유하지 않는 책임
 
-- Source YAML schema, metadata/query/auth policy의 업무 의미
+- Source package schema, `views.sql`, metadata/query/auth policy의 업무 의미
 - Source/Control DB persistence, admin mutation, generation/reload/replica reporter
 - Protected credential 설치, DB DDL, backup, route cutover와 deployment approval
 
@@ -43,7 +43,7 @@ managed environment가 남아 있으면 조용히 무시하지 않고 startup co
 | [`runtime/operations.py`](../../../src/query_man/runtime/operations.py) | Safe logging, counters, health/readiness projection |
 | [`runtime/diagnostic_capture.py`](../../../src/query_man/runtime/diagnostic_capture.py) | Consent-gated encrypted local capture lifecycle |
 | [`runtime/operator_shell.py`](../../../src/query_man/runtime/operator_shell.py) | `qm` UI, argument parsing, rendering과 entrypoint |
-| [`runtime/operator_backend.py`](../../../src/query_man/runtime/operator_backend.py) | Operator HTTP/Docker/diagnostic I/O, settings와 local YAML source loading |
+| [`runtime/operator_backend.py`](../../../src/query_man/runtime/operator_backend.py) | Operator HTTP/Docker/diagnostic I/O, settings와 local source-package loading |
 | [`compose.yaml`](../../../compose.yaml), [`compose.fixture.yaml`](../../../compose.fixture.yaml), [`Dockerfile`](../../../Dockerfile) | Application-only serving artifact와 explicit local/CI fixture topology |
 | [`test_runtime_config.py`](../../../tests/test_runtime_config.py), [`test_runtime_startup_cleanup.py`](../../../tests/test_runtime_startup_cleanup.py), [`test_operator_shell.py`](../../../tests/test_operator_shell.py) | Focused tests |
 
@@ -63,8 +63,8 @@ Protocol 주입을 약속하지 않는다. 일반 request path는 operations sin
 
 `build_app`은 production composition root다. `SourceRegistry.load`, concrete PostgreSQL catalog/query,
 Metadata service, Gateway/Delivery와 OAuth/capture adapter를 연결한다. Ordinary consumer에는 concrete
-registry 대신 `SourceReader`를 주입한다. Assurance offline CLI 이외의 코드가 production concrete
-implementation을 조립하지 않는다.
+registry 대신 `SourceReader`를 주입한다. 다른 module은 production concrete implementation을 조립하지
+않으며 Runtime에도 `views.sql` 실행 adapter나 administrator credential을 주입하지 않는다.
 
 Runtime은 `build_http_app`이 제공하는 `state.mcp_app` child-lifespan handle을 사용하고, 자신이 만든
 idempotent `state.shutdown_trigger`를 server entrypoint에 전달한다. 나머지 FastAPI state 배치를 모듈 간
@@ -90,8 +90,8 @@ cancel/rollback, capture interrupt/drop과 모든 resource close를 시도하며
 force-exit처럼 ASGI lifespan 자체가 시작되지 않는 경로와 SIGKILL은 cleanup 보장 범위 밖이다.
 
 `qm source list`는 sanitized source summary, `show <source-id>`는 password 값을 제외한 human-readable
-manifest, `validate`는 source/budget/verified YAML의 consistency를 표시한다. 이 명령은 파일이나 DB를
-변경하지 않으며 실행 중 process를 reload하지 않는다.
+manifest, `validate`는 exact two-file package와 source/budget consistency를 표시한다. 이 명령은 SQL을
+읽거나 실행하지 않고 파일이나 DB를 변경하지 않으며 실행 중 process를 reload하지 않는다.
 
 Encrypted capture의 persisted/privacy/TTL/fail-open lifecycle은
 [ADR 0027](../../decisions/0027-consent-gated-diagnostic-capture.md)이 exact contract입니다.
@@ -109,11 +109,10 @@ connection interrupt와 대기 항목 drop을 시도한 다음 다른 Runtime cl
 | Metadata | Application/lifecycle와 concrete catalog | Required callable을 ready 전에 확인 |
 | Guarded Query | Delivery executor lifecycle | Stop admission 뒤 drain/cancel/rollback/close 순서를 보존 |
 | Delivery | `build_http_app`, auth/capture contracts | Wire semantics를 Runtime에서 재정의하지 않음 |
-| Assurance | Verified YAML parser for startup L2 revision과 local validation, container acceptance | Runtime은 expected result를 판정하지 않음 |
 
 ## 불변조건
 
-- Git-reviewed YAML만 source authority이며 DB/managed/filesystem fallback 간 선택 모드는 없다.
+- Git-reviewed source package와 budget만 authority이며 DB/managed/filesystem fallback 간 선택 모드는 없다.
 - Base serving topology는 source database를 provision하지 않으며 fixture DB는 explicit overlay에서만 시작한다.
 - Retired managed environment는 값이나 secret을 노출하지 않고 fail-closed한다.
 - RLS 또는 required inventory/capability/probe 실패는 listener readiness 전에 거부한다.
@@ -156,6 +155,6 @@ Container/topology 변경은 container acceptance를, shutdown/socket 변경은 
 | Environment | `runtime/config.py`, `.env.example`, `.env.fixture.example`, `test_runtime_config.py` |
 | Composition/startup/shutdown cleanup | `runtime/composition.py`, `runtime/server.py`, provider lifecycle, `test_runtime_startup_cleanup.py`, `test_server.py` |
 | Operator CLI UI/parser | `runtime/operator_shell.py`, `test_operator_shell.py` |
-| Operator backend/I/O | `runtime/operator_backend.py`, SourceRegistry/VerifiedQueryRegistry, `test_operator_shell.py` |
+| Operator backend/I/O | `runtime/operator_backend.py`, SourceRegistry, `test_operator_shell.py` |
 | Operations/logging | `runtime/operations.py`, direct consumer, focused test |
 | Server/container | `runtime/server.py`, `Dockerfile`, `compose.yaml`, `compose.fixture.yaml`, operations guide와 acceptance |

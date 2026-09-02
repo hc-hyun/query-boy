@@ -1,9 +1,5 @@
 from __future__ import annotations
 
-import ast
-import inspect
-import shutil
-import textwrap
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 from types import MappingProxyType
@@ -12,7 +8,6 @@ from typing import get_type_hints
 import pytest
 import yaml
 
-import query_man.assurance.cli as assurance_cli_module
 from query_man.delivery.gateway import GatewayService
 from query_man.guarded_query.query import QueryService
 from query_man.metadata.service import MetadataService
@@ -36,22 +31,14 @@ def _public_methods(protocol: type[object]) -> set[str]:
     }
 
 
-def _local_annotation(function: object, variable: str) -> str | None:
-    tree = ast.parse(textwrap.dedent(inspect.getsource(function)))
-    for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.AnnAssign)
-            and isinstance(node.target, ast.Name)
-            and node.target.id == variable
-        ):
-            return ast.unparse(node.annotation)
-    return None
-
-
 def _development_manifest() -> dict[str, object]:
     raw: object = yaml.safe_load(
         (
-            ROOT_DIRECTORY / "config" / "sources" / "development-issues.yaml"
+            ROOT_DIRECTORY
+            / "config"
+            / "sources"
+            / "development-issues"
+            / "source.yaml"
         ).read_text(encoding="utf-8")
     )
     assert isinstance(raw, dict)
@@ -65,12 +52,17 @@ def _load_single_manifest(
     budget_file: Path | None = None,
     environment: dict[str, str] | None = None,
 ) -> SourceRegistry:
-    source_directory = tmp_path / "sources"
-    source_directory.mkdir()
-    (source_directory / "source.yaml").write_text(
+    source_directory = tmp_path / "config" / "sources"
+    source_directory.mkdir(parents=True)
+    source_id = raw.get("source_id")
+    assert isinstance(source_id, str)
+    source_path = source_directory / source_id
+    source_path.mkdir()
+    (source_path / "source.yaml").write_text(
         yaml.safe_dump(raw),
         encoding="utf-8",
     )
+    (source_path / "views.sql").write_text("-- reviewed test view artifact\n", encoding="utf-8")
     return SourceRegistry.load(
         source_directory,
         budget_file or ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
@@ -97,14 +89,6 @@ def test_source_consumers_receive_only_the_capability_they_need() -> None:
     assert get_type_hints(MetadataService.__init__)["registry"] is SourceReader
     assert get_type_hints(QueryService.__init__)["registry"] is SourceReader
     assert get_type_hints(_probe_registered_sources)["registry"] is SourceReader
-    assert (
-        _local_annotation(assurance_cli_module._run_evaluation, "registry")
-        == "SourceReader"
-    )
-    assert (
-        _local_annotation(assurance_cli_module._run_verification, "registry")
-        == "SourceReader"
-    )
 
 
 def test_published_source_profile_graph_is_recursively_immutable() -> None:
@@ -195,6 +179,7 @@ def test_loads_public_source_fields_only() -> None:
         }
     )
     assert len(registry) == 2
+    assert registry.get("development-issues").view_contract_version == 1  # type: ignore[union-attr]
     assert registry.get("development-issues").connection.host == "postgres"  # type: ignore[union-attr]
     assert registry.get("development-issues").connection.port == 55_432  # type: ignore[union-attr]
     assert registry.list() == [
@@ -348,11 +333,10 @@ def test_non_tcp_connection_host_fails_closed(host: str) -> None:
         load_test_registry({**DUMMY_ENVIRONMENT, "QUERY_MAN_POSTGRES_HOST": host})
 
 
-def test_duplicate_source_ids_are_rejected(tmp_path: Path) -> None:
-    source = ROOT_DIRECTORY / "config" / "sources" / "development-issues.yaml"
-    shutil.copy(source, tmp_path / "one.yaml")
-    shutil.copy(source, tmp_path / "two.yaml")
-    with pytest.raises(RegistryConfigurationError, match="Duplicate source_id"):
+def test_rejects_flat_source_manifest(tmp_path: Path) -> None:
+    (tmp_path / "development-issues.yaml").write_text("version: 4\n", encoding="utf-8")
+
+    with pytest.raises(RegistryConfigurationError, match="Unexpected source entry"):
         SourceRegistry.load(
             tmp_path,
             ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
@@ -360,44 +344,166 @@ def test_duplicate_source_ids_are_rejected(tmp_path: Path) -> None:
         )
 
 
-def test_system_schemas_are_rejected(tmp_path: Path) -> None:
-    (tmp_path / "system-test.yaml").write_text(
-        """version: 3
-source_id: system-test
-name: System Test
-description: Must not expose system catalogs
-provenance:
-  owner: query-man
-  environment: test
-  database_migration_ref: tests/system-test.sql
-connection:
-  host: 127.0.0.1
-  port: 5432
-  database: postgres
-  user: system_test_reader
-  password_env: SYSTEM_TEST_READER_PASSWORD
-  sslmode: disable
-allowed_schemas: [pg_catalog]
-allowed_relation_kinds: [table]
-budget_profile: interactive
-""",
+def test_source_directory_name_must_match_source_id(tmp_path: Path) -> None:
+    raw = _development_manifest()
+    source_directory = tmp_path / "sources"
+    source_path = source_directory / "wrong-name"
+    source_path.mkdir(parents=True)
+    (source_path / "source.yaml").write_text(
+        yaml.safe_dump(raw),
         encoding="utf-8",
     )
-    with pytest.raises(RegistryConfigurationError, match="system schema"):
+    (source_path / "views.sql").write_text("-- reviewed\n", encoding="utf-8")
+
+    with pytest.raises(RegistryConfigurationError, match="must match directory name"):
         SourceRegistry.load(
-            tmp_path,
+            source_directory,
             ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
-            {"SYSTEM_TEST_READER_PASSWORD": "secret"},
+            DUMMY_ENVIRONMENT,
         )
 
 
-@pytest.mark.parametrize("version", [0, 1, 2, 4])
-def test_rejects_non_v3_source_manifest(tmp_path: Path, version: int) -> None:
+@pytest.mark.parametrize("artifact", ["source.yaml", "views.sql", "README.md"])
+def test_source_directory_requires_exact_artifact_pair(
+    tmp_path: Path,
+    artifact: str,
+) -> None:
+    raw = _development_manifest()
+    source_directory = tmp_path / "sources"
+    source_path = source_directory / "development-issues"
+    source_path.mkdir(parents=True)
+    if artifact != "source.yaml":
+        (source_path / "source.yaml").write_text(
+            yaml.safe_dump(raw),
+            encoding="utf-8",
+        )
+    if artifact != "views.sql":
+        (source_path / "views.sql").write_text("-- reviewed\n", encoding="utf-8")
+    if artifact == "README.md":
+        (source_path / artifact).write_text("unexpected\n", encoding="utf-8")
+
+    with pytest.raises(
+        RegistryConfigurationError,
+        match=r"exactly source\.yaml and views\.sql",
+    ):
+        SourceRegistry.load(
+            source_directory,
+            ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
+            DUMMY_ENVIRONMENT,
+        )
+
+
+@pytest.mark.parametrize("artifact", ["source-directory", "source.yaml", "views.sql"])
+def test_source_package_rejects_symlinks(
+    tmp_path: Path,
+    artifact: str,
+) -> None:
+    raw = _development_manifest()
+    source_directory = tmp_path / "config" / "sources"
+    source_directory.mkdir(parents=True)
+    source_path = source_directory / "development-issues"
+    if artifact == "source-directory":
+        real_source_path = tmp_path / "real-source-package"
+        real_source_path.mkdir()
+        (real_source_path / "source.yaml").write_text(
+            yaml.safe_dump(raw),
+            encoding="utf-8",
+        )
+        (real_source_path / "views.sql").write_text(
+            "-- reviewed\n",
+            encoding="utf-8",
+        )
+        source_path.symlink_to(real_source_path, target_is_directory=True)
+        expected = "Unexpected source entry"
+    else:
+        source_path.mkdir()
+        external_file = tmp_path / artifact
+        external_file.write_text(
+            yaml.safe_dump(raw) if artifact == "source.yaml" else "-- reviewed\n",
+            encoding="utf-8",
+        )
+        (source_path / artifact).symlink_to(external_file)
+        other_artifact = "views.sql" if artifact == "source.yaml" else "source.yaml"
+        (source_path / other_artifact).write_text(
+            "-- reviewed\n" if other_artifact == "views.sql" else yaml.safe_dump(raw),
+            encoding="utf-8",
+        )
+        expected = r"exactly source\.yaml and views\.sql"
+
+    with pytest.raises(RegistryConfigurationError, match=expected):
+        SourceRegistry.load(
+            source_directory,
+            ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
+            DUMMY_ENVIRONMENT,
+        )
+
+
+def test_database_migration_ref_must_point_to_sibling_views_sql(
+    tmp_path: Path,
+) -> None:
+    raw = _development_manifest()
+    provenance = raw["provenance"]
+    assert isinstance(provenance, dict)
+    provenance["database_migration_ref"] = (
+        "unrelated/development-issues/views.sql"
+    )
+
+    with pytest.raises(RegistryConfigurationError, match=r"sibling views\.sql"):
+        _load_single_manifest(tmp_path, raw)
+
+
+def test_system_schemas_are_rejected(tmp_path: Path) -> None:
+    raw = _development_manifest()
+    raw["source_id"] = "system-test"
+    raw["allowed_schemas"] = ["pg_catalog"]
+    raw["provenance"] = {
+        "owner": "query-man",
+        "environment": "test",
+        "database_migration_ref": "config/sources/system-test/views.sql",
+    }
+    connection = raw["connection"]
+    assert isinstance(connection, dict)
+    connection["password_env"] = "SYSTEM_TEST_READER_PASSWORD"
+
+    with pytest.raises(RegistryConfigurationError, match="system schema"):
+        _load_single_manifest(
+            tmp_path,
+            raw,
+            environment={"SYSTEM_TEST_READER_PASSWORD": "secret"},
+        )
+
+
+@pytest.mark.parametrize("version", [0, 1, 2, 3, 5, "4", 4.0, True])
+def test_rejects_non_v4_source_manifest(tmp_path: Path, version: object) -> None:
     raw = _development_manifest()
     raw["version"] = version
 
-    with pytest.raises(RegistryConfigurationError, match="version must be 3"):
+    with pytest.raises(RegistryConfigurationError, match="version"):
         _load_single_manifest(tmp_path, raw)
+
+
+@pytest.mark.parametrize("version", [0, -1, "1", 1.0, True, None])
+def test_rejects_invalid_view_contract_version(
+    tmp_path: Path,
+    version: object,
+) -> None:
+    raw = _development_manifest()
+    raw["view_contract_version"] = version
+
+    with pytest.raises(RegistryConfigurationError, match="view_contract_version"):
+        _load_single_manifest(tmp_path, raw)
+
+
+def test_accepts_arbitrarily_large_positive_view_contract_version(
+    tmp_path: Path,
+) -> None:
+    raw = _development_manifest()
+    raw["view_contract_version"] = 10**100
+
+    source = _load_single_manifest(tmp_path, raw).get("development-issues")
+
+    assert source is not None
+    assert source.view_contract_version == 10**100
 
 
 @pytest.mark.parametrize("sslmode", ["disable", "require", "verify-full"])
@@ -616,15 +722,22 @@ def test_rejects_non_source_scoped_secret_environment(
 
 @pytest.mark.parametrize(
     "relation_kinds",
-    [["table"], ["view"], ["table", "view"]],
+    [[], ["table"], ["materialized_view"], ["view", "table"], ["view", "view"]],
 )
-def test_yaml_registry_rejects_every_rls_source(
+def test_source_relation_kind_allowlist_is_exactly_view(
     tmp_path: Path,
     relation_kinds: list[str],
 ) -> None:
     raw = _development_manifest()
-    raw["tenant_isolation"] = "rls"
     raw["allowed_relation_kinds"] = relation_kinds
+
+    with pytest.raises(RegistryConfigurationError, match="allowed_relation_kinds"):
+        _load_single_manifest(tmp_path, raw)
+
+
+def test_yaml_registry_rejects_every_rls_source(tmp_path: Path) -> None:
+    raw = _development_manifest()
+    raw["tenant_isolation"] = "rls"
 
     with pytest.raises(RegistryConfigurationError, match="RLS sources are not supported"):
         _load_single_manifest(tmp_path, raw)

@@ -28,30 +28,56 @@ databases=(
   clinical_operations
   saas_billing
 )
-schema_files=(
-  retail-commerce-schema.sql
-  parcel-logistics-schema.sql
-  energy-telemetry-schema.sql
-  clinical-operations-schema.sql
-  saas-billing-schema.sql
+source_ids=(
+  retail-commerce
+  parcel-logistics
+  energy-telemetry
+  clinical-operations
+  saas-billing
 )
 expected_columns=(53 45 47 51 59)
 expected_comments=(26 22 21 20 28)
 
 for index in "${!databases[@]}"; do
   database="${databases[$index]}"
-  schema_file="docker/postgres/domain-lab/${schema_files[$index]}"
-  awk '/^COMMENT ON COLUMN ai\./ { print }' "$schema_file" | \
+  source_id="${source_ids[$index]}"
+  views_file="config/domain-lab/sources/$source_id/views.sql"
+  awk '/^COMMENT ON (VIEW|COLUMN) ai\./ { print }' "$views_file" | \
     "${compose[@]}" exec -T postgres \
       psql --username query_man_admin --dbname "$database" \
         --set=ON_ERROR_STOP=1 >/dev/null
 
   coverage="$("${compose[@]}" exec -T postgres \
     psql --username query_man_admin --dbname "$database" \
-      --tuples-only --no-align --field-separator='|' --set=ON_ERROR_STOP=1 <<'SQL'
+      --tuples-only --no-align --field-separator='|' --set=ON_ERROR_STOP=1 \
+      --set=source_id="$source_id" <<'SQL'
 SELECT count(*),
        count(*) FILTER (
          WHERE pg_catalog.col_description(relation.oid, attribute.attnum) IS NOT NULL
+       ),
+       (
+         SELECT count(*)
+         FROM pg_catalog.pg_class AS view_relation
+         JOIN pg_catalog.pg_namespace AS view_namespace
+           ON view_namespace.oid = view_relation.relnamespace
+         WHERE view_namespace.nspname = 'ai'
+           AND view_relation.relkind = 'v'
+       ),
+       (
+         SELECT count(*)
+         FROM pg_catalog.pg_class AS view_relation
+         JOIN pg_catalog.pg_namespace AS view_namespace
+           ON view_namespace.oid = view_relation.relnamespace
+         WHERE view_namespace.nspname = 'ai'
+           AND view_relation.relkind = 'v'
+           AND pg_catalog.split_part(
+             pg_catalog.obj_description(view_relation.oid, 'pg_class'),
+             E'\n',
+             1
+           ) = pg_catalog.format(
+             'query-man:source=%s;view-contract=1',
+             :'source_id'
+           )
        )
 FROM pg_catalog.pg_class AS relation
 JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
@@ -63,7 +89,7 @@ WHERE namespace.nspname = 'ai'
   AND relation.relkind = 'v';
 SQL
 )"
-  expected="${expected_columns[$index]}|${expected_comments[$index]}"
+  expected="${expected_columns[$index]}|${expected_comments[$index]}|3|3"
   if [[ "$coverage" != "$expected" ]]; then
     echo "domain-lab comment coverage mismatch for $database" >&2
     exit 1

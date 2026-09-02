@@ -57,6 +57,8 @@ CATALOG_QUERY = """
         ELSE NULL END AS view_definition_hash,
       coalesce(relation.reloptions @> ARRAY['security_invoker=true'], false)
         AS security_invoker,
+      coalesce(relation.reloptions @> ARRAY['security_barrier=true'], false)
+        AS security_barrier,
       relation.reltuples
     FROM pg_catalog.pg_class AS relation
     JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
@@ -72,6 +74,7 @@ CATALOG_QUERY = """
     relation.relation_comment,
     relation.view_definition_hash,
     relation.security_invoker,
+    relation.security_barrier,
     CASE WHEN relation.relation_kind IN ('r', 'p', 'm', 'f') AND relation.reltuples >= 0
       THEN relation.reltuples::double precision ELSE NULL END AS estimated_rows,
     attribute.attnum::integer AS ordinal,
@@ -249,13 +252,17 @@ _POSTGRES_KINDS = {
     "view": "v",
     "materialized_view": "m",
 }
-_CATALOG_KINDS = {
+_CATALOG_KINDS: dict[str, CatalogRelationKind] = {
     "r": "table",
     "p": "partitioned_table",
     "v": "view",
     "m": "materialized_view",
     "f": "foreign_table",
 }
+_VIEW_CONTRACT_MARKER = re.compile(
+    r"query-man:source=(?P<source>[a-z0-9]+(?:-[a-z0-9]+)*);"
+    r"view-contract=(?P<version>[1-9][0-9]*)"
+)
 
 
 async def _begin_catalog_transaction(
@@ -401,7 +408,10 @@ class _CatalogRelationBuilder:
     comment: str | None
     estimated_rows: int | None
     definition_hash: str | None
+    view_contract_source: str | None
+    view_contract_version: int | None
     security_invoker: bool
+    security_barrier: bool
     columns: list[CatalogColumn] = field(default_factory=list)
 
     def freeze(self) -> CatalogRelation:
@@ -415,7 +425,10 @@ class _CatalogRelationBuilder:
             comment=self.comment,
             estimated_rows=self.estimated_rows,
             definition_hash=self.definition_hash,
+            view_contract_source=self.view_contract_source,
+            view_contract_version=self.view_contract_version,
             security_invoker=self.security_invoker,
+            security_barrier=self.security_barrier,
         )
 
 
@@ -427,15 +440,26 @@ def _rows_to_relations(rows: list[dict[str, Any]]) -> list[_CatalogRelationBuild
         if relation is None:
             kind = str(row["relation_kind"])
             estimated = row["estimated_rows"]
+            catalog_kind = _CATALOG_KINDS[kind]
+            if catalog_kind == "view":
+                contract_source, contract_version, comment = _parse_view_comment(
+                    row["relation_comment"]
+                )
+            else:
+                contract_source, contract_version = None, None
+                comment = _sanitize_comment(row["relation_comment"])
             relation = _CatalogRelationBuilder(
                 schema=str(row["schema_name"]),
                 name=str(row["relation_name"]),
                 qualified_name=qualified_name,
                 sql_name=f"{_quote_identifier(str(row['schema_name']))}.{_quote_identifier(str(row['relation_name']))}",
-                kind=_CATALOG_KINDS[kind],  # type: ignore[arg-type]
-                comment=_sanitize_comment(row["relation_comment"]),
+                kind=catalog_kind,
+                comment=comment,
                 definition_hash=row["view_definition_hash"],
+                view_contract_source=contract_source,
+                view_contract_version=contract_version,
                 security_invoker=bool(row["security_invoker"]),
+                security_barrier=bool(row.get("security_barrier", False)),
                 estimated_rows=None if estimated is None else max(0, round(float(estimated))),
             )
             relations[qualified_name] = relation
@@ -523,3 +547,22 @@ def _sanitize_comment(value: str | None) -> str | None:
         return None
     sanitized = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", " ", value).strip()
     return sanitized[:2000] or None
+
+
+def _parse_view_comment(value: str | None) -> tuple[str | None, int | None, str | None]:
+    if value is None:
+        return None, None, None
+    first_line, separator, description = value.partition("\n")
+    if first_line.endswith("\r"):
+        first_line = first_line[:-1]
+    marker = _VIEW_CONTRACT_MARKER.fullmatch(first_line)
+    if marker is None:
+        raise _CatalogValidationError("View comment has an invalid contract marker")
+    human_description = _sanitize_comment(description if separator else None)
+    if human_description is None:
+        raise _CatalogValidationError("View comment requires a human description")
+    return (
+        marker.group("source"),
+        int(marker.group("version")),
+        human_description,
+    )

@@ -51,14 +51,12 @@ test "$(
 )" = "on"
 
 ./scripts/apply-db.sh
-QUERY_MAN_POSTGRES_HOST=127.0.0.1 \
-POSTGRES_PORT="${QUERY_MAN_SCALE_POSTGRES_PORT:-55433}" \
-  uv run query-man-verify
 ```
 
 두 marker 검사 중 하나라도 실패하면 적재하지 않는다. `COMPOSE_FILE`을 export하는 이유는 내부에서
 bare `docker compose`를 호출하는 `apply-db.sh`도 반드시 scale project를 보게 하기 위해서다.
-`query-man-verify`는 대량 적재 **전**의 기존 9개 static baseline을 확인한다.
+`apply-db.sh`는 base schema, source별 `views.sql`, seed, exact row/marker/privilege 검사 순서로
+기본 fixture를 준비한다. Application Runtime이 `views.sql`을 실행하는 경로는 아니다.
 
 `apply-db.sh`는 적재 후 다시 실행하지 않는다. 이 script의 exact base-row 검사는 대량 데이터가 있는
 상태에서 의도대로 실패한다. Base를 다시 만들려면 아래의 scale-only `down -v`로 volume을 지우고 이
@@ -227,12 +225,14 @@ test "$(docker compose exec -T query-man printenv QUERY_MAN_SCALE_FIXTURE)" = "1
 호출하며, host URL은 `http://127.0.0.1:${QUERY_MAN_SCALE_PORT:-3100}`을 사용한다. 전체 반출 대신
 집계 또는 indexed filter와 `LIMIT`으로 시작한다.
 
-## Baseline과 종료/rollback
+## Source package와 종료/rollback
 
-Scale 적재는 별도 volume의 business row만 바꾸며 source manifest, metadata revision algorithm,
-`config/verified-queries.yaml`과 기본 fixture를 수정하지 않는다. 하지만 scale row가 추가되면
-`market-voc`의 기존 5개 expected result hash는 당연히 달라진다. 이를 새 baseline으로 갱신하지 않고,
-`query-man-verify`는 scale 적재 전 또는 scale volume을 초기화한 뒤에만 실행한다.
+Scale 적재는 별도 volume의 business row만 바꾸며
+`config/sources/market-voc/source.yaml`, `config/sources/market-voc/views.sql`, metadata revision algorithm과
+기본 fixture를 수정하지 않는다. Catalog shape과 comment가 같으면 metadata revision은 row 적재만으로
+바뀌지 않는다. Scale 데이터의 실제 결과는 적재 후 검사 SQL과 revision-bound query로
+확인하며 source별 expected-result artifact를 추가하지 않는다. Runtime이나 자원 경계를 바꾸면 기본
+fixture의 security, integration, container, bounded load·soak를 별도로 계속 통과해야 한다.
 
 데이터를 보존한 채 container만 멈추려면 scale file pair로 `down`한다.
 
@@ -259,4 +259,5 @@ unset QUERY_BOY_DB_PASSWORD QUERY_BOY_DB_SSLMODE QUERY_BOY_DB_CONNECT_TIMEOUT
 ```
 
 기본 project에 대한 bare `docker compose down -v`를 rollback으로 사용하지 않는다. Scale-only 명령
-후 기본 fixture와 verified baseline은 그대로 남고, 필요하면 평소 base+fixture 절차로 별도 실행한다.
+후 기본 fixture와 source package는 그대로 남고, 필요하면 평소 base+fixture 절차로 별도
+실행한다.

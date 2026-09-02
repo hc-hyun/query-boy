@@ -146,9 +146,16 @@ def test_source_selection_corpus_is_strict_version_one_and_covers_all_sources() 
 
     manifest_catalog = {}
     for path in sorted(
-        (ROOT_DIRECTORY / "config" / "domain-lab" / "sources").glob("*.yaml")
+        (ROOT_DIRECTORY / "config" / "domain-lab" / "sources").glob(
+            "*/source.yaml"
+        )
     ):
         manifest = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert path.parent.name == manifest["source_id"]
+        assert {entry.name for entry in path.parent.iterdir()} == {
+            "source.yaml",
+            "views.sql",
+        }
         manifest_catalog[manifest["source_id"]] = (
             manifest["name"],
             manifest["description"],

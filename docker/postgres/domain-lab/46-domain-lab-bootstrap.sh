@@ -21,6 +21,13 @@ declare -ar schema_files=(
   clinical-operations-schema.sql
   saas-billing-schema.sql
 )
+declare -ar view_files=(
+  retail-commerce/views.sql
+  parcel-logistics/views.sql
+  energy-telemetry/views.sql
+  clinical-operations/views.sql
+  saas-billing/views.sql
+)
 declare -ar readers=(
   retail_commerce_reader
   parcel_logistics_reader
@@ -152,4 +159,9 @@ for index in "${!databases[@]}"; do
     --dbname "${databases[$index]}" \
     --set=ON_ERROR_STOP=1 \
     --file "/query-man-domain-lab/${schema_files[$index]}"
+  psql \
+    --username "$POSTGRES_USER" \
+    --dbname "${databases[$index]}" \
+    --set=ON_ERROR_STOP=1 \
+    --file "/query-man-domain-lab-sources/${view_files[$index]}"
 done
