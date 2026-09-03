@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import inspect
 from dataclasses import FrozenInstanceError, replace
-from typing import get_type_hints
 
 import pytest
 
@@ -12,7 +10,6 @@ from query_man.metadata.catalog import PostgresCatalog, _apply_structures, _Cata
 from query_man.metadata.models import (
     CatalogForeignKey,
     CatalogIndex,
-    CatalogProvider,
     CatalogSnapshot,
     PreparedMetadata,
 )
@@ -33,35 +30,6 @@ from tests.helpers import (
 )
 
 
-def test_catalog_provider_protocol_has_exact_lifecycle_shape() -> None:
-    methods = {
-        name
-        for name, value in vars(CatalogProvider).items()
-        if not name.startswith("_") and callable(value)
-    }
-
-    assert methods == {"close", "load"}
-    assert get_type_hints(CatalogProvider.load) == {
-        "source": SourceProfile,
-        "return": CatalogSnapshot,
-    }
-    assert get_type_hints(CatalogProvider.close) == {"return": type(None)}
-    assert inspect.iscoroutinefunction(CatalogProvider.load)
-    assert inspect.iscoroutinefunction(CatalogProvider.close)
-    for method, names in (
-        (CatalogProvider.load, ("self", "source")),
-        (CatalogProvider.close, ("self",)),
-    ):
-        parameters = tuple(inspect.signature(method).parameters.values())
-        assert tuple(parameter.name for parameter in parameters) == names
-        assert all(
-            parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
-            and parameter.default is inspect.Parameter.empty
-            for parameter in parameters
-        )
-    assert get_type_hints(MetadataService.__init__)["catalog"] is CatalogProvider
-
-
 def test_static_launch_domain_guard_uses_declared_catalog_type_kind() -> None:
     normalized_query = " ".join(catalog_module.CATALOG_QUERY.casefold().split())
     assert "join pg_catalog.pg_type as type_row" in normalized_query
@@ -73,10 +41,6 @@ def test_static_launch_domain_guard_uses_declared_catalog_type_kind() -> None:
         match="Catalog contains an unsupported domain column",
     ):
         catalog_module._require_supported_catalog_types([{"type_kind": "d"}])
-
-    assert PostgresCatalog()._reject_domain_columns is False
-    assert PostgresCatalog(reject_domain_columns=True)._reject_domain_columns is True
-
 
 def test_view_comment_contract_marker_is_parsed_and_not_disclosed() -> None:
     builders = catalog_module._rows_to_relations(
@@ -522,7 +486,14 @@ async def test_catalog_limit_with_failed_rollback_never_serves_warm_stale(
         async def load(self, requested_source: SourceProfile) -> CatalogSnapshot:
             self.load_count += 1
             if self.load_count == 1:
-                return minimal_development_snapshot()
+                snapshot = minimal_development_snapshot()
+                return replace(
+                    snapshot,
+                    relations=tuple(
+                        replace(relation, comment="Description")
+                        for relation in snapshot.relations
+                    ),
+                )
             return await catalog.load(requested_source)
 
         async def close(self) -> None:
@@ -535,10 +506,10 @@ async def test_catalog_limit_with_failed_rollback_never_serves_warm_stale(
         cache_ttl_ms=0,
         now=lambda: 1_000,
     )
-    await service.get_context(source.source_id, "최근 문제")
+    await service.get_context(source.source_id)
 
     with pytest.raises(MetadataUnavailableError) as unavailable:
-        await service.get_context(source.source_id, "최근 문제")
+        await service.get_context(source.source_id)
 
     assert unavailable.value.__cause__ is not None
     assert isinstance(unavailable.value.__cause__, _CatalogValidationError)

@@ -1,254 +1,68 @@
-# Query 제한과 자원 사용 확인
+# Query 제한과 자원 사용
 
-Status: 현재 query 안전 제한과 운영 조사 reference
+Query Man의 budget은 비용 금액이 아니라 query 한 건과 source pool의 hard limit입니다. Current authority는
+`config/budget-profiles.yaml`이며 client가 override할 수 없습니다.
 
-이 문서의 핵심은 돈을 계산하는 것이 아니라 query 한 건이 DB 자원을 과도하게 쓰지 못하게 막는
-것입니다. 현재 Query Man은 provider 요금이나 query별 통화 비용을 계산하지 않습니다.
+## 강제 계층
 
-처음 읽는다면 다음 순서만 보면 됩니다.
-
-1. [강제하는 제한](#enforced-layers)에서 무엇을 막는지 확인합니다.
-2. [측정값](#what-is-measured)에서 응답·log로 무엇을 볼 수 있는지 확인합니다.
-3. 문제가 생기면 [조사 순서](#live-investigation)와 [개선 순서](#remediation-order)를 따릅니다.
-4. `pg_stat_statements` 절은 DBA가 별도 권한으로 조사할 때만 읽습니다.
-
-`budget profile`, `OID`, `fingerprint`가 낯설면 [용어 사전](glossary.md)을 먼저 참고하세요.
-
-## Scope
-
-Query Man이 직접 통제하는 대상은 query가 소비할 수 있는 database 자원, 동시 처리량과
-응답 크기다. PostgreSQL `EXPLAIN total_cost`는 planner의 상대 추정치이며 실행 시간이나
-클라우드 요금이 아니다. 통화 단위 비용은 database/host billing과 사용량을 source 단위로
-결합해 외부 cost system에서 계산한다.
-
-## Enforced Layers
-
-`config/budget-profiles.yaml`의 budget schema `version: 2` profile을 모든 source에 같은 순서로
-적용한다. 이는 source manifest schema version과 별도로 versioned되는 schema다. `budget_profile`은
-유일한 resource profile이며 관리자가 source마다 기존 profile 하나를 선택한다. 같은 source의
-모든 query 사용자는 같은 profile 정의를 쓴다. 별도 `cost_tier`나 caller/user/organization
-override는 없다. 현재 `interactive` 값은
-[`config/budget-profiles.yaml`](../config/budget-profiles.yaml)에 고정하고
-[Source Catalog module](modules/source-catalog/README.md)이 strict validation한다.
-
-| Layer | Enforced control | Failure or result signal |
+| 단계 | 주요 제한 | 실패 결과 |
 |---|---|---|
-| SQL boundary | 단일 read-only statement, relation/function/operator allowlist | `QUERY_REJECTED`와 bounded reason code |
-| Plan admission | `total_cost`, 최대 plan rows, plan node 수 | `QUERY_PLAN_COST_EXCEEDED`, `QUERY_PLAN_ROWS_EXCEEDED`, `QUERY_PLAN_NODES_EXCEEDED` |
-| Time | statement 5s, transaction 8s, lock 250ms, source admission queue 1s | `QUERY_TIMEOUT` 또는 `QUERY_OVERLOADED` |
-| Memory/temp/CPU shape | `work_mem=8MiB`, `temp_file_limit=64MiB`, parallel gather 0, JIT off | 적용값 재검증 실패 시 `QUERY_UNAVAILABLE` |
-| Capacity | replica/source당 query concurrency 2 이하, pool 2, reader role connection hard cap | semaphore 대기는 `query_queue_rejected`; connection 공급 실패는 `query_pool_exhausted`와 `QUERY_UNAVAILABLE` |
-| Result | 최대 1,000 rows와 compact JSON 1MiB | bounded rows와 `truncated=true` |
-| Intervention | `query_id`를 active source와 대조한 admin cancel | PostgreSQL cancel, rollback, cancel metric |
+| 요청 | SQL byte, strict JSON, 인증·source authorization | `INVALID_REQUEST`, 인증 오류 |
+| AST | 하나의 read-only statement, relation/function/operator/cast allowlist | `QUERY_REJECTED` |
+| Admission | Source별 semaphore, queue timeout, pool 크기 | `QUERY_OVERLOADED` 또는 `QUERY_UNAVAILABLE` |
+| Transaction | `REPEATABLE READ READ ONLY`, statement/transaction/lock timeout, UTC | timeout 또는 비공개 unavailable |
+| Plan | `EXPLAIN` total cost, 최대 rows와 node 수 | `QUERY_REJECTED` |
+| Result | Exact OID, row 수, compact UTF-8 JSON byte | bounded result 또는 fail-closed |
+| Lifecycle | Manual cancel, disconnect, shutdown | cancel·rollback·cleanup |
 
-Plan admission은 명백히 큰 추정치를 실행 전에 거르는 첫 방어선이다. 통계 오차, 함수
-실행 비용, lock과 I/O 변동을 모두 예측하지 못하므로 time/resource/capacity/result 경계를
-대체하지 않는다. 반대로 plan threshold를 통과했다는 사실은 query가 저렴하다는 보장이
-아니다.
+현재 `interactive` profile의 값은 YAML에서 직접 확인합니다. 대표 기본값은 query statement 5초,
+transaction 8초, queue 1초, pool/concurrency 2, result 1,000행/1 MiB입니다. 문서의 숫자를 별도
+authority로 복제하지 않습니다.
 
-Budget validation은 `max_concurrent_queries <= max_pool_size`를 강제합니다. 따라서 허용 동시 실행 수를
-넘긴 요청은 pool 앞의 source semaphore에서 제한 시간 동안 기다린 뒤 `QUERY_OVERLOADED`(429)가 되고,
-semaphore를 통과했지만 pool이 connection을 공급하지 못한 경우는 DB dependency 실패로 보고 details 없는
-`QUERY_UNAVAILABLE`(503)가 됩니다. `max_pool_size`만 늘리는 변경은 허용되지만 실제 query 동시 처리량은
-`max_concurrent_queries`를 함께 올리기 전까지 늘지 않습니다. 반대로 concurrency만 pool보다 크게 설정한
-profile은 startup validation에서 fail-closed합니다.
+`max_concurrent_queries`는 `max_pool_size`보다 클 수 없습니다. Pool만 늘려도 admission 한도는 늘지
+않습니다. Planner cost는 PostgreSQL의 상대 추정치이며 시간이나 돈이 아니므로 timeout과 결과 제한을
+대체하지 않습니다.
 
-`work_mem`은 plan node와 동시 연산별로 소비되고 hash operation에는 PostgreSQL의
-`hash_mem_multiplier`도 적용될 수 있어 process 전체 메모리 상한과 같지 않다. 그래서 query
-concurrency, parallel worker와 reader connection limit를 함께 제한한다. `temp_file_limit`은
-한 PostgreSQL process가 sort/hash 등에 만든 임시 파일 상한이며 명시적 temporary relation이나
-source storage quota를 뜻하지 않는다. Database `TEMP` privilege 보유는 reader admission 조건이
-아니지만, Query Man 사용자 SQL은 `SELECT INTO`, DDL과 `pg_temp` relation 접근을 계속 거부한다.
-Local fixture는 `TEMP` 보유 reader도 안전하게 admission되는 경계를 검증한다. 자세한 근거는
-[ADR 0032](decisions/0032-reader-temp-admission-relaxation.md)를 따른다.
+## 관측값
 
-현재 경계는 replica 전체의 distributed source quota, caller/tenant별 quota·fairness,
-user/organization별 tier, host cgroup CPU/memory quota와 일·월 통화 budget을 제공하지 않는다.
-이는 초기 운영의 명시적 deferred scope이며 미리 assignment table이나 counter를 만들지 않는다.
+성공 응답과 safe log는 다음과 같은 bounded 값을 제공합니다.
 
-현재 first launch는 단일 replica이며 distributed global quota를 제공하지 않습니다. DB-native 비용
-귀속과 사용량 경보는 [Active TODO의 `COST-*`](development-todo.md#현재-일정에-없는-일)에만 보존한
-parked 주제입니다. 별도 요구와 정확한 승인 전에는 collector, threshold, event, polling route나
-notification 동작이 없습니다.
-
-## What Is Measured
-
-Authorized query가 application service에 들어오면 source별 `query_request_started` counter를 한 번
-증가시킨다. 이 값에는 성공뿐 아니라 revision mismatch, SQL reject, admission timeout과 실행 실패가
-포함되지만, authentication·source authorization에서 거부된 요청은 포함되지 않는다. Collector는 각
-replica의 누적 counter 증가량을 같은 시간 구간으로 합산한다.
-
-```text
-authorized request QPS = rate(query_request_started)
-execution-start QPS    = rate(query_execution_started)
-success QPS            = rate(query_execution_succeeded)
-overload QPS           = rate(query_queue_rejected)
-```
-
-Counter는 process restart 때 0으로 돌아가므로 collector가 reset을 처리해야 한다. 애플리케이션은
-time-window rate나 replica 합계를 계산하지 않으며 raw counter를 HPA 입력으로 직접 사용하지 않는다.
-QPS는 queue/elapsed latency, overload 비율과 database capacity를 함께 해석한다.
-
-각 성공 응답과 `query_succeeded` audit event는 다음 값을 같은 `query_id`와 fingerprint에
-연결한다.
-
+- `query_id`, source와 pseudonymous caller
 - `queue_ms`, `elapsed_ms`
-- `plan_summary.total_cost`, `max_rows`, `node_count`
+- plan total cost, 최대 rows와 node 수
 - `row_count`, `result_bytes`, `truncated`
+- public outcome/error code
 
-외부 collector가 운영 rollup을 만든다면 bounded한 source ID, metadata revision과 time bucket을
-사용한다. Budget 정의는 metadata revision 재료이므로 별도 tier revision entity를 만들지 않는다.
-`pg_stat_statements`의 query ID와 gateway fingerprint는 정확히 대응한다고 가정하지 않는다.
-Caller/tenant는 security audit에는 남을 수 있지만 비용, quota 또는 metric label dimension으로
-쓰지 않는다.
+`/admin/metrics`는 process-local counter snapshot입니다. Durable audit, billing이나 여러 replica의 합계가
+아닙니다. SQL, literal, raw row, token, DSN과 database message는 기록하지 않습니다.
 
-`query_failed` event는 같은 식별자와 공개 가능한 application `error_code`/`reason_code`를
-기록한다. AST 검증 전에는 fingerprint가 없을 수 있고, executor에 진입한 실패는 같은
-`query_id`의 `query_execution_failed` event가 fingerprint를 연결한다. Plan reject는 observed
-cost/rows/nodes와 적용 threshold도 별도 event로 남긴다. SQL text, literal과 database error
-detail은 기록하지 않는다. 수정 가능한 고정 SQLSTATE는 `QUERY_INVALID`와 `query_invalid`
-metric으로 분리하고 알 수 없거나 권한·인프라 관련 오류는 계속 `QUERY_UNAVAILABLE`로 숨긴다.
-`/admin/metrics`는 replica-local
-counter와 `queue_ms`/`elapsed_ms`의 count·sum만 제공한다. 따라서 평균은 `sum / count`로
-계산할 수 있지만 percentile, active pool gauge, stale age와 monetary cost는 이 endpoint에
-존재하지 않는다. P95/P99가 필요하면 audit event를 histogram collector로 보내거나 별도
-instrumentation을 추가해야 한다.
+## 조사 순서
 
-Audit는 process JSON log에 기록될 뿐 repository가 durable store를 제공하지 않는다. Query별
-history를 운영 근거로 쓸 때는 top-level JSON field를 보존하는 collector, retention과 접근
-통제를 먼저 구성한다. `elapsed_ms`는 DB connection을 얻은 뒤 transaction 실행 구간이고
-`queue_ms`는 source semaphore 대기다. MCP는 별도의 HTTP lifecycle event/metric으로 request
-arrival부터 response start와 final ASGI body 전달까지를 측정해 pool/connect, SDK dispatch와
-serialization을 포함한다. 이 값도 client 수신, decode, tool scheduling과 model 응답 시간은
-포함하지 않는다.
+1. `/ready`와 `/admin/health`에서 metadata/query pool과 source 상태를 확인합니다.
+2. Public error를 구분합니다.
+   - `QUERY_OVERLOADED`: admission queue가 가득 참
+   - `QUERY_TIMEOUT`: deadline 또는 cancel
+   - `QUERY_REJECTED`: AST/plan/resource policy 거부
+   - `QUERY_UNAVAILABLE`: 비공개 database/infrastructure failure
+3. `queue_ms`가 크면 caller 동시성, semaphore와 pool saturation을 봅니다.
+4. `elapsed_ms`와 plan 수치가 크면 불필요한 scan, wide projection과 정렬·집계를 줄입니다.
+5. `truncated`이면 더 큰 한도를 요청하기 전에 질문과 SQL 범위를 좁힙니다.
+6. PostgreSQL 조사 권한이 별도로 승인된 경우에만 DBA 도구로 lock, active session과 aggregate query
+   통계를 확인합니다. Raw SQL이나 bind 값을 일반 운영 log로 복사하지 않습니다.
 
-통화 단위 source cost projection은 같은 기간의 database/cluster billing을 gateway의 source별
-성공 수, elapsed 합계와 database-native execution-time/block/WAL aggregate에 결합할 수 있다. 공유
-cluster에서는 배분 추정일 뿐 query별 정확한 원가가 아니므로 방법과 오차를 함께 표시한다.
-User/organization별 chargeback은 현재 제공하지 않는다.
+Limit을 늘리기 전에 query shape, view 설계와 caller load를 먼저 고칩니다. 변경이 필요하면 한 번에 한
+제약만 조정하고 worst-case memory(`work_mem × plan node × concurrency`)와 temp disk, timeout, rollback을
+함께 검증합니다. Source별 임시 override나 요청 parameter는 추가하지 않습니다.
 
-[ADR 0027](decisions/0027-consent-gated-diagnostic-capture.md)의 consent-gated diagnostic capture는
-question/SQL 품질 조사용 별도 encrypted store다. 그
-`subject_id`, question 또는 literal-free SQL을 metric label, quota, billing이나 per-user chargeback에 쓰지
-않는다. Monetary cost와 usage alert의 deferred 상태도 바꾸지 않는다.
+## 안전한 변경
 
-## Live Investigation
+Budget 변경은 policy 의미 변경입니다. 다음을 같은 change-set에서 review합니다.
 
-1. `qm status metrics`로 현재 replica counter를 확인하고 응답 또는 audit에서 `query_id`,
-   source, fingerprint와 error/reject reason을 확보한다. `qm logs --qid <query-id>`는 local
-   Compose의 같은 query event를 모아 보여준다. 이 명령들은 통화 비용을 계산하지 않는다.
-2. 실행 중 query만 monitoring identity로 확인한다. Application reader에 통계 전역 권한을
-   추가하지 않는다.
+- `config/budget-profiles.yaml`과 이를 선택하는 source package
+- Registry cross-field validation
+- Query admission/transaction/plan/result tests
+- Bounded load test와 container memory·stop grace
+- Rollback할 직전 YAML revision
 
-   ```sql
-   SELECT pid, datname, usename, application_name, state,
-          wait_event_type, wait_event,
-          pg_catalog.clock_timestamp() - query_start AS running_for
-   FROM pg_catalog.pg_stat_activity
-   WHERE datname = :'database_name'
-     AND usename = :'reader_role'
-     AND application_name = 'query-man:' || :'query_id'
-     AND backend_type = 'client backend';
-   ```
-
-   `application_name`은 인증 식별자가 아니므로 database와 reader role을 함께 제한한다.
-   기본 조회에서는 SQL literal 노출을 피하려고 `query` text를 선택하지 않는다.
-
-3. 즉시 피해를 줄여야 하면 별도 admin credential로 gateway cancel 경계를 사용한다.
-
-   ```text
-   DELETE /queries/<query_id>
-   ```
-
-   Application reader와 query user에게 `pg_cancel_backend` 또는 Query Man cancel 권한을 주지
-   않는다.
-4. `/admin/metrics`에서 같은 source의 admission queue, pool connection 공급 실패, timeout, reject와
-   truncation 변화를 확인한다. `query_queue_rejected`는 요청 경쟁을, `query_pool_exhausted`는 DB/network,
-   reader 또는 connection 공급 경로를 먼저 조사해야 하는 dependency 실패를 뜻한다.
-   `plan_summary`가 높은지와 실제 elapsed/I/O가 높은지는 별도로 판단한다.
-5. 선택적으로 DBA가 `pg_stat_statements`를 운영한다. 이는 normalized statement의 장기
-   calls/time/rows/shared block/temp block 집계를 제공하지만 Query Man `query_id` 또는 pglast
-   fingerprint와 직접 연결되지 않는다. Gateway는 connection-local 고정 cursor 이름을 써
-   request UUID별 entry 폭증은 막지만, `DECLARE`와 `FETCH` 통계가 원래 SELECT와 분리되거나
-   여러 fingerprint 사이에서 합쳐질 수 있다. 따라서 reader/source aggregate 보조 신호로만
-   사용한다. Extension과 monitoring role은 source owner가 별도로 관리하며 raw/queryid 통계는 Query Man
-   API에 공개하지 않는다. [보류된 비용 방향](decisions/README.md#보류된-방향)이 별도 요구와 정확한
-   승인을 받을 때만 bounded operator aggregate를 다시 검토한다.
-
-<details>
-<summary>DBA용 pg_stat_statements 상세 조사 펼치기</summary>
-
-### Optional PostgreSQL Aggregate
-
-Production source마다 DBA가 extension과 계측 overhead를 별도로 승인한다. Preload 설정 변경은
-database restart가 필요할 수 있다.
-
-```sql
-SHOW shared_preload_libraries;
-SHOW compute_query_id;
-SHOW track_io_timing;
-SHOW pg_stat_statements.track;
-SHOW pg_stat_statements.track_planning;
-SHOW pg_stat_statements.max;
-
-SELECT extversion
-FROM pg_catalog.pg_extension
-WHERE extname = 'pg_stat_statements';
-
-SELECT stats_reset, dealloc
-FROM public.pg_stat_statements_info;
-```
-
-Application reader에는 `pg_read_all_stats`, `pg_monitor` 또는 `pg_signal_backend`를 부여하지
-않는다. 아래 direct-view monitoring identity는 DBA가 수동 조사에만 쓰는 현재 외부 운영 선택지이며
-Query Man이 관리하는 collector credential이나 지원하는 application 수집 경로가 아니다. Source owner가 `CONNECT`,
-`pg_read_all_stats`와 extension view의 좁은 조회 권한을 별도로 review해야 하고, 이 identity는 다른
-session 통계를 볼 수 있는 민감한 운영 계정이다. 향후 network-facing collector를 승인하더라도 이
-broad role/direct view를 주지 않고 source-owner sanitized function만 실행하게 해야 한다.
-
-```sql
-SELECT stats.queryid, stats.calls,
-       stats.total_exec_time, stats.mean_exec_time, stats.max_exec_time,
-       stats.rows, stats.shared_blks_read,
-       stats.temp_blks_read, stats.temp_blks_written,
-       stats.parallel_workers_to_launch, stats.parallel_workers_launched
-FROM public.pg_stat_statements AS stats
-JOIN pg_catalog.pg_roles AS role ON role.oid = stats.userid
-JOIN pg_catalog.pg_database AS database_row ON database_row.oid = stats.dbid
-WHERE role.rolname = '<reader_role>'
-  AND database_row.datname = pg_catalog.current_database()
-ORDER BY stats.total_exec_time DESC
-LIMIT 20;
-```
-
-이 통계에는 metadata/session-policy/`EXPLAIN`/`DECLARE`/`FETCH`가 함께 섞이고 reset 또는
-entry eviction이 발생할 수 있다. Global `stats_reset`/`dealloc`과 row별 `stats_since`를 같이
-관찰해야 하며 query text는
-literal을 포함할 수 있으므로 dashboard 기본 필드로 저장하지 않는다. PostgreSQL query ID는
-major version이나 object OID 변화에 걸친 stable application identifier가 아니다.
-
-</details>
-
-## Remediation Order
-
-비싼 query가 발견되어도 limit부터 올리지 않는다.
-
-1. 잘못된 grain, fanout join, 불필요한 wide column과 무제한 상세 결과를 먼저 고친다.
-2. Source owner와 통계 freshness, 승인 view의 predicate/aggregation, 필요한 index 또는
-   materialized view를 검토한다.
-3. Production에서 무제한 `EXPLAIN ANALYZE`를 실행하지 않는다. 격리 replica나 대표 fixture로
-   결과 정확성, plan과 부하를 재검증한다.
-4. 변경 의도를 담은 test-local 결정적 SQL, integration과
-   `uv run pytest -m 'load and not mcp_server' -s`를 통과시킨다. Compose MCP 경계를 바꾸면
-   `uv run pytest -m 'mcp_server and not soak' -s`의 실제 server
-   saturation도 통과시킨다. 이 검증은 source concurrency 2를 채운 상태의 세 번째 요청이
-   `QUERY_OVERLOADED`, 5초 statement 상한을 넘긴 실행이 `QUERY_TIMEOUT`, 다른 source와
-   후속 정상 query가 계속 성공하는지 확인한다.
-5. 그래도 profile 변경이 필요하면 concurrency를 포함한 최악 자원량과 reader connection capacity를
-   review한다. Pool 여유만 늘릴 수 있지만 concurrency를 늘릴 때는 반드시 pool 이하로 유지한다. Profile
-   변경은 metadata revision을 정상적으로 바꾸며 security, integration, container, representative load와
-   soak를 다시 확인한다.
-
-Source별 특별 숫자를 Python 분기나 manifest 임의 override로 넣지 않는다. 공통 workload가
-현재 profile과 다를 때만 중앙 profile을 추가하고 절대 schema bounds, representative load와
-운영 승인을 함께 남긴다.
+Protected 환경에서는 approved commit을 고정하고 traffic 밖에서 적용합니다. Timeout, memory, temp file,
+row/byte 또는 cancel·rollback 방어가 약해지거나 관측되지 않으면 중단하고 직전 profile로 rollback합니다.

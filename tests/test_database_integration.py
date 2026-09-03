@@ -93,36 +93,9 @@ async def _admin_connection() -> AsyncConnection[tuple[object, ...]]:
     )
 
 
-def _source_for_relation(source: SourceProfile, qualified_name: str, key: str) -> SourceProfile:
+def _source_for_relation(source: SourceProfile, qualified_name: str) -> SourceProfile:
     schema, _name = qualified_name.split(".", 1)
-    semantic = source.semantic_overlay.relations[0]
-    assert semantic.grain is not None
-    semantic = replace(
-        semantic,
-        relation=qualified_name,
-        role="other",
-        aliases=(),
-        grain=replace(semantic.grain, key_columns=(key,)),
-        default_time_column=None,
-        use_for=(),
-        column_aliases={},
-        value_hints={},
-        measures=(),
-    )
-    overlay = replace(
-        source.semantic_overlay,
-        default_relation=qualified_name,
-        relations=(semantic,),
-        joins=(),
-        business_terms=(),
-        question_rules=(),
-        composition_hints=(),
-    )
-    return replace(
-        source,
-        allowed_schemas=(schema,),
-        semantic_overlay=overlay,
-    )
+    return replace(source, allowed_schemas=(schema,))
 
 
 async def _create_test_view(
@@ -130,7 +103,7 @@ async def _create_test_view(
     schema: str,
     *,
     domain_column: bool = False,
-) -> str:
+) -> None:
     await admin.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
     if domain_column:
         await admin.execute(
@@ -149,7 +122,6 @@ async def _create_test_view(
                 sql.Identifier(schema)
             )
         )
-        key = "value"
     else:
         await admin.execute(
             sql.SQL("CREATE TABLE {}.base_records (record_id bigint, label text)").format(
@@ -167,7 +139,6 @@ async def _create_test_view(
                 "AS SELECT record_id, label FROM {}.base_records"
             ).format(sql.Identifier(schema), sql.Identifier(schema))
         )
-        key = "record_id"
     await admin.execute(
         sql.SQL("COMMENT ON VIEW {}.records IS {}").format(
             sql.Identifier(schema),
@@ -187,7 +158,6 @@ async def _create_test_view(
             sql.Identifier(schema)
         )
     )
-    return key
 
 
 async def _drop_test_schema(
@@ -259,7 +229,7 @@ async def test_pg18_utf8_session_policy_and_database_write_denial() -> None:
 @pytest.mark.asyncio
 async def test_live_view_contract_and_base_privilege_boundary() -> None:
     source = _fixture_source()
-    catalog = PostgresCatalog(reject_domain_columns=True)
+    catalog = PostgresCatalog()
     reader = await AsyncConnection.connect(_connection_dsn(source), autocommit=True)
     try:
         snapshot = await catalog.load(source)
@@ -310,10 +280,10 @@ async def test_live_view_definition_drift_fails_closed() -> None:
     source = _fixture_source()
     admin = await _admin_connection()
     schema = f"kernel_drift_{uuid.uuid4().hex}"
-    catalog = PostgresCatalog(reject_domain_columns=True)
+    catalog = PostgresCatalog()
     try:
-        key = await _create_test_view(admin, schema)
-        drift_source = _source_for_relation(source, f"{schema}.records", key)
+        await _create_test_view(admin, schema)
+        drift_source = _source_for_relation(source, f"{schema}.records")
         metadata = MetadataService(
             SourceRegistry([drift_source]),
             catalog,
@@ -349,10 +319,10 @@ async def test_domain_output_is_rejected_during_metadata_admission() -> None:
     source = _fixture_source()
     admin = await _admin_connection()
     schema = f"kernel_domain_{uuid.uuid4().hex}"
-    catalog = PostgresCatalog(reject_domain_columns=True)
+    catalog = PostgresCatalog()
     try:
-        key = await _create_test_view(admin, schema, domain_column=True)
-        domain_source = _source_for_relation(source, f"{schema}.records", key)
+        await _create_test_view(admin, schema, domain_column=True)
+        domain_source = _source_for_relation(source, f"{schema}.records")
         metadata = MetadataService(SourceRegistry([domain_source]), catalog)
         with pytest.raises(MetadataUnavailableError) as unavailable:
             await metadata.get_published(domain_source.source_id)
@@ -368,7 +338,7 @@ async def test_domain_output_is_rejected_during_metadata_admission() -> None:
 async def test_exact_seven_result_oids_and_unsupported_oid_recovery() -> None:
     source = _fixture_source()
     registry = SourceRegistry([source])
-    catalog = PostgresCatalog(reject_domain_columns=True)
+    catalog = PostgresCatalog()
     metadata = MetadataService(registry, catalog)
     executor = PostgresQueryExecutor()
     query = QueryService(registry, metadata, executor)
@@ -450,7 +420,7 @@ async def test_exact_seven_result_oids_and_unsupported_oid_recovery() -> None:
 @pytest.mark.asyncio
 async def test_timeout_cancel_and_multibyte_limit_restore_pooled_connection() -> None:
     source = _fixture_source()
-    catalog = PostgresCatalog(reject_domain_columns=True)
+    catalog = PostgresCatalog()
     metadata = MetadataService(SourceRegistry([source]), catalog)
     executor = PostgresQueryExecutor()
     admin = await _admin_connection()

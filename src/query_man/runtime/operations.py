@@ -15,17 +15,7 @@ _SECRET_ASSIGNMENT = re.compile(
 )
 _SQL_LITERAL = re.compile(r"'(?:''|[^'])*'")
 _STRUCTURED_LOG_FIELDS = (
-    "mcp_http_request_id",
-    "mcp_call_id",
-    "tool_name",
-    "protocol_version",
-    "duration_ms",
-    "response_started_ms",
-    "response_bytes",
-    "status_code",
-    "outcome",
     "query_id",
-    "subject_id",
     "caller_id",
     "tenant_id",
     "source_id",
@@ -116,7 +106,6 @@ class OperationalState:
         self._source_metadata_health: dict[str, str] = {}
         self._source_query_health: dict[str, str] = {}
         self._active_sources: set[str] | None = None
-        self._component_health: dict[str, str] = {}
         self._accepting = True
 
     def reset(self) -> None:
@@ -126,7 +115,6 @@ class OperationalState:
             self._source_metadata_health.clear()
             self._source_query_health.clear()
             self._active_sources = None
-            self._component_health.clear()
             self._accepting = True
 
     def increment(self, name: str, source_id: str | None = None, value: int = 1) -> None:
@@ -179,10 +167,6 @@ class OperationalState:
                 },
             )
 
-    def set_component_health(self, component: str, status: str) -> None:
-        with self._lock:
-            self._component_health[component] = status
-
     def set_accepting(self, accepting: bool) -> None:
         with self._lock:
             self._accepting = accepting
@@ -205,10 +189,7 @@ class OperationalState:
                 ):
                     return "initializing"
                 return "unavailable"
-            if (
-                any(status != "healthy" for status in source_health.values())
-                or any(status != "healthy" for status in self._component_health.values())
-            ):
+            if any(status != "healthy" for status in source_health.values()):
                 return "degraded"
             return "ready"
 
@@ -239,7 +220,6 @@ class OperationalState:
             return {
                 "accepting": self._accepting,
                 "sources": dict(sorted(self._aggregate_source_health().items())),
-                "components": dict(sorted(self._component_health.items())),
                 "metrics": metrics,
             }
 

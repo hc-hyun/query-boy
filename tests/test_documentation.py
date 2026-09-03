@@ -7,557 +7,146 @@ import sys
 from pathlib import Path
 from urllib.parse import unquote
 
-import query_man.guarded_query.sql_validation as sql_validation_module
+import yaml
+
 from tests.helpers import ROOT_DIRECTORY
 
-ARCHITECTURE = ROOT_DIRECTORY / "docs" / "architecture.md"
-DEVELOPMENT_TODO = ROOT_DIRECTORY / "docs" / "development-todo.md"
-MODULE_INDEX = ROOT_DIRECTORY / "docs" / "modules" / "README.md"
-DECISION_DIRECTORY = ROOT_DIRECTORY / "docs" / "decisions"
-DECISION_INDEX = DECISION_DIRECTORY / "README.md"
-VERIFICATION_DIRECTORY = ROOT_DIRECTORY / "docs" / "verification"
-VERIFICATION_INDEX = VERIFICATION_DIRECTORY / "README.md"
-LAUNCH_ADR = (
-    ROOT_DIRECTORY
-    / "docs"
-    / "decisions"
-    / "0025-static-non-rls-first-launch.md"
-)
-SOURCE_AUTHORITY_ADR = (
-    ROOT_DIRECTORY
-    / "docs"
-    / "decisions"
-    / "0030-git-reviewed-yaml-source-authority.md"
-)
-SOURCE_VIEW_ADR = (
-    ROOT_DIRECTORY
-    / "docs"
-    / "decisions"
-    / "0034-source-view-package-and-direct-admission.md"
-)
-SOURCE_INVENTORY_ADR = (
-    ROOT_DIRECTORY
-    / "docs"
-    / "decisions"
-    / "0035-reviewed-source-package-inventory.md"
-)
-PII_BOUNDARY_ADR = (
-    ROOT_DIRECTORY
-    / "docs"
-    / "decisions"
-    / "0031-no-pii-curated-view-boundary.md"
-)
-TEMP_ADMISSION_ADR = (
-    ROOT_DIRECTORY
-    / "docs"
-    / "decisions"
-    / "0032-reader-temp-admission-relaxation.md"
-)
-
-MODULE_NAMES = (
-    "source-catalog",
-    "metadata",
-    "guarded-query",
-    "delivery",
-    "runtime",
-    "assurance",
-)
-REQUIRED_MODULE_HEADINGS = (
-    "## 목적",
-    "## 소유 책임",
-    "## 소유하지 않는 책임",
-    "## 현재 코드 위치",
-    "## 제공 인터페이스와 소유 경계",
-    "## 소비 인터페이스와 전제",
-    "## 불변조건",
-    "## 모듈 내부 변경",
-    "## 사용자 승인이 필요한 경계 변경",
-    "## 검증",
-    "## 집중해서 읽을 범위",
-)
-
-EXPECTED_ACTIVE_TODO_IDS = ("DBENV-01", "AUTHENV-01", "LAUNCH-02")
-EXPECTED_PARKED_ID_RANGES = (
-    "`RLS-01`~`RLS-03`",
-    "`ENC-01`~`ENC-02`",
-    "`DBAUTH-01`~`DBAUTH-03`",
-    "`COST-01`~`COST-05`",
-    "`TRACE-01`~`TRACE-04`",
-)
-
-CRITICAL_NON_PYTHON_MAPPINGS = (
-    "`config/sources/`, `config/budget-profiles.yaml`",
-    "`config/access-policies*.yaml`",
-    "`config/security-evaluation.yaml`",
-    "`Dockerfile`, `compose.yaml`, `compose.fixture.yaml`, `.env*.example`",
-    "`scripts/verify-container.sh`",
-    "`.github/workflows/ci.yml`, `.github/workflows/mcp-soak.yml`",
-    "`skills/query-man-text-to-sql/`",
-    "`skills/query-man-source-onboarding/`",
-    "`pyproject.toml` package/dependency/entrypoint sections",
-    "`uv.lock`",
-)
-CRITICAL_SHARED_WRITER_REFERENCES = (
-    "AGENTS.md",
-    "tests/helpers.py",
-    "tests/test_documentation.py",
-    "docs/development-todo.md",
-    "docs/decisions/README.md",
-    "docs/verification/README.md",
+DOCS = ROOT_DIRECTORY / "docs"
+DECISIONS = DOCS / "decisions"
+CURRENT_ENTRYPOINTS = (
+    ROOT_DIRECTORY / "README.md",
+    DOCS / "README.md",
+    DOCS / "architecture.md",
+    DOCS / "operations.md",
+    DOCS / "source-extension-checklist.md",
+    DOCS / "development-guidelines.md",
+    DOCS / "modules" / "README.md",
+    DOCS / "verification" / "README.md",
 )
 
 
-def test_current_tree_keeps_current_decisions_and_git_archive_pointer() -> None:
-    required_decisions = {
-        "0001-postgresql-ast-validation.md",
-        "0002-guarded-query-contract.md",
-        "0003-reader-and-resolved-object-policy.md",
-        "0006-mcp-transport-and-workflow.md",
-        "0025-static-non-rls-first-launch.md",
-        "0027-consent-gated-diagnostic-capture.md",
-        "0030-git-reviewed-yaml-source-authority.md",
-        "0033-explicit-source-tls-modes.md",
-        "0034-source-view-package-and-direct-admission.md",
-        "0035-reviewed-source-package-inventory.md",
-    }
-    decision_files = {
-        path.name for path in DECISION_DIRECTORY.glob("[0-9][0-9][0-9][0-9]-*.md")
-    }
-    assert required_decisions <= decision_files
-    assert all(
-        int(filename[:4]) in {1, 2, 3, 6, 25, 27, 30}
-        or int(filename[:4]) > 30
-        for filename in decision_files
-    )
-
-    decision_index = DECISION_INDEX.read_text(encoding="utf-8")
-    assert "현행 세부 계약" in decision_index
-    assert "1ff390ab67df215181810a84ac8b2ca8570eceee" in decision_index
-    assert "Git history를 rewrite하지 않습니다" in decision_index
-
-    for archived_name in (
-        "implementation-roadmap.md",
-        "future-work.md",
-        "verified-queries.md",
+def _markdown_targets(path: Path) -> set[Path]:
+    targets: set[Path] = set()
+    for match in re.finditer(
+        r"!?\[[^\]]*\]\(([^)]+)\)", path.read_text(encoding="utf-8")
     ):
-        assert not (ROOT_DIRECTORY / "docs" / archived_name).exists()
-    assert {path.name for path in VERIFICATION_DIRECTORY.glob("*.md")} == {
-        "README.md"
-    }
+        raw_target = match.group(1).strip()
+        if raw_target.startswith("<") and ">" in raw_target:
+            target = raw_target[1 : raw_target.index(">")]
+        else:
+            target = raw_target.split(maxsplit=1)[0]
+        if target.startswith(("http://", "https://", "mailto:", "//", "#")):
+            continue
+        relative, _separator, _fragment = target.partition("#")
+        targets.add((path.parent / unquote(relative.split("?", 1)[0])).resolve())
+    return targets
 
 
-def test_active_todo_is_small_open_work_only() -> None:
-    todo = DEVELOPMENT_TODO.read_text(encoding="utf-8")
-    matches = re.findall(r"^- \[([ x])\] `([A-Z]+)-(\d{2})`", todo, re.MULTILINE)
-    ids = tuple(f"{prefix}-{number}" for _checked, prefix, number in matches)
-
-    assert ids == EXPECTED_ACTIVE_TODO_IDS
-    assert len(ids) == len(set(ids))
-    assert all(checked == " " for checked, _prefix, _number in matches)
-    assert "- [x]" not in todo
-    assert "LAUNCH-01-A" in todo
-    assert "Repository implementation과 local acceptance는 protected environment 전환 권한이 아니다" in todo
-    assert "`DBENV-01`과 `AUTHENV-01`의 exact inventory와 evidence가 완료" in todo
-    assert "authentication mapper 또는 application code를 현장에서 새로 구현하지 않는다" in todo
-    for heading in (
-        "## Protected Environment Execution",
-        "## 시작 전에 필요한 승인",
-        "## 완료 조건",
-        "## 즉시 중단할 조건",
-        "## 현재 일정에 없는 일",
+def _markdown_heading_anchors(path: Path) -> set[str]:
+    anchors: set[str] = set()
+    occurrences: dict[str, int] = {}
+    for match in re.finditer(
+        r"^#{1,6}\s+(.+?)\s*#*\s*$",
+        path.read_text(encoding="utf-8"),
+        re.MULTILINE,
     ):
-        assert heading in todo
-
-    for parked_range in EXPECTED_PARKED_ID_RANGES:
-        assert parked_range in todo
-    assert "active queue가 아닙니다" in todo
-    assert "Git history를 rewrite하지 않습니다" in todo
-
-
-def test_adr_0025_keeps_launch_safety_after_inventory_supersession() -> None:
-    adr = LAUNCH_ADR.read_text(encoding="utf-8")
-    assert "Status: Accepted" in adr
-    assert "Decision ID: `LAUNCH-01-A`" in adr
-    assert "`development-issues`, `market-voc`" in adr
-    assert "180000 <= server_version < 190000" in adr
-    assert "server_encoding == \"UTF8\"" in adr
-    assert "client_encoding == \"UTF8\"" in adr
-    assert "tenant 유무와 무관한 details 없는 `503 QUERY_UNAVAILABLE`" in adr
-    for type_name, oid in (
-        ("int8", 20),
-        ("int2", 21),
-        ("int4", 23),
-        ("text", 25),
-        ("date", 1082),
-        ("timestamptz", 1184),
-        ("numeric", 1700),
-    ):
-        assert f"`{type_name}` | {oid}" in adr
-    assert "SQL policy version은 2에서 3으로" in adr
-    assert "0034-source-view-package-and-direct-admission.md" in adr
-    assert "0035-reviewed-source-package-inventory.md" in adr
-    assert "protected execution" in adr
-
-    assert sql_validation_module._SQL_POLICY_VERSION == 3
-    assert sql_validation_module.SQL_POLICY_REVISION in adr
+        heading = re.sub(r"[`*_~]", "", match.group(1))
+        base = re.sub(r"[^\w -]", "", heading.lower()).strip().replace(" ", "-")
+        occurrence = occurrences.get(base, 0)
+        occurrences[base] = occurrence + 1
+        anchors.add(base if occurrence == 0 else f"{base}-{occurrence}")
+    return anchors
 
 
-def test_adr_0030_retains_budget_and_retired_managed_boundaries() -> None:
-    adr = SOURCE_AUTHORITY_ADR.read_text(encoding="utf-8")
-    assert "Status: Accepted" in adr
-    assert "Decision ID: `QB-YAML-SOURCE-AUTHORITY-20260829`" in adr
-    assert "0034-source-view-package-and-direct-admission.md" in adr
-    assert "config/budget-profiles.yaml" in adr
-    assert "fail-closed" in adr
-    assert "Control DB" in adr
-    assert "drop" in adr.lower()
+def test_current_documentation_has_one_navigable_entrypoint() -> None:
+    assert all(path.is_file() for path in CURRENT_ENTRYPOINTS)
 
-    assert not any(
-        (ROOT_DIRECTORY / "src" / "query_man" / "managed").glob("*.py")
-    )
-    assert not (ROOT_DIRECTORY / "compose.acceptance.yaml").exists()
-    assert not any((ROOT_DIRECTORY / "config" / "onboarding").glob("*"))
-    assert not any(
-        (ROOT_DIRECTORY / "docker" / "postgres" / "init" / "control-migrations").glob("*")
-    )
+    root_targets = _markdown_targets(ROOT_DIRECTORY / "README.md")
+    assert (DOCS / "README.md").resolve() in root_targets
+
+    index_targets = _markdown_targets(DOCS / "README.md")
+    assert {path.resolve() for path in CURRENT_ENTRYPOINTS[2:]} <= index_targets
 
 
-def test_adr_0034_is_the_current_source_package_and_admission_authority() -> None:
-    adr = SOURCE_VIEW_ADR.read_text(encoding="utf-8")
-
-    for fragment in (
-        "Status: Accepted",
-        "Decision ID: `SOURCE-VIEW-01`",
-        "config/sources/<source-id>/",
-        "source.yaml",
-        "views.sql",
-        "version 4",
-        "view_contract_version",
-        "allowed_relation_kinds",
-        "query-man:source=<source-id>;view-contract=<positive integer>",
-        "직접 admission",
-        "metadata_revision",
-        "sql_policy_revision",
-        "Runtime은 이를 열거나 실행하지 않으며",
-        "별도 authorization",
-    ):
-        assert fragment in adr
-
-    source_root = ROOT_DIRECTORY / "config" / "sources"
-    assert all(
-        {path.name for path in directory.iterdir()} == {"source.yaml", "views.sql"}
-        for directory in source_root.iterdir()
-    )
-    assert not (ROOT_DIRECTORY / "config" / "quality-evaluation.yaml").exists()
-    assert not (ROOT_DIRECTORY / "config" / "verified-queries.yaml").exists()
+def test_decision_index_links_every_current_adr() -> None:
+    index_targets = _markdown_targets(DECISIONS / "README.md")
+    adr_files = set(DECISIONS.glob("[0-9][0-9][0-9][0-9]-*.md"))
+    assert {path.resolve() for path in adr_files} <= index_targets
 
 
-def test_adr_0035_makes_reviewed_packages_the_only_inventory_registration() -> None:
-    adr = SOURCE_INVENTORY_ADR.read_text(encoding="utf-8")
-
-    for fragment in (
-        "Status: Accepted",
-        "Decision ID: `SOURCE-INVENTORY-01`",
-        "Every immediate child directory under `config/sources/`",
-        "No third registration file",
-        "Tests verify behavior, not a duplicate inventory",
-        "every authenticated query principal",
-        "one tiny synthetic database",
-        "Protected activation remains separately authorized",
-    ):
-        assert fragment in adr
-
-
-def test_adr_0031_moves_source_pii_boundary_to_db_owner_views() -> None:
-    adr = PII_BOUNDARY_ADR.read_text(encoding="utf-8")
-
-    assert "Status: Accepted" in adr
-    assert "Decision ID: `QB-NO-PII-VIEW-BOUNDARY-20260830`" in adr
-    assert "DB owner는 개인정보와 개인 민감정보를 제거한 reviewed curated view만" in adr
-    assert "탐지, 분류, masking/pseudonymization 또는 column 단위로" in adr
-    assert "0034-source-view-package-and-direct-admission.md" in adr
-    assert "DB-owner-confirmed no-PII 경계" in adr
-
-
-def test_adr_0032_removes_only_database_temp_admission_check() -> None:
-    adr = TEMP_ADMISSION_ADR.read_text(encoding="utf-8")
-
-    assert "Status: Accepted" in adr
-    assert "Decision ID: `QB-READER-TEMP-RELAX-20260830`" in adr
-    assert "Reader가 database `TEMP` privilege를 보유하는지는 source admission 조건이 아니다" in adr
-    assert "[ADR 0003]" in adr
-    assert "[ADR 0001]" in adr
-    assert "`SELECT INTO`" in adr
-    assert "`pg_temp`" in adr
-    assert "Source manifest/YAML schema" in adr
-    assert "SQL policy\nrevision" in adr
-    assert "database DDL" in adr
-    assert "직접 사용하면 그 별도 session에서 temporary" in adr
-
-
-def test_current_navigation_documents_agree_on_launch_scope() -> None:
-    launch_documents = {
-        "README": ROOT_DIRECTORY / "README.md",
-        "docs index": ROOT_DIRECTORY / "docs" / "README.md",
-        "architecture": ARCHITECTURE,
-        "module index": MODULE_INDEX,
-        "operations": ROOT_DIRECTORY / "docs" / "operations.md",
-        "TODO": DEVELOPMENT_TODO,
-    }
-    for label, path in launch_documents.items():
-        content = path.read_text(encoding="utf-8")
-        assert "0025-static-non-rls-first-launch.md" in content, label
-        assert "0034-source-view-package-and-direct-admission.md" in content, label
-        assert "0035-reviewed-source-package-inventory.md" in content, label
-        assert "RLS" in content, label
-
-    readme = launch_documents["README"].read_text(encoding="utf-8")
-    docs_index = launch_documents["docs index"].read_text(encoding="utf-8")
-    architecture = launch_documents["architecture"].read_text(encoding="utf-8")
-    operations = launch_documents["operations"].read_text(encoding="utf-8")
-    assurance = (MODULE_INDEX.parent / "assurance" / "README.md").read_text(
-        encoding="utf-8"
-    )
-    assert "단일 Query Man replica" in readme
-    assert "exact seven result" in architecture
-    for task_id in EXPECTED_ACTIVE_TODO_IDS:
-        assert task_id in operations
-    assert "20, 21, 23, 25, 1082, 1184, 1700" in assurance
-    for heading in (
-        "## 공통 제품 문서",
-        "## 개발자 문서",
-        "## 운영자·DBA 문서",
-        "## 현재 결정과 Git 기록",
-    ):
-        assert heading in docs_index
-    assert "독자 구분은 탐색을 돕는 표지일 뿐" in docs_index
-
-
-def test_parked_research_is_not_presented_as_current_implementation() -> None:
-    decisions = DECISION_INDEX.read_text(encoding="utf-8")
-    assert "일정이나 구현 승인이 아닙니다" in decisions
-    for topic in (
-        "RLS serving",
-        "Result type 확대",
-        "DB-backed source authority",
-        "DB-native 비용·경보",
-        "Workflow trace",
-    ):
-        assert topic in decisions
-    assert "현재 모든 RLS source를 DB 접근 전에 차단" in decisions
-    assert "별도 real-DB acceptance" in decisions
-    assert "공통 PostgreSQL safety kernel" in decisions
-
-
-def test_consolidated_current_contracts_cover_archived_decisions() -> None:
-    metadata = (MODULE_INDEX.parent / "metadata" / "README.md").read_text(
-        encoding="utf-8"
-    )
-    for fragment in (
-        "valid·ready·non-partial",
-        "max_context_columns_per_relation` 기본값은 40",
-        "`column_count`, `returned_column_count`, `columns_truncated`",
-        "exact one-to-one coverage",
-        "같은 process에서 같은 source/version",
-    ):
-        assert fragment in metadata
-
-    guarded = (MODULE_INDEX.parent / "guarded-query" / "README.md").read_text(
-        encoding="utf-8"
-    )
-    for fragment in (
-        "`REPEATABLE READ READ ONLY`",
-        "`TimeZone=UTC`",
-        "`+00:00`",
-        "`date_trunc('month', received_at, 'Asia/Seoul')`",
-    ):
-        assert fragment in guarded
-
-    delivery = (MODULE_INDEX.parent / "delivery" / "README.md").read_text(
-        encoding="utf-8"
-    )
-    assert "`caller_id`, `tenant_id`, `token_env`," in delivery
-    assert "optional `diagnostic_consent`" in delivery
-    assert "`SOURCE_NOT_FOUND`" in delivery
-
-    operations = (ROOT_DIRECTORY / "docs" / "operations.md").read_text(
-        encoding="utf-8"
-    )
-    assert "30분/50건" in operations
-    assert "7일/100건" in operations
-
-    jwt = (ROOT_DIRECTORY / "docs" / "resource-server-jwt-auth.md").read_text(
-        encoding="utf-8"
-    )
-    for fragment in (
-        "최대 1 MiB",
-        "60초 clock-skew allowance",
-        "process-wide 30초 cooldown",
-        "`authbridge`",
-        "`AUTHENV-01`",
-        "`LAUNCH-02`",
-        "이 단계에서는 route하지 않는다",
-    ):
-        assert fragment in jwt
-
-
-def test_module_docs_cover_owners_interfaces_and_current_python_files() -> None:
-    index = MODULE_INDEX.read_text(encoding="utf-8")
-    agents = (ROOT_DIRECTORY / "AGENTS.md").read_text(encoding="utf-8")
-    normalized_agents = " ".join(agents.split())
-    assert "## 승인 대상 변경 절차" in index
-    assert "## 새 데이터베이스 추가 시 영향" in index
-    assert "docs/modules/README.md" in agents
-    assert "내부 Python shape/signature 변경" in agents
-    assert "별도 사용자 승인 없이" in normalized_agents
-    assert "모든 public Python symbol을 열거하지 않는다" in agents
-    assert "baseline commit" in agents
-    assert "수정 가능한 file allowlist" in agents
-    assert "여러 agent가 같은 worktree를 공유하면" in agents
-
-    for module_name in MODULE_NAMES:
-        path = MODULE_INDEX.parent / module_name / "README.md"
-        content = path.read_text(encoding="utf-8")
-        assert f"({module_name}/README.md)" in index
-        assert "Status: Physical package boundary active" in content
-        for heading in REQUIRED_MODULE_HEADINGS:
-            assert content.count(heading) == 1, (
-                f"{path.relative_to(ROOT_DIRECTORY)}: {heading}"
-            )
-
-    source_root = ROOT_DIRECTORY / "src" / "query_man"
-    for path in source_root.rglob("*.py"):
-        relative = path.relative_to(source_root)
-        mapped = relative.as_posix()
-        assert f"`{mapped}`" in index, f"Unmapped module owner: {relative}"
-    for mapping in CRITICAL_NON_PYTHON_MAPPINGS:
-        assert mapping in index, mapping
-    for reference in CRITICAL_SHARED_WRITER_REFERENCES:
-        assert reference in index, reference
-
-    errors = (source_root / "errors.py").read_text(encoding="utf-8")
-    for class_name in re.findall(r"^class (\w+Error)\(", errors, re.MULTILINE):
-        assert f"`{class_name}`" in index, f"Missing error owner: {class_name}"
-
-
-def test_internal_interface_flexibility_keeps_material_change_categories_explicit() -> None:
-    paths = (
-        ROOT_DIRECTORY / "AGENTS.md",
-        MODULE_INDEX,
-    )
-    categories = (
-        "External API/wire format",
-        "Persisted/versioned format",
-        "Policy/compatibility identity",
-        "Safety/lifecycle invariant",
-        "Ownership/composition boundary",
-        "Protected operational procedure",
-    )
-    for path in paths:
-        content = " ".join(path.read_text(encoding="utf-8").split())
-        assert "allowed dependency map" in content.casefold()
-        assert "shape/signature" in content
-        assert "input/output/domain-error semantics" in content
-        assert "모든 public Python symbol" in content
-        assert "별도 사용자 승인" in content
-        for category in categories:
-            assert category in content, f"{path.name}: {category}"
-
-    terminology_paths = (
-        ROOT_DIRECTORY / "AGENTS.md",
-        MODULE_INDEX,
-        *(MODULE_INDEX.parent / name / "README.md" for name in MODULE_NAMES),
-    )
-    for path in terminology_paths:
-        content = path.read_text(encoding="utf-8")
-        assert re.search(r"(?i)module\s+contract|모듈\s*간의?\s*계약", content) is None, path
-
-
-def test_current_docs_use_source_package_and_direct_admission_terms_only() -> None:
-    current_paths = (
-        ROOT_DIRECTORY / "README.md",
-        ROOT_DIRECTORY / "AGENTS.md",
-        ROOT_DIRECTORY / "docs" / "README.md",
-        ROOT_DIRECTORY / "docs" / "architecture.md",
-        ROOT_DIRECTORY / "docs" / "glossary.md",
-        ROOT_DIRECTORY / "docs" / "operations.md",
-        ROOT_DIRECTORY / "docs" / "development-todo.md",
-        ROOT_DIRECTORY / "docs" / "source-extension-checklist.md",
-        MODULE_INDEX,
-        *(MODULE_INDEX.parent / name / "README.md" for name in MODULE_NAMES),
-    )
-    retired_terms = (
-        "minimum_quality_level",
-        "quality_level",
-        "quality-evaluation",
-        "verified-queries",
-        "query-man-evaluate",
-        "query-man-verify",
-        "`L0`",
-        "`L1`",
-        "`L2`",
+def test_current_docs_do_not_reference_retired_artifacts() -> None:
+    current_docs = [ROOT_DIRECTORY / "README.md", *sorted(DOCS.rglob("*.md"))]
+    retired = (
+        "config/domain-lab",
+        "compose.domain-lab",
+        ".env.domain-lab",
+        "apply-domain-lab-comments",
+        "verified-queries.yaml",
+        "quality-evaluation.yaml",
         "config/sources/*.yaml",
+        "compose.acceptance.yaml",
+        "diagnostic capture",
+        "diagnostic_consent",
+        "QUERY_MAN_OAUTH_",
+        "AuthBridge",
+        "JWKS",
+        "/mcp",
+        "mcp_server.py",
+        "mcp-soak",
+        "query-man-text-to-sql",
+        "query-man-source-onboarding",
+        "semantic_overlay",
+        "answerability",
+        "relevance.py",
     )
-
-    for path in current_paths:
-        content = path.read_text(encoding="utf-8")
-        for term in retired_terms:
-            assert term not in content, f"{path.relative_to(ROOT_DIRECTORY)}: {term}"
-
-
-def test_runtime_has_no_known_fixture_source_specialization() -> None:
-    # This is a non-exhaustive regression corpus, not the active source inventory.
-    forbidden = {
-        "development-issues",
-        "development_issues",
-        "market-voc",
-        "market_voc",
-        "support-tickets",
-        "support_tickets",
-        "commerce-edges",
-        "commerce_edges",
+    references = {
+        path.relative_to(ROOT_DIRECTORY): term
+        for path in current_docs
+        for term in retired
+        if term.casefold() in path.read_text(encoding="utf-8").casefold()
     }
-    for path in (ROOT_DIRECTORY / "src" / "query_man").rglob("*.py"):
+    assert not references
+
+
+def test_source_contract_is_two_files_and_documented() -> None:
+    packages = sorted((ROOT_DIRECTORY / "config" / "sources").iterdir())
+    assert packages
+    for package in packages:
+        assert package.is_dir()
+        assert {path.name for path in package.iterdir()} == {"source.yaml", "views.sql"}
+        manifest = yaml.safe_load((package / "source.yaml").read_text(encoding="utf-8"))
+        assert manifest["source_id"] == package.name
+
+    contract = (DOCS / "source-extension-checklist.md").read_text(encoding="utf-8")
+    assert "source.yaml" in contract
+    assert "views.sql" in contract
+
+
+def test_local_markdown_links_resolve() -> None:
+    markdown_paths = [ROOT_DIRECTORY / "README.md", ROOT_DIRECTORY / "AGENTS.md"]
+    markdown_paths.extend(sorted(DOCS.rglob("*.md")))
+    missing: list[str] = []
+    for path in markdown_paths:
         content = path.read_text(encoding="utf-8")
-        assert not any(value in content for value in forbidden), path
-
-
-def test_container_inputs_are_immutable_and_revision_labeled() -> None:
-    dockerfile = (ROOT_DIRECTORY / "Dockerfile").read_text(encoding="utf-8")
-    compose = (ROOT_DIRECTORY / "compose.yaml").read_text(encoding="utf-8")
-    fixture = (ROOT_DIRECTORY / "compose.fixture.yaml").read_text(encoding="utf-8")
-    workflow = (ROOT_DIRECTORY / ".github" / "workflows" / "ci.yml").read_text(
-        encoding="utf-8"
-    )
-    assert len(re.findall(r"^FROM .*@sha256:[0-9a-f]{64}", dockerfile, re.MULTILINE)) == 2
-    assert "COPY --from=ghcr.io/astral-sh/uv:0.9.18@sha256:" in dockerfile
-    assert "ARG QUERY_MAN_VCS_REF" in dockerfile
-    assert 'LABEL org.opencontainers.image.revision="${QUERY_MAN_VCS_REF}"' in dockerfile
-    assert len(re.findall(r"image: postgres:[^\n]+@sha256:[0-9a-f]{64}", fixture)) == 1
-    assert 'payload == b\'{"status":"ready"}\'' in compose
-    assert "QUERY_MAN_VCS_REF: ${{ github.sha }}" in workflow
-    assert (
-        'docker compose build --build-arg QUERY_MAN_VCS_REF="$QUERY_MAN_VCS_REF" query-man'
-        in workflow
-    )
-    assert 'test "$revision" = "$QUERY_MAN_VCS_REF"' in workflow
-
-
-def test_base_compose_does_not_provision_a_source_database() -> None:
-    compose = (ROOT_DIRECTORY / "compose.yaml").read_text(encoding="utf-8")
-    fixture = (ROOT_DIRECTORY / "compose.fixture.yaml").read_text(encoding="utf-8")
-    service_environment = (ROOT_DIRECTORY / ".env.example").read_text(encoding="utf-8")
-    fixture_environment = (ROOT_DIRECTORY / ".env.fixture.example").read_text(
-        encoding="utf-8"
-    )
-
-    assert "\n  postgres:\n" not in compose
-    assert "\n  postgres:\n" in fixture
-    assert "depends_on:" not in compose
-    for setting in ("POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD"):
-        assert setting not in service_environment
-        assert f"{setting}=" in fixture_environment
-    assert "COMPOSE_FILE=compose.yaml:compose.fixture.yaml" in fixture_environment
+        for match in re.finditer(r"!?\[[^\]]*\]\(([^)]+)\)", content):
+            raw_target = match.group(1).strip()
+            if raw_target.startswith("<") and ">" in raw_target:
+                target = raw_target[1 : raw_target.index(">")]
+            else:
+                target = raw_target.split(maxsplit=1)[0]
+            if target.startswith(("http://", "https://", "mailto:", "//")):
+                continue
+            path_target, _separator, fragment = target.partition("#")
+            relative_target = unquote(path_target.split("?", 1)[0])
+            resolved = path if not relative_target else path.parent / relative_target
+            if not resolved.exists():
+                missing.append(f"{path.relative_to(ROOT_DIRECTORY)} -> {target}")
+            elif fragment and resolved.suffix.lower() == ".md":
+                if unquote(fragment) not in _markdown_heading_anchors(resolved):
+                    missing.append(
+                        f"{path.relative_to(ROOT_DIRECTORY)} -> {target} (missing anchor)"
+                    )
+    assert not missing, "Missing local Markdown links:\n" + "\n".join(missing)
 
 
 def test_bounded_pytest_traceback_does_not_render_argument_secrets(
@@ -581,7 +170,6 @@ def test_traceback_probe() -> None:
     )
     environment = dict(os.environ)
     environment["QUERY_MAN_TRACEBACK_PROBE"] = secret
-
     result = subprocess.run(
         [
             sys.executable,
@@ -599,81 +187,6 @@ def test_traceback_probe() -> None:
         text=True,
     )
     output = result.stdout + result.stderr
-
     assert result.returncode == 1
     assert "RuntimeError: bounded traceback probe" in output
     assert secret not in output
-
-
-def test_ci_and_compose_use_only_the_yaml_authority() -> None:
-    compose = (ROOT_DIRECTORY / "compose.yaml").read_text(encoding="utf-8")
-    fixture = (ROOT_DIRECTORY / "compose.fixture.yaml").read_text(encoding="utf-8")
-    workflow = (ROOT_DIRECTORY / ".github" / "workflows" / "ci.yml").read_text(
-        encoding="utf-8"
-    )
-
-    assert "name: query-man" in compose
-    assert "QUERY_MAN_SOURCE_MODE" not in compose
-    assert "postgres-control-recovery-source" not in compose + fixture
-    assert "managed-acceptance" not in workflow
-    assert "--ignore=tests/test_managed" not in workflow
-
-
-def test_verification_uses_commit_provenance_and_external_protected_records() -> None:
-    index = VERIFICATION_INDEX.read_text(encoding="utf-8")
-    assert "1ff390ab67df215181810a84ac8b2ca8570eceee" in index
-    assert "uv run ruff check ." in index
-    assert "uv run mypy src" in index
-    assert "uv run pytest" in index
-    for task_id in EXPECTED_ACTIVE_TODO_IDS:
-        assert re.search(
-            rf"\| `{re.escape(task_id)}` [^|]*\| [^|]*미실행",
-            index,
-        )
-    assert "외부 Control DB inventory·보존·폐기" in index
-    assert "append-only/immutable" in index
-    assert "날짜별 PASS 요약 문서를 만들지 않습니다" in index
-    assert "Git history를" in index and "rewrite" in index
-
-
-def _markdown_heading_anchors(path: Path) -> set[str]:
-    content = path.read_text(encoding="utf-8")
-    anchors: set[str] = set()
-    occurrences: dict[str, int] = {}
-    for match in re.finditer(r"^#{1,6}\s+(.+?)\s*#*\s*$", content, re.MULTILINE):
-        heading = re.sub(r"[`*_~]", "", match.group(1))
-        base = re.sub(r"[^\w -]", "", heading.lower()).strip().replace(" ", "-")
-        occurrence = occurrences.get(base, 0)
-        occurrences[base] = occurrence + 1
-        anchors.add(base if occurrence == 0 else f"{base}-{occurrence}")
-    return anchors
-
-
-def test_local_markdown_links_resolve() -> None:
-    markdown_paths = [ROOT_DIRECTORY / "README.md", ROOT_DIRECTORY / "AGENTS.md"]
-    markdown_paths.extend(
-        path
-        for path in sorted((ROOT_DIRECTORY / "docs").rglob("*.md"))
-    )
-    missing: list[str] = []
-    for path in markdown_paths:
-        content = path.read_text(encoding="utf-8")
-        for match in re.finditer(r"!?\[[^\]]*\]\(([^)]+)\)", content):
-            raw_target = match.group(1).strip()
-            if raw_target.startswith("<") and ">" in raw_target:
-                target = raw_target[1 : raw_target.index(">")]
-            else:
-                target = raw_target.split(maxsplit=1)[0]
-            if target.startswith(("http://", "https://", "mailto:", "//")):
-                continue
-            path_target, _separator, fragment = target.partition("#")
-            relative_target = unquote(path_target.split("?", 1)[0])
-            resolved = path if not relative_target else path.parent / relative_target
-            if not resolved.exists():
-                missing.append(f"{path.relative_to(ROOT_DIRECTORY)} -> {target}")
-            elif fragment and resolved.suffix.lower() == ".md":
-                if unquote(fragment) not in _markdown_heading_anchors(resolved):
-                    missing.append(
-                        f"{path.relative_to(ROOT_DIRECTORY)} -> {target} (missing anchor)"
-                    )
-    assert not missing, "Missing local Markdown links:\n" + "\n".join(missing)

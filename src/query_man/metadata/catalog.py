@@ -302,10 +302,9 @@ async def _require_catalog_connection_policy(
 
 
 class PostgresCatalog:
-    def __init__(self, *, reject_domain_columns: bool = False) -> None:
+    def __init__(self) -> None:
         self._pools: dict[str, AsyncConnectionPool[Any]] = {}
         self._pool_lock = asyncio.Lock()
-        self._reject_domain_columns = reject_domain_columns
 
     async def load(self, source: SourceProfile) -> CatalogSnapshot:
         pool = await self._get_pool(source)
@@ -324,8 +323,7 @@ class PostgresCatalog:
                 rows = await cursor.fetchall()
                 if len(rows) > source.budget.max_metadata_columns:
                     raise _CatalogValidationError("Catalog column limit exceeded")
-                if self._reject_domain_columns:
-                    _require_supported_catalog_types(rows)
+                _require_supported_catalog_types(rows)
                 structure_cursor = await connection.execute(
                     STRUCTURE_QUERY,
                     (
@@ -387,7 +385,6 @@ class PostgresCatalog:
                     "row_factory": dict_row,
                 },
                 min_size=0,
-                # MetadataService coalesces refreshes per source, so one catalog connection is sufficient.
                 max_size=1,
                 timeout=2,
                 max_idle=10,

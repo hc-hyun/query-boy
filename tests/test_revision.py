@@ -6,12 +6,8 @@ import pytest
 import query_man.guarded_query.sql_validation as sql_validation_module
 import query_man.metadata.revision as revision_module
 from query_man.guarded_query.result_encoding import CANONICAL_TIME_POLICY_MATERIAL
-from query_man.metadata.models import (
-    CatalogForeignKey,
-    CatalogIndex,
-)
+from query_man.metadata.models import CatalogIndex
 from query_man.metadata.revision import (
-    _canonicalize,
     create_metadata_revision,
     create_view_structure_signature,
 )
@@ -30,114 +26,98 @@ def test_revision_is_stable_across_catalog_order_and_estimates() -> None:
         ),
     )
     second = minimal_development_snapshot()
-    reversed_relations = tuple(reversed(second.relations))
     second = replace(
         second,
-        relations=(
-            replace(reversed_relations[0], estimated_rows=99_999),
-            *reversed_relations[1:],
-        ),
+        relations=tuple(replace(relation, estimated_rows=99_999) for relation in reversed(second.relations)),
     )
-    assert create_metadata_revision(source, first) == create_metadata_revision(source, second)
 
-
-def test_revision_changes_with_comment() -> None:
-    source = load_test_registry().get("development-issues")
-    assert source is not None
-    first = minimal_development_snapshot()
-    second = minimal_development_snapshot()
-    second = replace(
+    assert create_metadata_revision(source, first) == create_metadata_revision(
+        source,
         second,
-        relations=(
-            replace(second.relations[0], comment="Changed semantics"),
-            *second.relations[1:],
-        ),
     )
-    assert create_metadata_revision(source, first) != create_metadata_revision(source, second)
 
 
-def test_revision_preserves_physical_key_and_index_column_order() -> None:
+def test_revision_changes_with_every_published_query_contract_input() -> None:
     source = load_test_registry().get("development-issues")
     assert source is not None
-    baseline = minimal_development_snapshot()
-    relation = replace(
-        baseline.relations[0],
-        primary_key=("comment_id", "issue_id"),
-        foreign_keys=(
-            CatalogForeignKey(
-                columns=("comment_id", "issue_id"),
-                referenced_relation="ai.issue_overview",
-                referenced_columns=("issue_id", "discovered_at"),
-            ),
-        ),
-        indexes=(
-            CatalogIndex(
-                columns=("comment_id", "issue_id"),
-                unique=False,
-                primary=False,
+    snapshot = minimal_development_snapshot()
+    relation = snapshot.relations[0]
+    column = relation.columns[0]
+    baseline = create_metadata_revision(source, snapshot)
+    source_variants = (
+        replace(source, description="Changed source description"),
+        replace(source, view_contract_version=source.view_contract_version + 1),
+        replace(
+            source,
+            budget=replace(
+                source.budget,
+                max_result_rows=source.budget.max_result_rows - 1,
             ),
         ),
     )
-    baseline = replace(
-        baseline,
-        relations=(relation, *baseline.relations[1:]),
-    )
-
-    reversed_primary = replace(
-        baseline,
-        relations=(
-            replace(relation, primary_key=tuple(reversed(relation.primary_key))),
-            *baseline.relations[1:],
+    snapshot_variants = (
+        replace(
+            snapshot,
+            relations=(replace(relation, comment="Changed"), *snapshot.relations[1:]),
         ),
-    )
-    key = relation.foreign_keys[0]
-    reversed_reference = replace(
-        baseline,
-        relations=(
-            replace(
-                relation,
-                foreign_keys=(
-                    CatalogForeignKey(
-                        columns=key.columns,
-                        referenced_relation=key.referenced_relation,
-                        referenced_columns=tuple(reversed(key.referenced_columns)),
-                    ),
+        replace(
+            snapshot,
+            relations=(
+                replace(relation, definition_hash="changed"),
+                *snapshot.relations[1:],
+            ),
+        ),
+        replace(
+            snapshot,
+            relations=(
+                replace(relation, security_barrier=True),
+                *snapshot.relations[1:],
+            ),
+        ),
+        replace(
+            snapshot,
+            relations=(
+                replace(
+                    relation,
+                    columns=(replace(column, data_type="numeric"), *relation.columns[1:]),
                 ),
+                *snapshot.relations[1:],
             ),
-            *baseline.relations[1:],
         ),
     )
-    index = relation.indexes[0]
-    reversed_index = replace(
-        baseline,
-        relations=(
-            replace(
-                relation,
-                indexes=(
-                    CatalogIndex(
-                        columns=tuple(reversed(index.columns)),
-                        unique=index.unique,
-                        primary=index.primary,
-                    ),
-                ),
-            ),
-            *baseline.relations[1:],
-        ),
-    )
-    revision = create_metadata_revision(source, baseline)
 
-    assert create_metadata_revision(source, reversed_primary) != revision
-    assert create_metadata_revision(source, reversed_reference) != revision
-    assert create_metadata_revision(source, reversed_index) != revision
+    assert all(create_metadata_revision(variant, snapshot) != baseline for variant in source_variants)
+    assert all(create_metadata_revision(source, variant) != baseline for variant in snapshot_variants)
 
 
-def test_revision_matches_canonical_time_policy_golden() -> None:
+def test_revision_ignores_transport_provenance_and_unpublished_structure() -> None:
     source = load_test_registry().get("development-issues")
     assert source is not None
-
-    assert create_metadata_revision(source, minimal_development_snapshot()) == (
-        "sha256:698c3ea4bbaa8c24438eb8d3c7238ec21321f5ce3f0df6ccd40e0fe8edbcd8d6"
+    snapshot = minimal_development_snapshot()
+    baseline = create_metadata_revision(source, snapshot)
+    source_variants = (
+        replace(source, connection=replace(source.connection, sslmode="require")),
+        replace(source, provenance=replace(source.provenance, owner="another-owner")),
+        replace(
+            source,
+            provenance=replace(source.provenance, environment="production"),
+        ),
     )
+    structure_only = replace(
+        snapshot,
+        relations=(
+            replace(
+                snapshot.relations[0],
+                indexes=(CatalogIndex(("comment_id",), False, False),),
+                view_contract_source="another-source",
+                view_contract_version=999,
+            ),
+            *snapshot.relations[1:],
+        ),
+    )
+
+    assert all(create_metadata_revision(variant, snapshot) == baseline for variant in source_variants)
+    assert create_metadata_revision(source, structure_only) == baseline
 
 
 def test_revision_changes_with_canonical_time_policy(
@@ -158,154 +138,29 @@ def test_revision_changes_with_canonical_time_policy(
     assert create_metadata_revision(source, snapshot) != baseline
 
 
-def test_sql_and_metadata_revisions_share_one_canonical_time_material() -> None:
-    assert revision_module.CANONICAL_TIME_POLICY_MATERIAL is (
-        CANONICAL_TIME_POLICY_MATERIAL
-    )
-    assert sql_validation_module.CANONICAL_TIME_POLICY_MATERIAL is (
-        CANONICAL_TIME_POLICY_MATERIAL
-    )
-
-
-def test_canonicalizer_treats_mutable_and_immutable_containers_identically() -> None:
-    mutable = {
-        "relations": [
-            {"name": "second", "columns": ["z", "a"]},
-            {"name": "first", "columns": ["b", "a"]},
-        ]
-    }
-    immutable = MappingProxyType(
-        {
-            "relations": (
-                MappingProxyType({"name": "second", "columns": ("z", "a")}),
-                MappingProxyType({"name": "first", "columns": ("b", "a")}),
-            )
-        }
-    )
-
-    assert _canonicalize(immutable) == _canonicalize(mutable)
-
-
-def test_revision_changes_with_execution_budget() -> None:
-    source = load_test_registry().get("development-issues")
-    assert source is not None
-    snapshot = minimal_development_snapshot()
-    stricter = replace(
-        source,
-        budget=replace(source.budget, max_result_rows=source.budget.max_result_rows - 1),
-    )
-
-    assert create_metadata_revision(source, snapshot) != create_metadata_revision(
-        stricter,
-        snapshot,
-    )
-
-
-def test_revision_changes_with_view_contract_version() -> None:
-    source = load_test_registry().get("development-issues")
-    assert source is not None
-    snapshot = minimal_development_snapshot()
-
-    assert create_metadata_revision(source, snapshot) != create_metadata_revision(
-        replace(source, view_contract_version=source.view_contract_version + 1),
-        snapshot,
-    )
-
-
-def test_revision_changes_with_view_security_options() -> None:
-    source = load_test_registry().get("development-issues")
-    assert source is not None
-    snapshot = minimal_development_snapshot()
-    secured = replace(
-        snapshot,
-        relations=(
-            replace(snapshot.relations[0], security_barrier=True),
-            *snapshot.relations[1:],
-        ),
-    )
-
-    assert create_metadata_revision(source, snapshot) != create_metadata_revision(
-        source,
-        secured,
-    )
+def test_sql_and_metadata_revisions_share_canonical_time_material() -> None:
+    assert revision_module.CANONICAL_TIME_POLICY_MATERIAL is (CANONICAL_TIME_POLICY_MATERIAL)
+    assert sql_validation_module.CANONICAL_TIME_POLICY_MATERIAL is (CANONICAL_TIME_POLICY_MATERIAL)
 
 
 def test_view_structure_signature_tracks_exact_query_surface() -> None:
     snapshot = minimal_development_snapshot()
     relation = snapshot.relations[0]
     first_column = relation.columns[0]
-    second_column = relation.columns[1]
     baseline = create_view_structure_signature(snapshot)
     variants = (
         replace(snapshot, relations=snapshot.relations[1:]),
         replace(
             snapshot,
             relations=(
-                replace(relation, name=f"{relation.name}_renamed"),
+                replace(relation, definition_hash="changed"),
                 *snapshot.relations[1:],
             ),
         ),
         replace(
             snapshot,
             relations=(
-                replace(relation, kind="materialized_view"),
-                *snapshot.relations[1:],
-            ),
-        ),
-        replace(
-            snapshot,
-            relations=(
-                replace(relation, definition_hash="changed-definition"),
-                *snapshot.relations[1:],
-            ),
-        ),
-        replace(
-            snapshot,
-            relations=(
-                replace(
-                    relation,
-                    columns=(
-                        replace(first_column, name=f"{first_column.name}_renamed"),
-                        *relation.columns[1:],
-                    ),
-                ),
-                *snapshot.relations[1:],
-            ),
-        ),
-        replace(
-            snapshot,
-            relations=(
-                replace(
-                    relation,
-                    columns=tuple(reversed(relation.columns)),
-                ),
-                *snapshot.relations[1:],
-            ),
-        ),
-        replace(
-            snapshot,
-            relations=(
-                replace(
-                    relation,
-                    columns=(
-                        replace(first_column, ordinal=second_column.ordinal),
-                        replace(second_column, ordinal=first_column.ordinal),
-                        *relation.columns[2:],
-                    ),
-                ),
-                *snapshot.relations[1:],
-            ),
-        ),
-        replace(
-            snapshot,
-            relations=(
-                replace(
-                    relation,
-                    columns=(
-                        replace(first_column, data_type="numeric"),
-                        *relation.columns[1:],
-                    ),
-                ),
+                replace(relation, columns=tuple(reversed(relation.columns))),
                 *snapshot.relations[1:],
             ),
         ),
@@ -329,22 +184,12 @@ def test_view_structure_signature_tracks_exact_query_surface() -> None:
                 *snapshot.relations[1:],
             ),
         ),
-        replace(
-            snapshot,
-            relations=(
-                replace(relation, security_barrier=True),
-                *snapshot.relations[1:],
-            ),
-        ),
     )
 
-    assert all(
-        create_view_structure_signature(variant) != baseline
-        for variant in variants
-    )
+    assert all(create_view_structure_signature(variant) != baseline for variant in variants)
 
 
-def test_view_structure_signature_ignores_descriptive_and_planner_metadata() -> None:
+def test_view_structure_signature_ignores_descriptive_planner_and_marker_data() -> None:
     snapshot = minimal_development_snapshot()
     relation = snapshot.relations[0]
     descriptive = replace(
@@ -352,85 +197,14 @@ def test_view_structure_signature_ignores_descriptive_and_planner_metadata() -> 
         relations=(
             replace(
                 relation,
-                comment="새로운 사람용 설명",
-                primary_key=(relation.columns[0].name,),
-                indexes=(
-                    CatalogIndex(
-                        (relation.columns[0].name,),
-                        unique=True,
-                        primary=True,
-                    ),
-                ),
-            ),
-            *snapshot.relations[1:],
-        ),
-    )
-
-    assert create_view_structure_signature(descriptive) == (
-        create_view_structure_signature(snapshot)
-    )
-
-
-def test_comment_contract_marker_is_not_context_revision_material() -> None:
-    source = load_test_registry().get("development-issues")
-    assert source is not None
-    snapshot = minimal_development_snapshot()
-    marker_only = replace(
-        snapshot,
-        relations=(
-            replace(
-                snapshot.relations[0],
+                comment="Changed description",
+                estimated_rows=99_999,
                 view_contract_source="another-source",
                 view_contract_version=999,
+                indexes=(CatalogIndex((relation.columns[0].name,), True, True),),
             ),
             *snapshot.relations[1:],
         ),
     )
 
-    assert create_metadata_revision(source, marker_only) == (
-        create_metadata_revision(source, snapshot)
-    )
-    assert create_view_structure_signature(marker_only) == (
-        create_view_structure_signature(snapshot)
-    )
-
-
-def test_revision_ignores_source_transport_mode() -> None:
-    source = load_test_registry().get("development-issues")
-    assert source is not None
-    snapshot = minimal_development_snapshot()
-    changed = replace(
-        source,
-        connection=replace(source.connection, sslmode="require"),
-    )
-
-    assert create_metadata_revision(changed, snapshot) == create_metadata_revision(
-        source,
-        snapshot,
-    )
-
-
-def test_revision_ignores_source_provenance() -> None:
-    source = load_test_registry().get("development-issues")
-    assert source is not None
-    snapshot = minimal_development_snapshot()
-    revision = create_metadata_revision(source, snapshot)
-    changed_owner = replace(
-        source,
-        provenance=replace(source.provenance, owner="another-owner"),
-    )
-    changed_migration = replace(
-        source,
-        provenance=replace(
-            source.provenance,
-            database_migration_ref="migrations/9999_replacement.sql",
-        ),
-    )
-    changed_environment = replace(
-        source,
-        provenance=replace(source.provenance, environment="production"),
-    )
-
-    assert create_metadata_revision(changed_owner, snapshot) == revision
-    assert create_metadata_revision(changed_migration, snapshot) == revision
-    assert create_metadata_revision(changed_environment, snapshot) == revision
+    assert create_view_structure_signature(descriptive) == (create_view_structure_signature(snapshot))

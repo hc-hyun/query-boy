@@ -1,7 +1,7 @@
 name: query-man
 
 services:
-  query-man: &query-man-service
+  query-man:
     build:
       context: .
     image: query-man:local
@@ -12,27 +12,19 @@ services:
       MARKET_VOC_READER_PASSWORD: ${MARKET_VOC_READER_PASSWORD:?set source reader password}
       POSTGRES_PORT: ${POSTGRES_PORT:-5432}
       QUERY_MAN_ACCESS_POLICY_FILE: /app/config/access-policies.compose.yaml
-      QUERY_MAN_CODEX_MCP_TOKEN: ${QUERY_MAN_CODEX_MCP_TOKEN:?set QUERY_MAN_CODEX_MCP_TOKEN in .env}
+      QUERY_MAN_QUERY_TOKEN: ${QUERY_MAN_QUERY_TOKEN:?set QUERY_MAN_QUERY_TOKEN in .env}
       QUERY_MAN_OPERATOR_TOKEN: ${QUERY_MAN_OPERATOR_TOKEN:?set QUERY_MAN_OPERATOR_TOKEN in .env}
       QUERY_MAN_HOST: 0.0.0.0
       QUERY_MAN_LOG_LEVEL: ${QUERY_MAN_LOG_LEVEL:-info}
-      QUERY_MAN_DIAGNOSTIC_CAPTURE_DATABASE: ${QUERY_MAN_DIAGNOSTIC_CAPTURE_DATABASE:-}
-      QUERY_MAN_DIAGNOSTIC_CAPTURE_KEY: ${QUERY_MAN_DIAGNOSTIC_CAPTURE_KEY:-}
-      QUERY_MAN_DIAGNOSTIC_CAPTURE_KEY_ID: ${QUERY_MAN_DIAGNOSTIC_CAPTURE_KEY_ID:-}
-      QUERY_MAN_DIAGNOSTIC_CAPTURE_DAILY_BYTES: ${QUERY_MAN_DIAGNOSTIC_CAPTURE_DAILY_BYTES:-104857600}
       QUERY_MAN_METADATA_CACHE_TTL_MS: ${QUERY_MAN_METADATA_CACHE_TTL_MS:-30000}
       QUERY_MAN_METADATA_MAX_STALE_MS: ${QUERY_MAN_METADATA_MAX_STALE_MS:-300000}
       QUERY_MAN_METADATA_RETRY_DELAY_MS: ${QUERY_MAN_METADATA_RETRY_DELAY_MS:-5000}
-      QUERY_MAN_MCP_ALLOWED_HOSTS: "127.0.0.1:*,localhost:*"
-      QUERY_MAN_MCP_ALLOWED_ORIGINS: "http://127.0.0.1:*,http://localhost:*"
       QUERY_MAN_PORT: "3000"
       QUERY_MAN_POSTGRES_HOST: ${QUERY_MAN_POSTGRES_HOST:?set source PostgreSQL host}
       QUERY_MAN_SHUTDOWN_GRACE_MS: ${QUERY_MAN_SHUTDOWN_GRACE_MS:-10000}
       TZ: ${TZ:-Asia/Seoul}
     ports:
       - "127.0.0.1:${QUERY_MAN_PORT:-3000}:3000"
-    volumes:
-      - diagnostic_captures:/var/lib/query-man/diagnostics
     healthcheck:
       test:
         - CMD
@@ -55,12 +47,3 @@ services:
       - no-new-privileges:true
     stop_signal: SIGTERM
     stop_grace_period: 30s
-
-  query-man-replica:
-    <<: *query-man-service
-    profiles: [soak]
-    ports:
-      - "127.0.0.1:${QUERY_MAN_REPLICA_PORT:-3001}:3000"
-
-volumes:
-  diagnostic_captures:

@@ -5,12 +5,11 @@ import logging
 import uuid
 
 from query_man.delivery.access import CallerContext, caller_audit_fields
-from query_man.delivery.diagnostics import DiagnosticCapture
 from query_man.errors import AppError, OperatorRequiredError, QueryNotFoundError, SourceNotFoundError
 from query_man.guarded_query.query import QueryService
 from query_man.metadata.service import MetadataService
 from query_man.runtime.operations import operations
-from query_man.source_catalog.registry import SourceReader
+from query_man.source_catalog.registry import SourceRegistry
 
 logger = logging.getLogger("query_man.audit")
 
@@ -18,15 +17,13 @@ logger = logging.getLogger("query_man.audit")
 class GatewayService:
     def __init__(
         self,
-        registry: SourceReader,
+        registry: SourceRegistry,
         metadata: MetadataService,
         queries: QueryService,
-        diagnostic_capture: DiagnosticCapture | None = None,
     ) -> None:
         self._registry = registry
         self._metadata = metadata
         self._queries = queries
-        self._diagnostic_capture = diagnostic_capture
 
     def list_sources(self, _caller: CallerContext) -> dict[str, object]:
         return {"sources": self._registry.list()}
@@ -35,12 +32,9 @@ class GatewayService:
         self,
         caller: CallerContext,
         source_id: str,
-        question: str,
-        max_objects: int,
     ) -> dict[str, object]:
         self._require_source(caller, source_id, "get_context")
-        self._capture_question(caller, source_id, question)
-        return await self._metadata.get_context(source_id, question, max_objects)
+        return await self._metadata.get_context(source_id)
 
     async def query(
         self,
@@ -53,7 +47,6 @@ class GatewayService:
         self._require_source(caller, source_id, "query")
         operations.increment("query_request_started", source_id)
         query_id = str(uuid.uuid4())
-        self._capture_sql(caller, source_id, sql, query_id)
         logger.info(
             "query_started",
             extra=_audit_extra(
@@ -69,7 +62,6 @@ class GatewayService:
                 metadata_revision,
                 sql_policy_revision,
                 query_id=query_id,
-                tenant_id=caller.tenant_id,
             )
         except asyncio.CancelledError:
             logger.info(
@@ -167,38 +159,6 @@ class GatewayService:
             extra=_audit_extra(caller, operation=operation),
         )
         raise SourceNotFoundError
-
-    def _capture_question(
-        self,
-        caller: CallerContext,
-        source_id: str,
-        question: str,
-    ) -> None:
-        if self._diagnostic_capture is None:
-            return
-        try:
-            self._diagnostic_capture.capture_question(caller, source_id, question)
-        except Exception:
-            operations.increment("diagnostic_capture_dropped")
-            operations.increment("diagnostic_capture_submit_failed")
-            logger.exception("diagnostic_capture_submit_failed")
-
-    def _capture_sql(
-        self,
-        caller: CallerContext,
-        source_id: str,
-        sql: str,
-        query_id: str,
-    ) -> None:
-        if self._diagnostic_capture is None:
-            return
-        try:
-            self._diagnostic_capture.capture_sql(caller, source_id, sql, query_id)
-        except Exception:
-            operations.increment("diagnostic_capture_dropped")
-            operations.increment("diagnostic_capture_submit_failed")
-            logger.exception("diagnostic_capture_submit_failed")
-
 
 def _audit_extra(caller: CallerContext, **fields: object) -> dict[str, object]:
     return {**caller_audit_fields(caller), **fields}

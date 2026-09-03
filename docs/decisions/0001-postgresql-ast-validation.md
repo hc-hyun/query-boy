@@ -56,7 +56,7 @@ view security 속성, 권한과 query plan은 PostgreSQL parse analysis 이후�
 - Published metadata revision과 relation allowlist 재검증
 - Function/operator OID와 volatility 검증
 - Transaction-local timeout과 source별 concurrency
-- Optional `EXPLAIN (FORMAT JSON)` admission
+- Bounded `EXPLAIN (FORMAT JSON)` admission
 - Row/byte 상한, cancel과 rollback
 
 ## Consequences

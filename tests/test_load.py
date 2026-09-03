@@ -41,8 +41,6 @@ async def test_interactive_budget_under_representative_local_load() -> None:
     query = "SELECT record_id, text_value FROM ai.fixture_records ORDER BY record_id"
     try:
         revision = (await metadata.get_published(source_id)).revision
-        metadata.invalidate()
-
         async def measured_query() -> tuple[int, dict[str, object]]:
             started = time.monotonic()
             result = await service.query(

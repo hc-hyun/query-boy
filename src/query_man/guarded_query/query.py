@@ -7,7 +7,7 @@ import math
 import time
 import uuid
 from dataclasses import asdict, dataclass
-from typing import Any, Literal, Protocol
+from typing import Any, Literal
 
 from psycopg import AsyncConnection, errors
 from psycopg.rows import dict_row
@@ -47,7 +47,7 @@ from query_man.source_catalog.reader_policy import (
     require_reader_connection_policy,
     require_reader_session_policy,
 )
-from query_man.source_catalog.registry import SourceReader
+from query_man.source_catalog.registry import SourceRegistry
 
 audit_logger = logging.getLogger("query_man.audit")
 _RESULT_CURSOR_NAME = "query_man_result"
@@ -77,8 +77,7 @@ _QUERY_SESSION_SETTINGS = (
     "pg_catalog.set_config('search_path', 'pg_catalog', true), "
     "pg_catalog.set_config('row_security', 'on', true), "
     "pg_catalog.set_config('query_man.tenant_id', %s, true), "
-    "pg_catalog.set_config('application_name', %s, true), "
-    + READER_SESSION_BUDGET_SETTERS
+    "pg_catalog.set_config('application_name', %s, true), " + READER_SESSION_BUDGET_SETTERS
 )
 
 _FUNCTION_POLICY_QUERY = """
@@ -138,29 +137,6 @@ class _ActiveQuery:
     cancel_reason: Literal["operator", "shutdown"] | None = None
 
 
-class QueryExecutor(Protocol):
-    async def execute(
-        self,
-        source: SourceProfile,
-        sql: str,
-        metadata_revision: str,
-        validated: ValidatedSql,
-        *,
-        query_id: str | None = None,
-        tenant_id: str | None = None,
-    ) -> dict[str, object]: ...
-
-    async def cancel(self, query_id: str) -> bool: ...
-
-    async def close(self) -> None: ...
-
-
-class DeliveryQueryExecutor(QueryExecutor, Protocol):
-    def stop_accepting(self) -> None: ...
-
-    async def drain(self, grace_ms: int) -> None: ...
-
-
 class _QueryCancelledTimeoutError(QueryTimeoutError):
     """Preserve the public timeout envelope while classifying a terminal cancel."""
 
@@ -172,9 +148,9 @@ class _QueryCancelledUnavailableError(QueryUnavailableError):
 class QueryService:
     def __init__(
         self,
-        registry: SourceReader,
+        registry: SourceRegistry,
         metadata: MetadataService,
-        executor: QueryExecutor,
+        executor: PostgresQueryExecutor,
     ) -> None:
         self._registry = registry
         self._metadata = metadata
@@ -188,23 +164,17 @@ class QueryService:
         sql_policy_revision: str,
         *,
         query_id: str | None = None,
-        tenant_id: str | None = None,
     ) -> dict[str, object]:
         source = self._registry.get(source_id)
         if source is None:
             raise SourceNotFoundError
-        if source.tenant_isolation == "rls":
-            raise QueryUnavailableError
         try:
             published = await self._metadata.get_published(source_id)
         except MetadataUnavailableError as error:
             if isinstance(error.__cause__, ReaderSessionPolicyError):
                 raise QueryUnavailableError from None
             raise
-        if (
-            metadata_revision != published.revision
-            or sql_policy_revision != SQL_POLICY_REVISION
-        ):
+        if metadata_revision != published.revision or sql_policy_revision != SQL_POLICY_REVISION:
             operations.increment("query_revision_rejected", source.source_id)
             raise MetadataRevisionMismatchError
         try:
@@ -225,7 +195,6 @@ class QueryService:
             published.revision,
             validated,
             query_id=query_id,
-            tenant_id=tenant_id,
         )
         result["sql_policy_revision"] = SQL_POLICY_REVISION
         return result
@@ -252,10 +221,7 @@ class PostgresQueryExecutor:
         validated: ValidatedSql,
         *,
         query_id: str | None = None,
-        tenant_id: str | None = None,
     ) -> dict[str, object]:
-        if source.tenant_isolation == "rls":
-            raise QueryUnavailableError
         task = asyncio.current_task()
         if task is None:
             raise QueryUnavailableError
@@ -272,13 +238,11 @@ class PostgresQueryExecutor:
                 validated,
                 task,
                 query_id=effective_query_id,
-                tenant_id=tenant_id,
             )
         except asyncio.CancelledError as error:
             if not self._accepting:
                 audit_logger.info(
-                    "query_execution_failed query_id=%s source_id=%s fingerprint=%s "
-                    "error_code=QUERY_UNAVAILABLE",
+                    "query_execution_failed query_id=%s source_id=%s fingerprint=%s error_code=QUERY_UNAVAILABLE",
                     effective_query_id,
                     source.source_id,
                     validated.fingerprint,
@@ -332,10 +296,7 @@ class PostgresQueryExecutor:
         task: asyncio.Task[Any],
         *,
         query_id: str,
-        tenant_id: str | None,
     ) -> dict[str, object]:
-        if source.tenant_isolation == "rls":
-            raise QueryUnavailableError
         # ponytail: process-local limit; use a distributed limiter when replicas share a source quota.
         semaphore = self._semaphores.setdefault(
             source.source_id,
@@ -359,9 +320,7 @@ class PostgresQueryExecutor:
             try:
                 pool = await self._get_pool(source)
                 async with asyncio.timeout(source.budget.query_transaction_timeout_ms / 1000):
-                    async with pool.connection(
-                        timeout=source.budget.query_queue_timeout_ms / 1000
-                    ) as connection:
+                    async with pool.connection(timeout=source.budget.query_queue_timeout_ms / 1000) as connection:
                         try:
                             require_reader_connection_policy(
                                 connection,
@@ -389,7 +348,6 @@ class PostgresQueryExecutor:
                                 validated,
                                 queue_ms,
                                 query_id,
-                                tenant_id,
                             )
                         finally:
                             async with self._active_lock:
@@ -515,17 +473,11 @@ class PostgresQueryExecutor:
         validated: ValidatedSql,
         queue_ms: int,
         query_id: str,
-        tenant_id: str | None,
     ) -> dict[str, object]:
         started_at = time.monotonic()
         try:
             await connection.execute("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
             await connection.execute(READER_SESSION_TIMEZONE_SETTER)
-            trusted_tenant = (
-                tenant_id
-                if source.tenant_isolation == "rls" and tenant_id is not None
-                else ""
-            )
             await connection.execute(
                 _QUERY_SESSION_SETTINGS,
                 (
@@ -533,12 +485,12 @@ class PostgresQueryExecutor:
                     f"{source.budget.query_transaction_timeout_ms}ms",
                     f"{source.budget.lock_timeout_ms}ms",
                     f"{source.budget.query_transaction_timeout_ms}ms",
-                    trusted_tenant,
+                    "",
                     f"query-man:{query_id}",
                     *reader_session_budget_values(source),
                 ),
             )
-            await require_reader_session_policy(connection, source, trusted_tenant)
+            await require_reader_session_policy(connection, source, "")
 
             await _validate_resolved_objects(connection, validated)
             try:
@@ -551,11 +503,7 @@ class PostgresQueryExecutor:
             try:
                 _admit_plan(source, plan)
             except QueryRejectedError as error:
-                reason_code = (
-                    error.details.get("reason_code")
-                    if isinstance(error.details, dict)
-                    else "QUERY_REJECTED"
-                )
+                reason_code = error.details.get("reason_code") if isinstance(error.details, dict) else "QUERY_REJECTED"
                 audit_logger.info(
                     "query_plan_rejected query_id=%s source_id=%s fingerprint=%s "
                     "reason_code=%s plan_total_cost=%s plan_max_rows=%s plan_node_count=%s "
@@ -598,23 +546,15 @@ class PostgresQueryExecutor:
                     result_columns = tuple(description or ())
                     columns = [column.name for column in result_columns]
                     if any(not isinstance(column, str) for column in columns):
-                        raise ResultEncodingError(
-                            "Unsupported PostgreSQL result type"
-                        )
+                        raise ResultEncodingError("Unsupported PostgreSQL result type")
                 except Exception:
-                    raise ResultEncodingError(
-                        "Unsupported PostgreSQL result type"
-                    ) from None
+                    raise ResultEncodingError("Unsupported PostgreSQL result type") from None
                 if len(columns) != len(set(columns)):
                     raise QueryRejectedError("QUERY_DUPLICATE_RESULT_COLUMN")
-                _require_supported_result_oids(
-                    column.type_code for column in result_columns
-                )
+                _require_supported_result_oids(column.type_code for column in result_columns)
                 while not truncated:
                     remaining_with_sentinel = source.budget.max_result_rows - len(rows) + 1
-                    batch = await cursor.fetchmany(
-                        min(_RESULT_FETCH_BATCH_ROWS, remaining_with_sentinel)
-                    )
+                    batch = await cursor.fetchmany(min(_RESULT_FETCH_BATCH_ROWS, remaining_with_sentinel))
                     if not batch:
                         break
                     # ponytail: a small fixed batch bounds pre-accounting memory while avoiding

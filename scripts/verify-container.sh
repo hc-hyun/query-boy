@@ -38,7 +38,27 @@ fi
 docker compose exec -T query-man sh -c \
   'test ! -e /app/.env && test ! -e /app/.git && test ! -e /app/tests'
 
-docker compose exec -T query-man qm \
-  --url http://127.0.0.1:3000 status metrics >/dev/null
+operator_token="$(
+  docker compose exec -T query-man printenv QUERY_MAN_OPERATOR_TOKEN | tr -d '\r\n'
+)"
+source_status="$(
+  printf 'Authorization: Bearer %s\n' "$operator_token" |
+    curl -sS --max-time 5 --max-filesize 1048576 \
+      -o /dev/null -w '%{http_code}' -H @- "${base_url}/sources"
+)"
+if [[ "$source_status" != "200" ]]; then
+  echo "authenticated /sources returned ${source_status}, expected 200" >&2
+  exit 1
+fi
+admin_status="$(
+  printf 'Authorization: Bearer %s\n' "$operator_token" |
+    curl -sS --max-time 5 --max-filesize 1048576 \
+      -o /dev/null -w '%{http_code}' -H @- "${base_url}/admin/metrics"
+)"
+unset operator_token
+if [[ "$admin_status" != "200" ]]; then
+  echo "authenticated /admin/metrics returned ${admin_status}, expected 200" >&2
+  exit 1
+fi
 
 echo "container readiness and hardening checks passed"

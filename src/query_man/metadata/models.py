@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal, Protocol
-
-from query_man.source_catalog.models import SourceProfile
+from typing import Literal
 
 CatalogRelationKind = Literal["table", "partitioned_table", "view", "materialized_view", "foreign_table"]
 Nullability = bool | Literal["unknown"]
@@ -78,9 +76,3 @@ class CatalogSnapshot:
 class PreparedMetadata:
     snapshot: CatalogSnapshot
     revision: str
-
-
-class CatalogProvider(Protocol):
-    async def load(self, source: SourceProfile) -> CatalogSnapshot: ...
-
-    async def close(self) -> None: ...

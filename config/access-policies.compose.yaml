@@ -1,22 +1,11 @@
 version: 2
 
 callers:
-  - caller_id: codex-local
+  - caller_id: query-client-local
     tenant_id: local-development
-    token_env: QUERY_MAN_CODEX_MCP_TOKEN
+    token_env: QUERY_MAN_QUERY_TOKEN
     operator: false
-    # Internal-only default capture policy. Replace this with an actual consent
-    # receipt before this caller is used outside the internal environment.
-    diagnostic_consent:
-      version: 1
-      receipt_id: internal-default-codex-local-v1
-      expires_at: 2099-12-31T23:59:59Z
   - caller_id: operator-local
     tenant_id: local-operations
     token_env: QUERY_MAN_OPERATOR_TOKEN
     operator: true
-    # Internal-only default capture policy. This operator can also issue query calls.
-    diagnostic_consent:
-      version: 1
-      receipt_id: internal-default-operator-local-v1
-      expires_at: 2099-12-31T23:59:59Z

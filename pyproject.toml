@@ -5,14 +5,11 @@ description = "A safe Text-to-SQL metadata gateway for PostgreSQL sources"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-  "cryptography>=50,<51",
   "fastapi>=0.116,<1",
-  "mcp>=2,<3",
   "pglast>=8.4,<9",
   "psycopg[binary,pool]>=3.2,<4",
   "pydantic>=2.11,<3",
   "python-dotenv>=1.1,<2",
-  "PyJWT[crypto]>=2.13,<3",
   "pyyaml>=6.0,<7",
   "uvicorn>=0.35,<1",
 ]
@@ -39,14 +36,12 @@ build-backend = "hatchling.build"
 packages = ["src/query_man"]
 
 [tool.pytest.ini_options]
-addopts = "-ra --tb=short -m 'not integration and not mcp_server'"
+addopts = "-ra --tb=short -m 'not integration'"
 asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
   "integration: requires the local PostgreSQL services",
   "load: runs the bounded local load verification",
-  "mcp_server: requires the Docker MCP server on the configured loopback URL",
-  "soak: requires both Docker MCP replicas and runs the scheduled resource test",
 ]
 
 [tool.ruff]

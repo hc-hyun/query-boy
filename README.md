@@ -1,404 +1,130 @@
 # Query Man
 
-Query Man은 AI나 애플리케이션이 PostgreSQL에 직접 접속하지 않고, **승인된 데이터만 안전하게
-읽도록 중간에서 검사하고 제한하는 서버**입니다.
+Query Man은 AI가 만든 SQL을 그대로 데이터베이스에 전달하지 않고, 승인된 PostgreSQL view만 제한된
+reader로 조회하게 하는 안전한 metadata gateway입니다. AI 모델이나 데이터베이스 관리 기능은
+포함하지 않습니다.
 
-Query Man 자체에 자연어를 SQL로 바꾸는 AI 모델이 들어 있는 것은 아닙니다. 대신 질문에 필요한
-데이터 설명을 제공하고, 클라이언트나 AI가 만든 SQL이 안전한지 확인한 뒤 읽기 전용으로 실행합니다.
+현재 문서의 시작점은 [독자별 문서 안내](docs/README.md#독자별-시작점)입니다.
 
-> 현재 상태: 첫 오픈용 코드와 저장소 검증은 완료됐습니다. 실제 운영 환경의 암호화 통신(TLS), 비밀값,
-> 백업, 배포와 트래픽 전환은 아직 남아 있습니다.
+## 핵심 흐름
 
-찾는 내용이 정해져 있다면 [독자별 문서 안내](docs/README.md#독자별-시작점)에서 바로
-출발하세요. 모든 문서를 순서대로 읽을 필요는 없습니다.
+HTTP client는 다음 세 endpoint를 순서대로 사용합니다.
 
-## 먼저 알아둘 용어
+1. `GET /sources`로 호출자가 사용할 수 있는 source를 확인합니다.
+2. `POST /meta`에 `source_id`를 보내 현재 relation·column과 두 revision을 받습니다.
+3. `POST /query`에 SQL과 같은 두 revision을 보내 한 source의 읽기 전용 SQL을 실행합니다.
 
-전부 외울 필요는 없습니다. 뒤에서 낯선 단어가 나오면 이 표에서 뜻만 확인하면 됩니다.
+`get_context`는 PostgreSQL에서 직접 admission한 전체 curated-view catalog를 hard limit 안에서
+결정적으로 반환합니다. Runtime은 자연어 질문의 관련도를 추측하거나 여러 데이터베이스를 federation하지
+않습니다.
 
-| 용어 | 뜻 |
-|---|---|
-| Source | Query Man에 조회 대상으로 등록된 PostgreSQL 데이터베이스 하나입니다. |
-| Source ID | DB 주소나 비밀번호 대신 클라이언트가 사용하는 공개 이름입니다. |
-| Metadata / context | 사용할 수 있는 view(검토된 조회 화면)·column(항목), 한 행의 의미, 데이터 연결 규칙과 업무 용어를 설명하는 정보입니다. |
-| Metadata revision | View 구조·설명, 업무 의미와 사용량 설정이 어느 버전인지 나타내는 변경 지문입니다. 일반 업무 데이터 행의 추가·수정을 뜻하지는 않습니다. |
-| SQL policy revision | 허용 SQL 문법과 함수·결과 타입 등 안전 규칙이 어느 버전인지 나타내는 변경 지문입니다. |
-| Reader | 승인된 view를 읽기만 할 수 있는 최소 권한 DB 계정입니다. |
-| MCP | AI 도구가 source 목록, context와 query 기능을 호출하는 통신 방식입니다. |
-| RLS | PostgreSQL이 사용자나 tenant별로 볼 수 있는 행을 제한하는 기능입니다. 현재 첫 오픈에서는 지원하지 않습니다. |
-| Replica | 실행 중인 Query Man 서버 인스턴스 하나입니다. 첫 오픈 계획과 검증 범위는 하나입니다. |
-| Git-reviewed source package | Source별 `source.yaml`과 `views.sql`을 함께 review하고, Runtime은 manifest만 해석하며 DBA가 SQL을 별도 적용하는 방식입니다. |
-| Fixture | 로컬·CI 테스트를 위해 만든 DB와 데이터입니다. 실제 운영 DB와 구분합니다. |
+Application 상태는 `/health`, `/ready`, operator 상태는 `/admin/health`, `/admin/metrics`, 활성 query
+수동 취소는 `DELETE /queries/{query_id}`로 제공합니다.
 
-이 밖의 `grain`, `revision`, `OID` 같은 말은
-[전체 용어 사전](docs/glossary.md)에서 쉽게 풀어 설명합니다.
+## 안전 경계
 
-## 어떻게 동작하나요?
+- Source는 `config/sources/<source-id>/source.yaml`과 `views.sql` 두 파일로 review합니다.
+- Process 시작 때 모든 package를 load하며 별도 source 등록 목록은 없습니다.
+- RLS source, 허용하지 않은 schema·relation kind와 reader 권한은 DB query 전에 거부합니다.
+- SQL은 PostgreSQL AST로 검사하고 relation·function·operator·cast를 allowlist로 제한합니다.
+- Query는 최소 권한 reader의 `REPEATABLE READ READ ONLY` transaction에서 실행합니다.
+- Timeout, concurrency, plan, row와 byte 상한을 PostgreSQL과 gateway가 함께 강제합니다.
+- Timeout, client disconnect와 shutdown은 query cancel·rollback·connection cleanup을 수행합니다.
+- Password, bearer token, SQL literal과 내부 database 오류는 응답이나 일반 log에 노출하지 않습니다.
+- Metadata와 SQL policy revision이 달라지면 fail-closed하고 새 context를 요구합니다.
+
+정확한 launch 제한은 [ADR 0025](docs/decisions/0025-static-non-rls-first-launch.md), source package 계약은
+[ADR 0034](docs/decisions/0034-source-view-package-and-direct-admission.md), startup inventory는
+[ADR 0035](docs/decisions/0035-reviewed-source-package-inventory.md)를 따릅니다.
+
+## 로컬 실행
+
+필요한 것은 Docker Compose와 각 example source의 reader password입니다.
+
+```bash
+cp .env.example .env
+```
+
+`.env`에서 다음 값을 실제 로컬 값으로 바꿉니다.
+
+```dotenv
+QUERY_MAN_POSTGRES_HOST=127.0.0.1
+DEVELOPMENT_ISSUES_READER_PASSWORD=...
+MARKET_VOC_READER_PASSWORD=...
+QUERY_MAN_QUERY_TOKEN=...
+QUERY_MAN_OPERATOR_TOKEN=...
+```
+
+Password와 token은 Git에 commit하지 않습니다. Source database가 따로 준비되어 있지 않다면 작은 CI용
+PostgreSQL fixture를 함께 띄울 수 있습니다.
+
+```bash
+cp .env.fixture.example .env
+docker compose --env-file .env up --build -d
+curl -fsS http://127.0.0.1:3000/ready
+```
+
+Compose의 access-policy 설정에서는 `QUERY_MAN_QUERY_TOKEN`을 bearer token으로 사용합니다.
+
+```bash
+curl -fsS http://127.0.0.1:3000/sources \
+  -H "Authorization: Bearer $QUERY_MAN_QUERY_TOKEN"
+
+curl -fsS http://127.0.0.1:3000/meta \
+  -H "Authorization: Bearer $QUERY_MAN_QUERY_TOKEN" \
+  -H 'Content-Type: application/json' \
+  --data '{"source_id":"development-issues"}'
+```
+
+`/meta`가 반환한 exact `metadata_revision`과 `sql_policy_revision`을 `/query` 요청에 그대로 전달합니다.
+
+사용을 마치면 다음과 같이 종료합니다.
+
+```bash
+docker compose --env-file .env down
+```
+
+Fixture는 개발·CI 재현용이며 production DB apply나 운영 증거가 아닙니다.
+
+## 인증
+
+- Loopback bind에서는 인증 설정이 없을 때 local anonymous query를 허용합니다.
+- 단일 consumer는 `QUERY_MAN_API_TOKEN`을 사용할 수 있습니다.
+- 여러 caller와 operator 권한은 `QUERY_MAN_ACCESS_POLICY_FILE`의 opaque token policy를 사용합니다.
+- Non-loopback bind는 API token 또는 access-policy가 없으면 시작을 거부합니다.
+
+모든 mode에서 token 원문은 log에 남기지 않으며 query caller가 operator endpoint를 호출할 수 없습니다.
+
+## 새 source 추가
+
+새 PostgreSQL source의 repository 변경은 다음 두 파일만 추가합니다.
 
 ```text
-사용자 질문
-  → Query Man이 관련 view, column과 업무 규칙을 설명
-  → 클라이언트 또는 AI가 읽기 전용 SQL 작성
-  → Query Man이 SQL과 권한을 검사하고 실행 시간·결과 크기 제한을 강제
-  → 승인된 PostgreSQL source에서 실행
-  → 제한된 결과만 반환
+config/sources/<source-id>/
+├── source.yaml
+└── views.sql
 ```
 
-한 번의 조회는 source 하나만 사용합니다. 두 데이터베이스를 하나의 SQL로 join하지 않습니다.
-클라이언트는 DB 주소, 비밀번호, database 이름이나 role을 선택할 수 없고 공개된 `source_id`만
-전달합니다.
+`source.yaml`에는 secret 값이 아니라 password environment key, view-only allowlist, budget과 provenance를
+둡니다. `views.sql`은 explicit output column, source/version marker, dedicated owner와 exact reader grant를
+가진 desired artifact입니다. Runtime은 이 SQL을 실행하지 않습니다.
 
-## 지금 제공하는 범위
+DB/data owner 검토와 DBA apply는 repository 변경과 별도이며 traffic 밖에서 승인받아 수행합니다. 자세한
+stop·rollback 조건은 [Source extension checklist](docs/source-extension-checklist.md)를 따릅니다.
 
-| 항목 | 현재 범위 | 쉽게 말하면 |
-|---|---|---|
-| 데이터 | Reviewed source packages | `config/sources/`에 함께 review된 업무 DB package만 조회합니다. |
-| 실행 구성 | 단일 Query Man replica | Query Man 서버 한 개를 첫 오픈 계획·검증 대상으로 봅니다. |
-| PostgreSQL | 18.x, server/client UTF-8 | 다른 major version이나 문자 인코딩은 시작·조회 전에 거부합니다. |
-| DB 접근 | `ai` schema의 검토된 view, 읽기 전용 계정 | 원본 table이나 쓰기 SQL에 접근하지 않습니다. |
-| RLS | 모든 RLS source 차단 | 행 단위 권한을 사용하는 DB는 이번 첫 오픈에서 제공하지 않습니다. |
-| 결과 column | 정수 3종, text, date, timezone timestamp, numeric | 그 밖의 결과 타입은 결과 행을 가져오기 전에 거부합니다. |
-| Source 설정 | Git-reviewed source package와 budget | `config/sources/<source-id>/{source.yaml,views.sql}`와 `config/budget-profiles.yaml`이 authority입니다. 변경에는 review·검증·필요한 DBA 적용·재배포가 필요합니다. |
-
-Boolean은 SQL의 조건식이나 중간 계산에는 사용할 수 있지만 최종 결과 column으로 반환할 수
-없습니다. 내부적으로 허용하는 정확한 PostgreSQL type 번호와 정책은 ADR 0025에 기록돼 있습니다.
-
-다음 기능은 **현재 첫 오픈 범위에는 포함되지 않습니다.**
-
-- 실행 중 신규 DB를 바로 추가하는 hot reload 운영
-- RLS source 제공
-- 두 번째 replica, 장애 시 자동 전환(failover)과 고가용성(HA)
-- 임의의 PostgreSQL 결과 타입
-- DB 사용량을 source별 비용·금액으로 귀속하는 기능과 여러 요청을 잇는 분산 추적
-
-정확한 launch safety 기준은 [ADR 0025](docs/decisions/0025-static-non-rls-first-launch.md)의
-`LAUNCH-01-A`, startup inventory 기준은
-[ADR 0035](docs/decisions/0035-reviewed-source-package-inventory.md)입니다. 현재 검증 방법과 과거 기록은
-[검증 안내](docs/verification/README.md), 운영까지 남은 일은 [개발 TODO](docs/development-todo.md)에서
-확인할 수 있습니다.
-Source package authority의 현재 결정은
-[ADR 0034](docs/decisions/0034-source-view-package-and-direct-admission.md)입니다.
-
-## 함께 제공하는 source package 예시
-
-아래 두 source는 reviewed production-package 예시이며 active inventory의 고정 목록은 아닙니다.
-Local/CI PostgreSQL은 이 업무 schema와 데이터를 복제하지 않고 별도의 작은 `fixture-source`를 사용합니다.
-
-| Source ID | 담고 있는 데이터 | 질문 예시 |
-|---|---|---|
-| `development-issues` | 개발 문제, 원인, 대책, 시험기와 댓글 | 전체 개발 문제는 몇 건인가? |
-| `market-voc` | 시장 VOC, 제품·기기, 처리 이력과 댓글 | VOC가 한 번도 없는 기기는 몇 대인가? |
-
-각 source는 문제·댓글·기기처럼 “한 행이 무엇을 뜻하는지”가 다른 view를 분리해 제공합니다. 예를
-들어 문제와 댓글을 무조건 합치면 댓글 수만큼 문제가 중복되어 잘못 집계될 수 있습니다. 실제 view와
-예제 데이터는 [MVP 데이터 안내](docs/mvp.md)에 그림과 함께 설명돼 있습니다.
-
-## 5분 로컬 실행
-
-기본 [`compose.yaml`](compose.yaml)은 Query Man application만 정의하며 PostgreSQL을 만들거나
-`POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`를 요구하지 않습니다. 배포 환경에서는 reviewed
-source package의 manifest가 가리키는 외부 PostgreSQL endpoint와 reader secret만 연결합니다.
-
-아래 5분 절차는 실제 source가 없는 로컬·CI를 위해 [`compose.fixture.yaml`](compose.fixture.yaml)을
-추가해 3행짜리 합성 PostgreSQL source 하나를 함께 실행합니다.
-
-### 준비물
-
-- Docker와 Docker Compose
-- `openssl`과 `curl`
-- Bash 호환 shell(Linux, macOS 또는 WSL)
-- 기본 port `5432`, `3000`을 사용할 수 있는 로컬 환경
-
-아래 명령은 모두 저장소 최상위 폴더에서 실행합니다.
-
-Python 코드를 직접 개발할 때만 Python 3.12 이상과 `uv`가 추가로 필요합니다. Container는 고정된
-Python 3.14 image를 사용합니다.
-
-### 1. 로컬 설정 만들기
+## 개발
 
 ```bash
-test -f .env || cp .env.fixture.example .env
-openssl rand -hex 32
-openssl rand -hex 32
-```
-
-두 난수 결과를 각각 `.env`의 `QUERY_MAN_CODEX_MCP_TOKEN`과 `QUERY_MAN_OPERATOR_TOKEN`에 넣습니다.
-두 token은 서로 달라야 합니다. Fixture Compose가 사용하는 PostgreSQL과 reader의
-`replace-with-...` 값도 로컬 전용 password로 바꿉니다. Production password naming과 source package는
-이 fixture 때문에 바뀌지 않습니다.
-
-기존 `.env`를 계속 사용한다면 `COMPOSE_FILE=compose.yaml:compose.fixture.yaml`과
-`QUERY_MAN_POSTGRES_HOST=postgres`가 있는지 확인합니다. 이 두 값이 없으면 base는 의도대로
-application만 선택하며 `postgres` service를 만들지 않습니다.
-
-- `.env`는 Git에서 제외됩니다. commit하지 마세요.
-- `.env.fixture.example`의 `COMPOSE_FILE`이 application base와 local fixture overlay를 함께 선택합니다.
-- `.env.example`은 외부 source에 연결하는 application-only 환경 변수 목록이며 운영 비밀값 관리
-  방법이 아닙니다.
-- Local fixture Compose는 loopback에만 port를 열며 TLS를 제공하지 않습니다.
-
-### 2. PostgreSQL과 Query Man 시작하기
-
-```bash
-docker compose up -d --wait postgres
-docker compose up -d --build --wait query-man
-docker compose ps
-```
-
-새 volume에서는 PostgreSQL init이 test-local `fixture-source`의 role·schema·3행 데이터를 한 번
-적용합니다. 기존 local volume에 같은 작은 fixture를 명시적으로 다시 적용할 때만
-`./scripts/apply-db.sh`를 사용합니다.
-어느 스크립트도 운영 DB migration 도구가 아닙니다.
-
-### 3. 정상 동작 확인하기
-
-```bash
-curl -fsS http://127.0.0.1:3000/ready
-./scripts/verify-container.sh
-```
-
-첫 명령의 결과가 정확히 다음과 같아야 합니다.
-
-```json
-{"status":"ready"}
-```
-
-`verify-container.sh`는 `.env`와 실제 Compose port를 사용해 readiness, 인증, non-root와 read-only
-container 경계를 확인합니다. 실제 MCP query와 protocol 검사는 MCP pytest가 한 곳에서 담당합니다.
-
-로그는 다음 명령으로 확인합니다.
-
-```bash
-docker compose logs -f query-man
-```
-
-상태·로그·동의 기반 상세 진단을 안내와 Tab 자동완성이 있는 대화형 화면에서 보려면 repository root에서
-다음을 실행합니다. 빈 줄이나 `help`를 입력하면 예시가 나오며, `diag`는 민감 정보를 표시하기 전에
-조회 사유와 확인 문구를 요구합니다.
-
-```bash
-uv run qm
-```
-
-Compose에는 query token과 별도의 `QUERY_MAN_OPERATOR_TOKEN`이 필요합니다. `.env.fixture.example`에서 새
-random token으로 바꾸고 application image를 다시 빌드해야 container의 access policy에도 반영됩니다.
-`qm source list/show/validate`는 현재 checkout의 source package 구조·manifest와 budget을 조회·검증하는
-local read-only 명령입니다. SQL을 실행하지 않으며 Source 변경은 pull request, 필요한 DBA 적용과
-배포로만 반영합니다.
-
-AuthBridge를 쓰는 배포는 opaque token 대신 [Resource Server JWT Access Token 검증 계약](docs/resource-server-jwt-auth.md)을
-선택할 수 있습니다. 이때 Query Man은 JWT access token을 로컬 검증하며 client secret이나 refresh token을
-보관하지 않습니다. 실제 audience/scope 발급과 protected route 전환은 별도 실행 승인 대상입니다.
-
-## HTTP로 한 번 조회해 보기
-
-아래 예시는 기본 port `3000` 기준이며 Query Man container가 실행 중이어야 합니다. `.env`에서
-`QUERY_MAN_PORT`를 바꿨다면 URL의 port도 같은 값으로 바꾸세요.
-
-`.env`는 Compose가 읽지만 현재 shell에는 자동으로 들어오지 않습니다. 아래 명령은 조회 전용 token
-하나만 현재 shell에 가져옵니다. 이 local fixture caller는 합성 source를 조회할 수 있지만 관리·취소 권한은
-없습니다.
-
-```bash
-export QUERY_MAN_CODEX_MCP_TOKEN="$(sed -n 's/^QUERY_MAN_CODEX_MCP_TOKEN=//p' .env)"
-```
-
-### 1. Source 목록 확인
-
-```bash
-curl -sS http://127.0.0.1:3000/sources \
-  -H "Authorization: Bearer $QUERY_MAN_CODEX_MCP_TOKEN"
-```
-
-현재 local fixture 응답의 source 목록에는 `fixture-source` 하나만 있어야 합니다.
-
-### 2. 질문에 필요한 데이터 설명 받기
-
-```bash
-curl -sS http://127.0.0.1:3000/meta \
-  -H "Authorization: Bearer $QUERY_MAN_CODEX_MCP_TOKEN" \
-  -H 'content-type: application/json' \
-  -d '{
-    "source_id": "fixture-source",
-    "question": "테스트 레코드는 몇 건인가?"
-  }'
-```
-
-응답의 `metadata_revision`과 `sql_policy_revision`을 복사합니다. 이 두 값은 “어떤 데이터 설명과 안전
-규칙을 보고 SQL을 만들었는지” 확인하는 영수증과 같습니다. 값을 임의로 바꾸면 안 됩니다.
-
-`answerability`가 `needs_clarification` 또는 `unsupported`라면 SQL을 억지로 만들지 말고 질문을
-명확히 하거나 지원 범위를 확인해야 합니다.
-
-### 3. 같은 revision으로 읽기 전용 SQL 실행
-
-```bash
-curl -sS http://127.0.0.1:3000/query \
-  -H "Authorization: Bearer $QUERY_MAN_CODEX_MCP_TOKEN" \
-  -H 'content-type: application/json' \
-  -d '{
-    "source_id": "fixture-source",
-    "sql": "SELECT count(*) AS record_count FROM ai.fixture_records",
-    "metadata_revision": "<meta 응답의 전체 값을 그대로 붙여넣기>",
-    "sql_policy_revision": "<meta 응답의 전체 값을 그대로 붙여넣기>"
-  }'
-```
-
-로컬 합성 데이터가 정상이라면 `rows`는 `[{"record_count":3}]`, `row_count`는 `1`입니다.
-
-MCP endpoint는 같은 인증과 실행 경계를 사용하며 `list_sources`, `get_context`, `query` 세 tool만
-제공합니다. AI workflow는 [Text-to-SQL Skill](skills/query-man-text-to-sql/SKILL.md)을 참고하세요.
-Codex/MCP client 설정과 protocol version은 빠르게 바뀔 수 있으므로
-[운영 문서의 현재 절차](docs/operations.md)를 따릅니다.
-
-## 사용을 마쳤다면 종료하기
-
-```bash
-docker compose down
-```
-
-이 명령은 container를 내리지만 PostgreSQL 데이터 volume은 보존합니다.
-
-> `docker compose down -v`는 volume과 로컬 DB 데이터를 삭제합니다. 데이터를 초기화하려는 것이
-> 확실할 때만 사용하세요.
-
-## Query Man이 지키는 안전장치
-
-- 클라이언트가 DB host, DSN, database, role이나 비밀번호를 지정할 수 없습니다.
-- Local fixture Compose에서는 bearer token으로 인증된 조회 caller만 source, metadata와 query API를 사용할 수
-  있습니다.
-- AuthBridge mode에서는 서명, 고정 algorithm, issuer, audience, 만료와 endpoint scope/role/group을
-  검증하고 ID/refresh token을 거부합니다.
-- Reader는 각 source의 `ai` view만 읽을 수 있고 원본 schema에는 접근하지 못합니다.
-- SQL의 문법 구조(AST)를 검사해 한 개의 허용된 읽기 전용 `SELECT`만 실행합니다.
-- PostgreSQL도 read-only transaction, timeout과 최소 권한으로 다시 제한합니다.
-- Source별 동시 실행 수, 반환 row 수와 UTF-8 byte 수를 제한합니다.
-- Metadata나 SQL 정책이 바뀌면 예전 revision을 실행 전에 거부합니다.
-- Client 연결이 끊기면 실행 중인 PostgreSQL query를 취소하고 rollback합니다.
-- 인증 token, DB 접속 정보, SQL 안의 실제 값과 내부 DB 오류를 외부 오류에 노출하지 않습니다.
-- 현재는 RLS source를 예외 없이 거부합니다.
-
-기본 budget과 변경 절차는 [query 비용·제한 안내](docs/query-cost-control.md)에 있습니다.
-
-## 모듈을 쉽게 이해하기
-
-Query Man은 한 프로그램으로 배포하지만 내부 책임을 여섯 module로 나눈 구조, 즉 modular
-monolith입니다.
-여섯 책임은 `src/query_man` 아래 `source_catalog`, `metadata`, `guarded_query`,
-`delivery`, `runtime`, `assurance` package로 나뉩니다.
-이 구분은 별도 repository나 service가 아닙니다. 모두 같은 wheel과 하나의 Query Man process로
-배포되며, package `__init__.py`는 re-export 없는 marker라 필요한 leaf module을 직접 import합니다.
-
-| Module | 비유 | 맡은 일 |
-|---|---|---|
-| Source Catalog | 주소록 | 어떤 source를 어떤 reader·budget·업무 설명으로 사용할지 관리합니다. |
-| Metadata | 지도 제작자 | PostgreSQL 구조를 읽어 revision이 붙은 데이터 지도와 질문별 context를 만듭니다. |
-| Guarded Query | 보안 검색대 | SQL을 검사하고 제한된 read-only transaction으로 실행·취소·rollback합니다. |
-| Delivery | 현관 | Caller를 인증하고 같은 기능을 HTTP와 MCP로 제공합니다. |
-| Runtime | 조립·운영 담당 | 다른 module을 연결하고 설정, 시작·종료, health와 container 실행을 관리합니다. |
-| Assurance | 검사소 | 보안 corpus, 통합·container·load·soak 테스트로 전체 흐름을 검증합니다. |
-
-Module 하나를 수정할 때는 repository 전체를 먼저 읽지 말고
-[module index](docs/modules/README.md)에서 담당 module, 읽을 코드·테스트와 사용 가능한 interface를
-확인합니다. 내부 Python interface는 provider와 consumer를 함께 수정할 수 있고, external API·저장
-형식·정책·lifecycle·ownership 의미를 바꿀 때 변경 내용과 영향을 사용자에게 먼저 설명하고 승인받습니다.
-
-Module interface는 allowed dependency 안에서 provider가 보장하는 중요한 entrypoint와 호출 동작입니다.
-모든 public Python symbol을 목록화하거나 구현을 임의 교체할 수 있게 만들 필요는 없습니다.
-
-## 개발과 테스트
-
-Host에서 개발하려면 PostgreSQL fixture만 실행하고 Python 환경을 준비합니다.
-
-```bash
-test -f .env || cp .env.fixture.example .env
-docker compose stop query-man
-docker compose up -d --wait postgres
-uv sync --locked
-```
-
-일상적인 repository gate는 다음 네 명령입니다.
-
-```bash
+uv sync --frozen --all-groups
 uv run ruff check .
-uv run ruff check src/query_man/runtime --select C901 --config "lint.mccabe.max-complexity=19"
 uv run mypy src
 uv run pytest
 ```
 
-전체 integration 경계는 작은 test-local source를 준비한 뒤 같은 repository gate의 integration
-marker로 확인합니다. Production source를 추가할 때 이 fixture를 수정하지 않습니다.
+작업 전 [활성 개발 지침](docs/development-guidelines.md)과
+[Module index](docs/modules/README.md)에서 primary module의 관련 범위만 읽습니다. SQL parser,
+allowlist, reader, cancel·rollback과 secret redaction 테스트는 단순화를 이유로 줄이지 않습니다.
 
-```bash
-uv run pytest -m integration
-```
-
-실행 중인 Compose container와 MCP 경계는 다음 명령으로 확인합니다.
-
-```bash
-./scripts/verify-container.sh
-uv run pytest -m 'mcp_server and not soak' -s
-```
-
-Bounded load, 두-replica soak과 보안 update 절차는 일반 개발 흐름과 분리돼 있습니다.
-필요할 때 [운영 문서](docs/operations.md)와 [CI workflow](.github/workflows/ci.yml)를 따라 실행하세요.
-
-## 운영까지 남은 일
-
-저장소 구현, local container 검증과 CI(자동 검증)는 완료됐습니다. 하지만 이것은 특정 운영 환경에
-실제로 배포했다는 뜻이 아닙니다.
-
-남은 작업은 대상 환경별 세 단계입니다. DB/authentication capability 구현과 실제 환경 연결을 같은
-일로 보지 않습니다.
-
-1. `DBENV-01`: 실제 DB endpoint, TLS/secret, curated view와 reader inventory를 연결·검증합니다.
-2. `AUTHENV-01`: 인증 authority 하나를 선택하고 AuthBridge라면 audience/scope/CA와 실제 token을
-   연결·검증합니다.
-3. `LAUNCH-02`: 두 선행 작업이 완료된 exact artifact를 배포하고 `/ready`, view marker/권한,
-   revision·HTTP/MCP safety probe를 재확인한 뒤 traffic을 연결하고 오류·DB 연결을 관찰합니다.
-
-작업 경계, 실행 순서와 중단 조건은 [Active TODO](docs/development-todo.md)와
-[운영 runbook](docs/operations.md)의 “Static Non-RLS First Launch”를 따릅니다. 로컬 fixture 성공을
-실제 운영 증거로 대신하지 않습니다.
-
-## 새 데이터베이스를 추가하려면
-
-새 source의 repository inventory 등록은
-`config/sources/<source-id>/{source.yaml,views.sql}` 두 파일을 함께 review하는 것으로 끝납니다. 별도 source
-목록, source별 test case나 문서 등록은 만들지 않습니다. 아래
-[source onboarding과 extension checklist](docs/source-extension-checklist.md)에서 추가하려는 DB가 현재 static
-경로에 맞는지와 end-to-end 영향을 확인합니다. 새 DB에는 PostgreSQL 18/UTF-8, RLS를 사용하지 않는 검토된
-view와 읽기 전용 계정이 필요합니다. 업무 의미·사용량 제한·결과 타입을 검토하고 Metadata 직접 admission과
-repository gate를 통과한 뒤 다시 배포합니다.
-
-현재 module interface 안에서 처리할 수 있다면 source별 Python 분기를 추가하지 않습니다. 검사 코드는
-package 형식과 공통 동작을 검증하며 active source 이름·개수를 별도 authority로 복제하지 않습니다.
-DB owner가 output/no-PII를 확인하고 DBA가 별도 승인 아래 적용한 뒤 재배포합니다.
-
-PostgreSQL table·column comment는 grain, 단위, 상태값과 주의사항을 설명하는
-human-readable metadata로 활용합니다. Type과 numeric precision/scale은 catalog에서 수집하고,
-Query Man은 개인정보(PII)를 탐지·분류·마스킹하지 않습니다. DB owner가 개인정보를 제거했다고
-확인한 reviewed curated view와 최소 권한 reader만 source로 등록합니다.
-
-## 문서 읽는 순서
-
-전체 문서를 한 번에 읽지 마세요. [문서 안내](docs/README.md)가 목적에 맞는 다음 문서를 골라줍니다.
-
-| 알고 싶은 내용 | 문서 |
-|---|---|
-| 낯선 용어와 문서 찾기 | [문서 안내](docs/README.md), [용어 사전](docs/glossary.md) |
-| 현재 제공 데이터와 예제 | [MVP 데이터 안내](docs/mvp.md) |
-| 전체 구조와 module 작업 범위 | [Architecture](docs/architecture.md), [Module index](docs/modules/README.md) |
-| 첫 오픈 결정과 정확한 제한 | [ADR 0025](docs/decisions/0025-static-non-rls-first-launch.md) |
-| Source package와 직접 admission | [ADR 0034](docs/decisions/0034-source-view-package-and-direct-admission.md) |
-| Budget YAML과 retired managed 경계 | [ADR 0030](docs/decisions/0030-git-reviewed-yaml-source-authority.md) |
-| 개인정보 공개 경계 | [ADR 0031](docs/decisions/0031-no-pii-curated-view-boundary.md) |
-| Reader `TEMP` admission 경계 | [ADR 0032](docs/decisions/0032-reader-temp-admission-relaxation.md) |
-| AuthBridge API 인증 연동 | [Resource Server JWT Access Token 검증 계약](docs/resource-server-jwt-auth.md) |
-| 운영 배포·rollback·관측 절차 | [Operations](docs/operations.md) |
-| 지금 남은 일과 보류 주제 | [Active TODO](docs/development-todo.md) |
-| 현재 검증과 과거 기록 | [Verification and Git history](docs/verification/README.md) |
-| 핵심 방향과 세부 계약 | [Decision guide](docs/decisions/README.md) |
-
-삭제한 과거 ADR·verification·완료 원장은 Git archive commit에서 확인할 수 있습니다. 현재 상태는 이
-README, 현행 decision, active TODO와 지금 실행한 runnable test/CI 결과로 판단하세요.
+현재 protected-environment 작업은 [Active TODO](docs/development-todo.md), 운영 절차는
+[Operations](docs/operations.md), 현재 gate와 삭제한 기록을 찾는 법은
+[Verification and Git history](docs/verification/README.md)에 있습니다.

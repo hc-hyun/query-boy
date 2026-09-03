@@ -3,59 +3,28 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePosixPath
-from typing import Annotated, Protocol
+from typing import Annotated, Literal
 
 import yaml
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    ValidationError,
-    field_validator,
-    model_validator,
-)
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from query_man.source_catalog.models import (
     BudgetProfile,
-    BusinessPredicate,
-    BusinessTermDefinition,
-    CompositionHint,
-    GrainDefinition,
-    JoinDefinition,
-    MeasureDefinition,
-    QuestionRule,
-    RelationSemantic,
     ResolvedConnection,
-    SemanticOverlay,
     SourceEnvironment,
     SourceProfile,
     SourceProvenance,
     SSLMode,
-    TenantIsolation,
 )
 
 POSTGRES_IDENTIFIER_MAX_LENGTH = 63
-QUALIFIED_RELATION_MAX_LENGTH = POSTGRES_IDENTIFIER_MAX_LENGTH * 2 + 1
 IDENTIFIER_PATTERN = r"^[A-Za-z_][A-Za-z0-9_$]{0,62}$"
-RELATION_NAME_PATTERN = (
-    r"^[A-Za-z_][A-Za-z0-9_$]{0,62}\.[A-Za-z_][A-Za-z0-9_$]{0,62}$"
-)
 STABLE_SLUG_MAX_LENGTH = 80
 STABLE_SLUG_PATTERN = r"^[a-z0-9]+(?:-[a-z0-9]+)*$"
 
 Identifier = Annotated[
     str,
-    Field(
-        pattern=IDENTIFIER_PATTERN,
-        max_length=POSTGRES_IDENTIFIER_MAX_LENGTH,
-    ),
-]
-RelationName = Annotated[
-    str,
-    Field(
-        pattern=RELATION_NAME_PATTERN,
-        max_length=QUALIFIED_RELATION_MAX_LENGTH,
-    ),
+    Field(pattern=IDENTIFIER_PATTERN, max_length=POSTGRES_IDENTIFIER_MAX_LENGTH),
 ]
 EnvironmentVariableName = Annotated[
     str,
@@ -67,10 +36,9 @@ StableSlug = Annotated[
     str,
     Field(pattern=STABLE_SLUG_PATTERN, max_length=STABLE_SLUG_MAX_LENGTH),
 ]
-DatabaseMigrationRef = Annotated[
-    str,
-    Field(min_length=1, max_length=255),
-]
+DatabaseMigrationRef = Annotated[str, Field(min_length=1, max_length=255)]
+
+
 def _is_forbidden_schema(schema: str) -> bool:
     normalized = schema.casefold()
     return normalized == "information_schema" or normalized.startswith("pg_")
@@ -111,14 +79,12 @@ class _Budget(_StrictModel):
     @model_validator(mode="after")
     def require_pool_capacity_for_admitted_queries(self) -> _Budget:
         if self.max_concurrent_queries > self.max_pool_size:
-            raise ValueError(
-                "max_concurrent_queries must be less than or equal to max_pool_size"
-            )
+            raise ValueError("max_concurrent_queries must be less than or equal to max_pool_size")
         return self
 
 
 class _BudgetFile(_StrictModel):
-    version: int
+    version: int = Field(strict=True)
     profiles: dict[Identifier, _Budget]
 
     @model_validator(mode="after")
@@ -147,145 +113,9 @@ class _Provenance(_StrictModel):
     @field_validator("database_migration_ref", mode="before")
     @classmethod
     def reject_ascii_control_characters(cls, value: object) -> object:
-        if isinstance(value, str) and any(
-            ord(character) < 32 or ord(character) == 127 for character in value
-        ):
+        if isinstance(value, str) and any(ord(character) < 32 or ord(character) == 127 for character in value):
             raise ValueError("database_migration_ref cannot contain ASCII control characters")
         return value
-
-
-class _Grain(_StrictModel):
-    name: Identifier
-    description: Description
-    key_columns: list[Identifier] = Field(min_length=1, max_length=10)
-
-
-class _Measure(_StrictModel):
-    name: Identifier
-    description: Description
-    aliases: list[ShortText] = Field(default_factory=list, max_length=30)
-    aggregation: str
-    column: Identifier | None = None
-    numerator_measure: Identifier | None = None
-    denominator_measure: Identifier | None = None
-
-    @model_validator(mode="after")
-    def valid_shape(self) -> _Measure:
-        if self.aggregation not in {"count_rows", "sum", "ratio"}:
-            raise ValueError("invalid aggregation")
-        if self.aggregation == "sum" and self.column is None:
-            raise ValueError("sum requires column")
-        if self.aggregation == "ratio" and (self.numerator_measure is None or self.denominator_measure is None):
-            raise ValueError("ratio requires numerator_measure and denominator_measure")
-        if self.aggregation != "sum" and self.column is not None:
-            raise ValueError("column is only valid for sum")
-        if self.aggregation != "ratio" and (self.numerator_measure is not None or self.denominator_measure is not None):
-            raise ValueError("measure references are only valid for ratio")
-        return self
-
-
-class _RelationSemantic(_StrictModel):
-    relation: RelationName
-    role: str
-    description: Description | None = None
-    aliases: list[ShortText] = Field(default_factory=list, max_length=50)
-    grain: _Grain | None = None
-    default_time_column: Identifier | None = None
-    use_for: list[ShortText] = Field(default_factory=list, max_length=50)
-    column_aliases: dict[Identifier, list[ShortText]] = Field(default_factory=dict)
-    value_hints: dict[Identifier, list[ShortText]] = Field(default_factory=dict)
-    measures: list[_Measure] = Field(default_factory=list, max_length=100)
-
-    @model_validator(mode="after")
-    def valid_role(self) -> _RelationSemantic:
-        if self.role not in {"event", "comment", "population", "dimension", "other"}:
-            raise ValueError("invalid relation role")
-        return self
-
-
-class _Predicate(_StrictModel):
-    relation: RelationName
-    column: Identifier
-    operator: str
-    values: list[ShortText] = Field(default_factory=list, max_length=100)
-
-    @model_validator(mode="after")
-    def valid_shape(self) -> _Predicate:
-        valued = {"equal", "not_equal", "in", "not_in"}
-        unary = {"is_null", "is_not_null"}
-        if self.operator in valued and not self.values:
-            raise ValueError("predicate values are required")
-        if self.operator in unary and self.values:
-            raise ValueError("unary predicate cannot contain values")
-        if self.operator not in valued | unary:
-            raise ValueError("invalid predicate operator")
-        return self
-
-
-class _BusinessTerm(_StrictModel):
-    name: Identifier
-    description: Description
-    aliases: list[ShortText] = Field(min_length=1, max_length=50)
-    predicates: list[_Predicate] = Field(default_factory=list, max_length=20)
-    calculation: Description | None = None
-
-
-class _QuestionRule(_StrictModel):
-    code: Annotated[str, Field(pattern=r"^[A-Z][A-Z0-9_]*$", max_length=100)]
-    status: str
-    phrases: list[ShortText] = Field(min_length=1, max_length=50)
-    message: Description
-    missing_concepts: list[ShortText] = Field(default_factory=list, max_length=30)
-    options: list[Description] = Field(default_factory=list, max_length=20)
-
-    @model_validator(mode="after")
-    def valid_status(self) -> _QuestionRule:
-        if self.status not in {"needs_clarification", "unsupported"}:
-            raise ValueError("invalid question rule status")
-        return self
-
-
-class _CompositionHint(_StrictModel):
-    name: Identifier
-    phrases: list[ShortText] = Field(min_length=1, max_length=50)
-    strategy: str
-    guidance: Description
-    combine_keys: list[Identifier] = Field(min_length=1, max_length=20)
-
-    @model_validator(mode="after")
-    def valid_strategy(self) -> _CompositionHint:
-        if self.strategy != "aggregate_each_then_combine":
-            raise ValueError("invalid composition strategy")
-        return self
-
-
-class _JoinPair(_StrictModel):
-    left: Identifier
-    right: Identifier
-
-
-class _Join(_StrictModel):
-    left_relation: RelationName
-    right_relation: RelationName
-    column_pairs: list[_JoinPair] = Field(min_length=1, max_length=10)
-    cardinality: str
-    fanout: bool
-    guidance: Description
-
-    @model_validator(mode="after")
-    def valid_cardinality(self) -> _Join:
-        if self.cardinality not in {"one_to_one", "one_to_many", "many_to_one", "many_to_many"}:
-            raise ValueError("invalid cardinality")
-        return self
-
-
-class _SemanticOverlay(_StrictModel):
-    default_relation: RelationName | None = None
-    relations: list[_RelationSemantic] = Field(default_factory=list, max_length=200)
-    joins: list[_Join] = Field(default_factory=list, max_length=500)
-    business_terms: list[_BusinessTerm] = Field(default_factory=list, max_length=200)
-    question_rules: list[_QuestionRule] = Field(default_factory=list, max_length=200)
-    composition_hints: list[_CompositionHint] = Field(default_factory=list, max_length=200)
 
 
 class _SourceFile(_StrictModel):
@@ -296,29 +126,17 @@ class _SourceFile(_StrictModel):
     provenance: _Provenance
     connection: _Connection
     allowed_schemas: list[Identifier] = Field(min_length=1, max_length=20)
-    allowed_relation_kinds: list[str] = Field(min_length=1, max_length=1)
+    allowed_relation_kinds: list[Literal["view"]] = Field(min_length=1, max_length=1)
     view_contract_version: int = Field(strict=True, ge=1)
     budget_profile: Identifier
-    tenant_isolation: TenantIsolation = "none"
-    semantic_overlay: _SemanticOverlay = Field(default_factory=_SemanticOverlay)
 
     @model_validator(mode="after")
-    def valid_values(self) -> _SourceFile:
-        if self.version != 4:
-            raise ValueError("version must be 4")
+    def require_current_contract(self) -> _SourceFile:
+        if self.version != 5:
+            raise ValueError("version must be 5")
         if self.allowed_relation_kinds != ["view"]:
             raise ValueError("allowed_relation_kinds must be exactly [view]")
-        if self.tenant_isolation == "rls":
-            raise ValueError("RLS sources are not supported")
         return self
-
-
-class SourceReader(Protocol):
-    def list(self) -> list[dict[str, str]]: ...
-
-    def get(self, source_id: str) -> SourceProfile | None: ...
-
-    def source_ids(self) -> frozenset[str]: ...
 
 
 class SourceRegistry:
@@ -340,53 +158,20 @@ class SourceRegistry:
             raise RegistryConfigurationError(f"Cannot read {source_directory}: {error}") from error
         if not source_paths:
             raise RegistryConfigurationError(f"No source directories found in {source_directory.resolve()}")
+
         sources: list[SourceProfile] = []
         seen: set[str] = set()
         for source_path in source_paths:
             if source_path.is_symlink() or not source_path.is_dir():
-                raise RegistryConfigurationError(
-                    f"Unexpected source entry: {source_path.resolve()}"
-                )
-            try:
-                source_files = sorted(source_path.iterdir())
-            except OSError as error:
-                raise RegistryConfigurationError(
-                    f"Cannot read {source_path}: {error}"
-                ) from error
-            if (
-                {path.name for path in source_files} != {"source.yaml", "views.sql"}
-                or any(path.is_symlink() or not path.is_file() for path in source_files)
-            ):
-                raise RegistryConfigurationError(
-                    f"{source_path} must contain exactly source.yaml and views.sql"
-                )
+                raise RegistryConfigurationError(f"Unexpected source entry: {source_path.resolve()}")
+            _require_source_package(source_path)
             manifest_path = source_path / "source.yaml"
             parsed = _parse_model(manifest_path, _SourceFile)
             if source_path.name != parsed.source_id:
                 raise RegistryConfigurationError(
                     f"{manifest_path} source_id must match directory name {source_path.name}"
                 )
-            try:
-                config_index = max(
-                    index
-                    for index, part in enumerate(source_path.parts)
-                    if part == "config"
-                )
-            except ValueError as error:
-                raise RegistryConfigurationError(
-                    f"{manifest_path} source package must be below config"
-                ) from error
-            expected_migration_ref = PurePosixPath(
-                *source_path.parts[config_index:],
-                "views.sql",
-            )
-            migration_ref = PurePosixPath(
-                parsed.provenance.database_migration_ref
-            )
-            if migration_ref != expected_migration_ref:
-                raise RegistryConfigurationError(
-                    f"{manifest_path} database_migration_ref must reference sibling views.sql"
-                )
+            _require_sibling_view_reference(source_path, parsed, manifest_path)
             if parsed.source_id in seen:
                 raise RegistryConfigurationError(f"Duplicate source_id: {parsed.source_id}")
             seen.add(parsed.source_id)
@@ -396,7 +181,11 @@ class SourceRegistry:
     def list(self) -> list[dict[str, str]]:
         return sorted(
             (
-                {"source_id": source.source_id, "name": source.name, "description": source.description}
+                {
+                    "source_id": source.source_id,
+                    "name": source.name,
+                    "description": source.description,
+                }
                 for source in self._sources.values()
             ),
             key=lambda item: item["source_id"],
@@ -412,11 +201,35 @@ class SourceRegistry:
         return len(self._sources)
 
 
+def _require_source_package(source_path: Path) -> None:
+    try:
+        source_files = sorted(source_path.iterdir())
+    except OSError as error:
+        raise RegistryConfigurationError(f"Cannot read {source_path}: {error}") from error
+    if {path.name for path in source_files} != {"source.yaml", "views.sql"} or any(
+        path.is_symlink() or not path.is_file() for path in source_files
+    ):
+        raise RegistryConfigurationError(f"{source_path} must contain exactly source.yaml and views.sql")
+
+
+def _require_sibling_view_reference(
+    source_path: Path,
+    parsed: _SourceFile,
+    manifest_path: Path,
+) -> None:
+    try:
+        config_index = max(index for index, part in enumerate(source_path.parts) if part == "config")
+    except ValueError as error:
+        raise RegistryConfigurationError(f"{manifest_path} source package must be below config") from error
+    expected = PurePosixPath(*source_path.parts[config_index:], "views.sql")
+    if PurePosixPath(parsed.provenance.database_migration_ref) != expected:
+        raise RegistryConfigurationError(f"{manifest_path} database_migration_ref must reference sibling views.sql")
+
+
 def _parse_model[T: BaseModel](path: Path, model: type[T]) -> T:
     try:
         with path.open(encoding="utf-8") as stream:
-            raw = yaml.safe_load(stream)
-        return model.model_validate(raw)
+            return model.model_validate(yaml.safe_load(stream))
     except (OSError, yaml.YAMLError, ValidationError) as error:
         raise RegistryConfigurationError(f"Invalid configuration in {path}: {error}") from error
 
@@ -424,11 +237,7 @@ def _parse_model[T: BaseModel](path: Path, model: type[T]) -> T:
 def load_budget_profiles(path: Path) -> dict[str, BudgetProfile]:
     parsed = _parse_model(path, _BudgetFile)
     return {
-        name: BudgetProfile(
-            name=name,
-            version=parsed.version,
-            **profile.model_dump(),
-        )
+        name: BudgetProfile(name=name, version=parsed.version, **profile.model_dump())
         for name, profile in parsed.profiles.items()
     }
 
@@ -448,20 +257,21 @@ def _resolve_source(
     password = environment.get(parsed.connection.password_env)
     if not password:
         raise RegistryConfigurationError(f"{path} requires environment variable {parsed.connection.password_env}")
+
     raw_host = environment.get(parsed.connection.host_env) if parsed.connection.host_env is not None else None
     host = parsed.connection.host if raw_host is None else raw_host.strip()
-    host_items = tuple(item.strip() for item in host.split(","))
+    host_parts = host.split(",")
+    normalized_hosts = tuple(item.strip() for item in host_parts)
     if (
         not host
         or len(host) > 253
         or any(
-            not item
-            or item != raw_item
-            or item.startswith(("/", "@"))
-            for raw_item, item in zip(host.split(","), host_items, strict=True)
+            not item or item != raw_item or item.startswith(("/", "@"))
+            for raw_item, item in zip(host_parts, normalized_hosts, strict=True)
         )
     ):
         raise RegistryConfigurationError(f"{path} resolved an invalid host")
+
     raw_port = environment.get(parsed.connection.port_env) if parsed.connection.port_env is not None else None
     try:
         port = parsed.connection.port if raw_port is None else int(raw_port)
@@ -469,14 +279,12 @@ def _resolve_source(
         raise RegistryConfigurationError(f"{path} resolved an invalid port") from error
     if not 1 <= port <= 65_535:
         raise RegistryConfigurationError(f"{path} resolved an invalid port")
+
     _require_unique(path, "allowed_schemas", parsed.allowed_schemas)
-    _require_unique(path, "allowed_relation_kinds", parsed.allowed_relation_kinds)
     for schema in parsed.allowed_schemas:
         if _is_forbidden_schema(schema):
             raise RegistryConfigurationError(f"{path} cannot publish PostgreSQL system schema: {schema}")
 
-    overlay = _build_overlay(parsed.semantic_overlay)
-    _validate_overlay(path, parsed.allowed_schemas, overlay)
     return SourceProfile(
         source_id=parsed.source_id,
         name=parsed.name,
@@ -490,149 +298,17 @@ def _resolve_source(
             sslmode=parsed.connection.sslmode,
         ),
         allowed_schemas=tuple(parsed.allowed_schemas),
-        allowed_relation_kinds=tuple(parsed.allowed_relation_kinds),  # type: ignore[arg-type]
+        allowed_relation_kinds=("view",),
         view_contract_version=parsed.view_contract_version,
         budget=budget,
-        semantic_overlay=overlay,
         provenance=SourceProvenance(
             owner=parsed.provenance.owner,
             environment=parsed.provenance.environment,
             database_migration_ref=parsed.provenance.database_migration_ref,
         ),
-        tenant_isolation=parsed.tenant_isolation,
     )
-
-
-def _build_overlay(raw: _SemanticOverlay) -> SemanticOverlay:
-    relations = tuple(
-        RelationSemantic(
-            relation=item.relation,
-            role=item.role,  # type: ignore[arg-type]
-            description=item.description,
-            aliases=_unique(item.aliases),
-            grain=(
-                GrainDefinition(
-                    name=item.grain.name,
-                    description=item.grain.description,
-                    key_columns=_unique(item.grain.key_columns),
-                )
-                if item.grain
-                else None
-            ),
-            default_time_column=item.default_time_column,
-            use_for=_unique(item.use_for),
-            column_aliases={
-                key: _unique(value) for key, value in item.column_aliases.items()
-            },
-            value_hints={key: _unique(value) for key, value in item.value_hints.items()},
-            measures=tuple(
-                MeasureDefinition(
-                    name=measure.name,
-                    description=measure.description,
-                    aliases=_unique(measure.aliases),
-                    aggregation=measure.aggregation,  # type: ignore[arg-type]
-                    column=measure.column,
-                    numerator_measure=measure.numerator_measure,
-                    denominator_measure=measure.denominator_measure,
-                )
-                for measure in item.measures
-            ),
-        )
-        for item in raw.relations
-    )
-    return SemanticOverlay(
-        default_relation=raw.default_relation,
-        relations=relations,
-        joins=tuple(
-            JoinDefinition(
-                left_relation=item.left_relation,
-                right_relation=item.right_relation,
-                column_pairs=tuple(pair.model_dump() for pair in item.column_pairs),
-                cardinality=item.cardinality,  # type: ignore[arg-type]
-                fanout=item.fanout,
-                guidance=item.guidance,
-            )
-            for item in raw.joins
-        ),
-        business_terms=tuple(
-            BusinessTermDefinition(
-                name=item.name,
-                description=item.description,
-                aliases=_unique(item.aliases),
-                predicates=tuple(
-                    BusinessPredicate(
-                        relation=predicate.relation,
-                        column=predicate.column,
-                        operator=predicate.operator,  # type: ignore[arg-type]
-                        values=_unique(predicate.values),
-                    )
-                    for predicate in item.predicates
-                ),
-                calculation=item.calculation,
-            )
-            for item in raw.business_terms
-        ),
-        question_rules=tuple(
-            QuestionRule(
-                code=item.code,
-                status=item.status,  # type: ignore[arg-type]
-                phrases=_unique(item.phrases),
-                message=item.message,
-                missing_concepts=_unique(item.missing_concepts),
-                options=_unique(item.options),
-            )
-            for item in raw.question_rules
-        ),
-        composition_hints=tuple(
-            CompositionHint(
-                name=item.name,
-                phrases=_unique(item.phrases),
-                strategy="aggregate_each_then_combine",
-                guidance=item.guidance,
-                combine_keys=_unique(item.combine_keys),
-            )
-            for item in raw.composition_hints
-        ),
-    )
-
-
-def _validate_overlay(
-    path: Path | str,
-    allowed_schemas: Sequence[str],
-    overlay: SemanticOverlay,
-) -> None:
-    relation_names = [item.relation for item in overlay.relations]
-    _require_unique(path, "relation semantics", relation_names)
-    names = set(relation_names)
-    for relation in overlay.relations:
-        if relation.relation.split(".", 1)[0] not in allowed_schemas:
-            raise RegistryConfigurationError(f"{path} relation {relation.relation} is outside allowed_schemas")
-        measure_names = [measure.name for measure in relation.measures]
-        _require_unique(path, f"measure {relation.relation}", measure_names)
-        for measure in relation.measures:
-            if measure.aggregation == "ratio" and (
-                measure.numerator_measure not in measure_names or measure.denominator_measure not in measure_names
-            ):
-                raise RegistryConfigurationError(
-                    f"{path} ratio measure {relation.relation}.{measure.name} references an unknown measure"
-                )
-    if overlay.default_relation and overlay.default_relation not in names:
-        raise RegistryConfigurationError(f"{path} default_relation has no semantic definition")
-    for join in overlay.joins:
-        if join.left_relation not in names or join.right_relation not in names:
-            raise RegistryConfigurationError(f"{path} join references a relation without semantic definition")
-    _require_unique(path, "business term names", [item.name for item in overlay.business_terms])
-    _require_unique(path, "question rule names", [item.code for item in overlay.question_rules])
-    _require_unique(path, "composition hint names", [item.name for item in overlay.composition_hints])
-    for term in overlay.business_terms:
-        if any(predicate.relation not in names for predicate in term.predicates):
-            raise RegistryConfigurationError(f"{path} business term {term.name} references an unknown relation")
 
 
 def _require_unique(path: Path | str, kind: str, values: Sequence[str]) -> None:
     if len(set(values)) != len(values):
         raise RegistryConfigurationError(f"{path} contains duplicate {kind}")
-
-
-def _unique[T](values: Sequence[T]) -> tuple[T, ...]:
-    return tuple(dict.fromkeys(values))

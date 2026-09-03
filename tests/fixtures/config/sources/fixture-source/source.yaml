@@ -1,4 +1,4 @@
-version: 4
+version: 5
 
 source_id: fixture-source
 name: Query Man test fixture
@@ -22,27 +22,3 @@ allowed_schemas:
 allowed_relation_kinds:
   - view
 budget_profile: interactive
-tenant_isolation: none
-
-semantic_overlay:
-  default_relation: ai.fixture_records
-  relations:
-    - relation: ai.fixture_records
-      role: event
-      description: Deterministic scalar values used by repository safety tests
-      aliases:
-        - fixture records
-        - test records
-      grain:
-        name: fixture_record
-        description: One deterministic fixture record
-        key_columns: [record_id]
-      default_time_column: timestamp_value
-      use_for:
-        - PostgreSQL integration checks
-        - result encoding checks
-      measures:
-        - name: record_count
-          description: Number of fixture records
-          aliases: [row count]
-          aggregation: count_rows

@@ -12,23 +12,13 @@ from fastapi import FastAPI
 
 from query_man.delivery.access import AccessPolicy
 from query_man.delivery.app import build_http_app
-from query_man.delivery.authentication import (
-    BearerAuthenticator,
-    OAuth2JWTBearerAuthenticator,
-)
 from query_man.delivery.gateway import GatewayService
-from query_man.guarded_query.query import (
-    DeliveryQueryExecutor,
-    PostgresQueryExecutor,
-    QueryService,
-)
+from query_man.guarded_query.query import PostgresQueryExecutor, QueryService
 from query_man.metadata.catalog import PostgresCatalog
-from query_man.metadata.models import CatalogProvider
 from query_man.metadata.service import MetadataService
 from query_man.runtime.config import RuntimeConfig
-from query_man.runtime.diagnostic_capture import EncryptedDiagnosticCapture
 from query_man.runtime.operations import operations
-from query_man.source_catalog.registry import SourceReader, SourceRegistry
+from query_man.source_catalog.registry import SourceRegistry
 
 logger = logging.getLogger("query_man")
 
@@ -111,63 +101,12 @@ class _CleanupErrors:
             raise self._first
 
 
-def _require_runtime_capabilities(
-    component: str,
-    provider: object,
-    methods: tuple[str, ...],
-) -> None:
-    missing = tuple(
-        method
-        for method in methods
-        if not callable(getattr(provider, method, None))
-    )
-    if missing:
-        raise TypeError(
-            f"{component} is missing required runtime capabilities: {', '.join(missing)}"
-        )
-
-
-def _require_launch_inventory(registry: SourceReader) -> None:
-    for source_id in registry.source_ids():
-        source = registry.get(source_id)
-        if source is not None and source.tenant_isolation == "rls":
-            raise ValueError("Runtime launch inventory does not accept RLS sources")
-
-
-def build_app(
-    runtime_config: RuntimeConfig,
-    *,
-    registry: SourceRegistry | None = None,
-    catalog: CatalogProvider | None = None,
-    query_executor: DeliveryQueryExecutor | None = None,
-    access_policy: AccessPolicy | None = None,
-    authenticator: BearerAuthenticator | None = None,
-) -> FastAPI:
+def build_app(runtime_config: RuntimeConfig) -> FastAPI:
     operations.reset()
     shutdown_deadline = _ShutdownDeadline(runtime_config.shutdown_grace_ms)
-    diagnostic_capture: EncryptedDiagnosticCapture | None = None
-    if runtime_config.diagnostic_capture_database is not None:
-        if (
-            runtime_config.diagnostic_capture_key is None
-            or runtime_config.diagnostic_capture_key_id is None
-        ):
-            raise ValueError("Diagnostic capture configuration is incomplete")
-        diagnostic_capture = EncryptedDiagnosticCapture.from_base64(
-            runtime_config.diagnostic_capture_database,
-            runtime_config.diagnostic_capture_key,
-            runtime_config.diagnostic_capture_key_id,
-            daily_byte_budget=runtime_config.diagnostic_capture_daily_bytes,
-        )
-    if registry is None:
-        registry = SourceRegistry.load(runtime_config.source_directory, runtime_config.budget_file)
-    _require_launch_inventory(registry)
+    registry = SourceRegistry.load(runtime_config.source_directory, runtime_config.budget_file)
     operations.reconcile_sources(registry.source_ids())
-    catalog = PostgresCatalog(reject_domain_columns=True) if catalog is None else catalog
-    _require_runtime_capabilities(
-        "catalog",
-        catalog,
-        ("load", "close"),
-    )
+    catalog = PostgresCatalog()
     metadata = MetadataService(
         registry,
         catalog,
@@ -175,125 +114,57 @@ def build_app(
         max_stale_ms=runtime_config.metadata_max_stale_ms,
         refresh_retry_ms=runtime_config.metadata_retry_delay_ms,
     )
-    query_executor = PostgresQueryExecutor() if query_executor is None else query_executor
-    _require_runtime_capabilities(
-        "query_executor",
-        query_executor,
-        ("execute", "cancel", "close", "stop_accepting", "drain"),
-    )
+    query_executor = PostgresQueryExecutor()
     shutdown_trigger = _ShutdownTrigger(
         shutdown_deadline,
         query_executor.stop_accepting,
     )
     query_service = QueryService(registry, metadata, query_executor)
-    if access_policy is None and authenticator is None:
-        if runtime_config.oauth is not None:
-            authenticator = OAuth2JWTBearerAuthenticator(runtime_config.oauth)
-        elif runtime_config.access_policy_file is not None:
-            access_policy = AccessPolicy.load(runtime_config.access_policy_file)
-        elif runtime_config.api_token is not None:
-            access_policy = AccessPolicy.legacy(runtime_config.api_token)
-        else:
-            access_policy = AccessPolicy.local()
-    if diagnostic_capture is not None:
-        if access_policy is None:
-            raise ValueError("Diagnostic capture requires an access policy consent authority")
-        access_policy = access_policy.with_subject_identifier(diagnostic_capture.subject_id)
-    gateway = GatewayService(
-        registry,
-        metadata,
-        query_service,
-        diagnostic_capture=diagnostic_capture,
-    )
+    if runtime_config.access_policy_file is not None:
+        access_policy = AccessPolicy.load(runtime_config.access_policy_file)
+    elif runtime_config.api_token is not None:
+        access_policy = AccessPolicy.legacy(runtime_config.api_token)
+    else:
+        access_policy = AccessPolicy.local()
+    gateway = GatewayService(registry, metadata, query_service)
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        async def close_diagnostic_capture() -> None:
-            if diagnostic_capture is None:
-                return
-            try:
-                await diagnostic_capture.close(
-                    min(shutdown_deadline.remaining_ms(), 2_000)
-                )
-            except Exception:
-                operations.increment("diagnostic_capture_storage_failed")
-                logger.exception("diagnostic_capture_shutdown_failed")
-
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         cleanup_errors = _CleanupErrors()
-        cleanup_steps: list[tuple[str, object, Callable[[], Awaitable[None]]]] = []
-        if diagnostic_capture is not None:
-            cleanup_steps.append(
-                (
-                    "diagnostic_capture",
-                    diagnostic_capture,
-                    close_diagnostic_capture,
-                )
-            )
-        cleanup_steps.extend([
-            ("query_executor", query_executor, query_executor.close),
-            ("catalog", catalog, catalog.close),
-            ("metadata", metadata, metadata.close),
-        ])
-        unique_cleanup_steps: list[
-            tuple[str, object, Callable[[], Awaitable[None]]]
-        ] = []
-        registered_resources: set[int] = set()
-        for step, resource, cleanup in cleanup_steps:
-            resource_id = id(resource)
-            if resource_id in registered_resources:
-                continue
-            registered_resources.add(resource_id)
-            unique_cleanup_steps.append((step, resource, cleanup))
-
         async with AsyncExitStack() as resources:
-            for step, _resource, cleanup in reversed(unique_cleanup_steps):
-                resources.push_async_callback(cleanup_errors.attempt, step, cleanup)
-
-            operations.reconcile_sources(registry.source_ids())
+            resources.push_async_callback(
+                cleanup_errors.attempt,
+                "catalog",
+                catalog.close,
+            )
+            resources.push_async_callback(
+                cleanup_errors.attempt,
+                "query_executor",
+                query_executor.close,
+            )
             await _probe_registered_sources(registry, metadata)
-            if diagnostic_capture is not None:
-                diagnostic_capture.start()
-            mcp_app: FastAPI = app.state.mcp_app
-            async with mcp_app.router.lifespan_context(mcp_app):
-                try:
-                    yield
-                finally:
-                    cleanup_errors.attempt_sync(
-                        "shutdown_trigger",
-                        shutdown_trigger,
-                    )
-                    await cleanup_errors.attempt(
-                        "query_drain",
-                        lambda: query_executor.drain(
-                            shutdown_deadline.remaining_ms()
-                        ),
-                    )
-                    await resources.aclose()
+            try:
+                yield
+            finally:
+                cleanup_errors.attempt_sync("shutdown_trigger", shutdown_trigger)
+                await cleanup_errors.attempt(
+                    "query_drain",
+                    lambda: query_executor.drain(shutdown_deadline.remaining_ms()),
+                )
+                await resources.aclose()
             cleanup_errors.raise_first()
 
-    return build_http_app(
-        host=runtime_config.host,
-        mcp_allowed_hosts=runtime_config.mcp_allowed_hosts,
-        mcp_allowed_origins=runtime_config.mcp_allowed_origins,
-        registry=registry,
-        catalog=catalog,
-        metadata=metadata,
-        query_executor=query_executor,
-        query_service=query_service,
+    app = build_http_app(
         access_policy=access_policy,
-        authenticator=authenticator,
         gateway=gateway,
         lifespan=lifespan,
-        extra_state={
-            "diagnostic_capture": diagnostic_capture,
-            "shutdown_deadline": shutdown_deadline,
-            "shutdown_trigger": shutdown_trigger,
-        },
     )
+    app.state.shutdown_trigger = shutdown_trigger
+    return app
 
 
 async def _probe_registered_sources(
-    registry: SourceReader,
+    registry: SourceRegistry,
     metadata: MetadataService,
 ) -> None:
     async def probe(source_id: str) -> None:

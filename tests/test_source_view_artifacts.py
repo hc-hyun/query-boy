@@ -13,14 +13,10 @@ from pglast.parser import parse_sql_json
 
 from tests.helpers import ROOT_DIRECTORY
 
-SOURCE_ROOTS = (
-    ROOT_DIRECTORY / "config" / "sources",
-    ROOT_DIRECTORY / "config" / "domain-lab" / "sources",
-)
+SOURCE_ROOT = ROOT_DIRECTORY / "config" / "sources"
 SOURCE_PACKAGES = tuple(
     package
-    for source_root in SOURCE_ROOTS
-    for package in sorted(source_root.iterdir())
+    for package in sorted(SOURCE_ROOT.iterdir())
     if package.is_dir()
 )
 
@@ -280,7 +276,7 @@ def test_source_view_sql_is_a_bounded_standalone_desired_artifact(
     role_prefix = source_id.replace("-", "_")
 
     assert package.name == source_id
-    assert manifest["version"] == 4
+    assert manifest["version"] == 5
     assert manifest["allowed_relation_kinds"] == ["view"]
     assert isinstance(version, int) and not isinstance(version, bool) and version > 0
     assert sql.startswith("BEGIN;\n")

@@ -5,13 +5,6 @@ callers:
     tenant_id: engineering
     token_env: DEVELOPMENT_ANALYST_API_TOKEN
     operator: false
-    # Add only after the identified caller has granted the exact v1 diagnostic consent.
-    # Removal stops future capture after the required drain/restart; use the protected purge
-    # procedure when previously captured rows must be deleted before their maximum seven-day TTL.
-    # diagnostic_consent:
-    #   version: 1
-    #   receipt_id: consent-development-analyst-001
-    #   expires_at: 2026-09-30T00:00:00Z
 
   - caller_id: quality-analyst
     tenant_id: quality

@@ -100,7 +100,7 @@ test seam이 필요한 경계에만 Protocol을 둔다. Policy, ordering, limit�
 
 다음 범주는 중요하지만 그 자체로 module interface라고 부르지 않는다.
 
-- `External API/wire format`: HTTP/MCP/CLI request, response, status, error, authentication과 protocol version
+- `External API/wire format`: HTTP/CLI request, response, status, error와 authentication
 - `Persisted/versioned format`: DB/file/config schema, codec, version과 migration/rollback 의미
 - `Policy/compatibility identity`: revision, fingerprint, canonical encoding/hash, allowlist,
   reader/tenant/resource policy와 limit 의미
@@ -215,7 +215,7 @@ Root [agent router](../AGENTS.md#non-negotiable-safety)의 안전 불변조건�
 - Cyclomatic complexity는 숫자를 낮추기 위한 helper 분리를 요구하지 않는다. 기존 hotspot보다 나빠지는
   것을 막는 module별 ratchet으로 사용하고 transaction·lock·cleanup의 한 흐름을 우선 보존한다.
 - 완료 전 최소한 `uv run ruff check .`, `uv run mypy src`, `uv run pytest`를 실행한다. DB 경계를
-  변경하면 해당 CI lane의 security/integration test와 container, bounded load·soak도 실행한다.
+  변경하면 해당 CI lane의 security/integration test, container와 bounded load도 실행한다.
 
 ## Documentation And Handoff
 

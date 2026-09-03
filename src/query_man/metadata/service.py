@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from query_man.errors import MetadataUnavailableError, SourceNotFoundError
@@ -14,37 +13,21 @@ from query_man.guarded_query.sql_validation import (
     DEFAULT_ALLOWED_UNQUALIFIED_TYPES,
     SQL_POLICY_REVISION,
 )
-from query_man.metadata.catalog import _CatalogValidationError
+from query_man.metadata.catalog import PostgresCatalog, _CatalogValidationError
 from query_man.metadata.models import (
     CatalogColumn,
-    CatalogProvider,
     CatalogRelation,
     CatalogSnapshot,
     PreparedMetadata,
-)
-from query_man.metadata.relevance import (
-    RankedRelation,
-    RelationRetrievalIndex,
-    SelectionReason,
-    normalize_business_text,
-    select_ranked_relations,
 )
 from query_man.metadata.revision import (
     create_metadata_revision,
     create_view_structure_signature,
 )
 from query_man.runtime.operations import operations
-from query_man.source_catalog.models import (
-    BusinessTermDefinition,
-    CompositionHint,
-    JoinDefinition,
-    MeasureDefinition,
-    QuestionRule,
-    RelationSemantic,
-    SourceProfile,
-)
+from query_man.source_catalog.models import SourceProfile
 from query_man.source_catalog.reader_policy import ReaderSessionPolicyError
-from query_man.source_catalog.registry import SourceReader
+from query_man.source_catalog.registry import SourceRegistry
 
 
 @dataclass
@@ -58,8 +41,8 @@ class _CacheEntry:
 class MetadataService:
     def __init__(
         self,
-        registry: SourceReader,
-        catalog: CatalogProvider,
+        registry: SourceRegistry,
+        catalog: PostgresCatalog,
         *,
         cache_ttl_ms: int = 30_000,
         max_stale_ms: int = 300_000,
@@ -73,55 +56,28 @@ class MetadataService:
         self._refresh_retry_ms = refresh_retry_ms
         self._now = now or (lambda: time.monotonic_ns() // 1_000_000)
         self._cache: dict[str, _CacheEntry] = {}
-        self._refreshes: dict[tuple[str, int], asyncio.Task[PreparedMetadata]] = {}
-        self._source_epochs: dict[str, int] = {}
-        self._retrieval_indexes: dict[tuple[str, str], RelationRetrievalIndex] = {}
+        self._refreshes: dict[str, asyncio.Task[PreparedMetadata]] = {}
         self._view_structure_signatures: dict[tuple[str, int], str] = {}
 
-    async def get_context(self, source_id: str, question: str, max_objects: int = 2) -> dict[str, object]:
+    async def get_context(self, source_id: str) -> dict[str, object]:
         source = self._registry.get(source_id)
         if source is None:
             raise SourceNotFoundError
         prepared, stale = await self._get_prepared(source)
-        index_key = (source.source_id, prepared.revision)
-        retrieval = self._retrieval_indexes.get(index_key)
-        if retrieval is None:
-            retrieval = RelationRetrievalIndex(
-                prepared.snapshot.relations,
-                source.semantic_overlay.relations,
-                source.semantic_overlay.default_relation,
-            )
-            self._retrieval_indexes[index_key] = retrieval
-        ranked = retrieval.rank(question)
-        selected, truncated = select_ranked_relations(ranked, max_objects)
-        selected_names = {item.relation.qualified_name for item in selected}
-        composition_hints = _select_composition_hints(question, source.semantic_overlay.composition_hints)
-        joins = (
-            []
-            if composition_hints
-            else [
-                join
-                for join in source.semantic_overlay.joins
-                if join.left_relation in selected_names and join.right_relation in selected_names
-            ]
-        )
-        ambiguities = _build_ambiguities(selected, joins, stale, bool(composition_hints))
-        relation_responses = [
+        relations = [
             _to_relation_response(
-                item,
-                index + 1,
-                source.semantic_overlay.joins,
-                source.semantic_overlay.business_terms,
-                question,
+                relation,
                 source.budget.max_context_columns_per_relation,
             )
-            for index, item in enumerate(selected)
+            for relation in sorted(
+                prepared.snapshot.relations,
+                key=lambda item: item.qualified_name,
+            )
         ]
         response: dict[str, object] = {
             "source_id": source.source_id,
             "source_name": source.name,
             "source_description": source.description,
-            "question": question,
             "metadata_revision": prepared.revision,
             "sql_policy_revision": SQL_POLICY_REVISION,
             "snapshot_status": "stale" if stale else "fresh",
@@ -130,42 +86,17 @@ class MetadataService:
                 "cast_types": sorted(DEFAULT_ALLOWED_TYPES),
                 "unqualified_cast_types": sorted(DEFAULT_ALLOWED_UNQUALIFIED_TYPES),
             },
-            "answerability": _build_answerability(question, source.semantic_overlay.question_rules, ambiguities),
-            "relations": relation_responses,
-            "joins": [_to_join_response(join) for join in joins],
-            "business_terms": _select_business_terms(question, source.semantic_overlay.business_terms),
-            "composition_hints": composition_hints,
-            "ambiguities": ambiguities,
-            "truncated": truncated
-            or any(bool(relation["columns_truncated"]) for relation in relation_responses),
+            "relations": relations,
+            "truncated": any(bool(relation["columns_truncated"]) for relation in relations),
         }
-        encoded = json.dumps(response, ensure_ascii=False, separators=(",", ":")).encode()
+        encoded = json.dumps(
+            response,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode()
         if len(encoded) > source.budget.max_metadata_response_bytes:
-            raise MetadataUnavailableError(
-                {"contract_violations": ["Question-scoped metadata response exceeds its byte limit."]}
-            )
+            raise MetadataUnavailableError({"contract_violations": ["Metadata response exceeds its byte limit."]})
         return response
-
-    def invalidate(self, source_id: str | None = None) -> None:
-        if source_id is None:
-            source_ids = (
-                set(self._source_epochs)
-                | set(self._cache)
-                | {key[0] for key in self._refreshes}
-                | set(self._registry.source_ids())
-            )
-            for current_id in source_ids:
-                self._source_epochs[current_id] = self._source_epochs.get(current_id, 0) + 1
-            self._cache.clear()
-            self._retrieval_indexes.clear()
-        else:
-            self._source_epochs[source_id] = self._source_epochs.get(source_id, 0) + 1
-            self._cache.pop(source_id, None)
-            self._retrieval_indexes = {
-                key: value
-                for key, value in self._retrieval_indexes.items()
-                if key[0] != source_id
-            }
 
     async def get_published(self, source_id: str) -> PreparedMetadata:
         source = self._registry.get(source_id)
@@ -174,21 +105,15 @@ class MetadataService:
         prepared, _stale = await self._get_prepared(source)
         return prepared
 
-    async def close(self) -> None:
-        pass
-
     async def _get_prepared(self, source: SourceProfile) -> tuple[PreparedMetadata, bool]:
-        epoch = self._source_epochs.get(source.source_id, 0)
         cached = self._cache.get(source.source_id)
         now = self._now()
         if cached and cached.expires_at > now:
-            self._require_current(source, epoch)
             self._require_compatible(source, cached.value)
             operations.set_source_health(source.source_id, "healthy")
             return cached.value, False
         if cached and cached.next_refresh_at > now:
             if now - cached.loaded_at <= self._max_stale_ms:
-                self._require_current(source, epoch)
                 self._require_compatible(source, cached.value)
                 operations.increment("metadata_stale_served", source.source_id)
                 operations.set_source_health(source.source_id, "stale")
@@ -196,7 +121,7 @@ class MetadataService:
             operations.set_source_health(source.source_id, "unavailable")
             raise MetadataUnavailableError
         try:
-            return await self._refresh(source, epoch), False
+            return await self._refresh(source), False
         except MetadataUnavailableError:
             raise
         except (ReaderSessionPolicyError, _CatalogValidationError) as error:
@@ -206,7 +131,6 @@ class MetadataService:
         except Exception as error:
             failed_at = self._now()
             if cached and failed_at - cached.loaded_at <= self._max_stale_ms:
-                self._require_current(source, epoch)
                 self._require_compatible(source, cached.value)
                 cached.next_refresh_at = failed_at + self._refresh_retry_ms
                 operations.increment("metadata_refresh_failed", source.source_id)
@@ -217,49 +141,45 @@ class MetadataService:
             operations.set_source_health(source.source_id, "unavailable")
             raise MetadataUnavailableError from error
 
-    async def _refresh(self, source: SourceProfile, epoch: int) -> PreparedMetadata:
-        key = (source.source_id, epoch)
-        active = self._refreshes.get(key)
+    async def _refresh(self, source: SourceProfile) -> PreparedMetadata:
+        active = self._refreshes.get(source.source_id)
         if active is not None:
             return await active
-        task = asyncio.create_task(self._load_and_validate(source, epoch))
-        self._refreshes[key] = task
+        task = asyncio.create_task(self._load_and_validate(source))
+        self._refreshes[source.source_id] = task
         try:
             return await task
         finally:
-            self._refreshes.pop(key, None)
+            self._refreshes.pop(source.source_id, None)
 
-    async def _load_and_validate(self, source: SourceProfile, epoch: int) -> PreparedMetadata:
+    async def _load_and_validate(
+        self,
+        source: SourceProfile,
+    ) -> PreparedMetadata:
         operations.increment("metadata_refresh_started", source.source_id)
         snapshot = await self._catalog.load(source)
         issues = _validate_snapshot(source, snapshot)
         signature_key = (source.source_id, source.view_contract_version)
         structure_signature = create_view_structure_signature(snapshot)
         accepted_signature = self._view_structure_signatures.get(signature_key)
-        if (
-            accepted_signature is not None
-            and accepted_signature != structure_signature
-        ):
-            issues.append(
-                "View structure changed without a view contract version change."
-            )
+        if accepted_signature is not None and accepted_signature != structure_signature:
+            issues.append("View structure changed without a view contract version change.")
         if issues:
             operations.increment("metadata_validation_rejected", source.source_id)
             operations.set_source_health(source.source_id, "unavailable")
             raise MetadataUnavailableError({"contract_violations": issues})
-        candidate = PreparedMetadata(snapshot, create_metadata_revision(source, snapshot))
-        self._require_current(source, epoch)
+
+        candidate = PreparedMetadata(
+            snapshot,
+            create_metadata_revision(source, snapshot),
+        )
         self._require_compatible(source, candidate)
         current_signature = self._view_structure_signatures.get(signature_key)
         if current_signature is not None and current_signature != structure_signature:
             operations.increment("metadata_validation_rejected", source.source_id)
             operations.set_source_health(source.source_id, "unavailable")
             raise MetadataUnavailableError(
-                {
-                    "contract_violations": [
-                        "View structure changed without a view contract version change."
-                    ]
-                }
+                {"contract_violations": ["View structure changed without a view contract version change."]}
             )
         self._view_structure_signatures[signature_key] = structure_signature
         self._cache_value(source.source_id, candidate)
@@ -276,15 +196,11 @@ class MetadataService:
             next_refresh_at=loaded_at + self._cache_ttl_ms,
         )
 
-    def _require_current(self, source: SourceProfile, epoch: int) -> None:
-        if (
-            self._source_epochs.get(source.source_id, 0) != epoch
-            or self._registry.get(source.source_id) != source
-        ):
-            raise MetadataUnavailableError
-
     @staticmethod
-    def _require_compatible(source: SourceProfile, value: PreparedMetadata) -> None:
+    def _require_compatible(
+        source: SourceProfile,
+        value: PreparedMetadata,
+    ) -> None:
         if create_metadata_revision(source, value.snapshot) != value.revision:
             raise MetadataUnavailableError(
                 {"contract_violations": ["Metadata revision does not match the current source."]}
@@ -292,295 +208,47 @@ class MetadataService:
 
 
 def _validate_snapshot(source: SourceProfile, snapshot: CatalogSnapshot) -> list[str]:
-    issues: list[str] = []
     if not snapshot.relations:
         return ["No selectable relations were discovered in the allowed schemas."]
+
+    issues: list[str] = []
     relation_names = [relation.qualified_name for relation in snapshot.relations]
     if len(set(relation_names)) != len(relation_names):
         issues.append("Catalog contains duplicate relations.")
-    relations = {relation.qualified_name: relation for relation in snapshot.relations}
-    for structure_relation in snapshot.relations:
-        if (
-            structure_relation.schema not in source.allowed_schemas
-            or structure_relation.kind not in source.allowed_relation_kinds
-        ):
-            issues.append(
-                "Catalog relation is outside the source allowlist: "
-                f"{structure_relation.qualified_name}"
-            )
-        if structure_relation.kind == "view":
-            if structure_relation.view_contract_source != source.source_id:
-                issues.append(
-                    "View contract source does not match the source: "
-                    f"{structure_relation.qualified_name}"
-                )
-            if structure_relation.view_contract_version != source.view_contract_version:
-                issues.append(
-                    "View contract version does not match the source: "
-                    f"{structure_relation.qualified_name}"
-                )
-        if source.tenant_isolation == "rls" and not structure_relation.security_invoker:
-            issues.append(
-                f"RLS relation is not a security-invoker view: {structure_relation.qualified_name}"
-            )
-        structure_columns = {column.name for column in structure_relation.columns}
-        if any(column not in structure_columns for column in structure_relation.primary_key):
-            issues.append(
-                f"Primary key targets a missing column: {structure_relation.qualified_name}"
-            )
-        for physical_key in structure_relation.foreign_keys:
-            referenced = relations.get(physical_key.referenced_relation)
-            referenced_columns = (
-                set() if referenced is None else {column.name for column in referenced.columns}
-            )
-            if (
-                not physical_key.columns
-                or len(physical_key.columns) != len(physical_key.referenced_columns)
-                or any(column not in structure_columns for column in physical_key.columns)
-                or any(
-                    column not in referenced_columns
-                    for column in physical_key.referenced_columns
-                )
-            ):
-                issues.append(
-                    "Foreign key targets unavailable columns: "
-                    f"{structure_relation.qualified_name}"
-                )
-        for physical_index in structure_relation.indexes:
-            if not physical_index.columns or any(
-                column not in structure_columns for column in physical_index.columns
-            ):
-                issues.append(
-                    f"Index targets a missing column: {structure_relation.qualified_name}"
-                )
-    for semantic in source.semantic_overlay.relations:
-        relation = relations.get(semantic.relation)
-        if relation is None:
-            issues.append(f"Configured relation is missing or not selectable: {semantic.relation}")
-            continue
-        columns = {column.name: column for column in relation.columns}
-        for key in semantic.grain.key_columns if semantic.grain else []:
-            if key not in columns:
-                issues.append(f"Missing grain key {semantic.relation}.{key}")
-        if semantic.default_time_column:
-            time_column = columns.get(semantic.default_time_column)
-            if time_column is None:
-                issues.append(f"Missing default time column {semantic.relation}.{semantic.default_time_column}")
-            elif not re.match(r"^(date|time|timestamp)", time_column.data_type, re.IGNORECASE):
-                issues.append(f"Default time column is not temporal: {semantic.relation}.{time_column.name}")
-        for alias_column in semantic.column_aliases:
-            if alias_column not in columns:
-                issues.append(f"Column alias targets a missing column: {semantic.relation}.{alias_column}")
-        for hint_column in semantic.value_hints:
-            if hint_column not in columns:
-                issues.append(f"Value hints target a missing column: {semantic.relation}.{hint_column}")
-        for measure in semantic.measures:
-            if measure.aggregation == "sum" and measure.column not in columns:
-                issues.append(f"Measure targets a missing column: {semantic.relation}.{measure.column}")
-    for join in source.semantic_overlay.joins:
-        left = relations.get(join.left_relation)
-        right = relations.get(join.right_relation)
-        if left is None or right is None:
-            issues.append(f"Approved join relation is unavailable: {join.left_relation} -> {join.right_relation}")
-            continue
-        left_columns = {column.name: column for column in left.columns}
-        right_columns = {column.name: column for column in right.columns}
-        for pair in join.column_pairs:
-            left_column = left_columns.get(pair["left"])
-            right_column = right_columns.get(pair["right"])
-            key = f"{join.left_relation}.{pair['left']} -> {join.right_relation}.{pair['right']}"
-            if left_column is None or right_column is None:
-                issues.append(f"Approved join key is unavailable: {key}")
-            elif left_column.data_type != right_column.data_type:
-                issues.append(f"Approved join key type mismatch: {key}")
-    for term in source.semantic_overlay.business_terms:
-        for predicate in term.predicates:
-            relation = relations.get(predicate.relation)
-            if relation is None or not any(column.name == predicate.column for column in relation.columns):
-                issues.append(f"Business predicate targets a missing column: {predicate.relation}.{predicate.column}")
-    semantic_names = [
-        semantic.relation for semantic in source.semantic_overlay.relations
-    ]
-    if len(set(semantic_names)) != len(semantic_names):
-        issues.append("Semantic metadata contains duplicate relations.")
-    semantics = {
-        semantic.relation: semantic for semantic in source.semantic_overlay.relations
-    }
     for relation in snapshot.relations:
-        relation_semantic = semantics.get(relation.qualified_name)
-        if relation_semantic is None:
-            issues.append(
-                f"Missing semantic metadata: {relation.qualified_name}"
-            )
-            continue
-        if relation_semantic.grain is None:
-            issues.append(f"Missing grain: {relation.qualified_name}")
-        if not (relation_semantic.description or relation.comment):
-            issues.append(f"Missing description: {relation.qualified_name}")
-        if (
-            relation_semantic.role in {"event", "comment", "population"}
-            and not relation_semantic.default_time_column
-        ):
-            issues.append(f"Missing default time: {relation.qualified_name}")
+        if relation.schema not in source.allowed_schemas or relation.kind not in source.allowed_relation_kinds:
+            issues.append(f"Catalog relation is outside the source allowlist: {relation.qualified_name}")
+        if relation.view_contract_source != source.source_id:
+            issues.append(f"View contract source does not match the source: {relation.qualified_name}")
+        if relation.view_contract_version != source.view_contract_version:
+            issues.append(f"View contract version does not match the source: {relation.qualified_name}")
+        if not relation.comment:
+            issues.append(f"Missing view description: {relation.qualified_name}")
     return issues
 
 
 def _to_relation_response(
-    candidate: RankedRelation,
-    rank: int,
-    all_joins: Sequence[JoinDefinition],
-    business_terms: Sequence[BusinessTermDefinition],
-    question: str,
+    relation: CatalogRelation,
     max_columns: int,
 ) -> dict[str, object]:
-    relation, semantic = candidate.relation, candidate.semantic
-    columns = _select_context_columns(
-        candidate,
-        all_joins,
-        business_terms,
-        question,
-        max_columns,
+    ordered_columns = sorted(
+        relation.columns,
+        key=lambda column: (column.ordinal, column.name),
     )
-    returned_names = {column.name for column in columns}
-    indexes = [
-        index
-        for index in relation.indexes
-        if all(column in returned_names for column in index.columns)
-    ]
-    response: dict[str, object] = {
-        "rank": rank,
+    columns = ordered_columns[:max_columns]
+    return {
         "name": relation.qualified_name,
         "sql_name": relation.sql_name,
         "kind": relation.kind,
-        "role": semantic.role if semantic else "unclassified",
-        "description": (semantic.description if semantic else None) or relation.comment,
-        "database_comment": relation.comment,
-        "grain": (
-            {
-                "name": semantic.grain.name,
-                "description": semantic.grain.description,
-                "key_columns": list(semantic.grain.key_columns),
-            }
-            if semantic and semantic.grain
-            else None
-        ),
-        "default_time_column": semantic.default_time_column if semantic else None,
-        "selection_reasons": [_reason_dict(reason) for reason in candidate.reasons],
-        "measures": [_to_measure_response(measure) for measure in semantic.measures] if semantic else [],
-        "primary_key": list(relation.primary_key),
-        "foreign_keys": [
-            {
-                "columns": list(key.columns),
-                "referenced_relation": key.referenced_relation,
-                "referenced_columns": list(key.referenced_columns),
-            }
-            for key in relation.foreign_keys
-        ],
-        "indexes": [
-            {
-                "columns": list(index.columns),
-                "unique": index.unique,
-                "primary": index.primary,
-            }
-            for index in indexes
-        ],
-        "indexes_truncated": len(indexes) < len(relation.indexes),
-        "column_count": len(relation.columns),
+        "description": relation.comment,
+        "column_count": len(ordered_columns),
         "returned_column_count": len(columns),
-        "columns_truncated": len(columns) < len(relation.columns),
-        "columns": [_to_column_response(column, relation, semantic, all_joins) for column in columns],
+        "columns_truncated": len(columns) < len(ordered_columns),
+        "columns": [_to_column_response(column) for column in columns],
     }
-    if relation.estimated_rows is not None:
-        response["estimated_rows"] = relation.estimated_rows
-    return response
 
 
-def _select_context_columns(
-    candidate: RankedRelation,
-    all_joins: Sequence[JoinDefinition],
-    business_terms: Sequence[BusinessTermDefinition],
-    question: str,
-    max_columns: int,
-) -> list[CatalogColumn]:
-    relation, semantic = candidate.relation, candidate.semantic
-    if len(relation.columns) <= max_columns:
-        return list(relation.columns)
-
-    required = set(relation.primary_key)
-    required.update(column for key in relation.foreign_keys for column in key.columns)
-    required.update(reason.column for reason in candidate.reasons if reason.column is not None)
-    if semantic is not None:
-        if semantic.grain is not None:
-            required.update(semantic.grain.key_columns)
-        if semantic.default_time_column is not None:
-            required.add(semantic.default_time_column)
-        required.update(
-            measure.column for measure in semantic.measures if measure.column is not None
-        )
-    for join in all_joins:
-        if join.left_relation == relation.qualified_name:
-            required.update(pair["left"] for pair in join.column_pairs)
-        if join.right_relation == relation.qualified_name:
-            required.update(pair["right"] for pair in join.column_pairs)
-    for term in business_terms:
-        if any(_contains_business_phrase(question, alias) for alias in term.aliases):
-            required.update(
-                predicate.column
-                for predicate in term.predicates
-                if predicate.relation == relation.qualified_name
-            )
-
-    matched: set[str] = set()
-    for column in relation.columns:
-        phrases = [column.name, column.comment]
-        if semantic is not None:
-            phrases.extend(semantic.column_aliases.get(column.name, ()))
-            phrases.extend(semantic.value_hints.get(column.name, ()))
-        if any(
-            phrase is not None and _contains_business_phrase(question, phrase)
-            for phrase in phrases
-        ):
-            matched.add(column.name)
-
-    ordered_columns = sorted(relation.columns, key=lambda column: (column.ordinal, column.name))
-    target = max(max_columns, len(required))
-    selected = set(required)
-    for column in ordered_columns:
-        if len(selected) >= target:
-            break
-        if column.name in matched:
-            selected.add(column.name)
-    for column in ordered_columns:
-        if len(selected) >= target:
-            break
-        selected.add(column.name)
-    return [column for column in ordered_columns if column.name in selected]
-
-
-def _reason_dict(reason: SelectionReason) -> dict[str, str]:
-    value = {"kind": reason.kind, "term": reason.term}
-    if reason.column is not None:
-        value["column"] = reason.column
-    return value
-
-
-def _to_column_response(
-    column: CatalogColumn,
-    relation: CatalogRelation,
-    semantic: RelationSemantic | None,
-    all_joins: Sequence[JoinDefinition],
-) -> dict[str, object]:
-    roles: list[str] = []
-    if semantic and semantic.grain and column.name in semantic.grain.key_columns:
-        roles.append("grain_key")
-    if semantic and semantic.default_time_column == column.name:
-        roles.append("default_time")
-    if _is_join_key(relation.qualified_name, column.name, all_joins):
-        roles.append("join_key")
-    if column.name in relation.primary_key:
-        roles.append("primary_key")
-    if any(column.name in key.columns for key in relation.foreign_keys):
-        roles.append("foreign_key")
+def _to_column_response(column: CatalogColumn) -> dict[str, object]:
     return {
         "name": column.name,
         "sql_name": column.sql_name,
@@ -588,183 +256,4 @@ def _to_column_response(
         "data_type": column.data_type,
         "nullable": column.nullable,
         "description": column.comment,
-        "aliases": list(semantic.column_aliases.get(column.name, ())) if semantic else [],
-        "value_hints": list(semantic.value_hints.get(column.name, ())) if semantic else [],
-        "semantic_roles": roles,
     }
-
-
-def _is_join_key(
-    relation: str,
-    column: str,
-    joins: Sequence[JoinDefinition],
-) -> bool:
-    return any(
-        (join.left_relation == relation and any(pair["left"] == column for pair in join.column_pairs))
-        or (join.right_relation == relation and any(pair["right"] == column for pair in join.column_pairs))
-        for join in joins
-    )
-
-
-def _to_join_response(join: JoinDefinition) -> dict[str, object]:
-    return {
-        "left_relation": join.left_relation,
-        "right_relation": join.right_relation,
-        "column_pairs": [dict(pair) for pair in join.column_pairs],
-        "cardinality": join.cardinality,
-        "fanout": join.fanout,
-        "guidance": join.guidance,
-    }
-
-
-def _to_measure_response(measure: MeasureDefinition) -> dict[str, object]:
-    result: dict[str, object] = {
-        "name": measure.name,
-        "description": measure.description,
-        "aliases": list(measure.aliases),
-        "aggregation": measure.aggregation,
-    }
-    if measure.column:
-        result["column"] = measure.column
-    if measure.numerator_measure:
-        result["numerator_measure"] = measure.numerator_measure
-    if measure.denominator_measure:
-        result["denominator_measure"] = measure.denominator_measure
-    return result
-
-
-def _build_ambiguities(
-    selected: list[RankedRelation],
-    joins: Sequence[JoinDefinition],
-    stale: bool,
-    has_composition: bool,
-) -> list[dict[str, str]]:
-    ambiguities: list[dict[str, str]] = []
-    first = selected[0] if selected else None
-    used_default = bool(first and any(reason.kind == "default_relation" for reason in first.reasons))
-    if first is None or used_default or not _has_meaningful_reason(first):
-        ambiguities.append(
-            {
-                "code": "LOW_METADATA_RELEVANCE",
-                "message": (
-                    "The question had little overlap with the published metadata; the default relation was returned."
-                    if used_default
-                    else "The question had little semantic overlap with the published metadata; "
-                    "treat the candidates as low confidence."
-                ),
-            }
-        )
-    ambiguities.extend({"code": "RAW_JOIN_FANOUT", "message": join.guidance} for join in joins if join.fanout)
-    if len(selected) > 1 and not joins and not has_composition:
-        ambiguities.append(
-            {
-                "code": "NO_APPROVED_JOIN_PATH",
-                "message": "Multiple grains matched, but no approved raw join connects them. "
-                "Aggregate each relation separately.",
-            }
-        )
-    if stale:
-        ambiguities.append(
-            {
-                "code": "STALE_METADATA_SNAPSHOT",
-                "message": "Catalog refresh failed; the last valid metadata revision was returned.",
-            }
-        )
-    return ambiguities
-
-
-def _has_meaningful_reason(candidate: RankedRelation) -> bool:
-    generic = {"id", "no", "name", "number", "key", "code"}
-    return any(
-        reason.kind in {"use_for", "relation_alias", "column_alias"}
-        or (
-            reason.kind == "retrieval_token"
-            and reason.column is not None
-            and reason.term not in generic
-        )
-        for reason in candidate.reasons
-    )
-
-
-def _build_answerability(
-    question: str,
-    rules: Sequence[QuestionRule],
-    ambiguities: list[dict[str, str]],
-) -> dict[str, object]:
-    matched = [rule for rule in rules if any(_contains_business_phrase(question, phrase) for phrase in rule.phrases)]
-    if matched:
-        return {
-            "status": "unsupported" if any(rule.status == "unsupported" for rule in matched) else "needs_clarification",
-            "reason_codes": _unique([rule.code for rule in matched]),
-            "messages": _unique([rule.message for rule in matched]),
-            "missing_concepts": _unique([concept for rule in matched for concept in rule.missing_concepts]),
-            "options": _unique([option for rule in matched for option in rule.options]),
-        }
-    if any(item["code"] == "LOW_METADATA_RELEVANCE" for item in ambiguities):
-        return {
-            "status": "low_confidence",
-            "reason_codes": ["LOW_METADATA_RELEVANCE"],
-            "messages": ["The selected relations are candidates, not a confirmed answer surface."],
-            "missing_concepts": [],
-            "options": [],
-        }
-    return {
-        "status": "best_effort",
-        "reason_codes": [],
-        "messages": [],
-        "missing_concepts": [],
-        "options": [],
-    }
-
-
-def _select_business_terms(
-    question: str,
-    terms: Sequence[BusinessTermDefinition],
-) -> list[dict[str, object]]:
-    result: list[dict[str, object]] = []
-    for term in terms:
-        aliases = [alias for alias in term.aliases if _contains_business_phrase(question, alias)]
-        if not aliases:
-            continue
-        item: dict[str, object] = {
-            "name": term.name,
-            "description": term.description,
-            "matched_aliases": aliases,
-            "predicates": [
-                {
-                    "relation": predicate.relation,
-                    "column": predicate.column,
-                    "operator": predicate.operator,
-                    "values": list(predicate.values),
-                }
-                for predicate in term.predicates
-            ],
-        }
-        if term.calculation:
-            item["calculation"] = term.calculation
-        result.append(item)
-    return result
-
-
-def _select_composition_hints(
-    question: str,
-    hints: Sequence[CompositionHint],
-) -> list[dict[str, object]]:
-    return [
-        {
-            "name": hint.name,
-            "strategy": hint.strategy,
-            "guidance": hint.guidance,
-            "combine_keys": list(hint.combine_keys),
-        }
-        for hint in hints
-        if any(_contains_business_phrase(question, phrase) for phrase in hint.phrases)
-    ]
-
-
-def _contains_business_phrase(question: str, phrase: str) -> bool:
-    return normalize_business_text(phrase) in normalize_business_text(question)
-
-
-def _unique[T](values: list[T]) -> list[T]:
-    return list(dict.fromkeys(values))

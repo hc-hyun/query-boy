@@ -1,290 +1,110 @@
 # Operations Guide
 
-Status: current Git-reviewed source-package first-launch runbook
+이 문서는 현재 단일-replica, static non-RLS 배포 절차만 다룹니다. Repository 변경 승인과 protected
+환경 실행 승인은 별개입니다.
 
-이 문서는 목적에 맞는 절만 읽습니다. 낯선 말은 [용어 사전](glossary.md)을 참고하세요.
+## 시작 전 고정할 것
 
-| 상황 | 읽을 절 |
-|---|---|
-| 실제 첫 오픈 준비·전환 | [Static Non-RLS First Launch](#static-non-rls-first-launch) |
-| AuthBridge bearer 인증 준비 | [Resource Server JWT 계약](resource-server-jwt-auth.md) |
-| 상태·log·diagnostic·source package 조회 | [Interactive Operator Shell](#interactive-operator-shell) |
-| Core health·metric·alert 조사 | [Health](#health-and-metrics), [Alert](#alert-policy) |
-| 로컬 Compose와 MCP 확인 | [Local Container Operations](#local-container-operations) |
-| 안전한 process 종료 | [Graceful Shutdown](#graceful-shutdown) |
+- Approved commit과 immutable image revision
+- `config/sources/<source-id>/{source.yaml,views.sql}` 전체와 `config/budget-profiles.yaml`
+- 실제 PostgreSQL target, DBA·service 실행자와 change-record 위치
+- Password/token secret reference와 전달 방식
+- Traffic-off 검증 시간, stop condition, 직전 image/config/route
+- DB view 변경이 있으면 backup과 DBA rollback SQL
 
-현재 source authority는 Git-reviewed source package, budget authority는 Git-reviewed YAML뿐입니다. Runtime admin
-mutation, Control DB, hot reload과 source convergence 운영 절차는 제공하지 않습니다.
-정확한 source package 기준은 [ADR 0034](decisions/0034-source-view-package-and-direct-admission.md), startup
-inventory는 [ADR 0035](decisions/0035-reviewed-source-package-inventory.md), budget과 retired managed 경계는
-[ADR 0030](decisions/0030-git-reviewed-yaml-source-authority.md)입니다.
-실제 protected environment 작업은 [Active TODO](development-todo.md)의 DB 연결 `DBENV-01`, 인증 연결
-`AUTHENV-01`과 그 뒤의 배포·전환 `LAUNCH-02` 순서입니다.
+RLS source나 unreviewed package를 임시로 허용하지 않습니다. `require` TLS mode는 암호화하지만 hostname을
+검증하지 않으므로 승인된 risk와 `verify-full` 전환 조건을 기록해야 합니다.
 
-현재 application은 reviewed Git revision, pinned artifact와 외부 secret 설정으로 복구합니다. Source
-업무 데이터의 backup·restore는 각 source DB owner의 정책에 따릅니다. 남아 있는 과거 Control DB,
-backup, credential 또는 key는 이 runbook으로 폐기하지 않습니다. Exact inventory, retention, target,
-access scope, rollback과 change-record 책임을 정한 별도 protected-operation 승인이 필요합니다.
+## Source 검증과 DB apply
 
-Base `compose.yaml`은 application-only topology이며 source PostgreSQL을 provision하지 않습니다.
-`compose.fixture.yaml`은 로컬·CI에서만 쓰는 명시적 합성 source overlay입니다.
-
-## Static Non-RLS First Launch
-
-[ADR 0025](decisions/0025-static-non-rls-first-launch.md)의 first launch는 다음 exact profile만 대상으로 합니다.
-이 절은 `DBENV-01`과 `AUTHENV-01`에서 실제 DB·인증 binding을 완료한 뒤 실행하는 `LAUNCH-02`
-runbook입니다. DB DDL/reader/view, source manifest, AuthBridge mapper나 application code를 이 단계에서
-새로 구현하지 않고, 승인된 inventory를 traffic 밖에서 다시 검증합니다.
-
-- Approved Git revision의 reviewed `config/sources/<source-id>/{source.yaml,views.sql}` package 전체
-- Git-reviewed `config/budget-profiles.yaml`
-- PostgreSQL 18, server/client UTF-8, RLS source 0개
-- final result OID `20, 21, 23, 25, 1082, 1184, 1700`
-- SQL policy v3, metadata/view contract admission과 repository security/integration/container gate
-- 단일 Query Man replica, private Docker network와 loopback listener
-
-Repository 변경 승인은 실제 환경 실행 승인이 아닙니다. 실행 전 change record에 target,
-operator access, authentication authority, TLS/secret/backup, source·DDL·role/settings inventory,
-approved Git commit, upstream/application image digest, route, stop/rollback 조건과 책임자를
-기록합니다. TLS inventory에는 source manifest v4의 exact `sslmode`, native PostgreSQL TCP endpoint,
-root CA/`PGSSLROOTCERT`, `require`의 hostname-risk 승인과 CA/SAN 개선 조건을 포함합니다. AuthBridge를
-선택하면 exact issuer, Query Man 전용 audience/scope mapper, CA trust와 client token 취득·refresh
-owner도 기록합니다.
-
-### Artifact preparation
+Repository 안의 package는 local read-only 명령으로 검사합니다.
 
 ```bash
-git status --short
-git rev-parse HEAD
-export QUERY_MAN_VCS_REF=<approved-40-hex-git-commit>
-docker compose --file compose.yaml config --quiet
-docker compose --file compose.yaml build \
-  --build-arg QUERY_MAN_VCS_REF="$QUERY_MAN_VCS_REF" query-man
-docker image inspect query-man:local \
-  --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}'
-```
-
-Application image revision/digest와 approved commit이 다르면 중단합니다. `soak` profile은 first-launch
-artifact acceptance에서 시작하지 않습니다.
-
-### Traffic-off acceptance
-
-Source package, budget/access policy, source DDL/view/function/operator/type/collation/extension, reader
-role/grant와 database/role/server setting을 승인 inventory와 비교합니다. Manifest는 secret 값이
-아니라 환경 변수 이름만 포함해야 합니다. Source manifest는 exact v4 `sslmode`를 가져야 하며 `prefer`,
-`allow`, `verify-ca`와 생략은 중단 조건입니다. Runtime checkout이 `gssencmode=disable`과 reviewed
-mode에 맞는 실제 TLS state를 확인하는 artifact여야 합니다.
-
-아래 Compose 명령은 repository/local fixture에서 artifact와 검사 경로를 재현하는 예시이며 protected
-DB 배포 명령이나 environment evidence가 아닙니다. 실제 target의 deploy, DB probe와 token acceptance
-명령은 `DBENV-01`·`AUTHENV-01` 실행 승인과 change record에서 exact 값으로 고정합니다.
-
-```bash
-test -f .env || cp .env.fixture.example .env
 uv run qm source validate
-docker compose up -d --wait postgres query-man
-./scripts/verify-container.sh
 ```
 
-위 local command는 test-local `fixture-source` 하나의 readiness와 공통 safety path만 검증하며 approved
-package inventory 전체의 protected evidence가 아닙니다. Protected acceptance에서는 exact target 명령으로 approved
-package 전체의 RLS 0개, PostgreSQL 18/UTF-8, view marker/source/version, direct semantic admission,
-metadata/SQL revision mismatch, seven-OID positive/negative와 HTTP/MCP parity를 확인합니다. Source
-이름·개수는 문서에 복제하지 않고 exact artifact의 `qm source list`와 change record를 대조합니다.
-AuthBridge를 선택하면 JWT
-access token 서명·issuer·audience·exp/nbf·scope/role를 Discovery의 `jwks_uri`로 로컬
-검증하고 ID token, refresh token, 다른 audience와 만료 token을 거부합니다. JWKS는 cache하되
-알 수 없는 `kid`가 오면 한 번 갱신합니다. Authorization header와 token을 log에 남기지
+이 명령은 manifest와 desired SQL을 검증할 뿐 DB에 연결하거나 DDL을 실행하지 않습니다.
+
+DB/data owner는 `views.sql`의 explicit output, no-PII 경계, base relation과 comment를 review합니다. DBA는
+별도 승인 뒤 traffic 밖에서 exact SQL을 적용하고 reader grant를 확인합니다. Runtime이 대신 적용하거나
+repository test 결과를 production apply evidence로 사용하지 않습니다.
+
+적용 중 다음 중 하나라도 발생하면 즉시 중단합니다.
+
+- Target database·role·approved SQL이 불명확함
+- Existing object ownership이나 dependency가 예상과 다름
+- Lock timeout, statement failure 또는 partial transaction
+- View output에 개인정보·민감정보 또는 검토하지 않은 column이 포함됨
+- Reader가 base relation, write, role switch나 허용 밖 schema에 접근할 수 있음
+
+Transaction 실패는 rollback하고 이전 view가 그대로인지 확인합니다. Commit 뒤 문제가 발견되면 신규
+application admission을 차단하고 DBA가 승인된 역순 DDL 또는 직전 view definition을 복구합니다.
+
+## Traffic-off acceptance
+
+단일 replica를 traffic 밖에서 시작하고 다음을 순서대로 확인합니다.
+
+1. 모든 reviewed package가 strict load되고 unknown file·field와 누락 secret은 startup을 실패시킵니다.
+2. Live catalog의 PostgreSQL 18/UTF-8, source/version marker, RLS 0개와 reader identity를 admission합니다.
+3. `/health`는 process 생존, `/ready`는 startup source와 query pool 준비 상태를 반영합니다.
+4. `/sources`와 `/meta`는 인증·source authorization 뒤 secret 없는 public projection만 반환합니다.
+5. `/query`는 두 revision, AST/allowlist, read-only transaction과 모든 resource limit을 적용합니다.
+6. 잘못된 credential, stale revision, write SQL, forbidden relation/function/operator와 unsupported OID를
+   fail-closed합니다.
+7. Timeout, manual cancel, disconnect와 shutdown에서 cancel·rollback·connection reuse를 확인합니다.
+
+실패 응답이나 log에서 token, password, DSN, SQL literal과 PostgreSQL 내부 message가 보이면 전환하지
 않습니다.
 
-`degraded`, inventory/RLS/result type mismatch, 설명되지 않은 definition/revision drift, mixed SQL policy,
-rollback 미검증은
-stop condition입니다.
+## Cutover와 rollback
 
-### Source view apply boundary
+Acceptance evidence와 실행 승인을 확인한 뒤에만 traffic을 제한적으로 연결합니다. 관찰할 항목은
+readiness, error code, queue/elapsed, row/byte truncation, plan rejection과 pool/query health입니다.
 
-Repository review는 protected database의 DDL 실행 승인이 아닙니다. Source의 `views.sql`을 적용하려면
-DB owner가 exact output과 no-PII를 확인하고, DBA가 exact target/access, traffic freeze, stop condition,
-rollback artifact와 append-only change-record owner를 별도로 승인받아야 합니다.
+다음이면 신규 admission을 막고 rollback합니다.
 
-Traffic을 끈 뒤 current view definition, comment, owner, ACL과 dependency를 보존합니다. DBA는 reader가
-아닌 migration authority로 exact database에서 `ON_ERROR_STOP`, bounded lock과 transaction을 사용해
-source package의 `views.sql`만 적용합니다. Runtime과 application container에는 SQL execution hook이나
-administrator credential을 주지 않습니다.
+- Readiness 또는 source health가 안정적으로 유지되지 않음
+- Revision mismatch가 예상 배포 창 밖에서 반복됨
+- Timeout·overload·unavailable이 승인된 기준을 넘음
+- Authorization, redaction, cancel·rollback 또는 result limit 위반
+- DB schema, role/grant, TLS나 semantic setting drift
 
-Apply 뒤 모든 reader-visible view의 marker/source/version, output column name/order/type/nullability,
-security option, owner와 ACL을 확인합니다. Reader는 exact view만 SELECT할 수 있고 base schema/table,
-CREATE와 DML은 거부돼야 합니다. Missing dependency, incompatible replacement, marker mismatch,
-unexpected view, broad/default privilege, timeout 또는 unexplained drift면 route를 열지 않습니다.
+Rollback 순서는 traffic 차단, 활성 query drain 또는 cancel, process 종료, 직전 image/config/route 복원,
+readiness와 negative probe 재검증입니다. DB 변경 rollback은 application rollback과 분리해 DBA가 수행합니다.
+부분 성공을 완료로 기록하지 않습니다.
 
-Rollback은 traffic을 계속 차단한 채 previous source/application artifact와 previous view definition,
-comment, owner/ACL을 함께 복구합니다. 호환되지 않는 column remove/name/type 변경은 forward apply 전에
-별도 reviewed down SQL이 있어야 합니다. Base table, business row, secret과 role을 자동 drop/delete하지
-않습니다.
+## 상태와 로그
 
-### Cutover and rollback
+- `GET /health`: process liveness
+- `GET /ready`: startup admission과 serving readiness
+- `GET /admin/health`: operator용 component 상태
+- `GET /admin/metrics`: bounded process-local counters
+- `DELETE /queries/{query_id}`: operator의 활성 query cancel 요청
 
-Old route를 닫고 신규 유입, active query와 source connection을 drain한 뒤 accepted single
-replica만 route합니다. Rollback은 route 차단 → new replica drain → 직전 image/config/SQL
-policy와 source inventory 복구 → readiness와 marker/revision/safety probe 확인 → route 순서입니다. 실제
-결과는 승인된 environment change record에 append-only/immutable하게 남깁니다. Repository에는
-날짜별 PASS 문서를 만들지 않고 exact commit과 CI provenance만 연결합니다.
+일반 log는 request/query ID, source, pseudonymous caller, public outcome, duration과 bounded resource 수치만
+기록합니다. Authorization header, raw request body, question, SQL, literal, DSN과 database error는 기록하지
+않습니다. Metrics는 process-local 관측값이며 billing, durable audit 또는 multi-replica 합계가 아닙니다.
 
-## Interactive Operator Shell
+## Local Compose
 
 ```bash
-uv run qm
+cp .env.fixture.example .env
+docker compose --env-file .env up --build -d
+curl -fsS http://127.0.0.1:3000/ready
+docker compose --env-file .env down
 ```
 
-`status`, `logs`, `diag`는 runtime 상태·log·동의 기반 diagnostic capture를 다룹니다. `source`는
-현재 checkout의 local source package와 budget을 읽는 read-only 명령입니다.
+Fixture database는 개발·CI 재현용입니다. Production inventory, backup이나 protected evidence가 아닙니다.
+Volume 삭제는 복구 불가능한 데이터 제거이므로 exact Compose project와 fixture 소유권을 확인하고 별도
+의도로 수행합니다.
 
-```text
-qm> status
-qm> status metrics
-qm> logs --event query_failed --since 2h
-qm> source list
-qm> source show market-voc
-qm> source validate
-```
+## Graceful shutdown
 
-`source list/show/validate`는 server, DB 또는 repository를 변경하지 않고 `views.sql`을 실행하지
-않습니다. Exact two-file layout, manifest schema, source ID 충돌과 budget profile 참조를 검사합니다.
-Source 변경은 package pull request, 필요한 DBA apply와 배포로만 반영합니다.
+SIGTERM 뒤 server는 신규 admission을 중단하고 하나의 monotonic shutdown deadline 안에서 활성 query를
+drain합니다. 남은 query는 cancel하고 transaction rollback 뒤 pool/catalog/metadata resource를 닫습니다.
+Orchestrator의 stop grace는 application grace와 cleanup overhead보다 길어야 합니다. 강제 kill이 발생하면
+미완료 cleanup으로 기록하고 다음 start 전에 DB session과 lock을 확인합니다.
 
-`logs`의 기본 window/limit는 30분/50건이고 최대 31일/1,000건입니다. `diag list`는 기본 1시간/20건,
-최대 7일/100건입니다. 모든 출력은 bounded하며 secret, token, raw request body와 내부 DB 오류를
-표시하지 않습니다.
-
-`diag show`는 question 원문이 terminal에 나타날 수 있고 `diag purge`는 복구할 수 없으므로
-reason과 exact confirmation이 필요합니다. Protected 환경의 실제 조회·삭제는 별도 operational
-approval과 change record를 요구합니다.
-
-## Logging Policy
-
-Application/audit log는 one-line JSON을 기록하며 SQL text, question, request body, bearer token,
-Authorization header, credential과 내부 DB error를 기록하지 않습니다. Query의 bounded
-identifier, duration, row/byte, truncation과 공개 error code만 남깁니다. Formatter는 token/secret
-assignment과 quoted SQL literal을 방어적으로 redact합니다. `psycopg`/`psycopg_pool` dependency
-log는 driver message를 출력하지 않고 고정된 `database_dependency_log` event로 정규화합니다.
-
-PostgreSQL transaction-local `application_name=query-man:<query_id>`로 실행 중 activity와 audit를
-연결할 수 있습니다. 비용 조사는 [query cost runbook](query-cost-control.md)을 따릅니다.
-
-### Consent-gated diagnostic capture
-
-Capture는 기본 disabled입니다. Database path, 별도 32-byte key, key ID를 함께 설정하고 caller에
-만료 가능한 `diagnostic_consent` receipt가 있을 때만 최대 7일 encrypted store에 저장합니다.
-
-```text
-QUERY_MAN_DIAGNOSTIC_CAPTURE_DATABASE=/var/lib/query-man/diagnostics/capture.sqlite3
-QUERY_MAN_DIAGNOSTIC_CAPTURE_KEY=<URL-safe Base64 32 bytes>
-QUERY_MAN_DIAGNOSTIC_CAPTURE_KEY_ID=<lowercase key slug>
-QUERY_MAN_DIAGNOSTIC_CAPTURE_DAILY_BYTES=104857600
-```
-
-Question 원문 또는 literal을 `NULL`로 바꾼 single-SELECT shape만 저장합니다. Header, token, raw
-body, invalid SQL, result row와 DB error는 저장하지 않습니다. TTL/purge를 막지 않으며 decrypt·purge·key
-rotation은 대상, 실행자, 출력 처리와 stop condition을 확인한 별도 승인이 필요합니다.
-
-## Retired Source Authority Procedures
-
-이전 Control DB migration, runtime source mutation, source authority cutover와 recovery 절차는 현재
-구현에 적용할 수 없습니다. 과거 ADR·evidence의 사실은 그 commit의 Git 이력에 보존됩니다.
-
-### Canonical-Time Coordinated Cutover
-
-해당 managed cutover는 retired됐으며 현재 runbook으로 실행하지 않습니다. 과거 절차는
-[Git 기록 안내](verification/README.md)의 archive commit에서만 확인합니다.
-
-## Health And Metrics
-
-| Endpoint | Audience | External behavior |
-|---|---|---|
-| `GET /health` | Public/load balancer | Process liveness `ok` |
-| `GET /ready` | Public/load balancer | Aggregate status; source ID를 노출하지 않음 |
-| `GET /admin/health` | Query Man operator | Source별 bounded health |
-| `GET /admin/metrics` | Query Man operator | Source/component health와 bounded counter/total snapshot |
-
-Startup은 source package manifest에 등록된 source별 metadata 경로를 병렬 probe합니다. Source health는 마지막 metadata
-refresh 결과와 query 경로에서 관찰한 DB dependency 상태를 합쳐 계산하며, 매 health 요청마다 DB를
-ping하지 않습니다. Pool connection 공급 실패, PostgreSQL connection/session 오류는 해당 source를 즉시
-`unavailable`로 내립니다. Metadata와 query는 별도 pool을 사용하므로 metadata refresh 성공은 query
-장애를 덮지 않으며, 성공한 query `COMMIT`만 query 경로의 장애 상태를 복구합니다.
-
-| Status | Meaning | `/ready` HTTP |
-|---|---|---:|
-| `initializing` | Source inventory가 아직 probe되지 않음 | 503 |
-| `ready` | 모든 active source가 healthy | 200 |
-| `degraded` | 일부 source에 문제가 있지만 healthy/stale source가 있음 | 200 |
-| `unavailable` | Healthy/stale source가 하나도 없음 | 503 |
-| `shutting_down` | 신규 작업을 받지 않음 | 503 |
-
-`degraded`는 HTTP 200이지만 launch acceptance의 exact readiness는 아닙니다. Counter는 process
-restart 때 초기화됩니다. QPS collector는 source별 `query_request_started` 증가량을 replica 전체에서
-합산하고 reset을 처리하며, public dashboard에는 source label을 노출하지 않습니다. Raw 누적값이나 QPS
-하나만 HPA 신호로 쓰지 않고 queue/elapsed latency, `query_queue_rejected` 비율과 DB capacity를 함께
-확인합니다. 별도 background DB probe나 자동 query retry는 없습니다. 모든 source가 `unavailable`이라
-load balancer가 일반 traffic을 막은 뒤에는 operator/canary의 검증 query 또는 process restart로 회복을
-확인해야 합니다.
-
-## Local Container Operations
-
-```bash
-test -f .env || cp .env.fixture.example .env
-docker compose up -d --wait postgres
-docker compose up -d --build --wait query-man
-./scripts/verify-container.sh
-```
-
-`.env.fixture.example`의 `COMPOSE_FILE`이 base와 fixture overlay를 함께 선택합니다. Application port는
-container `3000`, host loopback `${QUERY_MAN_PORT:-3000}`입니다. Token과 reader password는 `.env`에서
-주입하고 image build context·Git·application log에 넣지 않습니다.
-Application container에 PostgreSQL administrator password를 전달하지 않습니다.
-Fresh volume은 PostgreSQL init으로 3행짜리 test-local source를 준비합니다. 기존 local volume에 같은
-fixture를 다시 적용할 때만 `./scripts/apply-db.sh`를 실행합니다. Production source의 `views.sql`은 이
-스크립트로 적용하지 않습니다.
-
-MCP의 Host/Origin, content type, protocol version과 duplicate security header를 fail-closed로 검증합니다.
-Reverse proxy 배포는 exact HTTPS Host/Origin allowlist를 설정하고 wildcard를 사용하지 않습니다.
-Client disconnect는 실행 중 query를 cancel·rollback하며 DB timeout은 최종 상한입니다.
-
-## Alert Policy
-
-| Signal | Warning | Critical / action |
-|---|---|---|
-| Metadata refresh failure | source별 5분에 3회 또는 `stale` | `unavailable`이면 즉시 조사 |
-| Query reject | 10분 baseline의 3배 또는 20/min | 공격·오류 client 배포 확인 |
-| Query admission pressure | 평균 source semaphore queue가 timeout의 50% | 80% 또는 `query_queue_rejected` 발생 |
-| DB connection supply | `query_pool_exhausted` 1회 | 5회/5분이면 DB/network/reader와 pool 상태 조사 |
-| Timeout | source별 5분에 3회 | 5분 실행의 5% 초과 시 fingerprint/DB activity 확인 |
-| Truncation | 10분 성공의 10% | 25%면 질문·집계·limit 검토; limit 즉시 상향 금지 |
-| Forced shutdown cancel | 1회 | grace, 장기 query와 drain 순서 조사 |
-
-## Security Update Policy
-
-CI의 dependency audit, secret scan, filesystem/config scan과 image vulnerability scan을 유지합니다. 보안
-finding은 dependency/image update로 먼저 해소하고, 예외은 exact path·근거·만료일을 가진
-최소 범위로만 허용합니다.
-
-## Graceful Shutdown
-
-`QUERY_MAN_SHUTDOWN_GRACE_MS`는 단계별 timeout이 아니라 하나의 shared graceful-work budget입니다.
-최초 SIGTERM/SIGINT에서 monotonic deadline을 한 번 기록하고 readiness와 executor admission을 먼저
-닫습니다. Signal 없는 server shutdown은 Uvicorn shutdown 시작에서, direct lifespan 종료는 cleanup
-시작에서 같은 방식으로 deadline을 만들며 반복 호출은 이를 연장하지 않습니다.
-
-Uvicorn은 configured grace를 초 단위로 올림한 기존 timeout으로 listener와 accepted task를 정리합니다.
-그동안 지난 wall-clock time은 application deadline에서 차감합니다. Lifespan shutdown이 시작되면 query
-executor에는 remaining milliseconds만 전달하고, 그 뒤 diagnostic capture에는 다시 계산한
-`min(remaining, 2초)`를 전달합니다. Remaining이 0이어도 `drain(0)`, `capture.close(0)`과
-query/catalog/metadata close를 생략하지 않습니다. Query는 cancel·rollback하고 capture는 새 admission을
-막은 뒤 active SQLite connection interrupt와 queued drop을 시도합니다.
-
-이 deadline은 graceful wait의 cutoff이며 process 종료 완료시한은 아닙니다. PostgreSQL cancel·rollback,
-pool/resource close, child lifespan exit, Uvicorn handoff·초 단위 반올림과 이미 commit에 진입한 diagnostic
-worker는 deadline 뒤에도 남을 수 있습니다. 두 번째 SIGINT의 force-exit이나 SIGKILL로 ASGI lifespan이
-시작되지 않으면 application cleanup도 보장되지 않습니다. Orchestrator termination grace는
-`QUERY_MAN_SHUTDOWN_GRACE_MS`에 이 forced-cleanup/process overhead를 더한 값보다 길어야 합니다. 기본
-10초 budget에 Compose의 30초 `stop_grace_period`를 유지합니다. Transaction-local `TimeZone=UTC`는
-commit, timeout, disconnect, forced cancel 후 pool에 남지 않아야 합니다.
+현재 protected 작업과 완료 조건은 [Active TODO](development-todo.md), query limit과 조사 순서는
+[Query 제한](query-cost-control.md), source 변경 checklist는
+[Source extension](source-extension-checklist.md)에 있습니다.

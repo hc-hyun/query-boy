@@ -2,44 +2,22 @@ from __future__ import annotations
 
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
-from types import MappingProxyType
-from typing import get_type_hints
 
 import pytest
 import yaml
 
-from query_man.delivery.gateway import GatewayService
-from query_man.guarded_query.query import QueryService
-from query_man.metadata.service import MetadataService
-from query_man.runtime.composition import _probe_registered_sources
-from query_man.source_catalog.models import SourceProfile
 from query_man.source_catalog.registry import (
     POSTGRES_IDENTIFIER_MAX_LENGTH,
     RegistryConfigurationError,
-    SourceReader,
     SourceRegistry,
     load_budget_profiles,
 )
 from tests.helpers import DUMMY_ENVIRONMENT, ROOT_DIRECTORY, load_test_registry
 
 
-def _public_methods(protocol: type[object]) -> set[str]:
-    return {
-        name
-        for name, value in vars(protocol).items()
-        if not name.startswith("_") and callable(value)
-    }
-
-
 def _development_manifest() -> dict[str, object]:
     raw: object = yaml.safe_load(
-        (
-            ROOT_DIRECTORY
-            / "config"
-            / "sources"
-            / "development-issues"
-            / "source.yaml"
-        ).read_text(encoding="utf-8")
+        (ROOT_DIRECTORY / "config" / "sources" / "development-issues" / "source.yaml").read_text(encoding="utf-8")
     )
     assert isinstance(raw, dict)
     return raw
@@ -70,104 +48,27 @@ def _load_single_manifest(
     )
 
 
-def test_source_reader_protocol_has_exact_approved_shape() -> None:
-    assert _public_methods(SourceReader) == {"get", "list", "source_ids"}
-    assert get_type_hints(SourceReader.list) == {
-        "return": list[dict[str, str]],
-    }
-    assert get_type_hints(SourceReader.get) == {
-        "source_id": str,
-        "return": SourceProfile | None,
-    }
-    assert get_type_hints(SourceReader.source_ids) == {
-        "return": frozenset[str],
-    }
-
-
-def test_source_consumers_receive_only_the_capability_they_need() -> None:
-    assert get_type_hints(GatewayService.__init__)["registry"] is SourceReader
-    assert get_type_hints(MetadataService.__init__)["registry"] is SourceReader
-    assert get_type_hints(QueryService.__init__)["registry"] is SourceReader
-    assert get_type_hints(_probe_registered_sources)["registry"] is SourceReader
-
-
-def test_published_source_profile_graph_is_recursively_immutable() -> None:
+def test_published_source_profile_is_immutable() -> None:
     registry = load_test_registry()
     source = registry.get("development-issues")
     assert source is not None
-    overlay = source.semantic_overlay
 
     assert isinstance(source.allowed_schemas, tuple)
     assert isinstance(source.allowed_relation_kinds, tuple)
-    assert isinstance(overlay.relations, tuple)
-    assert isinstance(overlay.joins, tuple)
-    assert isinstance(overlay.business_terms, tuple)
-    assert isinstance(overlay.question_rules, tuple)
-    assert isinstance(overlay.composition_hints, tuple)
-    for relation in overlay.relations:
-        assert isinstance(relation.aliases, tuple)
-        assert isinstance(relation.use_for, tuple)
-        assert isinstance(relation.column_aliases, MappingProxyType)
-        assert isinstance(relation.value_hints, MappingProxyType)
-        assert all(isinstance(items, tuple) for items in relation.column_aliases.values())
-        assert all(isinstance(items, tuple) for items in relation.value_hints.values())
-        assert isinstance(relation.measures, tuple)
-        assert all(isinstance(measure.aliases, tuple) for measure in relation.measures)
-        if relation.grain is not None:
-            assert isinstance(relation.grain.key_columns, tuple)
-    for join in overlay.joins:
-        assert isinstance(join.column_pairs, tuple)
-        assert all(isinstance(pair, MappingProxyType) for pair in join.column_pairs)
-    for term in overlay.business_terms:
-        assert isinstance(term.aliases, tuple)
-        assert isinstance(term.predicates, tuple)
-        assert all(isinstance(predicate.values, tuple) for predicate in term.predicates)
-    for rule in overlay.question_rules:
-        assert isinstance(rule.phrases, tuple)
-        assert isinstance(rule.missing_concepts, tuple)
-        assert isinstance(rule.options, tuple)
-    for hint in overlay.composition_hints:
-        assert isinstance(hint.phrases, tuple)
-        assert isinstance(hint.combine_keys, tuple)
 
     with pytest.raises(FrozenInstanceError):
         source.name = "mutated"  # type: ignore[misc]
-    with pytest.raises(TypeError):
-        overlay.relations[0].column_aliases["mutated"] = ()  # type: ignore[index]
-    with pytest.raises(TypeError):
-        overlay.joins[0].column_pairs[0]["left"] = "mutated"  # type: ignore[index]
-    with pytest.raises(AttributeError):
-        overlay.relations.append(overlay.relations[0])  # type: ignore[attr-defined]
 
 
-def test_source_profile_construction_does_not_retain_mutable_aliases() -> None:
+def test_source_profile_construction_does_not_retain_mutable_schema_list() -> None:
     source = load_test_registry().get("development-issues")
     assert source is not None
-    relation = source.semantic_overlay.relations[0]
-    join = source.semantic_overlay.joins[0]
     schemas = list(source.allowed_schemas)
-    aliases = ["original-alias"]
-    column_aliases = {"issue_id": ["original-column-alias"]}
-    pair = {"left": "issue_id", "right": "issue_id"}
 
     copied_source = replace(source, allowed_schemas=schemas)  # type: ignore[arg-type]
-    copied_relation = replace(  # type: ignore[arg-type]
-        relation,
-        aliases=aliases,
-        column_aliases=column_aliases,
-    )
-    copied_join = replace(join, column_pairs=[pair])  # type: ignore[arg-type]
     schemas.append("mutated")
-    aliases.append("mutated")
-    column_aliases["issue_id"].append("mutated")
-    pair["left"] = "mutated"
 
     assert "mutated" not in copied_source.allowed_schemas
-    assert copied_relation.aliases == ("original-alias",)
-    assert copied_relation.column_aliases["issue_id"] == (
-        "original-column-alias",
-    )
-    assert copied_join.column_pairs[0]["left"] == "issue_id"
 
 
 def test_loads_public_source_fields_only() -> None:
@@ -187,13 +88,8 @@ def test_loads_public_source_fields_only() -> None:
     listed = registry.list()
     assert len(registry) == len(registry.source_ids())
     assert [source["source_id"] for source in listed] == sorted(registry.source_ids())
-    assert all(
-        set(source) == {"source_id", "name", "description"}
-        for source in listed
-    )
-    development_public = next(
-        source for source in listed if source["source_id"] == "development-issues"
-    )
+    assert all(set(source) == {"source_id", "name", "description"} for source in listed)
+    development_public = next(source for source in listed if source["source_id"] == "development-issues")
     assert development_public == {
         "source_id": "development-issues",
         "name": "개발 문제점",
@@ -221,9 +117,7 @@ def test_rejects_retired_managed_observability_field(tmp_path: Path) -> None:
 
 
 def test_loads_versioned_hard_session_budget() -> None:
-    budget = load_budget_profiles(
-        ROOT_DIRECTORY / "config" / "budget-profiles.yaml"
-    )["interactive"]
+    budget = load_budget_profiles(ROOT_DIRECTORY / "config" / "budget-profiles.yaml")["interactive"]
 
     assert budget.version == 2
     assert budget.work_mem_kb == 8_192
@@ -236,11 +130,7 @@ def test_loads_versioned_hard_session_budget() -> None:
 def test_budget_accepts_pool_capacity_above_query_concurrency(
     tmp_path: Path,
 ) -> None:
-    raw = yaml.safe_load(
-        (ROOT_DIRECTORY / "config" / "budget-profiles.yaml").read_text(
-            encoding="utf-8"
-        )
-    )
+    raw = yaml.safe_load((ROOT_DIRECTORY / "config" / "budget-profiles.yaml").read_text(encoding="utf-8"))
     raw["profiles"]["interactive"]["max_pool_size"] = 3
     path = tmp_path / "budget-profiles.yaml"
     path.write_text(yaml.safe_dump(raw), encoding="utf-8")
@@ -252,11 +142,7 @@ def test_budget_accepts_pool_capacity_above_query_concurrency(
 
 
 def test_rejects_query_concurrency_above_pool_capacity(tmp_path: Path) -> None:
-    raw = yaml.safe_load(
-        (ROOT_DIRECTORY / "config" / "budget-profiles.yaml").read_text(
-            encoding="utf-8"
-        )
-    )
+    raw = yaml.safe_load((ROOT_DIRECTORY / "config" / "budget-profiles.yaml").read_text(encoding="utf-8"))
     raw["profiles"]["interactive"]["max_concurrent_queries"] = 3
     path = tmp_path / "budget-profiles.yaml"
     path.write_text(yaml.safe_dump(raw), encoding="utf-8")
@@ -285,11 +171,7 @@ def test_rejects_unsafe_hard_session_budget(
     field: str,
     value: object,
 ) -> None:
-    raw = yaml.safe_load(
-        (ROOT_DIRECTORY / "config" / "budget-profiles.yaml").read_text(
-            encoding="utf-8"
-        )
-    )
+    raw = yaml.safe_load((ROOT_DIRECTORY / "config" / "budget-profiles.yaml").read_text(encoding="utf-8"))
     raw["profiles"]["interactive"][field] = value
     path = tmp_path / "budget-profiles.yaml"
     path.write_text(yaml.safe_dump(raw), encoding="utf-8")
@@ -299,11 +181,7 @@ def test_rejects_unsafe_hard_session_budget(
 
 
 def test_rejects_older_budget_schema_version(tmp_path: Path) -> None:
-    raw = yaml.safe_load(
-        (ROOT_DIRECTORY / "config" / "budget-profiles.yaml").read_text(
-            encoding="utf-8"
-        )
-    )
+    raw = yaml.safe_load((ROOT_DIRECTORY / "config" / "budget-profiles.yaml").read_text(encoding="utf-8"))
     raw["version"] = 1
     path = tmp_path / "budget-profiles.yaml"
     path.write_text(yaml.safe_dump(raw), encoding="utf-8")
@@ -449,9 +327,7 @@ def test_database_migration_ref_must_point_to_sibling_views_sql(
     raw = _development_manifest()
     provenance = raw["provenance"]
     assert isinstance(provenance, dict)
-    provenance["database_migration_ref"] = (
-        "unrelated/development-issues/views.sql"
-    )
+    provenance["database_migration_ref"] = "unrelated/development-issues/views.sql"
 
     with pytest.raises(RegistryConfigurationError, match=r"sibling views\.sql"):
         _load_single_manifest(tmp_path, raw)
@@ -478,8 +354,8 @@ def test_system_schemas_are_rejected(tmp_path: Path) -> None:
         )
 
 
-@pytest.mark.parametrize("version", [0, 1, 2, 3, 5, "4", 4.0, True])
-def test_rejects_non_v4_source_manifest(tmp_path: Path, version: object) -> None:
+@pytest.mark.parametrize("version", [0, 1, 2, 3, 4, 6, "5", 5.0, True])
+def test_rejects_non_v5_source_manifest(tmp_path: Path, version: object) -> None:
     raw = _development_manifest()
     raw["version"] = version
 
@@ -590,16 +466,11 @@ def test_accepts_postgresql_identifier_boundary_in_source_fields(
     identifier = "a" * POSTGRES_IDENTIFIER_MAX_LENGTH
     raw["allowed_schemas"] = [identifier]
     raw["budget_profile"] = identifier
-    raw["semantic_overlay"] = {}
     connection = raw["connection"]
     assert isinstance(connection, dict)
     connection["database"] = identifier
     connection["user"] = identifier
-    budget_raw = yaml.safe_load(
-        (ROOT_DIRECTORY / "config" / "budget-profiles.yaml").read_text(
-            encoding="utf-8"
-        )
-    )
+    budget_raw = yaml.safe_load((ROOT_DIRECTORY / "config" / "budget-profiles.yaml").read_text(encoding="utf-8"))
     assert isinstance(budget_raw, dict)
     profiles = budget_raw["profiles"]
     assert isinstance(profiles, dict)
@@ -607,9 +478,7 @@ def test_accepts_postgresql_identifier_boundary_in_source_fields(
     budget_file = tmp_path / "budget-profiles.yaml"
     budget_file.write_text(yaml.safe_dump(budget_raw), encoding="utf-8")
 
-    source = _load_single_manifest(tmp_path, raw, budget_file=budget_file).get(
-        "development-issues"
-    )
+    source = _load_single_manifest(tmp_path, raw, budget_file=budget_file).get("development-issues")
 
     assert source is not None
     assert source.budget.name == identifier
@@ -740,9 +609,13 @@ def test_source_relation_kind_allowlist_is_exactly_view(
         _load_single_manifest(tmp_path, raw)
 
 
-def test_yaml_registry_rejects_every_rls_source(tmp_path: Path) -> None:
+@pytest.mark.parametrize("retired_field", ["tenant_isolation", "semantic_overlay"])
+def test_rejects_retired_source_policy_fields(
+    tmp_path: Path,
+    retired_field: str,
+) -> None:
     raw = _development_manifest()
-    raw["tenant_isolation"] = "rls"
+    raw[retired_field] = "rls" if retired_field == "tenant_isolation" else {}
 
-    with pytest.raises(RegistryConfigurationError, match="RLS sources are not supported"):
+    with pytest.raises(RegistryConfigurationError, match=retired_field):
         _load_single_manifest(tmp_path, raw)

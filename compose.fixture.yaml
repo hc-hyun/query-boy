@@ -42,17 +42,5 @@ services:
     volumes:
       - ./tests/fixtures/config:/app/test-fixtures/config:ro
 
-  query-man-replica:
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      FIXTURE_SOURCE_READER_PASSWORD: ${DEVELOPMENT_ISSUES_READER_PASSWORD}
-      POSTGRES_PORT: "5432"
-      QUERY_MAN_POSTGRES_HOST: postgres
-      QUERY_MAN_SOURCE_DIR: /app/test-fixtures/config/sources
-    volumes:
-      - ./tests/fixtures/config:/app/test-fixtures/config:ro
-
 volumes:
   postgres_data:

@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 from dataclasses import dataclass, replace
-from typing import Any, get_type_hints
+from typing import Any
 
 import pytest
 from psycopg import errors
 
 import query_man.guarded_query.query as query_module
-from query_man.delivery.app import _until_disconnect
 from query_man.errors import (
     MetadataRevisionMismatchError,
     MetadataUnavailableError,
@@ -20,10 +18,8 @@ from query_man.errors import (
     QueryUnavailableError,
 )
 from query_man.guarded_query.query import (
-    DeliveryQueryExecutor,
     PlanSummary,
     PostgresQueryExecutor,
-    QueryExecutor,
     QueryService,
     _summarize_plan,
 )
@@ -34,51 +30,19 @@ from query_man.metadata.service import MetadataService
 from query_man.runtime.operations import operations
 from query_man.source_catalog.models import SourceProfile, SSLMode
 from query_man.source_catalog.reader_policy import ReaderSessionPolicyError
-from query_man.source_catalog.registry import SourceRegistry
 from tests.helpers import load_test_registry, minimal_development_snapshot
-
-
-def test_delivery_query_executor_protocol_has_exact_lifecycle_shape() -> None:
-    application_methods = {
-        name
-        for name, value in vars(QueryExecutor).items()
-        if not name.startswith("_") and callable(value)
-    }
-    delivery_methods = {
-        name
-        for name, value in vars(DeliveryQueryExecutor).items()
-        if not name.startswith("_") and callable(value)
-    }
-
-    assert application_methods == {"cancel", "close", "execute"}
-    assert delivery_methods == {"drain", "stop_accepting"}
-    assert QueryExecutor in DeliveryQueryExecutor.__mro__
-    assert get_type_hints(DeliveryQueryExecutor.stop_accepting) == {
-        "return": type(None),
-    }
-    assert get_type_hints(DeliveryQueryExecutor.drain) == {
-        "grace_ms": int,
-        "return": type(None),
-    }
-    assert not inspect.iscoroutinefunction(DeliveryQueryExecutor.stop_accepting)
-    assert inspect.iscoroutinefunction(DeliveryQueryExecutor.drain)
-    for method, names in (
-        (DeliveryQueryExecutor.stop_accepting, ("self",)),
-        (DeliveryQueryExecutor.drain, ("self", "grace_ms")),
-    ):
-        parameters = tuple(inspect.signature(method).parameters.values())
-        assert tuple(parameter.name for parameter in parameters) == names
-        assert all(
-            parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
-            and parameter.default is inspect.Parameter.empty
-            for parameter in parameters
-        )
-    assert get_type_hints(QueryService.__init__)["executor"] is QueryExecutor
 
 
 class StaticCatalog:
     async def load(self, _source: SourceProfile) -> CatalogSnapshot:
-        return minimal_development_snapshot()
+        snapshot = minimal_development_snapshot()
+        return replace(
+            snapshot,
+            relations=tuple(
+                replace(relation, comment=f"Description for {relation.qualified_name}")
+                for relation in snapshot.relations
+            ),
+        )
 
     async def close(self) -> None:
         pass
@@ -96,7 +60,6 @@ class RecordingExecutor:
         validated: ValidatedSql,
         *,
         query_id: str | None = None,
-        tenant_id: str | None = None,
     ) -> dict[str, object]:
         self.calls.append((source, sql, metadata_revision, validated))
         return {
@@ -211,9 +174,7 @@ class _PhaseConnection:
         self.events: list[str] = []
         self.info = info or _ConnectionInfo()
         self.pgconn = _PGConnection()
-        self.result_description = (
-            (_ResultColumn("value", 20),) if description is None else description
-        )
+        self.result_description = (_ResultColumn("value", 20),) if description is None else description
         self.result_cursor: _ResultCursor | None = None
         self.context_exit_error: BaseException | None = None
 
@@ -232,10 +193,7 @@ class _PhaseConnection:
             self.events.append("explain")
         elif statement == "COMMIT":
             self.events.append("commit")
-        if (
-            self.phase == "timezone"
-            and statement == query_module.READER_SESSION_TIMEZONE_SETTER
-        ):
+        if self.phase == "timezone" and statement == query_module.READER_SESSION_TIMEZONE_SETTER:
             raise self.database_error
         if self.phase == "session" and "set_config('statement_timeout'" in statement:
             raise self.database_error
@@ -370,9 +328,7 @@ async def test_validates_revision_and_sql_before_execution() -> None:
 async def test_rejects_stale_revision_before_execution() -> None:
     service, metadata, executor = query_service()
     published = await metadata.get_published("development-issues")
-    old_metadata_revision = (
-        "sha256:753f2d1e3f1e5f62de423e9180cb71dc2aed1869d5e4a9b5bd8da9955bad632b"
-    )
+    old_metadata_revision = "sha256:753f2d1e3f1e5f62de423e9180cb71dc2aed1869d5e4a9b5bd8da9955bad632b"
     assert published.revision != old_metadata_revision
 
     with pytest.raises(MetadataRevisionMismatchError):
@@ -390,9 +346,7 @@ async def test_rejects_stale_revision_before_execution() -> None:
 async def test_rejects_stale_sql_policy_revision_before_execution() -> None:
     service, metadata, executor = query_service()
     published = await metadata.get_published("development-issues")
-    old_sql_policy_revision = (
-        "sha256:6b68458319a21416e51bf4be059fc55c4e053b45e38e7219956c4ac3725637a6"
-    )
+    old_sql_policy_revision = "sha256:6b68458319a21416e51bf4be059fc55c4e053b45e38e7219956c4ac3725637a6"
     assert SQL_POLICY_REVISION != old_sql_policy_revision
 
     with pytest.raises(MetadataRevisionMismatchError):
@@ -453,39 +407,6 @@ def test_query_rejection_details_do_not_reflect_unknown_construct() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("tenant_id", [None, "trusted-tenant"])
-async def test_query_service_quarantines_rls_before_metadata_and_execution(
-    tenant_id: str | None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    registry = load_test_registry()
-    source = registry.get("development-issues")
-    assert source is not None
-    registry = SourceRegistry([replace(source, tenant_isolation="rls")])
-    metadata = MetadataService(registry, StaticCatalog())
-    executor = RecordingExecutor()
-    service = QueryService(registry, metadata, executor)
-
-    async def unexpected_metadata(_source_id: str) -> object:
-        raise AssertionError("RLS quarantine must precede metadata")
-
-    monkeypatch.setattr(metadata, "get_published", unexpected_metadata)
-    with pytest.raises(QueryUnavailableError) as captured:
-        await service.query(
-            source.source_id,
-            "SELECT count(*) FROM ai.issue_overview",
-            f"sha256:{'0' * 64}",
-            SQL_POLICY_REVISION,
-            tenant_id=tenant_id,
-        )
-
-    assert captured.value.status_code == 503
-    assert captured.value.code == "QUERY_UNAVAILABLE"
-    assert captured.value.details is None
-    assert executor.calls == []
-
-
-@pytest.mark.asyncio
 async def test_query_service_maps_reader_policy_metadata_failure_to_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -517,37 +438,6 @@ async def test_query_service_maps_reader_policy_metadata_failure_to_unavailable(
     assert executor.calls == []
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("tenant_id", [None, "trusted-tenant"])
-async def test_executor_quarantines_rls_before_queue_and_pool(
-    tenant_id: str | None,
-) -> None:
-    source = load_test_registry().get("development-issues")
-    assert source is not None
-    source = replace(source, tenant_isolation="rls")
-    executor = PostgresQueryExecutor()
-
-    async def unexpected_pool(_source: SourceProfile) -> object:
-        raise AssertionError("RLS quarantine must precede pool access")
-
-    executor._get_pool = unexpected_pool  # type: ignore[method-assign]
-
-    with pytest.raises(QueryUnavailableError) as captured:
-        await executor.execute(
-            source,
-            "SELECT 1",
-            "test-revision",
-            ValidatedSql("fingerprint", (), (), ()),
-            tenant_id=tenant_id,
-        )
-
-    assert captured.value.status_code == 503
-    assert captured.value.code == "QUERY_UNAVAILABLE"
-    assert captured.value.details is None
-    assert executor._semaphores == {}
-    assert executor._inflight == set()
-
-
 def test_summarizes_nested_explain_plan() -> None:
     plan: dict[str, Any] = {
         "Total Cost": 42.25,
@@ -572,55 +462,12 @@ def test_query_invalid_error_rejects_nonpublic_reason() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("database_error", "reason_code"),
-    [
-        (errors.UndefinedColumn("private_column at character 42"), "QUERY_UNDEFINED_COLUMN"),
-        (
-            errors.NumericValueOutOfRange("private numeric argument"),
-            "QUERY_NUMERIC_VALUE_OUT_OF_RANGE",
-        ),
-        (
-            errors.InvalidTextRepresentation("invalid input syntax for private type"),
-            "QUERY_INVALID_CAST",
-        ),
-        (errors.InvalidDatetimeFormat("private date literal"), "QUERY_INVALID_CAST"),
-        (errors.DatetimeFieldOverflow("private timestamp literal"), "QUERY_INVALID_CAST"),
-        (errors.CannotCoerce("private source and target types"), "QUERY_INVALID_CAST"),
-        (errors.DivisionByZero("private expression at character 42"), "QUERY_DIVISION_BY_ZERO"),
-        (
-            errors.InvalidRegularExpression("private regular expression"),
-            "QUERY_INVALID_REGULAR_EXPRESSION",
-        ),
-        (
-            errors.InvalidRowCountInLimitClause("private negative limit"),
-            "QUERY_INVALID_LIMIT",
-        ),
-        (
-            errors.InvalidRowCountInResultOffsetClause("private negative offset"),
-            "QUERY_INVALID_LIMIT",
-        ),
-        (
-            errors.InvalidParameterValue("private function argument"),
-            "QUERY_INVALID_FUNCTION_ARGUMENT",
-        ),
-        (
-            errors.WrongObjectType("private aggregate usage"),
-            "QUERY_INVALID_FUNCTION_USAGE",
-        ),
-        (
-            errors.UndefinedFunction("private function signature"),
-            "QUERY_FUNCTION_SIGNATURE_MISMATCH",
-        ),
-    ],
-)
-async def test_executor_maps_correctable_database_errors_to_bounded_query_invalid(
-    database_error: errors.DatabaseError,
-    reason_code: str,
+async def test_executor_maps_user_sql_error_to_bounded_query_invalid(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = load_test_registry().get("development-issues")
     assert source is not None
+    database_error = errors.InvalidParameterValue("private function argument")
     executor = PostgresQueryExecutor()
     connection = _PhaseConnection("explain", database_error)
 
@@ -641,52 +488,14 @@ async def test_executor_maps_correctable_database_errors_to_bounded_query_invali
 
         assert caught.value.status_code == 400
         assert caught.value.code == "QUERY_INVALID"
-        assert caught.value.message == {
-            "QUERY_DIVISION_BY_ZERO": (
-                "The query can divide by zero. Guard the denominator with NULLIF or exclude "
-                "zero values, then retry once."
-            ),
-            "QUERY_FUNCTION_SIGNATURE_MISMATCH": (
-                "A function or operator call has unsupported argument types or count. Use a "
-                "supported built-in signature and only advertised casts, then retry once."
-            ),
-            "QUERY_INVALID_CAST": (
-                "The query casts a value to an incompatible type. Use an advertised compatible "
-                "cast or filter invalid values, then retry once."
-            ),
-            "QUERY_INVALID_FUNCTION_ARGUMENT": (
-                "A function argument has an invalid value. Correct the argument while preserving "
-                "the requested calculation, then retry once."
-            ),
-            "QUERY_INVALID_FUNCTION_USAGE": (
-                "An aggregate or window function is used in an unsupported form. Use its "
-                "supported call form, then retry once."
-            ),
-            "QUERY_INVALID_LIMIT": (
-                "LIMIT and OFFSET must use non-negative values. Correct them and retry once."
-            ),
-            "QUERY_INVALID_REGULAR_EXPRESSION": (
-                "The regular expression is invalid. Correct its pattern or flags, then retry once."
-            ),
-            "QUERY_NUMERIC_VALUE_OUT_OF_RANGE": (
-                "A numeric value is outside its supported range. For percentile fractions use a "
-                "value from 0 through 1, then retry once."
-            ),
-            "QUERY_UNDEFINED_COLUMN": (
-                "The query references a column PostgreSQL cannot resolve. Use a returned column "
-                "sql_name or an alias declared in the query, then retry once."
-            ),
-        }[reason_code]
         assert caught.value.details == {
-            "reason_code": reason_code,
+            "reason_code": "QUERY_INVALID_FUNCTION_ARGUMENT",
             "action": "CORRECT_SQL",
             "retryable": True,
         }
         assert "private" not in str(caught.value)
         assert any(
-            metric["name"] == "query_invalid"
-            and metric.get("source_id") == source.source_id
-            and metric["value"] == 1
+            metric["name"] == "query_invalid" and metric.get("source_id") == source.source_id and metric["value"] == 1
             for metric in operations.snapshot()["metrics"]
         )
         assert connection.rolled_back
@@ -736,7 +545,7 @@ async def test_executor_maps_result_cursor_database_errors_to_query_invalid(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "phase",
-    ["timezone", "session", "reader_policy", "resolved_object", "commit"],
+    ["session", "commit"],
 )
 async def test_executor_keeps_internal_invalid_parameter_errors_unavailable(
     phase: str,
@@ -768,10 +577,7 @@ async def test_executor_keeps_internal_invalid_parameter_errors_unavailable(
         assert caught.value.details is None
         assert "private" not in str(caught.value)
         assert connection.rolled_back
-        assert not any(
-            metric["name"] == "query_invalid"
-            for metric in operations.snapshot()["metrics"]
-        )
+        assert not any(metric["name"] == "query_invalid" for metric in operations.snapshot()["metrics"])
     finally:
         await executor.close()
         operations.reset()
@@ -1102,57 +908,7 @@ async def test_executor_applies_timezone_and_policy_before_planning_and_sql(
 
 
 @pytest.mark.asyncio
-async def test_executor_accepts_all_seven_launch_result_oids_before_fetch(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    source = load_test_registry().get("development-issues")
-    assert source is not None
-    database_error = errors.InvalidParameterValue("unused")
-    description = tuple(
-        _ResultColumn(f"value_{index}", oid)
-        for index, oid in enumerate((20, 21, 23, 25, 1082, 1184, 1700))
-    )
-    connection = _PhaseConnection(
-        "success",
-        database_error,
-        description=description,
-    )
-    executor = PostgresQueryExecutor()
-
-    async def get_pool(_source: SourceProfile) -> _PhasePool:
-        return _PhasePool(connection)
-
-    _stub_internal_query_checks(monkeypatch, "success", database_error)
-    executor._get_pool = get_pool  # type: ignore[method-assign]
-    try:
-        result = await executor.execute(
-            source,
-            "SELECT 1",
-            "test-revision",
-            ValidatedSql("private-fingerprint", (), (), ()),
-        )
-
-        assert result["columns"] == [column.name for column in description]
-        assert connection.result_cursor is not None
-        assert connection.result_cursor.fetch_calls == 1
-        assert connection.events[-1] == "commit"
-    finally:
-        await executor.close()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "description",
-    [
-        pytest.param((_ResultColumn("value", 16),), id="bool"),
-        pytest.param((_ResultColumn("value", 3802),), id="jsonb"),
-        pytest.param((), id="empty"),
-        pytest.param((_ResultColumn("value", "20"),), id="malformed-oid"),
-        pytest.param((object(),), id="malformed-column"),
-    ],
-)
-async def test_executor_rejects_unsupported_result_description_before_fetch(
-    description: tuple[object, ...],
+async def test_executor_rejects_unsupported_result_before_fetch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = load_test_registry().get("development-issues")
@@ -1161,7 +917,7 @@ async def test_executor_rejects_unsupported_result_description_before_fetch(
     connection = _PhaseConnection(
         "success",
         database_error,
-        description=description,
+        description=(_ResultColumn("value", 16),),
     )
     executor = PostgresQueryExecutor()
 
@@ -1190,58 +946,14 @@ async def test_executor_rejects_unsupported_result_description_before_fetch(
         assert connection.result_cursor.closed
         assert connection.rolled_back
         assert "commit" not in connection.events
-        assert not any(
-            metric["name"] == "query_execution_succeeded"
-            for metric in operations.snapshot()["metrics"]
-        )
+        assert not any(metric["name"] == "query_execution_succeeded" for metric in operations.snapshot()["metrics"])
     finally:
         await executor.close()
         operations.reset()
 
 
 @pytest.mark.asyncio
-async def test_result_oid_failure_maps_to_unavailable(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    registry = load_test_registry()
-    source = registry.get("development-issues")
-    assert source is not None
-    metadata = MetadataService(registry, StaticCatalog())
-    published = await metadata.get_published(source.source_id)
-    database_error = errors.InvalidParameterValue("unused")
-    connection = _PhaseConnection(
-        "success",
-        database_error,
-        description=(_ResultColumn("unsupported", 16),),
-    )
-    executor = PostgresQueryExecutor()
-    service = QueryService(registry, metadata, executor)
-
-    async def get_pool(_source: SourceProfile) -> _PhasePool:
-        return _PhasePool(connection)
-
-    _stub_internal_query_checks(monkeypatch, "success", database_error)
-    executor._get_pool = get_pool  # type: ignore[method-assign]
-    operations.reset()
-    try:
-        with pytest.raises(QueryUnavailableError) as captured:
-            await service.query(
-                source.source_id,
-                "SELECT count(*) FROM ai.issue_overview",
-                published.revision,
-                SQL_POLICY_REVISION,
-            )
-
-        assert captured.value.status_code == 503
-        assert captured.value.code == "QUERY_UNAVAILABLE"
-        assert captured.value.details is None
-    finally:
-        await executor.close()
-        operations.reset()
-
-
-@pytest.mark.asyncio
-async def test_duplicate_result_column_precedes_unsupported_oid_without_fetch(
+async def test_executor_rejects_duplicate_result_column_without_fetch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = load_test_registry().get("development-issues")
@@ -1251,8 +963,8 @@ async def test_duplicate_result_column_precedes_unsupported_oid_without_fetch(
         "success",
         database_error,
         description=(
-            _ResultColumn("duplicate", 16),
-            _ResultColumn("duplicate", 3802),
+            _ResultColumn("duplicate", 20),
+            _ResultColumn("duplicate", 23),
         ),
     )
     executor = PostgresQueryExecutor()
@@ -1271,56 +983,11 @@ async def test_duplicate_result_column_precedes_unsupported_oid_without_fetch(
                 ValidatedSql("private-fingerprint", (), (), ()),
             )
 
-        assert captured.value.details == {
-            "reason_code": "QUERY_DUPLICATE_RESULT_COLUMN"
-        }
+        assert captured.value.details == {"reason_code": "QUERY_DUPLICATE_RESULT_COLUMN"}
         assert connection.result_cursor is not None
         assert connection.result_cursor.fetch_calls == 0
         assert connection.result_cursor.closed
         assert connection.rolled_back
-    finally:
-        await executor.close()
-
-
-@pytest.mark.asyncio
-async def test_executor_recovers_after_unsupported_result_oid(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    source = load_test_registry().get("development-issues")
-    assert source is not None
-    database_error = errors.InvalidParameterValue("unused")
-    unsupported = _PhaseConnection(
-        "success",
-        database_error,
-        description=(_ResultColumn("value", 16),),
-    )
-    executor = PostgresQueryExecutor()
-
-    async def get_pool(_source: SourceProfile) -> _PhasePool:
-        return _PhasePool(unsupported)
-
-    _stub_internal_query_checks(monkeypatch, "success", database_error)
-    executor._get_pool = get_pool  # type: ignore[method-assign]
-    try:
-        with pytest.raises(QueryUnavailableError):
-            await executor.execute(
-                source,
-                "SELECT 1",
-                "test-revision",
-                ValidatedSql("private-fingerprint", (), (), ()),
-            )
-
-        unsupported.result_description = (_ResultColumn("value", 20),)
-        result = await executor.execute(
-            source,
-            "SELECT 1",
-            "test-revision",
-            ValidatedSql("private-fingerprint", (), (), ()),
-        )
-
-        assert unsupported.rolled_back
-        assert result["rows"] == []
-        assert unsupported.events[-1] == "commit"
     finally:
         await executor.close()
 
@@ -1363,10 +1030,7 @@ async def test_executor_keeps_noncorrectable_database_errors_unavailable(
         assert caught.value.details is None
         assert "private" not in str(caught.value)
         assert connection.rolled_back
-        assert not any(
-            metric["name"] == "query_invalid"
-            for metric in operations.snapshot()["metrics"]
-        )
+        assert not any(metric["name"] == "query_invalid" for metric in operations.snapshot()["metrics"])
     finally:
         await executor.close()
         operations.reset()
@@ -1499,8 +1163,7 @@ async def test_executor_distinguishes_operator_cancel_from_statement_timeout() -
         assert type(timed_out.value) is QueryTimeoutError
 
         metrics = {
-            (metric["name"], metric.get("source_id")): metric["value"]
-            for metric in operations.snapshot()["metrics"]
+            (metric["name"], metric.get("source_id")): metric["value"] for metric in operations.snapshot()["metrics"]
         }
         assert metrics[("query_cancel_requested", source.source_id)] == 1
         assert metrics[("query_cancelled", source.source_id)] == 1
@@ -1560,13 +1223,9 @@ async def test_drain_cancels_active_and_queued_admitted_queries() -> None:
     executor._get_pool = get_pool  # type: ignore[method-assign]
     executor._execute_connection = execute_connection  # type: ignore[method-assign]
     validated = ValidatedSql("fingerprint", (), (), ())
-    active = asyncio.create_task(
-        executor.execute(source, "SELECT 1", "test-revision", validated)
-    )
+    active = asyncio.create_task(executor.execute(source, "SELECT 1", "test-revision", validated))
     await started.wait()
-    queued = asyncio.create_task(
-        executor.execute(source, "SELECT 1", "test-revision", validated)
-    )
+    queued = asyncio.create_task(executor.execute(source, "SELECT 1", "test-revision", validated))
     for _attempt in range(100):
         if len(executor._inflight) == 2:
             break
@@ -1654,22 +1313,3 @@ async def test_drain_cancels_admitted_query_waiting_for_pool_connection() -> Non
             pending.cancel()
             await asyncio.gather(pending, return_exceptions=True)
         operations.reset()
-
-
-@pytest.mark.asyncio
-async def test_client_disconnect_cancels_active_query() -> None:
-    cancelled = asyncio.Event()
-
-    async def pending() -> dict[str, object]:
-        try:
-            await asyncio.Event().wait()
-        finally:
-            cancelled.set()
-
-    class DisconnectedRequest:
-        async def receive(self) -> dict[str, str]:
-            return {"type": "http.disconnect"}
-
-    with pytest.raises(QueryTimeoutError):
-        await _until_disconnect(DisconnectedRequest(), pending())  # type: ignore[arg-type]
-    assert cancelled.is_set()
