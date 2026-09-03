@@ -137,11 +137,6 @@ class OperatorRequiredError(AppError):
         super().__init__(403, "OPERATOR_REQUIRED", "Operator permission is required.")
 
 
-class InsufficientScopeError(AppError):
-    def __init__(self) -> None:
-        super().__init__(403, "INSUFFICIENT_SCOPE", "Required bearer permission is missing.")
-
-
 class QueryNotFoundError(AppError):
     def __init__(self) -> None:
         super().__init__(404, "QUERY_NOT_FOUND", "The active query was not found.")

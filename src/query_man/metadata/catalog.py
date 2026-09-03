@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import Any
 
 from psycopg import AsyncConnection
@@ -12,8 +12,6 @@ from psycopg_pool import AsyncConnectionPool
 
 from query_man.metadata.models import (
     CatalogColumn,
-    CatalogForeignKey,
-    CatalogIndex,
     CatalogRelation,
     CatalogRelationKind,
     CatalogSnapshot,
@@ -58,8 +56,7 @@ CATALOG_QUERY = """
       coalesce(relation.reloptions @> ARRAY['security_invoker=true'], false)
         AS security_invoker,
       coalesce(relation.reloptions @> ARRAY['security_barrier=true'], false)
-        AS security_barrier,
-      relation.reltuples
+        AS security_barrier
     FROM pg_catalog.pg_class AS relation
     JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
     WHERE namespace.nspname::text = ANY(%s::text[])
@@ -75,13 +72,10 @@ CATALOG_QUERY = """
     relation.view_definition_hash,
     relation.security_invoker,
     relation.security_barrier,
-    CASE WHEN relation.relation_kind IN ('r', 'p', 'm', 'f') AND relation.reltuples >= 0
-      THEN relation.reltuples::double precision ELSE NULL END AS estimated_rows,
     attribute.attnum::integer AS ordinal,
     attribute.attname::text AS column_name,
     pg_catalog.format_type(attribute.atttypid, attribute.atttypmod) AS data_type,
     type_row.typtype::text AS type_kind,
-    attribute.attnotnull AS is_not_null,
     pg_catalog.left(pg_catalog.col_description(relation.relation_oid, attribute.attnum), 2000)
       AS column_comment
   FROM eligible_relations AS relation
@@ -96,169 +90,6 @@ CATALOG_QUERY = """
   LIMIT %s
 """
 
-STRUCTURE_QUERY = """
-  WITH eligible_relations AS MATERIALIZED (
-    SELECT
-      relation.oid AS relation_oid,
-      namespace.nspname::text AS schema_name,
-      relation.relname::text AS relation_name
-    FROM pg_catalog.pg_class AS relation
-    JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
-    WHERE namespace.nspname::text = ANY(%s::text[])
-      AND relation.relkind::text = ANY(%s::text[])
-      AND pg_catalog.has_schema_privilege(current_user, namespace.oid, 'USAGE')
-      AND pg_catalog.has_table_privilege(current_user, relation.oid, 'SELECT')
-  ),
-  primary_keys AS (
-    SELECT
-      local_relation.schema_name,
-      local_relation.relation_name,
-      key_columns.column_names
-    FROM pg_catalog.pg_constraint AS constraint_row
-    JOIN eligible_relations AS local_relation
-      ON local_relation.relation_oid = constraint_row.conrelid
-    JOIN LATERAL (
-      SELECT
-        pg_catalog.array_agg(attribute.attname::text ORDER BY key.position) AS column_names,
-        pg_catalog.bool_and(
-          pg_catalog.has_column_privilege(
-            current_user, local_relation.relation_oid, attribute.attnum, 'SELECT'
-          )
-        ) AS columns_visible,
-        pg_catalog.count(*) = pg_catalog.cardinality(constraint_row.conkey) AS complete
-      FROM pg_catalog.unnest(constraint_row.conkey) WITH ORDINALITY AS key(attnum, position)
-      JOIN pg_catalog.pg_attribute AS attribute
-        ON attribute.attrelid = local_relation.relation_oid
-        AND attribute.attnum = key.attnum
-    ) AS key_columns ON key_columns.columns_visible AND key_columns.complete
-    WHERE constraint_row.contype = 'p'
-  ),
-  foreign_keys AS (
-    SELECT
-      local_relation.schema_name,
-      local_relation.relation_name,
-      key_columns.local_columns AS column_names,
-      referenced_relation.schema_name || '.' || referenced_relation.relation_name
-        AS referenced_relation,
-      key_columns.referenced_columns
-    FROM pg_catalog.pg_constraint AS constraint_row
-    JOIN eligible_relations AS local_relation
-      ON local_relation.relation_oid = constraint_row.conrelid
-    JOIN eligible_relations AS referenced_relation
-      ON referenced_relation.relation_oid = constraint_row.confrelid
-    JOIN LATERAL (
-      SELECT
-        pg_catalog.array_agg(local_attribute.attname::text ORDER BY local_key.position)
-          AS local_columns,
-        pg_catalog.array_agg(
-          referenced_attribute.attname::text ORDER BY local_key.position
-        )
-          AS referenced_columns,
-        pg_catalog.bool_and(
-          pg_catalog.has_column_privilege(
-            current_user, local_relation.relation_oid, local_attribute.attnum, 'SELECT'
-          )
-          AND pg_catalog.has_column_privilege(
-            current_user,
-            referenced_relation.relation_oid,
-            referenced_attribute.attnum,
-            'SELECT'
-          )
-        ) AS columns_visible,
-        pg_catalog.count(*) = pg_catalog.cardinality(constraint_row.conkey) AS complete
-      FROM pg_catalog.unnest(constraint_row.conkey)
-        WITH ORDINALITY AS local_key(attnum, position)
-      JOIN pg_catalog.unnest(constraint_row.confkey)
-        WITH ORDINALITY AS referenced_key(attnum, position)
-        ON referenced_key.position = local_key.position
-      JOIN pg_catalog.pg_attribute AS local_attribute
-        ON local_attribute.attrelid = local_relation.relation_oid
-        AND local_attribute.attnum = local_key.attnum
-      JOIN pg_catalog.pg_attribute AS referenced_attribute
-        ON referenced_attribute.attrelid = referenced_relation.relation_oid
-        AND referenced_attribute.attnum = referenced_key.attnum
-    ) AS key_columns ON key_columns.columns_visible AND key_columns.complete
-    WHERE constraint_row.contype = 'f'
-  ),
-  simple_indexes AS (
-    SELECT
-      local_relation.schema_name,
-      local_relation.relation_name,
-      key_columns.column_names,
-      index_row.indisunique AS is_unique,
-      index_row.indisprimary AS is_primary
-    FROM pg_catalog.pg_index AS index_row
-    JOIN eligible_relations AS local_relation
-      ON local_relation.relation_oid = index_row.indrelid
-    JOIN LATERAL (
-      SELECT
-        pg_catalog.array_agg(attribute.attname::text ORDER BY key.position) AS column_names,
-        pg_catalog.bool_and(
-          pg_catalog.has_column_privilege(
-            current_user, local_relation.relation_oid, attribute.attnum, 'SELECT'
-          )
-        ) AS columns_visible,
-        pg_catalog.count(*) = index_row.indnkeyatts AS complete
-      FROM pg_catalog.unnest(index_row.indkey::smallint[])
-        WITH ORDINALITY AS key(attnum, position)
-      JOIN pg_catalog.pg_attribute AS attribute
-        ON attribute.attrelid = local_relation.relation_oid
-        AND attribute.attnum = key.attnum
-      WHERE key.position <= index_row.indnkeyatts
-    ) AS key_columns ON key_columns.columns_visible AND key_columns.complete
-    WHERE index_row.indisvalid
-      AND index_row.indisready
-      AND index_row.indpred IS NULL
-  )
-  SELECT
-    'primary_key'::text AS structure_kind,
-    schema_name,
-    relation_name,
-    column_names,
-    NULL::text AS referenced_relation,
-    NULL::text[] AS referenced_columns,
-    NULL::boolean AS is_unique,
-    true AS is_primary
-  FROM primary_keys
-  UNION ALL
-  SELECT
-    'foreign_key',
-    schema_name,
-    relation_name,
-    column_names,
-    referenced_relation,
-    referenced_columns,
-    NULL::boolean,
-    false
-  FROM foreign_keys
-  UNION ALL
-  SELECT
-    'index',
-    schema_name,
-    relation_name,
-    column_names,
-    NULL::text,
-    NULL::text[],
-    is_unique,
-    is_primary
-  FROM simple_indexes
-  ORDER BY schema_name, relation_name, structure_kind, column_names
-  LIMIT %s
-"""
-
-_POSTGRES_KINDS = {
-    "table": "r",
-    "partitioned_table": "p",
-    "view": "v",
-    "materialized_view": "m",
-}
-_CATALOG_KINDS: dict[str, CatalogRelationKind] = {
-    "r": "table",
-    "p": "partitioned_table",
-    "v": "view",
-    "m": "materialized_view",
-    "f": "foreign_table",
-}
 _VIEW_CONTRACT_MARKER = re.compile(
     r"query-man:source=(?P<source>[a-z0-9]+(?:-[a-z0-9]+)*);"
     r"view-contract=(?P<version>[1-9][0-9]*)"
@@ -316,7 +147,7 @@ class PostgresCatalog:
                     CATALOG_QUERY,
                     (
                         list(source.allowed_schemas),
-                        [_POSTGRES_KINDS[kind] for kind in source.allowed_relation_kinds],
+                        ["v"],
                         source.budget.max_metadata_columns + 1,
                     ),
                 )
@@ -324,17 +155,6 @@ class PostgresCatalog:
                 if len(rows) > source.budget.max_metadata_columns:
                     raise _CatalogValidationError("Catalog column limit exceeded")
                 _require_supported_catalog_types(rows)
-                structure_cursor = await connection.execute(
-                    STRUCTURE_QUERY,
-                    (
-                        list(source.allowed_schemas),
-                        [_POSTGRES_KINDS[kind] for kind in source.allowed_relation_kinds],
-                        source.budget.max_metadata_columns + 1,
-                    ),
-                )
-                structures = await structure_cursor.fetchall()
-                if len(structures) > source.budget.max_metadata_columns:
-                    raise _CatalogValidationError("Catalog structure limit exceeded")
                 await connection.execute("COMMIT")
             except Exception as error:
                 try:
@@ -348,9 +168,8 @@ class PostgresCatalog:
             raise _CatalogValidationError("Catalog relation limit exceeded")
         if any(len(relation.columns) > source.budget.max_columns_per_relation for relation in relations):
             raise _CatalogValidationError("Catalog per-relation column limit exceeded")
-        frozen_relations = tuple(relation.freeze() for relation in relations)
         return CatalogSnapshot(
-            relations=_apply_structures(frozen_relations, structures)
+            relations=tuple(relation.freeze() for relation in relations)
         )
 
     async def close(self) -> None:
@@ -403,7 +222,6 @@ class _CatalogRelationBuilder:
     sql_name: str
     kind: CatalogRelationKind
     comment: str | None
-    estimated_rows: int | None
     definition_hash: str | None
     view_contract_source: str | None
     view_contract_version: int | None
@@ -420,7 +238,6 @@ class _CatalogRelationBuilder:
             kind=self.kind,
             columns=tuple(self.columns),
             comment=self.comment,
-            estimated_rows=self.estimated_rows,
             definition_hash=self.definition_hash,
             view_contract_source=self.view_contract_source,
             view_contract_version=self.view_contract_version,
@@ -435,29 +252,23 @@ def _rows_to_relations(rows: list[dict[str, Any]]) -> list[_CatalogRelationBuild
         qualified_name = f"{row['schema_name']}.{row['relation_name']}"
         relation = relations.get(qualified_name)
         if relation is None:
-            kind = str(row["relation_kind"])
-            estimated = row["estimated_rows"]
-            catalog_kind = _CATALOG_KINDS[kind]
-            if catalog_kind == "view":
-                contract_source, contract_version, comment = _parse_view_comment(
-                    row["relation_comment"]
-                )
-            else:
-                contract_source, contract_version = None, None
-                comment = _sanitize_comment(row["relation_comment"])
+            if row["relation_kind"] != "v":
+                raise _CatalogValidationError("Catalog returned a non-view relation")
+            contract_source, contract_version, comment = _parse_view_comment(
+                row["relation_comment"]
+            )
             relation = _CatalogRelationBuilder(
                 schema=str(row["schema_name"]),
                 name=str(row["relation_name"]),
                 qualified_name=qualified_name,
                 sql_name=f"{_quote_identifier(str(row['schema_name']))}.{_quote_identifier(str(row['relation_name']))}",
-                kind=catalog_kind,
+                kind="view",
                 comment=comment,
                 definition_hash=row["view_definition_hash"],
                 view_contract_source=contract_source,
                 view_contract_version=contract_version,
                 security_invoker=bool(row["security_invoker"]),
                 security_barrier=bool(row.get("security_barrier", False)),
-                estimated_rows=None if estimated is None else max(0, round(float(estimated))),
             )
             relations[qualified_name] = relation
         relation.columns.append(
@@ -466,7 +277,7 @@ def _rows_to_relations(rows: list[dict[str, Any]]) -> list[_CatalogRelationBuild
                 sql_name=_quote_identifier(str(row["column_name"])),
                 ordinal=int(row["ordinal"]),
                 data_type=str(row["data_type"]),
-                nullable=("unknown" if row["relation_kind"] in {"v", "m"} else not bool(row["is_not_null"])),
+                nullable="unknown",
                 comment=_sanitize_comment(row["column_comment"]),
             )
         )
@@ -476,63 +287,6 @@ def _rows_to_relations(rows: list[dict[str, Any]]) -> list[_CatalogRelationBuild
 def _require_supported_catalog_types(rows: Sequence[dict[str, Any]]) -> None:
     if any(row.get("type_kind") == "d" for row in rows):
         raise _CatalogValidationError("Catalog contains an unsupported domain column")
-
-
-def _apply_structures(
-    relations: Sequence[CatalogRelation],
-    rows: list[dict[str, Any]],
-) -> tuple[CatalogRelation, ...]:
-    by_name = {relation.qualified_name for relation in relations}
-    primary_keys = {
-        relation.qualified_name: relation.primary_key
-        for relation in relations
-        if relation.primary_key
-    }
-    foreign_keys = {
-        relation.qualified_name: list(relation.foreign_keys) for relation in relations
-    }
-    indexes = {
-        relation.qualified_name: list(relation.indexes) for relation in relations
-    }
-    for row in rows:
-        qualified_name = f"{row['schema_name']}.{row['relation_name']}"
-        if qualified_name not in by_name:
-            raise _CatalogValidationError("Catalog structure references an unavailable relation")
-        columns = tuple(str(column) for column in row["column_names"])
-        kind = row["structure_kind"]
-        if kind == "primary_key":
-            if qualified_name in primary_keys:
-                raise _CatalogValidationError("Catalog relation has multiple primary keys")
-            primary_keys[qualified_name] = columns
-        elif kind == "foreign_key":
-            foreign_keys[qualified_name].append(
-                CatalogForeignKey(
-                    columns=columns,
-                    referenced_relation=str(row["referenced_relation"]),
-                    referenced_columns=tuple(
-                        str(column) for column in row["referenced_columns"]
-                    ),
-                )
-            )
-        elif kind == "index":
-            indexes[qualified_name].append(
-                CatalogIndex(
-                    columns=columns,
-                    unique=bool(row["is_unique"]),
-                    primary=bool(row["is_primary"]),
-                )
-            )
-        else:
-            raise _CatalogValidationError("Catalog returned an unknown structure kind")
-    return tuple(
-        replace(
-            relation,
-            primary_key=primary_keys.get(relation.qualified_name, ()),
-            foreign_keys=tuple(foreign_keys[relation.qualified_name]),
-            indexes=tuple(indexes[relation.qualified_name]),
-        )
-        for relation in relations
-    )
 
 
 def _quote_identifier(value: str) -> str:

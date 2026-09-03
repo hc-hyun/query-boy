@@ -6,7 +6,6 @@ import pytest
 import query_man.guarded_query.sql_validation as sql_validation_module
 import query_man.metadata.revision as revision_module
 from query_man.guarded_query.result_encoding import CANONICAL_TIME_POLICY_MATERIAL
-from query_man.metadata.models import CatalogIndex
 from query_man.metadata.revision import (
     create_metadata_revision,
     create_view_structure_signature,
@@ -14,21 +13,14 @@ from query_man.metadata.revision import (
 from tests.helpers import load_test_registry, minimal_development_snapshot
 
 
-def test_revision_is_stable_across_catalog_order_and_estimates() -> None:
+def test_revision_is_stable_across_catalog_order() -> None:
     source = load_test_registry().get("development-issues")
     assert source is not None
     first = minimal_development_snapshot()
-    first = replace(
-        first,
-        relations=(
-            replace(first.relations[0], estimated_rows=10),
-            *first.relations[1:],
-        ),
-    )
     second = minimal_development_snapshot()
     second = replace(
         second,
-        relations=tuple(replace(relation, estimated_rows=99_999) for relation in reversed(second.relations)),
+        relations=tuple(reversed(second.relations)),
     )
 
     assert create_metadata_revision(source, first) == create_metadata_revision(
@@ -90,7 +82,7 @@ def test_revision_changes_with_every_published_query_contract_input() -> None:
     assert all(create_metadata_revision(source, variant) != baseline for variant in snapshot_variants)
 
 
-def test_revision_ignores_transport_provenance_and_unpublished_structure() -> None:
+def test_revision_ignores_transport_provenance_and_admission_markers() -> None:
     source = load_test_registry().get("development-issues")
     assert source is not None
     snapshot = minimal_development_snapshot()
@@ -108,7 +100,6 @@ def test_revision_ignores_transport_provenance_and_unpublished_structure() -> No
         relations=(
             replace(
                 snapshot.relations[0],
-                indexes=(CatalogIndex(("comment_id",), False, False),),
                 view_contract_source="another-source",
                 view_contract_version=999,
             ),
@@ -189,7 +180,7 @@ def test_view_structure_signature_tracks_exact_query_surface() -> None:
     assert all(create_view_structure_signature(variant) != baseline for variant in variants)
 
 
-def test_view_structure_signature_ignores_descriptive_planner_and_marker_data() -> None:
+def test_view_structure_signature_ignores_descriptive_and_marker_data() -> None:
     snapshot = minimal_development_snapshot()
     relation = snapshot.relations[0]
     descriptive = replace(
@@ -198,10 +189,8 @@ def test_view_structure_signature_ignores_descriptive_planner_and_marker_data() 
             replace(
                 relation,
                 comment="Changed description",
-                estimated_rows=99_999,
                 view_contract_source="another-source",
                 view_contract_version=999,
-                indexes=(CatalogIndex((relation.columns[0].name,), True, True),),
             ),
             *snapshot.relations[1:],
         ),

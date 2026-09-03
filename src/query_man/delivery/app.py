@@ -12,10 +12,6 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from query_man.delivery.access import AccessPolicy, CallerContext, caller_audit_fields
-from query_man.delivery.authentication import (
-    AccessPolicyBearerAuthenticator,
-    InvalidBearerTokenError,
-)
 from query_man.delivery.gateway import GatewayService
 from query_man.errors import AppError, OperatorRequiredError, QueryTimeoutError
 from query_man.runtime.operations import operations
@@ -98,7 +94,6 @@ def build_http_app(
     gateway: GatewayService,
     lifespan: Callable[[FastAPI], AbstractAsyncContextManager[None]],
 ) -> FastAPI:
-    authenticator = AccessPolicyBearerAuthenticator(access_policy)
     app = FastAPI(title="query-man", lifespan=lifespan)
 
     @app.middleware("http")
@@ -120,11 +115,12 @@ def build_http_app(
             authorizations = request.headers.getlist("authorization")
             authorization = authorizations[0] if len(authorizations) == 1 else None
             received = _bearer_token(authorization) if len(authorizations) == 1 else None
-            try:
-                if len(authorizations) > 1:
-                    raise InvalidBearerTokenError
-                caller = await authenticator.authenticate(received)
-            except InvalidBearerTokenError:
+            caller = (
+                access_policy.authenticate(received)
+                if len(authorizations) <= 1
+                else None
+            )
+            if caller is None:
                 audit_logger.warning(
                     "authentication_failed method=%s",
                     request.method,

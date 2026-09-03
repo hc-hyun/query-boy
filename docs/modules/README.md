@@ -42,8 +42,8 @@ rendering은 Delivery, error 발생 조건은 owner module이 책임집니다.
   `metadata/revision.py`, `metadata/service.py`
 - Guarded Query: `guarded_query/__init__.py`, `guarded_query/query.py`,
   `guarded_query/result_encoding.py`, `guarded_query/sql_validation.py`
-- Delivery: `delivery/__init__.py`, `delivery/access.py`, `delivery/authentication.py`,
-  `delivery/gateway.py`, `delivery/http_validation.py`, `delivery/app.py`
+- Delivery: `delivery/__init__.py`, `delivery/access.py`, `delivery/gateway.py`,
+  `delivery/app.py`
 - Runtime: `runtime/__init__.py`, `runtime/config.py`, `runtime/composition.py`,
   `runtime/operations.py`, `runtime/operator_shell.py`, `runtime/server.py`
 - Assurance: `assurance/__init__.py`

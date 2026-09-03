@@ -86,7 +86,6 @@ def test_loads_public_source_fields_only() -> None:
     assert development.connection.port == 55_432
 
     listed = registry.list()
-    assert len(registry) == len(registry.source_ids())
     assert [source["source_id"] for source in listed] == sorted(registry.source_ids())
     assert all(set(source) == {"source_id", "name", "description"} for source in listed)
     development_public = next(source for source in listed if source["source_id"] == "development-issues")

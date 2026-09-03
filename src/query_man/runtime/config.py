@@ -8,6 +8,14 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+_RETIRED_SOURCE_AUTHORITY_SETTINGS = (
+    "QUERY_MAN_SOURCE_MODE",
+    "QUERY_MAN_CONTROL_DSN",
+    "QUERY_MAN_SOURCE_ENCRYPTION_KEY",
+    "QUERY_MAN_REPLICA_ID",
+    "QUERY_MAN_SOURCE_RELOAD_INTERVAL_MS",
+)
+
 
 class _Environment(BaseModel):
     model_config = ConfigDict(
@@ -62,6 +70,14 @@ def load_runtime_config(
     root_directory: Path | None = None,
 ) -> RuntimeConfig:
     values = dict(os.environ if environment is None else environment)
+    retired_settings = [
+        name for name in _RETIRED_SOURCE_AUTHORITY_SETTINGS if name in values
+    ]
+    if retired_settings:
+        raise ValueError(
+            "Git-reviewed source packages are the only source authority; remove: "
+            + ", ".join(retired_settings)
+        )
     for optional_name in (
         "QUERY_MAN_API_TOKEN",
     ):

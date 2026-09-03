@@ -24,7 +24,6 @@ token 또는 access-policy가 없으면 startup을 거부합니다.
 | 위치 | 책임 |
 |---|---|
 | `delivery/access.py` | Caller context, capability, access-policy와 audit identity |
-| `delivery/authentication.py` | Anonymous/API/access-policy bearer authentication |
 | `delivery/gateway.py` | Transport-facing application operations |
 | `delivery/app.py` | FastAPI routes, strict validation, middleware, disconnect와 lifespan |
 

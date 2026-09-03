@@ -428,7 +428,7 @@ async def test_timeout_cancel_and_multibyte_limit_restore_pooled_connection() ->
     try:
         await admin.execute("ANALYZE fixture.fixture_records")
         published = await metadata.get_published(source.source_id)
-        aliases = tuple(f"r{index}" for index in range(15))
+        aliases = tuple(f"r{index}" for index in range(18))
         slow_sql = "SELECT count(*) AS total FROM " + ", ".join(
             f"ai.fixture_records AS {alias}" for alias in aliases
         )

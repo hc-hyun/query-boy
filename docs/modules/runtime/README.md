@@ -9,15 +9,15 @@ Runtime는 environment를 검증하고 production registry, catalog, query, gate
 
 ## 책임과 interface
 
-- `load_runtime_config`: environment parsing, cross-field와 retired-setting rejection
+- `load_runtime_config`: environment parsing, cross-field와 retired source-authority setting rejection
 - `build_app`: 유일한 production composition root
 - Server signal handling, stop-admission, drain/cancel과 cleanup deadline
-- Safe structured logging, component health와 bounded process metrics
+- Safe structured logging, source health와 bounded process metrics
 - `qm source validate`: local package validation만 수행하는 read-only CLI
 
 Config는 source directory와 budget file, bind/log, authentication, metadata cache, shutdown grace를
 제공합니다. Password/token 값을 exception이나 representation에 포함하지 않습니다. Non-loopback bind의
-인증 누락, conflicting authority와 retired setting은 startup을 fail-closed합니다.
+인증 누락, conflicting authority와 retired source-authority setting은 startup을 fail-closed합니다.
 
 ## 코드 지도
 

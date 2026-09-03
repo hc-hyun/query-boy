@@ -137,14 +137,6 @@ class _ActiveQuery:
     cancel_reason: Literal["operator", "shutdown"] | None = None
 
 
-class _QueryCancelledTimeoutError(QueryTimeoutError):
-    """Preserve the public timeout envelope while classifying a terminal cancel."""
-
-
-class _QueryCancelledUnavailableError(QueryUnavailableError):
-    """Preserve the public unavailable envelope while classifying a terminal cancel."""
-
-
 class QueryService:
     def __init__(
         self,
@@ -253,7 +245,7 @@ class PostgresQueryExecutor:
                         "error_code": "QUERY_UNAVAILABLE",
                     },
                 )
-                raise _QueryCancelledUnavailableError from error
+                raise QueryUnavailableError from error
             operations.increment("query_interrupted", source.source_id)
             audit_logger.info(
                 "query_execution_interrupted query_id=%s source_id=%s fingerprint=%s",
@@ -368,7 +360,7 @@ class PostgresQueryExecutor:
                 }[reason]
                 operations.increment(metric, source.source_id)
                 if reason is not None:
-                    raise _QueryCancelledTimeoutError from error
+                    raise QueryTimeoutError from error
                 raise QueryTimeoutError from error
             except (
                 errors.OperationalError,

@@ -9,10 +9,10 @@ bounded deterministic context와 revision을 제공합니다. 질문 관련도�
 
 ## 책임과 interface
 
-- `PostgresCatalog.collect(source)`: bounded catalog와 reader/admission evidence 수집
+- `PostgresCatalog.load(source)`: bounded catalog와 reader/admission evidence 수집
 - Runtime startup probe의 reviewed inventory 전체 admission
 - `MetadataService.get_context(source_id)`: 현재 full admitted catalog와 두 revision 반환
-- `MetadataService.assert_revision(...)`: stale metadata/SQL policy fail-closed
+- `MetadataService.get_published(source_id)`: Guarded Query가 검증할 snapshot과 revision 제공
 - TTL 안의 snapshot 재사용과 bounded stale/retry behavior
 
 Admission은 PostgreSQL 18/UTF-8, exact database/session user, allowed schema의 view-only catalog, RLS 0개,
@@ -29,7 +29,7 @@ marker source/version, reader privilege와 metadata hard limit을 확인합니�
 | `metadata/models.py` | Catalog snapshot과 public context data model |
 | `metadata/catalog.py` | PostgreSQL pool, bounded catalog SQL과 direct admission evidence |
 | `metadata/revision.py` | Canonical metadata revision material |
-| `metadata/service.py` | Startup, cache/refresh, context와 revision check |
+| `metadata/service.py` | Cache/refresh, context와 published revision |
 
 Source Catalog는 validated profile을 제공하고 Guarded Query는 published snapshot과 revisions를 소비합니다.
 Delivery는 response를 운반할 뿐 catalog를 재해석하지 않습니다.

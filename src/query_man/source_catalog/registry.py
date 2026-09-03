@@ -197,10 +197,6 @@ class SourceRegistry:
     def source_ids(self) -> frozenset[str]:
         return frozenset(self._sources)
 
-    def __len__(self) -> int:
-        return len(self._sources)
-
-
 def _require_source_package(source_path: Path) -> None:
     try:
         source_files = sorted(source_path.iterdir())

@@ -64,6 +64,22 @@ def test_rejects_two_authentication_authorities() -> None:
         )
 
 
+def test_rejects_retired_source_authority_settings_without_disclosure() -> None:
+    secret = "retired-setting-value-that-must-not-be-disclosed"
+    settings = (
+        "QUERY_MAN_SOURCE_MODE",
+        "QUERY_MAN_CONTROL_DSN",
+        "QUERY_MAN_SOURCE_ENCRYPTION_KEY",
+        "QUERY_MAN_REPLICA_ID",
+        "QUERY_MAN_SOURCE_RELOAD_INTERVAL_MS",
+    )
+
+    for setting in settings:
+        with pytest.raises(ValueError, match="only source authority") as captured:
+            load_runtime_config({setting: secret}, ROOT_DIRECTORY)
+        assert secret not in str(captured.value)
+
+
 @pytest.mark.parametrize(
     "environment",
     [

@@ -1149,7 +1149,6 @@ async def test_executor_distinguishes_operator_cancel_from_statement_timeout() -
         assert await executor.cancel(query_id)
         with pytest.raises(QueryTimeoutError) as operator_cancelled:
             await pending
-        assert type(operator_cancelled.value) is query_module._QueryCancelledTimeoutError
         assert operator_cancelled.value.code == "QUERY_TIMEOUT"
 
         wait_for_operator = False
@@ -1236,11 +1235,9 @@ async def test_drain_cancels_active_and_queued_admitted_queries() -> None:
 
     with pytest.raises(QueryTimeoutError) as active_cancelled:
         await active
-    assert type(active_cancelled.value) is query_module._QueryCancelledTimeoutError
     assert active_cancelled.value.code == "QUERY_TIMEOUT"
     with pytest.raises(QueryUnavailableError) as queued_cancelled:
         await queued
-    assert type(queued_cancelled.value) is query_module._QueryCancelledUnavailableError
     assert queued_cancelled.value.code == "QUERY_UNAVAILABLE"
     assert executor._inflight == set()
     assert any(
@@ -1303,7 +1300,6 @@ async def test_drain_cancels_admitted_query_waiting_for_pool_connection() -> Non
 
         with pytest.raises(QueryUnavailableError) as queued_cancelled:
             await asyncio.wait_for(pending, 1)
-        assert type(queued_cancelled.value) is query_module._QueryCancelledUnavailableError
         assert queued_cancelled.value.code == "QUERY_UNAVAILABLE"
         assert lease_released.is_set()
         assert executor._inflight == set()

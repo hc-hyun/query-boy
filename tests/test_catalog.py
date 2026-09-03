@@ -6,10 +6,8 @@ import pytest
 
 import query_man.metadata.catalog as catalog_module
 from query_man.errors import MetadataUnavailableError
-from query_man.metadata.catalog import PostgresCatalog, _apply_structures, _CatalogValidationError
+from query_man.metadata.catalog import PostgresCatalog, _CatalogValidationError
 from query_man.metadata.models import (
-    CatalogForeignKey,
-    CatalogIndex,
     CatalogSnapshot,
     PreparedMetadata,
 )
@@ -56,7 +54,6 @@ def test_view_comment_contract_marker_is_parsed_and_not_disclosed() -> None:
                 "view_definition_hash": "definition-digest",
                 "security_invoker": True,
                 "security_barrier": True,
-                "estimated_rows": None,
                 "ordinal": 1,
                 "column_name": "issue_id",
                 "data_type": "bigint",
@@ -141,10 +138,7 @@ async def test_catalog_load_checks_connection_before_existing_transaction_order(
             _parameters: object | None = None,
         ) -> object:
             events.append(statement)
-            if statement in {
-                catalog_module.CATALOG_QUERY,
-                catalog_module.STRUCTURE_QUERY,
-            }:
+            if statement == catalog_module.CATALOG_QUERY:
                 return Cursor()
             return object()
 
@@ -207,7 +201,6 @@ async def test_catalog_load_checks_connection_before_existing_transaction_order(
         catalog_module._CATALOG_SESSION_SETTINGS,
         "session-policy",
         catalog_module.CATALOG_QUERY,
-        catalog_module.STRUCTURE_QUERY,
         "COMMIT",
     ]
     assert not connection.rolled_back
@@ -550,46 +543,19 @@ async def test_common_reader_policy_rejects_non_utc_timezone() -> None:
 def test_published_catalog_graph_is_recursively_immutable_and_alias_free() -> None:
     base = relation("ai.example", [column("id")])
     columns = list(base.columns)
-    primary_key = ["id"]
-    foreign_key_columns = ["id"]
-    referenced_columns = ["id"]
-    index_columns = ["id"]
-    foreign_keys = [
-        CatalogForeignKey(
-            foreign_key_columns,  # type: ignore[arg-type]
-            "ai.example",
-            referenced_columns,  # type: ignore[arg-type]
-        )
-    ]
-    indexes = [
-        CatalogIndex(index_columns, unique=True, primary=True)  # type: ignore[arg-type]
-    ]
     published_relation = replace(  # type: ignore[arg-type]
         base,
         columns=columns,
-        primary_key=primary_key,
-        foreign_keys=foreign_keys,
-        indexes=indexes,
     )
     relations = [published_relation]
     snapshot = CatalogSnapshot(relations)  # type: ignore[arg-type]
     prepared = PreparedMetadata(snapshot, f"sha256:{'0' * 64}")
 
     columns.append(column("mutated"))
-    primary_key.append("mutated")
-    foreign_key_columns.append("mutated")
-    referenced_columns.append("mutated")
-    index_columns.append("mutated")
-    foreign_keys.clear()
-    indexes.clear()
     relations.clear()
 
     assert isinstance(snapshot.relations, tuple)
     assert isinstance(published_relation.columns, tuple)
-    assert published_relation.primary_key == ("id",)
-    assert published_relation.foreign_keys[0].columns == ("id",)
-    assert published_relation.foreign_keys[0].referenced_columns == ("id",)
-    assert published_relation.indexes[0].columns == ("id",)
     assert prepared.snapshot is snapshot
     with pytest.raises(FrozenInstanceError):
         snapshot.relations = ()  # type: ignore[misc]
@@ -601,48 +567,3 @@ def test_published_catalog_graph_is_recursively_immutable_and_alias_free() -> No
         prepared.revision = "mutated"  # type: ignore[misc]
     with pytest.raises(AttributeError):
         published_relation.columns.append(column("mutated"))  # type: ignore[attr-defined]
-
-
-def test_applies_primary_foreign_key_and_index_structures() -> None:
-    relations = minimal_development_snapshot().relations
-    relations = _apply_structures(
-        relations,
-        [
-            {
-                "structure_kind": "primary_key",
-                "schema_name": "ai",
-                "relation_name": "issue_overview",
-                "column_names": ["issue_id"],
-                "referenced_relation": None,
-                "referenced_columns": None,
-                "is_unique": None,
-                "is_primary": True,
-            },
-            {
-                "structure_kind": "foreign_key",
-                "schema_name": "ai",
-                "relation_name": "issue_comments",
-                "column_names": ["issue_id"],
-                "referenced_relation": "ai.issue_overview",
-                "referenced_columns": ["issue_id"],
-                "is_unique": None,
-                "is_primary": False,
-            },
-            {
-                "structure_kind": "index",
-                "schema_name": "ai",
-                "relation_name": "issue_overview",
-                "column_names": ["discovered_at"],
-                "referenced_relation": None,
-                "referenced_columns": None,
-                "is_unique": False,
-                "is_primary": False,
-            },
-        ],
-    )
-    by_name = {relation.qualified_name: relation for relation in relations}
-    assert by_name["ai.issue_overview"].primary_key == ("issue_id",)
-    assert by_name["ai.issue_comments"].foreign_keys[0].referenced_relation == (
-        "ai.issue_overview"
-    )
-    assert by_name["ai.issue_overview"].indexes[0].columns == ("discovered_at",)

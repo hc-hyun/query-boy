@@ -101,7 +101,7 @@ Volume 삭제는 복구 불가능한 데이터 제거이므로 exact Compose pro
 ## Graceful shutdown
 
 SIGTERM 뒤 server는 신규 admission을 중단하고 하나의 monotonic shutdown deadline 안에서 활성 query를
-drain합니다. 남은 query는 cancel하고 transaction rollback 뒤 pool/catalog/metadata resource를 닫습니다.
+drain합니다. 남은 query는 cancel하고 transaction rollback 뒤 query와 catalog pool을 닫습니다.
 Orchestrator의 stop grace는 application grace와 cleanup overhead보다 길어야 합니다. 강제 kill이 발생하면
 미완료 cleanup으로 기록하고 다음 start 전에 DB session과 lock을 확인합니다.
 

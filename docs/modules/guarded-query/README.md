@@ -11,8 +11,9 @@ read-only transaction에서 실행합니다. Timeout·cancel·disconnect·shutdo
 ## 책임과 interface
 
 - SQL policy revision과 relation/function/operator/cast allowlist
-- `QueryService.execute(...)`: revisions 확인, validation, admission과 execution
-- `QueryService.cancel(...)`, `drain(...)`, `close(...)`: active query lifecycle
+- `QueryService.query(...)`: revisions 확인, validation, admission과 execution
+- `QueryService.cancel(...)`: operator cancel 진입점
+- `PostgresQueryExecutor.drain(...)`, `close(...)`: active query lifecycle
 - `PostgresQueryExecutor`: reader pool, transaction/session validation, plan과 result limit
 - Exact result OID와 canonical JSON encoding
 

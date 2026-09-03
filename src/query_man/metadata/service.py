@@ -109,12 +109,10 @@ class MetadataService:
         cached = self._cache.get(source.source_id)
         now = self._now()
         if cached and cached.expires_at > now:
-            self._require_compatible(source, cached.value)
             operations.set_source_health(source.source_id, "healthy")
             return cached.value, False
         if cached and cached.next_refresh_at > now:
             if now - cached.loaded_at <= self._max_stale_ms:
-                self._require_compatible(source, cached.value)
                 operations.increment("metadata_stale_served", source.source_id)
                 operations.set_source_health(source.source_id, "stale")
                 return cached.value, True
@@ -131,7 +129,6 @@ class MetadataService:
         except Exception as error:
             failed_at = self._now()
             if cached and failed_at - cached.loaded_at <= self._max_stale_ms:
-                self._require_compatible(source, cached.value)
                 cached.next_refresh_at = failed_at + self._refresh_retry_ms
                 operations.increment("metadata_refresh_failed", source.source_id)
                 operations.increment("metadata_stale_served", source.source_id)
@@ -173,7 +170,6 @@ class MetadataService:
             snapshot,
             create_metadata_revision(source, snapshot),
         )
-        self._require_compatible(source, candidate)
         current_signature = self._view_structure_signatures.get(signature_key)
         if current_signature is not None and current_signature != structure_signature:
             operations.increment("metadata_validation_rejected", source.source_id)
@@ -195,17 +191,6 @@ class MetadataService:
             expires_at=loaded_at + self._cache_ttl_ms,
             next_refresh_at=loaded_at + self._cache_ttl_ms,
         )
-
-    @staticmethod
-    def _require_compatible(
-        source: SourceProfile,
-        value: PreparedMetadata,
-    ) -> None:
-        if create_metadata_revision(source, value.snapshot) != value.revision:
-            raise MetadataUnavailableError(
-                {"contract_violations": ["Metadata revision does not match the current source."]}
-            )
-
 
 def _validate_snapshot(source: SourceProfile, snapshot: CatalogSnapshot) -> list[str]:
     if not snapshot.relations:

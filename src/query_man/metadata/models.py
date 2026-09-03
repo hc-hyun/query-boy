@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-CatalogRelationKind = Literal["table", "partitioned_table", "view", "materialized_view", "foreign_table"]
+CatalogRelationKind = Literal["view"]
 Nullability = bool | Literal["unknown"]
 
 
@@ -18,27 +18,6 @@ class CatalogColumn:
 
 
 @dataclass(frozen=True)
-class CatalogForeignKey:
-    columns: tuple[str, ...]
-    referenced_relation: str
-    referenced_columns: tuple[str, ...]
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "columns", tuple(self.columns))
-        object.__setattr__(self, "referenced_columns", tuple(self.referenced_columns))
-
-
-@dataclass(frozen=True)
-class CatalogIndex:
-    columns: tuple[str, ...]
-    unique: bool
-    primary: bool
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "columns", tuple(self.columns))
-
-
-@dataclass(frozen=True)
 class CatalogRelation:
     schema: str
     name: str
@@ -47,21 +26,14 @@ class CatalogRelation:
     kind: CatalogRelationKind
     columns: tuple[CatalogColumn, ...]
     comment: str | None = None
-    estimated_rows: int | None = None
     definition_hash: str | None = None
     view_contract_source: str | None = None
     view_contract_version: int | None = None
-    primary_key: tuple[str, ...] = field(default_factory=tuple)
-    foreign_keys: tuple[CatalogForeignKey, ...] = field(default_factory=tuple)
-    indexes: tuple[CatalogIndex, ...] = field(default_factory=tuple)
     security_invoker: bool = False
     security_barrier: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "columns", tuple(self.columns))
-        object.__setattr__(self, "primary_key", tuple(self.primary_key))
-        object.__setattr__(self, "foreign_keys", tuple(self.foreign_keys))
-        object.__setattr__(self, "indexes", tuple(self.indexes))
 
 
 @dataclass(frozen=True)
