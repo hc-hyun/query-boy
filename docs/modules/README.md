@@ -56,7 +56,7 @@ rendering은 Delivery, error 발생 조건은 owner module이 책임집니다.
 | `config/access-policies*.yaml` | Delivery |
 | `config/security-evaluation.yaml`, root `tests/` | Assurance와 behavior owner |
 | `Dockerfile`, `compose*.yaml`, `.env*.example` | Runtime; container는 Assurance consumer |
-| `.github/workflows/ci.yml`, `scripts/verify-container.sh` | Assurance shared gate |
+| `.github/workflows/ci.yml`, `scripts/verify-database.sh`, `scripts/verify-container.sh` | Assurance shared gate |
 | `pyproject.toml`, `uv.lock` | Runtime/dependency shared artifact |
 
 `AGENTS.md`, development guidelines, 이 index, decision/TODO/verification index와 CI workflow는 shared

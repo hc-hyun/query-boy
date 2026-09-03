@@ -28,7 +28,7 @@ business question/result corpus, production source 목록 복제나 test-only pu
 | `tests/test_database_integration.py` | Real PostgreSQL reader/transaction safety kernel |
 | `tests/fixtures/config/sources/` | Production inventory와 분리된 tiny source package |
 | `tests/test_integration.py`, `tests/test_load.py` | Composition/disconnect와 bounded load |
-| `scripts/verify-container.sh`, `.github/workflows/ci.yml` | Built image와 repository CI |
+| `scripts/verify-database.sh`, `scripts/verify-container.sh`, `.github/workflows/ci.yml` | Disposable PostgreSQL, built image와 repository CI |
 
 ## 불변조건과 승인
 
@@ -40,8 +40,8 @@ business question/result corpus, production source 목록 복제나 test-only pu
 
 ```bash
 uv run pytest tests/test_security_evaluation.py tests/test_integration.py tests/test_load.py
-uv run pytest -m integration tests/test_database_integration.py
-bash scripts/verify-container.sh
+./scripts/verify-database.sh
+./scripts/verify-container.sh
 ```
 
 ## 집중해서 읽을 범위

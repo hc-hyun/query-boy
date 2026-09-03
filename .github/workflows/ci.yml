@@ -21,18 +21,11 @@ jobs:
           uv run ruff check src/query_man/runtime --select C901 --config "lint.mccabe.max-complexity=19"
           uv run mypy src
           uv run pytest -m 'not integration and not load'
-      - name: Start tiny PostgreSQL safety fixture
-        run: |
-          cp .env.fixture.example .env
-          docker compose config --quiet
-          docker compose up -d --wait postgres
-      - name: Database and integration checks
-        run: uv run pytest -m 'integration and not load'
-      - name: Bounded load check
-        run: uv run pytest -m load tests/test_load.py
+      - name: Database, integration, and bounded load checks
+        run: ./scripts/verify-database.sh
       - name: Stop fixtures
         if: always()
-        run: docker compose --env-file .env.fixture.example down -v
+        run: docker compose --env-file .env.fixture.example down -v --remove-orphans
 
   container:
     runs-on: ubuntu-latest
@@ -44,21 +37,8 @@ jobs:
       QUERY_MAN_VCS_REF: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v7
-      - name: Start containerized HTTP API
-        run: |
-          cp .env.fixture.example .env
-          docker compose config --quiet
-          docker compose up -d --wait --wait-timeout 120 postgres
-          docker compose build --build-arg QUERY_MAN_VCS_REF="$QUERY_MAN_VCS_REF" query-man
-          docker compose up -d --no-build --wait --wait-timeout 120 query-man
-      - name: Verify container and API boundary
-        run: |
-          revision="$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$(docker compose ps -q query-man)")"
-          test "$revision" = "$QUERY_MAN_VCS_REF"
-          ./scripts/verify-container.sh
-      - name: Show container logs on failure
-        if: failure()
-        run: docker compose logs --no-color --tail=200 query-man
+      - name: Verify containerized HTTP API
+        run: ./scripts/verify-container.sh
       - name: Stop containerized runtime
         if: always()
         run: docker compose --env-file .env.fixture.example down -v --remove-orphans

@@ -87,16 +87,24 @@ readiness와 negative probe 재검증입니다. DB 변경 rollback은 applicatio
 
 ## Local Compose
 
+실제 source를 연결한 local API는 명시적으로 시작하고 종료합니다.
+
 ```bash
-cp .env.fixture.example .env
 docker compose --env-file .env up --build -d
 curl -fsS http://127.0.0.1:3000/ready
 docker compose --env-file .env down
 ```
 
-Fixture database는 개발·CI 재현용입니다. Production inventory, backup이나 protected evidence가 아닙니다.
-Volume 삭제는 복구 불가능한 데이터 제거이므로 exact Compose project와 fixture 소유권을 확인하고 별도
-의도로 수행합니다.
+Synthetic fixture 검증은 lifecycle을 소유하는 script로 실행합니다.
+
+```bash
+./scripts/verify-database.sh
+./scripts/verify-container.sh
+```
+
+Script는 `query-man-fixture` project만 사용하고 성공·실패 때 모두 container와 volume을 삭제합니다.
+Fixture database는 개발·CI 재현용이며 production inventory, backup이나 protected evidence가 아닙니다.
+자동 삭제 대상에는 synthetic test data만 두어야 합니다.
 
 ## Graceful shutdown
 

@@ -56,10 +56,19 @@ QUERY_MAN_OPERATOR_TOKEN=...
 ```
 
 Password와 token은 Git에 commit하지 않습니다. Source database가 따로 준비되어 있지 않다면 작은 CI용
-PostgreSQL fixture를 함께 띄울 수 있습니다.
+PostgreSQL fixture로 실제 DB와 container 경계를 검증할 수 있습니다.
 
 ```bash
-cp .env.fixture.example .env
+./scripts/verify-database.sh
+./scripts/verify-container.sh
+```
+
+두 명령은 `query-man-fixture` project에 synthetic DB를 새로 만들며, 성공·실패와 관계없이 종료할 때
+container와 fixture volume을 삭제합니다. 별도 `.env` 복사나 수동 정리가 필요하지 않습니다.
+
+실제 source를 연결한 local API는 다음처럼 실행합니다.
+
+```bash
 docker compose --env-file .env up --build -d
 curl -fsS http://127.0.0.1:3000/ready
 ```
@@ -84,7 +93,8 @@ curl -fsS http://127.0.0.1:3000/meta \
 docker compose --env-file .env down
 ```
 
-Fixture는 개발·CI 재현용이며 production DB apply나 운영 증거가 아닙니다.
+Fixture는 개발·CI 재현용이며 production DB apply나 운영 증거가 아닙니다. 자동 삭제되는 volume에는
+synthetic test data만 두어야 합니다.
 
 ## 인증
 
