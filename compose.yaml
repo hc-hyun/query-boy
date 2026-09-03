@@ -1,7 +1,7 @@
 name: query-man
 
 services:
-  query-man:
+  api:
     build:
       context: .
     image: query-man:local

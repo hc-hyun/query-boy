@@ -1,8 +1,7 @@
 services:
   postgres:
     image: postgres:18.6-bookworm@sha256:1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af
-    container_name: query-man-postgres
-    restart: unless-stopped
+    restart: "no"
     environment:
       DEVELOPMENT_ISSUES_READER_PASSWORD: ${DEVELOPMENT_ISSUES_READER_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
@@ -30,7 +29,8 @@ services:
     shm_size: 256mb
     stop_grace_period: 30s
 
-  query-man:
+  api:
+    restart: "no"
     depends_on:
       postgres:
         condition: service_healthy
