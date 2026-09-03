@@ -6,7 +6,7 @@ import socket
 import threading
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
-from dataclasses import replace
+from pathlib import Path
 
 import httpx
 import pytest
@@ -16,10 +16,11 @@ from fastapi import FastAPI
 import query_man.runtime.composition as composition_module
 import query_man.runtime.server as server_module
 from query_man.runtime.composition import _ShutdownDeadline, _ShutdownTrigger
+from query_man.runtime.config import RuntimeConfig
 from query_man.runtime.operations import OperationalState, operations
 
 
-def test_server_uses_the_runtime_yaml_composition() -> None:
+def test_server_uses_the_runtime_composition() -> None:
     assert server_module.build_app.__module__ == "query_man.runtime.composition"
 
 
@@ -32,6 +33,25 @@ def test_main_configures_ceil_uvicorn_shutdown_timeout(
     grace_ms: int,
     expected_seconds: int,
 ) -> None:
+    runtime_config = RuntimeConfig(
+        host="127.0.0.1",
+        port=4321,
+        log_level="warning",
+        api_token=None,
+        source_directory=Path("unused-sources"),
+        budget_file=Path("unused-budgets.yaml"),
+        access_policy_file=None,
+        metadata_cache_ttl_ms=30_000,
+        metadata_max_stale_ms=300_000,
+        metadata_retry_delay_ms=5_000,
+        shutdown_grace_ms=grace_ms,
+    )
+    app = FastAPI()
+
+    def shutdown_trigger() -> None:
+        pass
+
+    app.state.shutdown_trigger = shutdown_trigger
     captured: dict[str, object] = {}
 
     class RecordingServer:
@@ -46,20 +66,28 @@ def test_main_configures_ceil_uvicorn_shutdown_timeout(
         def run(self) -> None:
             captured["ran"] = True
 
+    monkeypatch.setattr(server_module, "load_dotenv", lambda: captured.setdefault("dotenv", True))
+    monkeypatch.setattr(server_module, "load_runtime_config", lambda: runtime_config)
     monkeypatch.setattr(
         server_module,
-        "runtime_config",
-        replace(server_module.runtime_config, shutdown_grace_ms=grace_ms),
+        "configure_logging",
+        lambda level: captured.setdefault("log_level", level),
     )
+    monkeypatch.setattr(server_module, "build_app", lambda config: app)
     monkeypatch.setattr(server_module, "_QueryManServer", RecordingServer)
 
     server_module.main()
 
     config = captured["config"]
     assert isinstance(config, uvicorn.Config)
+    assert config.app is app
+    assert config.host == "127.0.0.1"
+    assert config.port == 4321
+    assert config.log_level == "warning"
     assert config.timeout_graceful_shutdown == expected_seconds
-    assert callable(captured["shutdown_trigger"])
-    assert captured["shutdown_trigger"] is server_module.app.state.shutdown_trigger
+    assert captured["dotenv"] is True
+    assert captured["log_level"] == "warning"
+    assert captured["shutdown_trigger"] is shutdown_trigger
     assert captured["ran"] is True
 
 

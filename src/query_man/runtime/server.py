@@ -11,11 +11,6 @@ from query_man.runtime.composition import build_app
 from query_man.runtime.config import load_runtime_config
 from query_man.runtime.operations import configure_logging
 
-load_dotenv()
-runtime_config = load_runtime_config()
-configure_logging(runtime_config.log_level)
-app = build_app(runtime_config)
-
 
 class _QueryManServer(uvicorn.Server):
     def __init__(
@@ -36,6 +31,10 @@ class _QueryManServer(uvicorn.Server):
 
 
 def main() -> None:
+    load_dotenv()
+    runtime_config = load_runtime_config()
+    configure_logging(runtime_config.log_level)
+    app = build_app(runtime_config)
     config = uvicorn.Config(
         app,
         host=runtime_config.host,
