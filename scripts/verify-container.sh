@@ -38,11 +38,11 @@ fi
 docker compose exec -T query-man sh -c \
   'test ! -e /app/.env && test ! -e /app/.git && test ! -e /app/tests'
 
-operator_token="$(
-  docker compose exec -T query-man printenv QUERY_MAN_OPERATOR_TOKEN | tr -d '\r\n'
+query_token="$(
+  docker compose exec -T query-man printenv QUERY_MAN_QUERY_TOKEN | tr -d '\r\n'
 )"
 source_status="$(
-  printf 'Authorization: Bearer %s\n' "$operator_token" |
+  printf 'Authorization: Bearer %s\n' "$query_token" |
     curl -sS --max-time 5 --max-filesize 1048576 \
       -o /dev/null -w '%{http_code}' -H @- "${base_url}/sources"
 )"
@@ -50,6 +50,21 @@ if [[ "$source_status" != "200" ]]; then
   echo "authenticated /sources returned ${source_status}, expected 200" >&2
   exit 1
 fi
+meta_status="$(
+  printf 'Authorization: Bearer %s\n' "$query_token" |
+    curl -sS --max-time 5 --max-filesize 1048576 \
+      -o /dev/null -w '%{http_code}' -H @- \
+      -H 'Content-Type: application/json' \
+      --data '{"source_id":"fixture-source"}' "${base_url}/meta"
+)"
+unset query_token
+if [[ "$meta_status" != "200" ]]; then
+  echo "authenticated /meta returned ${meta_status}, expected 200" >&2
+  exit 1
+fi
+operator_token="$(
+  docker compose exec -T query-man printenv QUERY_MAN_OPERATOR_TOKEN | tr -d '\r\n'
+)"
 admin_status="$(
   printf 'Authorization: Bearer %s\n' "$operator_token" |
     curl -sS --max-time 5 --max-filesize 1048576 \
