@@ -4,6 +4,8 @@ services:
   postgres:
     container_name: query-man-domain-lab-postgres
     environment:
+      DEVELOPMENT_ISSUES_READER_PASSWORD: ${DEVELOPMENT_ISSUES_READER_PASSWORD}
+      MARKET_VOC_READER_PASSWORD: ${MARKET_VOC_READER_PASSWORD}
       RETAIL_COMMERCE_READER_PASSWORD: ${RETAIL_COMMERCE_READER_PASSWORD}
       PARCEL_LOGISTICS_READER_PASSWORD: ${PARCEL_LOGISTICS_READER_PASSWORD}
       ENERGY_TELEMETRY_READER_PASSWORD: ${ENERGY_TELEMETRY_READER_PASSWORD}
@@ -22,6 +24,10 @@ services:
     volumes:
       - ./docker/postgres/domain-lab/46-domain-lab-bootstrap.sh:/docker-entrypoint-initdb.d/46-domain-lab-bootstrap.sh:ro
       - ./docker/postgres/domain-lab:/query-man-domain-lab:ro
+      - ./docker/postgres/init/10-development-issues-schema.sql:/query-man-domain-lab/development-issues-schema.sql:ro
+      - ./docker/postgres/init/20-development-issues-seed.sql:/query-man-domain-lab/development-issues-seed.sql:ro
+      - ./docker/postgres/init/30-market-voc-schema.sql:/query-man-domain-lab/market-voc-schema.sql:ro
+      - ./docker/postgres/init/40-market-voc-seed.sql:/query-man-domain-lab/market-voc-seed.sql:ro
       - ./config/domain-lab/sources:/query-man-domain-lab-sources:ro
 
   query-man:

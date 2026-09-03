@@ -25,11 +25,10 @@ jobs:
           enable-cache: true
       - name: Install locked test environment
         run: uv sync --locked
-      - name: Prepare deterministic PostgreSQL fixtures
+      - name: Prepare tiny PostgreSQL safety fixture
         run: |
           cp .env.fixture.example .env
           docker compose up -d --wait --wait-timeout 120 postgres
-          ./scripts/apply-db.sh
       - name: Build and start two MCP replicas
         run: |
           docker compose --profile soak config --quiet
@@ -44,4 +43,4 @@ jobs:
           docker compose --profile soak logs --no-color --tail=300 postgres query-man query-man-replica
       - name: Stop containerized soak runtime
         if: always()
-        run: docker compose --profile soak down -v --remove-orphans
+        run: docker compose --env-file .env.fixture.example --profile soak down -v --remove-orphans

@@ -1,0 +1,48 @@
+version: 4
+
+source_id: fixture-source
+name: Query Man test fixture
+description: Three deterministic rows for PostgreSQL integration and container checks
+view_contract_version: 1
+provenance:
+  owner: query-man
+  environment: test
+  database_migration_ref: config/sources/fixture-source/views.sql
+connection:
+  host: 127.0.0.1
+  host_env: QUERY_MAN_POSTGRES_HOST
+  port: 5432
+  port_env: POSTGRES_PORT
+  database: query_man
+  user: query_man_fixture_reader
+  password_env: FIXTURE_SOURCE_READER_PASSWORD
+  sslmode: disable
+allowed_schemas:
+  - ai
+allowed_relation_kinds:
+  - view
+budget_profile: interactive
+tenant_isolation: none
+
+semantic_overlay:
+  default_relation: ai.fixture_records
+  relations:
+    - relation: ai.fixture_records
+      role: event
+      description: Deterministic scalar values used by repository safety tests
+      aliases:
+        - fixture records
+        - test records
+      grain:
+        name: fixture_record
+        description: One deterministic fixture record
+        key_columns: [record_id]
+      default_time_column: timestamp_value
+      use_for:
+        - PostgreSQL integration checks
+        - result encoding checks
+      measures:
+        - name: record_count
+          description: Number of fixture records
+          aliases: [row count]
+          aggregation: count_rows

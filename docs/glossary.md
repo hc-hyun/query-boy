@@ -59,7 +59,7 @@ accepted ADR이 기준이고, 이 문서는 개념을 쉽게 이해하기 위한
 | 용어 | 쉽게 말하면 |
 |---|---|
 | Git-reviewed source authority | `config/sources/<source-id>/source.yaml`과 `views.sql`, `config/budget-profiles.yaml`이 source와 제한을 결정하는 기준인 방식입니다. 변경은 review·test·DBA 적용·배포로 반영합니다. |
-| Static launch | Git에서 검토한 두 source와 단일 replica를 배포물에 고정한 현재 첫 오픈 범위입니다. 실행 중 새 source를 추가하지 않습니다. |
+| Static launch | Git에서 검토한 source package 집합과 단일 replica를 process 시작 때 배포물에 고정한 현재 첫 오픈 범위입니다. 실행 중 새 source를 추가하지 않습니다. |
 | Replica | 같은 Query Man 애플리케이션을 실행하는 process 한 개입니다. 현재 first launch 계획은 단일 replica입니다. |
 | Freshness / stale | Metadata가 얼마나 최근 것인지 나타냅니다. `stale`은 마지막 정상 snapshot은 있지만 신선도 기준을 넘었다는 뜻입니다. |
 | Projection | 내부 정보 중 외부에 보여도 되는 필드만 골라 만든 응답 모양입니다. Secret이나 내부 row 전체를 그대로 내보내지 않습니다. |
@@ -83,7 +83,7 @@ accepted ADR이 기준이고, 이 문서는 개념을 쉽게 이해하기 위한
 | Lifecycle | 시작, 준비, reload, drain, 종료와 실패 정리의 순서와 결과입니다. |
 | Composition root | 여러 모듈의 실제 구현을 골라 연결하는 허용된 조립 지점입니다. Production server는 Runtime이 조립합니다. |
 | Trust boundary | 입력이나 권한을 그대로 믿으면 안 되어 검증·격리가 필요한 경계입니다. |
-| Authority | 어떤 사실을 결정하는 최종 기준입니다. 예: 현재 첫 오픈 범위의 authority는 ADR 0025입니다. |
+| Authority | 어떤 사실을 결정하는 최종 기준입니다. 예: launch safety는 ADR 0025, startup source inventory는 ADR 0035가 정합니다. |
 | ADR | 중요한 설계 선택과 이유·영향을 보존하는 Architecture Decision Record입니다. |
 | Active TODO | 승인돼 실제로 지금 진행할 남은 일입니다. |
 | Parked research | 조사 기록은 있지만 일정과 구현 승인은 없는 미래 후보입니다. |

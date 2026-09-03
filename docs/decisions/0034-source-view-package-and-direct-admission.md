@@ -178,9 +178,9 @@ owner를 확인한 별도 authorization이 필요합니다.
 
 - 이 결정은 ADR 0030의 flat `config/sources/*.yaml` 및 verified-query authority를 source package
   authority로 대체합니다. Budget YAML authority와 retired managed capability는 유지합니다.
-- ADR 0025의 두 non-RLS source, PostgreSQL 18/UTF-8, seven result OID, SQL policy, revision mismatch,
-  reader/query safety와 privileged DDL freeze는 유지합니다. Nine-query repository/protected launch gate는
-  이 결정이 대체합니다.
+- ADR 0025의 PostgreSQL 18/UTF-8, seven result OID, SQL policy, revision mismatch, reader/query safety와
+  privileged DDL freeze는 유지합니다. Exact two-name inventory는 ADR 0035가 대체하고, nine-query
+  repository/protected launch gate는 이 결정이 대체합니다.
 - ADR 0031의 DB-owner-confirmed no-PII curated-view boundary는 유지합니다. Quality/verified domain-lab
   verification 조항만 이 결정이 대체합니다.
 - ADR 0033의 exact TLS mode와 transport behavior는 유지합니다. Manifest version 3 format만 version 4

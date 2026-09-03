@@ -330,17 +330,20 @@ def test_real_source_commands_read_git_packages_without_secrets_or_network(
     list_shell.onecmd("source list")
     listed = yaml.safe_load(list_output.getvalue())
     assert listed["authority"] == "source-package"
-    assert listed["source_count"] == 2
-    assert [source["source_id"] for source in listed["sources"]] == [
-        "development-issues",
-        "market-voc",
-    ]
-    assert listed["sources"][0]["source_manifest"] == (
-        "config/sources/development-issues/source.yaml"
+    expected_source_ids = sorted(
+        path.name for path in (ROOT_DIRECTORY / "config" / "sources").iterdir()
     )
-    assert listed["sources"][0]["views_sql"] == (
-        "config/sources/development-issues/views.sql"
-    )
+    source_ids = [source["source_id"] for source in listed["sources"]]
+    assert listed["source_count"] == len(source_ids)
+    assert source_ids == expected_source_ids
+    assert source_ids == sorted(source_ids)
+    for source in listed["sources"]:
+        source_id = source["source_id"]
+        assert source["package_path"] == f"config/sources/{source_id}"
+        assert source["source_manifest"] == (
+            f"config/sources/{source_id}/source.yaml"
+        )
+        assert source["views_sql"] == f"config/sources/{source_id}/views.sql"
 
     show_shell, show_output = _shell(backend)
     show_shell.onecmd("source show development-issues")
@@ -362,8 +365,8 @@ def test_real_source_commands_read_git_packages_without_secrets_or_network(
         "source_directory": "config/sources",
         "package_layout": "config/sources/<source-id>/{source.yaml,views.sql}",
         "budget_file": "config/budget-profiles.yaml",
-        "source_count": 2,
-        "source_ids": ["development-issues", "market-voc"],
+        "source_count": len(source_ids),
+        "source_ids": source_ids,
         "live_database_checked": False,
     }
 

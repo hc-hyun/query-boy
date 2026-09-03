@@ -15,25 +15,24 @@ jobs:
           enable-cache: true
       - name: Install locked environment
         run: uv sync --locked
-      - name: Start Git-reviewed source-package PostgreSQL fixtures
-        run: |
-          cp .env.fixture.example .env
-          docker compose config --quiet
-          docker compose up -d --wait postgres
-          ./scripts/apply-db.sh
-      - name: Static analysis and unit checks
+      - name: Static source-package analysis and unit checks
         run: |
           uv run ruff check .
           uv run ruff check src/query_man/runtime --select C901 --config "lint.mccabe.max-complexity=19"
           uv run mypy src
           uv run pytest -m 'not integration and not load and not soak and not mcp_server'
+      - name: Start tiny PostgreSQL safety fixture
+        run: |
+          cp .env.fixture.example .env
+          docker compose config --quiet
+          docker compose up -d --wait postgres
       - name: Database and integration checks
         run: uv run pytest -m 'integration and not load and not soak and not mcp_server'
       - name: Bounded load check
         run: uv run pytest -m load tests/test_load.py
       - name: Stop fixtures
         if: always()
-        run: docker compose down -v
+        run: docker compose --env-file .env.fixture.example down -v
 
   container:
     runs-on: ubuntu-latest
@@ -55,7 +54,6 @@ jobs:
           cp .env.fixture.example .env
           docker compose config --quiet
           docker compose up -d --wait --wait-timeout 120 postgres
-          ./scripts/apply-db.sh
           docker compose build --build-arg QUERY_MAN_VCS_REF="$QUERY_MAN_VCS_REF" query-man
           docker compose up -d --no-build --wait --wait-timeout 120 query-man
       - name: Verify container and MCP boundary
@@ -70,7 +68,7 @@ jobs:
         run: docker compose logs --no-color --tail=200 query-man
       - name: Stop containerized runtime
         if: always()
-        run: docker compose down -v --remove-orphans
+        run: docker compose --env-file .env.fixture.example down -v --remove-orphans
 
   security:
     runs-on: ubuntu-latest

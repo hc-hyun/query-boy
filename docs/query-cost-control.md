@@ -59,7 +59,7 @@ concurrency, parallel worker와 reader connection limit를 함께 제한한다. 
 한 PostgreSQL process가 sort/hash 등에 만든 임시 파일 상한이며 명시적 temporary relation이나
 source storage quota를 뜻하지 않는다. Database `TEMP` privilege 보유는 reader admission 조건이
 아니지만, Query Man 사용자 SQL은 `SELECT INTO`, DDL과 `pg_temp` relation 접근을 계속 거부한다.
-Local fixture의 `TEMP` revoke는 선택적 hardening이다. 자세한 경계는
+Local fixture는 `TEMP` 보유 reader도 안전하게 admission되는 경계를 검증한다. 자세한 근거는
 [ADR 0032](decisions/0032-reader-temp-admission-relaxation.md)를 따른다.
 
 현재 경계는 replica 전체의 distributed source quota, caller/tenant별 quota·fairness,

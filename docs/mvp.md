@@ -1,15 +1,16 @@
 # 첫 오픈 예제 데이터와 대표 질문
 
-Status: 현재 ADR 0025 static two-source launch dataset
+Status: Bundled two-source example dataset; startup inventory authority 아님
 
 이 문서는 Query Man이 제공하는 두 예제 source의 업무 의미를 설명합니다. API 형식이나 SQL 안전
 정책보다 “어떤 데이터가 있고 한 행이 무엇을 뜻하는가”에 집중합니다.
 
-현재 범위는 [ADR 0025](decisions/0025-static-non-rls-first-launch.md)의 단일 replica,
+현재 safety 범위는 [ADR 0025](decisions/0025-static-non-rls-first-launch.md)의 단일 replica,
 PostgreSQL 18/UTF-8, non-RLS launch profile이며 source authority는
 [ADR 0034](decisions/0034-source-view-package-and-direct-admission.md)의 source별
 `config/sources/<source-id>/source.yaml`+`views.sql` package입니다. Budget은 계속
 [ADR 0030](decisions/0030-git-reviewed-yaml-source-authority.md)의 Git-reviewed YAML을 따릅니다.
+이 문서의 두 source는 bundled example 설명이며 active inventory의 이름·개수 기준은 아닙니다.
 
 ## 먼저 알아둘 말
 
@@ -142,9 +143,8 @@ Market VOC:
 
 ## 직접 확인하기
 
-처음 실행하는 절차는 [프로젝트 README](../README.md#5분-로컬-실행)를 따릅니다. Fixture의
-base schema, source-local view, seed, row 수, marker와 reader 권한을 다시 적용·검사하려면 다음을
-사용합니다.
+처음 실행하는 절차는 [프로젝트 README](../README.md#5분-로컬-실행)를 따릅니다. Local PostgreSQL
+safety fixture의 작은 schema, view, 3행 seed와 reader 권한을 다시 적용하려면 다음을 사용합니다.
 
 ```bash
 test -f .env || cp .env.fixture.example .env
@@ -152,9 +152,9 @@ docker compose up -d --wait postgres
 ./scripts/apply-db.sh
 ```
 
-`apply-db.sh`는 현재 Git source package의 두 fixture만 준비합니다. `get_context`가 candidate
-metadata를 만들 때 reader-visible view marker와 semantic overlay를 직접 검사하고, 불일치하면
-stale snapshot으로 우회하지 않습니다. Source 추가나 view definition 변경은
+`apply-db.sh`는 production source package를 적용하지 않고 test-local `fixture-source`만 준비합니다.
+`get_context`가 candidate metadata를 만들 때 reader-visible view marker와 semantic overlay를 직접
+검사하고, 불일치하면 stale snapshot으로 우회하지 않습니다. Source 추가나 view definition 변경은
 [source 확장 checklist](source-extension-checklist.md)의 DB owner review, traffic-off apply와 별도 실행
 승인을 거칩니다.
 
@@ -162,7 +162,8 @@ stale snapshot으로 우회하지 않습니다. Source 추가나 view definition
 
 이 문서는 데이터 설명만 담당합니다.
 
-- 현재 source, PostgreSQL·RLS·결과 type 제한: [ADR 0025](decisions/0025-static-non-rls-first-launch.md)
+- 현재 PostgreSQL·RLS·결과 type safety 제한: [ADR 0025](decisions/0025-static-non-rls-first-launch.md)
+- Startup source inventory: [ADR 0035](decisions/0035-reviewed-source-package-inventory.md)
 - Source package, view marker와 direct admission: [ADR 0034](decisions/0034-source-view-package-and-direct-admission.md)
 - SQL 검사와 실행: [Guarded Query module](modules/guarded-query/README.md)
 - HTTP/MCP 외부 API: [Delivery module](modules/delivery/README.md)
@@ -170,7 +171,7 @@ stale snapshot으로 우회하지 않습니다. Source 추가나 view definition
 
 ## MVP Exit Criteria
 
-두 source, 최소 권한 reader, 결정적 seed, grain별 curated view, metadata retrieval, guarded query,
+Reviewed source package, 최소 권한 reader, grain별 curated view, metadata retrieval, guarded query,
 HTTP/MCP와 direct metadata admission의 repository 구현은 완료됐습니다. Security, integration,
 container, bounded load·soak가 유지되며 현재 검증 방법과 삭제한 과거 기록은
 [검증과 Git 기록](verification/README.md)에서 확인합니다. 실제 환경 전환 완료를 뜻하지는 않습니다.

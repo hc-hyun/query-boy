@@ -339,7 +339,13 @@ async def test_lists_sources_without_connection_information() -> None:
     async with client(NeverCalledCatalog()) as session:
         response = await session.get("/sources")
     assert response.status_code == 200
-    assert len(response.json()["sources"]) == 2
+    sources = response.json()["sources"]
+    source_ids = [source["source_id"] for source in sources]
+    assert source_ids == sorted(load_test_registry().source_ids())
+    assert all(
+        set(source) == {"source_id", "name", "description"}
+        for source in sources
+    )
     assert "password" not in response.text
     assert "development_issues_reader" not in response.text
 
@@ -1342,8 +1348,8 @@ async def test_query_identities_share_sources_and_source_resolved_budget(
             headers={"authorization": "Bearer invalid-query-token"},
         )
 
-    expected_sources = ["development-issues", "market-voc"]
-    assert [source["source_id"] for source in listed_a.json()["sources"]] == expected_sources
+    listed_source_ids = [source["source_id"] for source in listed_a.json()["sources"]]
+    assert listed_source_ids == sorted(load_test_registry().source_ids())
     assert listed_b.json() == listed_a.json()
     assert context_a.status_code == context_b.status_code == 200
     assert context_b.json() == context_a.json()

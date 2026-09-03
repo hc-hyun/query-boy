@@ -25,7 +25,7 @@ from tests.helpers import ROOT_DIRECTORY
 
 pytestmark = [pytest.mark.mcp_server, pytest.mark.asyncio]
 
-_KNOWN_SOURCES = {"development-issues", "market-voc"}
+_KNOWN_SOURCES = {"fixture-source"}
 _DISCOVER_REQUEST = {
     "jsonrpc": "2.0",
     "id": 1,
@@ -87,21 +87,13 @@ class QueryFixture:
     rows: tuple[dict[str, object], ...]
 
 
-_DEVELOPMENT_QUERY = QueryFixture(
-    source_id="development-issues",
-    question="전체 개발 문제 건수를 보여줘",
-    sql="SELECT count(*) AS issue_count FROM ai.issue_overview",
-    relations=("ai.issue_overview",),
-    columns=("issue_count",),
-    rows=({"issue_count": 600},),
-)
-_MARKET_QUERY = QueryFixture(
-    source_id="market-voc",
-    question="전체 시장 VOC 수를 보여줘",
-    sql="SELECT count(*) AS voc_count FROM ai.voc_overview",
-    relations=("ai.voc_overview",),
-    columns=("voc_count",),
-    rows=({"voc_count": 1_200},),
+_FIXTURE_QUERY = QueryFixture(
+    source_id="fixture-source",
+    question="fixture record count",
+    sql="SELECT count(*) AS record_count FROM ai.fixture_records",
+    relations=("ai.fixture_records",),
+    columns=("record_count",),
+    rows=({"record_count": 3},),
 )
 
 
@@ -227,7 +219,7 @@ def _assert_query_result(result: CallToolResult, contract: QueryFixture) -> str:
 async def test_tools_and_revision_refresh_workflow(
     mcp_server_settings: McpServerSettings,
 ) -> None:
-    contract = _MARKET_QUERY
+    contract = _FIXTURE_QUERY
     async with _mcp_client(mcp_server_settings) as client:
         tools = await client.list_tools()
         assert [tool.name for tool in tools.tools] == [
@@ -524,7 +516,7 @@ async def test_tool_validation_does_not_disclose_input(
         (
             "query",
             {
-                "source_id": "development-issues",
+                "source_id": "fixture-source",
                 "sql": marker + ("x" * 100_000),
                 "metadata_revision": revision,
                 "sql_policy_revision": SQL_POLICY_REVISION,
@@ -555,8 +547,8 @@ async def test_tool_validation_does_not_disclose_input(
         (
             "get_context",
             {
-                "source_id": "development-issues",
-                "question": "문제 수",
+                "source_id": "fixture-source",
+                "question": "record count",
                 "max_objects": 5,
             },
             "CORRECT_ARGUMENTS",
@@ -566,7 +558,7 @@ async def test_tool_validation_does_not_disclose_input(
         (
             "query",
             {
-                "source_id": "development-issues",
+                "source_id": "fixture-source",
                 "sql": "SELECT 1",
                 "metadata_revision": revision,
             },
@@ -601,7 +593,7 @@ async def test_query_policy_rejections_are_structured_and_bounded(
         revision = _structured(
             await client.call_tool(
                 "get_context",
-                {"source_id": "development-issues", "question": "문제 수"},
+                {"source_id": "fixture-source", "question": "record count"},
             )
         )["metadata_revision"]
         rejected = [
@@ -609,7 +601,7 @@ async def test_query_policy_rejections_are_structured_and_bounded(
                 await client.call_tool(
                     "query",
                     {
-                        "source_id": "development-issues",
+                        "source_id": "fixture-source",
                         "sql": sql,
                         "metadata_revision": revision,
                         "sql_policy_revision": SQL_POLICY_REVISION,
@@ -619,15 +611,15 @@ async def test_query_policy_rejections_are_structured_and_bounded(
             )
             for sql, reason_code in (
                 (
-                    "DELETE FROM ai.issue_overview",
+                    "DELETE FROM ai.fixture_records",
                     "SQL_STATEMENT_NOT_ALLOWED",
                 ),
                 (
-                    "SELECT count(*) FROM issue_overview",
+                    "SELECT count(*) FROM fixture_records",
                     "SQL_RELATION_MUST_BE_QUALIFIED",
                 ),
                 (
-                    "SELECT pg_catalog.pg_sleep(0.01) FROM ai.issue_overview LIMIT 1",
+                    "SELECT pg_catalog.pg_sleep(0.01) FROM ai.fixture_records LIMIT 1",
                     "SQL_FUNCTION_NOT_ALLOWED",
                 ),
             )
@@ -654,7 +646,7 @@ async def test_query_policy_rejections_are_structured_and_bounded(
 async def test_same_client_handles_bounded_concurrent_query_batch(
     mcp_server_settings: McpServerSettings,
 ) -> None:
-    contract = _MARKET_QUERY
+    contract = _FIXTURE_QUERY
     started = time.monotonic()
     async with _mcp_client(mcp_server_settings) as client:
         context = _structured(
@@ -683,54 +675,6 @@ async def test_same_client_handles_bounded_concurrent_query_batch(
                 "wall_ms": round((time.monotonic() - started) * 1_000),
                 "max_queue_ms": max(int(body["queue_ms"]) for body in bodies),
                 "max_execution_ms": max(int(body["elapsed_ms"]) for body in bodies),
-            },
-            sort_keys=True,
-        )
-    )
-
-
-async def _run_independent_session(
-    settings: McpServerSettings,
-    contract: QueryFixture,
-) -> str:
-    async with _mcp_client(settings) as client:
-        listed = _structured(await client.call_tool("list_sources", {}))
-        assert {source["source_id"] for source in listed["sources"]} == _KNOWN_SOURCES
-        context = _structured(
-            await client.call_tool(
-                "get_context",
-                {"source_id": contract.source_id, "question": contract.question},
-            )
-        )
-        assert tuple(relation["name"] for relation in context["relations"]) == contract.relations
-        result = await client.call_tool(
-            "query",
-            {
-                "source_id": contract.source_id,
-                "sql": contract.sql,
-                "metadata_revision": context["metadata_revision"],
-                "sql_policy_revision": context["sql_policy_revision"],
-            },
-        )
-        return _assert_query_result(result, contract)
-
-
-async def test_independent_sessions_are_isolated_and_exact(
-    mcp_server_settings: McpServerSettings,
-) -> None:
-    contracts = (_DEVELOPMENT_QUERY, _MARKET_QUERY)
-    started = time.monotonic()
-    query_ids = await asyncio.gather(
-        *(_run_independent_session(mcp_server_settings, contracts[index % 2]) for index in range(8))
-    )
-    assert len(set(query_ids)) == len(query_ids)
-    print(
-        json.dumps(
-            {
-                "event": "mcp_independent_sessions_summary",
-                "sessions": len(query_ids),
-                "unique_query_ids": len(set(query_ids)),
-                "wall_ms": round((time.monotonic() - started) * 1_000),
             },
             sort_keys=True,
         )

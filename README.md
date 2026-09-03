@@ -52,7 +52,7 @@ Query Man 자체에 자연어를 SQL로 바꾸는 AI 모델이 들어 있는 것
 
 | 항목 | 현재 범위 | 쉽게 말하면 |
 |---|---|---|
-| 데이터 | `development-issues`, `market-voc` | 검토가 끝난 두 업무 DB만 조회합니다. |
+| 데이터 | Reviewed source packages | `config/sources/`에 함께 review된 업무 DB package만 조회합니다. |
 | 실행 구성 | 단일 Query Man replica | Query Man 서버 한 개를 첫 오픈 계획·검증 대상으로 봅니다. |
 | PostgreSQL | 18.x, server/client UTF-8 | 다른 major version이나 문자 인코딩은 시작·조회 전에 거부합니다. |
 | DB 접근 | `ai` schema의 검토된 view, 읽기 전용 계정 | 원본 table이나 쓰기 SQL에 접근하지 않습니다. |
@@ -71,13 +71,18 @@ Boolean은 SQL의 조건식이나 중간 계산에는 사용할 수 있지만 �
 - 임의의 PostgreSQL 결과 타입
 - DB 사용량을 source별 비용·금액으로 귀속하는 기능과 여러 요청을 잇는 분산 추적
 
-정확한 현재 기준은 [ADR 0025](docs/decisions/0025-static-non-rls-first-launch.md)의
-`LAUNCH-01-A`입니다. 현재 검증 방법과 과거 기록은
+정확한 launch safety 기준은 [ADR 0025](docs/decisions/0025-static-non-rls-first-launch.md)의
+`LAUNCH-01-A`, startup inventory 기준은
+[ADR 0035](docs/decisions/0035-reviewed-source-package-inventory.md)입니다. 현재 검증 방법과 과거 기록은
 [검증 안내](docs/verification/README.md), 운영까지 남은 일은 [개발 TODO](docs/development-todo.md)에서
 확인할 수 있습니다.
-Source authority의 현재 결정은 [ADR 0034](docs/decisions/0034-source-view-package-and-direct-admission.md)입니다.
+Source package authority의 현재 결정은
+[ADR 0034](docs/decisions/0034-source-view-package-and-direct-admission.md)입니다.
 
-## 제공 데이터
+## 함께 제공하는 source package 예시
+
+아래 두 source는 reviewed production-package 예시이며 active inventory의 고정 목록은 아닙니다.
+Local/CI PostgreSQL은 이 업무 schema와 데이터를 복제하지 않고 별도의 작은 `fixture-source`를 사용합니다.
 
 | Source ID | 담고 있는 데이터 | 질문 예시 |
 |---|---|---|
@@ -95,7 +100,7 @@ Source authority의 현재 결정은 [ADR 0034](docs/decisions/0034-source-view-
 source package의 manifest가 가리키는 외부 PostgreSQL endpoint와 reader secret만 연결합니다.
 
 아래 5분 절차는 실제 source가 없는 로컬·CI를 위해 [`compose.fixture.yaml`](compose.fixture.yaml)을
-추가해 합성 PostgreSQL source 두 개를 함께 실행합니다.
+추가해 3행짜리 합성 PostgreSQL source 하나를 함께 실행합니다.
 
 ### 준비물
 
@@ -118,8 +123,9 @@ openssl rand -hex 32
 ```
 
 두 난수 결과를 각각 `.env`의 `QUERY_MAN_CODEX_MCP_TOKEN`과 `QUERY_MAN_OPERATOR_TOKEN`에 넣습니다.
-두 token은 서로 달라야 합니다. Fixture Compose가 사용하는 PostgreSQL과 current 두 reader의
-`replace-with-...` 값도 각각 로컬 전용 password로 바꿉니다.
+두 token은 서로 달라야 합니다. Fixture Compose가 사용하는 PostgreSQL과 reader의
+`replace-with-...` 값도 로컬 전용 password로 바꿉니다. Production password naming과 source package는
+이 fixture 때문에 바뀌지 않습니다.
 
 기존 `.env`를 계속 사용한다면 `COMPOSE_FILE=compose.yaml:compose.fixture.yaml`과
 `QUERY_MAN_POSTGRES_HOST=postgres`가 있는지 확인합니다. 이 두 값이 없으면 base는 의도대로
@@ -135,13 +141,13 @@ application만 선택하며 `postgres` service를 만들지 않습니다.
 
 ```bash
 docker compose up -d --wait postgres
-./scripts/apply-db.sh
 docker compose up -d --build --wait query-man
 docker compose ps
 ```
 
-`apply-db.sh`는 현재 static launch와 같은 `development-issues`, `market-voc` 두 fixture DB의
-role·schema·예제 데이터만 적용하고 검증합니다.
+새 volume에서는 PostgreSQL init이 test-local `fixture-source`의 role·schema·3행 데이터를 한 번
+적용합니다. 기존 local volume에 같은 작은 fixture를 명시적으로 다시 적용할 때만
+`./scripts/apply-db.sh`를 사용합니다.
 어느 스크립트도 운영 DB migration 도구가 아닙니다.
 
 ### 3. 정상 동작 확인하기
@@ -157,8 +163,8 @@ curl -fsS http://127.0.0.1:3000/ready
 {"status":"ready"}
 ```
 
-`verify-container.sh`는 `.env`와 실제 Compose port를 사용해 source 두 개, 인증, HTTP/MCP query,
-non-root와 read-only container 경계까지 확인합니다.
+`verify-container.sh`는 `.env`와 실제 Compose port를 사용해 readiness, 인증, non-root와 read-only
+container 경계를 확인합니다. 실제 MCP query와 protocol 검사는 MCP pytest가 한 곳에서 담당합니다.
 
 로그는 다음 명령으로 확인합니다.
 
@@ -190,7 +196,7 @@ AuthBridge를 쓰는 배포는 opaque token 대신 [Resource Server JWT Access T
 `QUERY_MAN_PORT`를 바꿨다면 URL의 port도 같은 값으로 바꾸세요.
 
 `.env`는 Compose가 읽지만 현재 shell에는 자동으로 들어오지 않습니다. 아래 명령은 조회 전용 token
-하나만 현재 shell에 가져옵니다. 이 caller는 두 source를 모두 조회할 수 있지만 관리·취소 권한은
+하나만 현재 shell에 가져옵니다. 이 local fixture caller는 합성 source를 조회할 수 있지만 관리·취소 권한은
 없습니다.
 
 ```bash
@@ -204,7 +210,7 @@ curl -sS http://127.0.0.1:3000/sources \
   -H "Authorization: Bearer $QUERY_MAN_CODEX_MCP_TOKEN"
 ```
 
-응답의 source 목록에 `development-issues`, `market-voc`만 있어야 합니다.
+현재 local fixture 응답의 source 목록에는 `fixture-source` 하나만 있어야 합니다.
 
 ### 2. 질문에 필요한 데이터 설명 받기
 
@@ -213,8 +219,8 @@ curl -sS http://127.0.0.1:3000/meta \
   -H "Authorization: Bearer $QUERY_MAN_CODEX_MCP_TOKEN" \
   -H 'content-type: application/json' \
   -d '{
-    "source_id": "market-voc",
-    "question": "전체 VOC는 몇 건인가?"
+    "source_id": "fixture-source",
+    "question": "테스트 레코드는 몇 건인가?"
   }'
 ```
 
@@ -231,14 +237,14 @@ curl -sS http://127.0.0.1:3000/query \
   -H "Authorization: Bearer $QUERY_MAN_CODEX_MCP_TOKEN" \
   -H 'content-type: application/json' \
   -d '{
-    "source_id": "market-voc",
-    "sql": "SELECT count(*) AS voc_count FROM ai.voc_overview",
+    "source_id": "fixture-source",
+    "sql": "SELECT count(*) AS record_count FROM ai.fixture_records",
     "metadata_revision": "<meta 응답의 전체 값을 그대로 붙여넣기>",
     "sql_policy_revision": "<meta 응답의 전체 값을 그대로 붙여넣기>"
   }'
 ```
 
-로컬 예제 데이터가 정상이라면 `rows`는 `[{"voc_count":1200}]`, `row_count`는 `1`입니다.
+로컬 합성 데이터가 정상이라면 `rows`는 `[{"record_count":3}]`, `row_count`는 `1`입니다.
 
 MCP endpoint는 같은 인증과 실행 경계를 사용하며 `list_sources`, `get_context`, `query` 세 tool만
 제공합니다. AI workflow는 [Text-to-SQL Skill](skills/query-man-text-to-sql/SKILL.md)을 참고하세요.
@@ -320,8 +326,8 @@ uv run mypy src
 uv run pytest
 ```
 
-전체 integration 경계는 기본 두 source fixture를 준비한 뒤 같은 repository gate의 integration
-marker로 확인합니다.
+전체 integration 경계는 작은 test-local source를 준비한 뒤 같은 repository gate의 integration
+marker로 확인합니다. Production source를 추가할 때 이 fixture를 수정하지 않습니다.
 
 ```bash
 uv run pytest -m integration
@@ -334,7 +340,7 @@ uv run pytest -m integration
 uv run pytest -m 'mcp_server and not soak' -s
 ```
 
-부하, 두-replica soak과 보안 update 절차는 일반 개발 흐름과 분리돼 있습니다.
+Bounded load, 두-replica soak과 보안 update 절차는 일반 개발 흐름과 분리돼 있습니다.
 필요할 때 [운영 문서](docs/operations.md)와 [CI workflow](.github/workflows/ci.yml)를 따라 실행하세요.
 
 ## 운영까지 남은 일
@@ -357,14 +363,16 @@ uv run pytest -m 'mcp_server and not soak' -s
 
 ## 새 데이터베이스를 추가하려면
 
-현재 첫 오픈은 두 source만 승인했습니다. 아래
-[source onboarding과 extension checklist](docs/source-extension-checklist.md)에서
-추가하려는 DB가 현재 static 경로에 맞는지와 end-to-end 영향을 함께 확인합니다. 새 DB에는 PostgreSQL
-18/UTF-8, RLS를 사용하지 않는 검토된 view와 읽기 전용 계정이 필요합니다. 업무 의미·사용량 제한·결과
-타입을 검토하고 Metadata 직접 admission과 repository gate를 통과한 뒤, 변경 승인을 받아 다시 배포합니다.
+새 source의 repository inventory 등록은
+`config/sources/<source-id>/{source.yaml,views.sql}` 두 파일을 함께 review하는 것으로 끝납니다. 별도 source
+목록, source별 test case나 문서 등록은 만들지 않습니다. 아래
+[source onboarding과 extension checklist](docs/source-extension-checklist.md)에서 추가하려는 DB가 현재 static
+경로에 맞는지와 end-to-end 영향을 확인합니다. 새 DB에는 PostgreSQL 18/UTF-8, RLS를 사용하지 않는 검토된
+view와 읽기 전용 계정이 필요합니다. 업무 의미·사용량 제한·결과 타입을 검토하고 Metadata 직접 admission과
+repository gate를 통과한 뒤 다시 배포합니다.
 
-현재 module interface 안에서 처리할 수 있다면 source별 Python 분기를 추가하지 않습니다. Source
-추가·변경은 `config/sources/<source-id>/source.yaml`과 `views.sql`을 같은 review에서 검증합니다.
+현재 module interface 안에서 처리할 수 있다면 source별 Python 분기를 추가하지 않습니다. 검사 코드는
+package 형식과 공통 동작을 검증하며 active source 이름·개수를 별도 authority로 복제하지 않습니다.
 DB owner가 output/no-PII를 확인하고 DBA가 별도 승인 아래 적용한 뒤 재배포합니다.
 
 PostgreSQL table·column comment는 grain, 단위, 상태값과 주의사항을 설명하는

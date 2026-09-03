@@ -22,8 +22,9 @@ source는 [활성 개발 지침](docs/development-guidelines.md)이다. Primary 
 5. External/persisted/policy/lifecycle/ownership/procedure 의미를 바꿔야 하면
    구현을 멈추고 아래 승인 trigger와 [상세 절차](docs/development-guidelines.md#승인-규칙)를 따른다.
 
-현재 launch authority는 [ADR 0025](docs/decisions/0025-static-non-rls-first-launch.md), source package
-authority는 [ADR 0034](docs/decisions/0034-source-view-package-and-direct-admission.md), budget authority는
+현재 launch safety authority는 [ADR 0025](docs/decisions/0025-static-non-rls-first-launch.md), source package
+authority는 [ADR 0034](docs/decisions/0034-source-view-package-and-direct-admission.md), startup inventory
+authority는 [ADR 0035](docs/decisions/0035-reviewed-source-package-inventory.md), budget authority는
 [ADR 0030](docs/decisions/0030-git-reviewed-yaml-source-authority.md)의 Git-reviewed YAML이다. 실제 active
 작업은 [development TODO](docs/development-todo.md)에서 확인한다. 삭제한 과거 roadmap·verification은
 [Git 기록 안내](docs/verification/README.md)의 archive commit에서만 읽고 현재 serving 범위로 해석하지 않는다.
@@ -77,4 +78,5 @@ compatibility/migration/rollback, 보안·데이터 손실 영향과 검증 계�
 안전 정책을 prompt나 호출자 관례에 맡기지 않고 gateway와 PostgreSQL이 강제하게 한다. 더 짧은
 구현과 더 안전한 구현이 충돌하면 안전한 구현을 선택한다.
 Revision이 포착하지 못하는 privileged DDL/function/operator/collation/semantic-setting drift는 현재
-runtime attestation 범위 밖이므로 ADR 0025의 승인 inventory와 serving freeze를 필수 완화로 유지한다.
+runtime attestation 범위 밖이므로 ADR 0035의 reviewed package inventory와 ADR 0025의 serving freeze를
+필수 완화로 유지한다.

@@ -92,8 +92,8 @@ scope/role/group을 검증한다. API 인증에는 access token만 받고 ID tok
 - 이 ADR은 archived ADR 0012, 0013, 0016과 ADR 0025의 managed authority 보존·활성화 조항을 현재
   동작에 한해 supersede한다. 원문과 dated verification은 Git archive commit
   `1ff390ab67df215181810a84ac8b2ca8570eceee`의 당시 사실입니다.
-- ADR 0025의 두-source non-RLS launch, PostgreSQL/encoding/result-OID/RLS 격리와 protected execution
-  gate는 이 결정으로 확대되지 않는다.
+- ADR 0025의 non-RLS launch, PostgreSQL/encoding/result-OID/RLS 격리와 protected execution gate는 이
+  결정으로 확대되지 않는다. Exact two-name inventory는 ADR 0035가 대체한다.
 
 ## Change and rollback
 

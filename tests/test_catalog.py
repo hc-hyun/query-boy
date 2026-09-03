@@ -1,14 +1,10 @@
 from __future__ import annotations
 
 import inspect
-import os
 from dataclasses import FrozenInstanceError, replace
 from typing import get_type_hints
 
 import pytest
-from dotenv import load_dotenv
-from psycopg import AsyncConnection
-from psycopg.conninfo import make_conninfo
 
 import query_man.metadata.catalog as catalog_module
 from query_man.errors import MetadataUnavailableError
@@ -30,7 +26,6 @@ from query_man.source_catalog.reader_policy import (
 )
 from query_man.source_catalog.registry import SourceRegistry
 from tests.helpers import (
-    ROOT_DIRECTORY,
     column,
     load_test_registry,
     minimal_development_snapshot,
@@ -680,74 +675,3 @@ def test_applies_primary_foreign_key_and_index_structures() -> None:
         "ai.issue_overview"
     )
     assert by_name["ai.issue_overview"].indexes[0].columns == ("discovered_at",)
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_live_catalog_collects_only_simple_visible_table_structures() -> None:
-    load_dotenv(ROOT_DIRECTORY / ".env")
-    required = [
-        "POSTGRES_USER",
-        "POSTGRES_PASSWORD",
-        "DEVELOPMENT_ISSUES_READER_PASSWORD",
-        "MARKET_VOC_READER_PASSWORD",
-    ]
-    if any(not os.environ.get(name) for name in required):
-        pytest.skip("local PostgreSQL administrator credentials are not configured")
-    source = load_test_registry(os.environ).get("development-issues")
-    assert source is not None
-    source = replace(
-        source,
-        allowed_schemas=("development",),
-        allowed_relation_kinds=("table",),
-    )
-    admin = await AsyncConnection.connect(
-        make_conninfo(
-            host="127.0.0.1",
-            port=os.environ.get("POSTGRES_PORT", "5432"),
-            dbname="development_issues",
-            user=os.environ["POSTGRES_USER"],
-            password=os.environ["POSTGRES_PASSWORD"],
-            sslmode="disable",
-        )
-    )
-    catalog = PostgresCatalog()
-    try:
-        await admin.execute(
-            "GRANT USAGE ON SCHEMA development TO development_issues_reader"
-        )
-        await admin.execute(
-            "GRANT SELECT ON ALL TABLES IN SCHEMA development "
-            "TO development_issues_reader"
-        )
-        await admin.commit()
-        snapshot = await catalog.load(source)
-    finally:
-        await catalog.close()
-        await admin.rollback()
-        await admin.execute(
-            "REVOKE SELECT ON ALL TABLES IN SCHEMA development "
-            "FROM development_issues_reader"
-        )
-        await admin.execute(
-            "REVOKE USAGE ON SCHEMA development FROM development_issues_reader"
-        )
-        await admin.commit()
-        await admin.close()
-
-    by_name = {relation.qualified_name: relation for relation in snapshot.relations}
-    issues = by_name["development.issues"]
-    assert issues.primary_key == ("id",)
-    assert {
-        (tuple(key.columns), key.referenced_relation, tuple(key.referenced_columns))
-        for key in issues.foreign_keys
-    } == {
-        (("assignee_id",), "development.users", ("id",)),
-        (("reporter_id",), "development.users", ("id",)),
-        (("test_unit_id",), "development.test_units", ("id",)),
-    }
-    index_columns = {tuple(index.columns) for index in issues.indexes}
-    assert ("id",) in index_columns
-    assert ("discovered_at",) in index_columns
-    assert ("status", "discovered_at") in index_columns
-    assert ("assignee_id", "status") not in index_columns

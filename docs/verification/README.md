@@ -8,9 +8,10 @@ Status: Current — 현재 gate와 과거 repository 기록 조회 안내
 
 | 항목 | 현재 판정 |
 |---|---|
-| `LAUNCH-01-A` repository 구현 | Accepted; exact launch scope는 ADR 0025 |
+| `LAUNCH-01-A` repository 구현 | Accepted; launch safety scope는 ADR 0025 |
 | `QB-YAML-SOURCE-AUTHORITY-20260829` repository removal | Accepted; exact authority는 ADR 0030 |
 | `SOURCE-VIEW-01` source package/direct admission | Accepted; exact format와 procedure는 ADR 0034 |
+| `SOURCE-INVENTORY-01` reviewed startup inventory | Accepted; exact inventory policy는 ADR 0035 |
 | `DBENV-01` protected DB binding | 미실행; Active TODO |
 | `AUTHENV-01` protected authentication binding | 미실행; Active TODO |
 | `LAUNCH-02` protected deployment | 미실행; Active TODO |
@@ -27,8 +28,9 @@ uv run mypy src
 uv run pytest
 ```
 
-DB catalog/query 경계는 security/integration lane을, container·release 경계는 container acceptance,
-bounded load와 soak를 추가합니다. 정확한 범위는
+DB catalog/query 경계는 하나의 test-local source를 사용하는 security/integration lane을,
+container·release 경계는 container acceptance, bounded load와 soak를 추가합니다. Production source별
+업무 schema·seed는 repository acceptance artifact가 아닙니다. 정확한 범위는
 [활성 개발 지침](../development-guidelines.md#tests)과 primary module README가 정합니다.
 
 Source package와 view apply/rollback은

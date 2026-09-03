@@ -13,6 +13,9 @@ HTTP/MCP 계약으로 제공한다. OAuth2 bearer access token은 Discovery의 `
 Source 관리 API는 없다. Source inventory 변경은 source-package pull request로 수행하고 HTTP/MCP는 현재
 Runtime에 load된 read-only source projection만 제공한다.
 
+현재 authorization model에서는 인증된 query principal 모두가 그 loaded inventory 전체를 source별
+reviewed budget으로 조회한다. Caller별 source grant가 필요한 추가는 이 정책 범위가 아니다.
+
 ## 소유 책임
 
 - Caller/access policy, OAuth2 JWT bearer 인증과 source authorization
@@ -96,6 +99,7 @@ Diagnostic capture는 active server-side consent receipt가 있을 때만 질문
 - HTTP/MCP input size, type, Host/Origin와 validation detail 수를 제한한다.
 - Disconnect/cancel은 Guarded Query cleanup 경계까지 전파한다.
 - HTTP와 MCP는 같은 application authorization/revision/query policy를 우회하지 않는다.
+- HTTP/MCP source list는 loaded Registry 전체를 정렬된 public projection으로 제공하며 고정 source 목록을 갖지 않는다.
 - Source 관리 route와 Control Plane capability는 없다.
 
 ## 모듈 내부 변경

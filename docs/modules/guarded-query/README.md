@@ -74,7 +74,7 @@ Transport UTC와 한국 업무 달력은 별개입니다. `ai.issue_overview.dis
 `(received_at AT TIME ZONE 'Asia/Seoul')::date`이고 월별 VOC SQL은 SELECT/GROUP BY 모두
 `date_trunc('month', received_at, 'Asia/Seoul')`을 사용합니다. 공개 view 정의나 output이 바뀌면
 `view_contract_version`을 올리고 metadata revision, SQL policy와 관련 integration을 함께 검토합니다.
-현재 rollout/rollback은 ADR 0025, ADR 0034와 Operations를 따릅니다.
+현재 rollout/rollback은 ADR 0025, ADR 0034, ADR 0035와 Operations를 따릅니다.
 
 Application result는 stable `columns`, `rows`, `row_count`, `metadata_revision`, truncation/limit 정보로
 구성한다. `QueryRejectedError`, `QueryInvalidError`, `QueryOverloadedError`, `QueryTimeoutError`,

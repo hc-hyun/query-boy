@@ -5,7 +5,6 @@ services:
     restart: unless-stopped
     environment:
       DEVELOPMENT_ISSUES_READER_PASSWORD: ${DEVELOPMENT_ISSUES_READER_PASSWORD}
-      MARKET_VOC_READER_PASSWORD: ${MARKET_VOC_READER_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_INITDB_ARGS: --data-checksums --encoding=UTF8 --auth-host=scram-sha-256
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -14,22 +13,14 @@ services:
     command:
       - postgres
       - -c
-      - shared_preload_libraries=pg_stat_statements
-      - -c
       - log_min_duration_statement=1000
     ports:
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql
       - ./docker/postgres/init/01-source-bootstrap.sh:/docker-entrypoint-initdb.d/01-source-bootstrap.sh:ro
-      - ./docker/postgres/init/10-development-issues-schema.sql:/docker-entrypoint-initdb.d/10-development-issues-schema.sql:ro
-      - ./config/sources/development-issues/views.sql:/query-man-source-views/development-issues.sql:ro
-      - ./docker/postgres/init/20-development-issues-seed.sql:/docker-entrypoint-initdb.d/20-development-issues-seed.sql:ro
-      - ./docker/postgres/init/30-market-voc-schema.sql:/docker-entrypoint-initdb.d/30-market-voc-schema.sql:ro
-      - ./config/sources/market-voc/views.sql:/query-man-source-views/market-voc.sql:ro
-      - ./docker/postgres/init/40-market-voc-seed.sql:/docker-entrypoint-initdb.d/40-market-voc-seed.sql:ro
-      - ./scripts/validate-static-fixtures.sh:/docker-entrypoint-initdb.d/45-validate-static-fixtures.sh:ro
-      - ./docker/postgres/init/90-validate-mvp.sql:/query-man-fixtures/90-validate-mvp.sql:ro
+      - ./docker/postgres/init/10-fixture-schema.sql:/query-man-fixtures/10-fixture-schema.sql:ro
+      - ./tests/fixtures/config/sources/fixture-source/views.sql:/query-man-source-views/fixture-source.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
@@ -44,16 +35,24 @@ services:
       postgres:
         condition: service_healthy
     environment:
+      FIXTURE_SOURCE_READER_PASSWORD: ${DEVELOPMENT_ISSUES_READER_PASSWORD}
       POSTGRES_PORT: "5432"
       QUERY_MAN_POSTGRES_HOST: postgres
+      QUERY_MAN_SOURCE_DIR: /app/test-fixtures/config/sources
+    volumes:
+      - ./tests/fixtures/config:/app/test-fixtures/config:ro
 
   query-man-replica:
     depends_on:
       postgres:
         condition: service_healthy
     environment:
+      FIXTURE_SOURCE_READER_PASSWORD: ${DEVELOPMENT_ISSUES_READER_PASSWORD}
       POSTGRES_PORT: "5432"
       QUERY_MAN_POSTGRES_HOST: postgres
+      QUERY_MAN_SOURCE_DIR: /app/test-fixtures/config/sources
+    volumes:
+      - ./tests/fixtures/config:/app/test-fixtures/config:ro
 
 volumes:
   postgres_data:

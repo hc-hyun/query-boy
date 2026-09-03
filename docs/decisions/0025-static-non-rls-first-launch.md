@@ -7,9 +7,10 @@ Date: 2026-08-26
 Decision ID: `LAUNCH-01-A`
 
 Current interpretation: [ADR 0030](0030-git-reviewed-yaml-source-authority.md)이 managed authority를,
-[ADR 0034](0034-source-view-package-and-direct-admission.md)가 flat source 형식과 source별 결과 gate를
-대체했습니다. 두 static source, PostgreSQL/encoding, RLS quarantine, result OID, SQL/revision/reader
-안전성과 privileged DDL freeze는 계속 current authority입니다.
+[ADR 0034](0034-source-view-package-and-direct-admission.md)가 flat source 형식과 source별 결과 gate를,
+[ADR 0035](0035-reviewed-source-package-inventory.md)가 exact two-name inventory를 대체했습니다. 단일
+replica, PostgreSQL/encoding, RLS quarantine, result OID, SQL/revision/reader 안전성과 privileged DDL
+freeze는 계속 current authority입니다.
 
 ## Context
 
@@ -27,8 +28,8 @@ driver는 여러 PostgreSQL type을 Python `str`, `int`, `list` 등으로 평탄
 허용된 scalar처럼 우연히 성공할 수 있다. 전체 RLS attestation, lossless encoding, hot
 onboarding과 HA를 한 번에 완료하면 첫 오픈 범위와 일정이 불필요하게 커진다.
 
-이 결정은 일반적인 production 완성을 주장하지 않는다. 현재 두 source를 단일 호스트에서
-제한적으로 제공할 repository launch profile을 정하고, 실제 TLS·secret·backup·route·배포는
+이 결정은 일반적인 production 완성을 주장하지 않는다. 당시 두 source를 단일 호스트에서
+제한적으로 제공할 repository launch profile을 정했고, 실제 TLS·secret·backup·route·배포는
 대상 환경과 change record를 갖춘 별도 실행 승인으로 남긴다.
 
 ## Decision
@@ -39,14 +40,14 @@ onboarding과 HA를 한 번에 완료하면 첫 오픈 범위와 일정이 불�
   `config/verified-queries.yaml`, `config/budget-profiles.yaml`만 authority입니다.
 - Process에는 Control DB, managed mode, admin mutation, hot reload와 alternate/fallback authority가
   없습니다.
-- Current inventory는 `development-issues`, `market-voc` 두 source입니다. Source ID, manifest,
-  budget/access policy 또는 database를 추가·교체하는 것은 이 결정 밖의 새 inventory review와
-  배포입니다.
+- 이 결정이 처음 승인한 inventory는 `development-issues`, `market-voc`였습니다. Current startup
+  inventory는 ADR 0035에 따라 reviewed `config/sources/` package 집합으로 정하며, 변경은 review와
+  배포/재시작을 거칩니다.
 - First-launch topology는 단일 Query Man replica입니다. `soak` profile과 두 번째 replica는
   acceptance fixture이며 serving topology가 아닙니다.
 - Base `compose.yaml`은 application-only이며 source database를 provision하지 않습니다.
-  `compose.fixture.yaml`, `scripts/apply-db.sh`와 CI는 명시적인 local/acceptance two-source fixture만
-  준비합니다.
+  `compose.fixture.yaml`, `scripts/apply-db.sh`와 CI는 production inventory와 분리된 단일
+  test-local source로 공통 PostgreSQL safety boundary만 준비합니다.
 
 ### 2. RLS quarantine
 

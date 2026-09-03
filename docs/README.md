@@ -2,12 +2,13 @@
 
 이 페이지가 `docs/`의 유일한 시작점입니다. 독자 역할에 맞는 절만 읽으면 됩니다.
 
-현재 첫 오픈 범위는 [ADR 0025](decisions/0025-static-non-rls-first-launch.md), source package와 직접
-metadata admission은 [ADR 0034](decisions/0034-source-view-package-and-direct-admission.md), budget
-authority는 [ADR 0030](decisions/0030-git-reviewed-yaml-source-authority.md)이 정합니다. 저장소 구현과
+현재 첫 오픈 safety 범위는 [ADR 0025](decisions/0025-static-non-rls-first-launch.md), source package와 직접
+metadata admission은 [ADR 0034](decisions/0034-source-view-package-and-direct-admission.md), reviewed startup
+inventory는 [ADR 0035](decisions/0035-reviewed-source-package-inventory.md), budget authority는
+[ADR 0030](decisions/0030-git-reviewed-yaml-source-authority.md)이 정합니다. 저장소 구현과
 로컬 검증은 끝났지만 실제 DB 환경 연결 `DBENV-01`, 인증 환경 연결 `AUTHENV-01`과 그 뒤의
-대상 환경 전환 `LAUNCH-02`는 남아 있습니다. Current profile은 `development-issues`, `market-voc`
-두 source만 제공하고 모든 RLS source를 차단합니다.
+대상 환경 전환 `LAUNCH-02`는 남아 있습니다. Current profile은 reviewed `config/sources/` package 집합을
+process 시작 때 load하고 모든 RLS source를 차단합니다.
 Source의 개인정보 공개 경계는
 [ADR 0031](decisions/0031-no-pii-curated-view-boundary.md)을 따릅니다.
 Reader의 database `TEMP` 보유 여부를 source admission 조건으로 사용하지 않는 경계는
@@ -66,6 +67,7 @@ Fixture 문서는 개발·CI 재현용입니다. 그 명령이나 결과를 prod
 - [ADR 0032](decisions/0032-reader-temp-admission-relaxation.md): reader `TEMP` admission 경계
 - [ADR 0033](decisions/0033-explicit-source-tls-modes.md): source TLS mode와 transport 경계
 - [ADR 0034](decisions/0034-source-view-package-and-direct-admission.md): source별 두 파일, view contract marker와 직접 admission
+- [ADR 0035](decisions/0035-reviewed-source-package-inventory.md): reviewed package startup inventory와 generic test 기준
 - [검증과 Git 기록 안내](verification/README.md): 현재 gate와 삭제한 과거 문서 조회 방법
 
 현재 tree에는 현행 authority, 실행 가능한 절차와 테스트에 필요한 설명만 둡니다. 과거 ADR,

@@ -8,9 +8,6 @@ import time
 from dataclasses import dataclass
 
 import pytest
-from mcp.types import CallToolResult
-from psycopg import AsyncConnection
-from psycopg.conninfo import make_conninfo
 
 from tests.test_mcp_server import (
     McpServerSettings,
@@ -21,17 +18,11 @@ from tests.test_mcp_server import (
     suppress_http_client_request_logs,  # noqa: F401 -- shared autouse fixture
 )
 from tests.test_mcp_server_load import (
-    _DEVELOPMENT_COUNT_SQL,
-    _DEVELOPMENT_SOURCE,
-    _MARKET_COUNT_SQL,
-    _MARKET_SOURCE,
-    _SLOW_SQL,
-    _active_query_man_session_count,
+    _COUNT_SQL,
+    _FIXTURE_SOURCE,
     _assert_exact_count,
-    _error_code,
     _measured_query,
     _revision,
-    _wait_for_active_query_man_sessions,
 )
 
 pytestmark = [pytest.mark.mcp_server, pytest.mark.soak, pytest.mark.asyncio]
@@ -150,10 +141,7 @@ async def _one_stateless_session(
         started = time.monotonic()
         async with _mcp_client(settings) as client:
             sources = _structured(await client.call_tool("list_sources", {}))
-            assert {source["source_id"] for source in sources["sources"]} == {
-                "development-issues",
-                "market-voc",
-            }
+            assert {source["source_id"] for source in sources["sources"]} == {_FIXTURE_SOURCE}
         return replica_index, round((time.monotonic() - started) * 1_000)
 
 
@@ -202,13 +190,13 @@ async def test_two_replicas_serve_exact_queries_with_unique_ids(
                 sort_keys=True,
                 separators=(",", ":"),
             )
-            metadata_revision = await _revision(client, _MARKET_SOURCE, "시장 VOC 수")
+            metadata_revision = await _revision(client, _FIXTURE_SOURCE, "record count")
             results = await asyncio.gather(
                 *(
                     _measured_query(
                         client,
-                        source_id=_MARKET_SOURCE,
-                        sql=_MARKET_COUNT_SQL,
+                        source_id=_FIXTURE_SOURCE,
+                        sql=_COUNT_SQL,
                         metadata_revision=metadata_revision,
                     )
                     for _ in range(8)
@@ -216,7 +204,7 @@ async def test_two_replicas_serve_exact_queries_with_unique_ids(
             )
             query_ids: list[str] = []
             for result, _elapsed_ms in results:
-                _assert_exact_count(result, column="voc_count", count=1_200)
+                _assert_exact_count(result, column="record_count", count=3)
                 query_id = _structured(result)["query_id"]
                 assert isinstance(query_id, str) and query_id
                 query_ids.append(query_id)
@@ -242,118 +230,6 @@ async def test_two_replicas_serve_exact_queries_with_unique_ids(
             sort_keys=True,
         )
     )
-
-
-async def test_two_replica_source_saturation_is_bounded_and_recovers(
-    mcp_replica_settings: tuple[McpServerSettings, McpServerSettings],
-) -> None:
-    required = ("POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB")
-    if any(not os.environ.get(name) for name in required):
-        pytest.skip("local PostgreSQL admin credentials are not configured")
-
-    observer = await AsyncConnection.connect(
-        make_conninfo(
-            host="127.0.0.1",
-            port=os.environ.get("POSTGRES_PORT", "5432"),
-            dbname=os.environ["POSTGRES_DB"],
-            user=os.environ["POSTGRES_USER"],
-            password=os.environ["POSTGRES_PASSWORD"],
-            sslmode="disable",
-        ),
-        autocommit=True,
-    )
-    holder_tasks: list[asyncio.Task[tuple[CallToolResult, int]]] = []
-    started = time.monotonic()
-    try:
-        assert await _active_query_man_session_count(observer) == 0
-        async with (
-            _mcp_client(mcp_replica_settings[0]) as first,
-            _mcp_client(mcp_replica_settings[1]) as second,
-        ):
-            development_revision, market_revision = await asyncio.gather(
-                _revision(first, _DEVELOPMENT_SOURCE, "개발 문제 수"),
-                _revision(first, _MARKET_SOURCE, "시장 VOC 수"),
-            )
-            clients = (first, second)
-            holder_tasks = [
-                asyncio.create_task(
-                    _measured_query(
-                        client,
-                        source_id=_DEVELOPMENT_SOURCE,
-                        sql=_SLOW_SQL,
-                        metadata_revision=development_revision,
-                    )
-                )
-                for client in clients
-                for _ in range(2)
-            ]
-            active_holders = await _wait_for_active_query_man_sessions(
-                observer,
-                expected=4,
-            )
-            overload_tasks = [
-                asyncio.create_task(
-                    _measured_query(
-                        client,
-                        source_id=_DEVELOPMENT_SOURCE,
-                        sql=_DEVELOPMENT_COUNT_SQL,
-                        metadata_revision=development_revision,
-                    )
-                )
-                for client in clients
-            ]
-            market_task = asyncio.create_task(
-                _measured_query(
-                    first,
-                    source_id=_MARKET_SOURCE,
-                    sql=_MARKET_COUNT_SQL,
-                    metadata_revision=market_revision,
-                )
-            )
-            overload_results = await asyncio.gather(*overload_tasks)
-            market_result, market_wall_ms = await market_task
-            overload_codes = [_error_code(result) for result, _wall_ms in overload_results]
-            assert overload_codes == ["QUERY_OVERLOADED", "QUERY_OVERLOADED"]
-            _assert_exact_count(market_result, column="voc_count", count=1_200)
-
-            holder_results = await asyncio.gather(*holder_tasks)
-            holder_codes = [_error_code(result) for result, _wall_ms in holder_results]
-            assert holder_codes == ["QUERY_TIMEOUT"] * 4
-            recovered = await asyncio.gather(
-                *(
-                    _measured_query(
-                        client,
-                        source_id=_DEVELOPMENT_SOURCE,
-                        sql=_DEVELOPMENT_COUNT_SQL,
-                        metadata_revision=development_revision,
-                    )
-                    for client in clients
-                )
-            )
-            for result, _wall_ms in recovered:
-                _assert_exact_count(result, column="issue_count", count=600)
-            assert await _active_query_man_session_count(observer) == 0
-
-        print(
-            json.dumps(
-                {
-                    "event": "mcp_replica_saturation_summary",
-                    "active_holders": active_holders,
-                    "holder_codes": holder_codes,
-                    "overload_codes": overload_codes,
-                    "market_wall_ms": market_wall_ms,
-                    "total_ms": round((time.monotonic() - started) * 1_000),
-                },
-                sort_keys=True,
-            )
-        )
-    finally:
-        for task in holder_tasks:
-            if not task.done():
-                task.cancel()
-        if holder_tasks:
-            await asyncio.gather(*holder_tasks, return_exceptions=True)
-        await observer.close()
 
 
 async def test_one_thousand_stateless_sessions_do_not_leak_process_resources(

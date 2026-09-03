@@ -32,9 +32,9 @@ relation과 allowlist 밖 relation은 SQL AST validation에서 거부한다. Met
   row/byte limit는 유지한다.
 - `temp_file_limit`는 sort/hash 같은 executor 작업의 temporary file 상한으로 계속 적용한다. 명시적
   temporary relation의 quota나 database `TEMP` privilege 검사가 아니다.
-- Repository가 제공하는 local/acceptance fixture는 database `TEMP` revoke를 선택적 hardening으로
-  유지할 수 있다. 이는 일반 source admission 요건이 아니며 이번 결정은 database DDL이나 grant를
-  변경하지 않는다.
+- Repository의 작은 local/acceptance fixture는 reader에 database `TEMP`를 부여해 이 허용 경계를
+  실제 PostgreSQL에서 회귀 검증한다. 사용자 SQL의 DDL·temporary relation 차단과 read-only
+  transaction은 별도로 유지한다.
 
 PostgreSQL은 session-local temporary schema가 존재하면 명시적 `search_path`에 없어도 relation과 data
 type lookup에서 먼저 검색할 수 있다. 현재 안전성은 `search_path` 하나가 아니라 gateway session에

@@ -1,6 +1,6 @@
 # Query Man Architecture
 
-Status: 현재 구조 안내 — Git-reviewed source package authority, ADR 0025 static non-RLS first launch
+Status: 현재 구조 안내 — Git-reviewed source package inventory, ADR 0025 static non-RLS first launch
 
 이 문서는 Query Man이 지금 어떻게 실행되는지 설명합니다. 정확한 Python interface는
 [모듈 안내](modules/README.md), 외부 API와 정책 의미는 해당 모듈 문서와
@@ -15,7 +15,7 @@ Query Man은 하나의 애플리케이션 process 안에서 여러 책임을 모
 
 | 구분 | 현재 상태 |
 |---|---|
-| Source | `development-issues`, `market-voc` 두 개만 사용 |
+| Source | Reviewed `config/sources/` package 집합을 process 시작 때 load |
 | Runtime | 단일 Query Man replica |
 | PostgreSQL | Major version 18, server/client UTF-8 |
 | RLS | 모든 RLS source를 실행 전에 거부 |
@@ -189,7 +189,7 @@ Source DB의 curated view와 최소 권한 reader
 
 현재 첫 오픈:
 
-- 검토된 두 source만 단일 replica에서 제공합니다.
+- 검토된 source package 전체를 단일 replica에서 제공합니다.
 - PostgreSQL 18/UTF-8, non-RLS와 일곱 결과 OID를 fail-closed로 강제합니다.
 - HTTP와 MCP의 권한·metadata·query 결과가 같습니다.
 - View marker/권한, revision mismatch, security/integration/container 검증을 통과합니다.
@@ -207,6 +207,7 @@ Source DB의 curated view와 최소 권한 reader
 
 - 현재 launch 범위: [ADR 0025](decisions/0025-static-non-rls-first-launch.md)
 - 현재 source package와 admission: [ADR 0034](decisions/0034-source-view-package-and-direct-admission.md)
+- 현재 startup inventory: [ADR 0035](decisions/0035-reviewed-source-package-inventory.md)
 - 현재 budget authority와 retired managed 경계: [ADR 0030](decisions/0030-git-reviewed-yaml-source-authority.md)
 - 현재 개인정보 공개 경계: [ADR 0031](decisions/0031-no-pii-curated-view-boundary.md)
 - 현재 reader `TEMP` admission 경계: [ADR 0032](decisions/0032-reader-temp-admission-relaxation.md)

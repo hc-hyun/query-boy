@@ -10,8 +10,12 @@ Runtime은 Git-reviewed source package와 budget authority를 한 번 load해 So
 Delivery를 production process로 조립한다. Configuration, startup/readiness, safe logging, diagnostic
 capture와 shutdown cleanup을 소유한다.
 
+Load 대상은 `config/sources/`의 reviewed immediate child package 전체다. Runtime에 별도 source allowlist나
+source별 composition branch는 없으며 inventory 변경은 새 artifact의 배포·재시작 뒤 반영된다.
+
 Base `compose.yaml`은 application-only이며 source PostgreSQL을 provision하지 않는다. 재현 가능한
-로컬·CI source database는 명시적인 `compose.fixture.yaml` overlay만 소유한다.
+로컬·CI의 작은 합성 source database는 명시적인 `compose.fixture.yaml` overlay만 소유한다. 이
+test-local source는 production package inventory를 복제하지 않는다.
 
 `qm source list|show|validate`는 repository source package와 budget을 읽는 local read-only operator CLI다. Runtime에는
 source mode selector, Control DB, managed fallback, hot reload 또는 source mutation API가 없다. Retired
@@ -70,7 +74,7 @@ Runtime은 `build_http_app`이 제공하는 `state.mcp_app` child-lifespan handl
 idempotent `state.shutdown_trigger`를 server entrypoint에 전달한다. 나머지 FastAPI state 배치를 모듈 간
 API로 확대하거나 이를 위한 별도 DTO를 만들지 않는다.
 
-Startup은 configuration/YAML load, exact inventory와 RLS quarantine, provider capability 및 bounded DB
+Startup은 configuration/YAML load, reviewed package inventory와 RLS quarantine, provider capability 및 bounded DB
 probe, application/lifespan 진입 후 accepting/ready 순서다. 실패하면 ready가 되지 않으며 생성한 parent
 resource를 역순으로 정확히 한 번 close 시도한다. Cleanup은 첫 probe 전에 등록하며 한 단계가 실패해도
 나머지를 계속한다. Startup, parent lifespan body 또는 child lifespan 오류는 cleanup 오류보다 우선 보존하고,
@@ -113,7 +117,9 @@ connection interrupt와 대기 항목 drop을 시도한 다음 다른 Runtime cl
 ## 불변조건
 
 - Git-reviewed source package와 budget만 authority이며 DB/managed/filesystem fallback 간 선택 모드는 없다.
-- Base serving topology는 source database를 provision하지 않으며 fixture DB는 explicit overlay에서만 시작한다.
+- 모든 reviewed package를 process 시작 때 load하며 source 이름·개수의 별도 Runtime 목록은 없다.
+- Base serving topology는 source database를 provision하지 않으며 단일 합성 fixture DB는 explicit
+  overlay에서만 시작한다.
 - Retired managed environment는 값이나 secret을 노출하지 않고 fail-closed한다.
 - RLS 또는 required inventory/capability/probe 실패는 listener readiness 전에 거부한다.
 - Startup partial failure와 shutdown은 owned resource를 정해진 순서로 leak 없이 정리한다.

@@ -23,16 +23,22 @@ from tests.test_mcp_server import (
 
 pytestmark = [pytest.mark.mcp_server, pytest.mark.load, pytest.mark.asyncio]
 
-_DEVELOPMENT_SOURCE = "development-issues"
-_MARKET_SOURCE = "market-voc"
-_SLOW_SQL = "SELECT sum(power(issue_id::pg_catalog.numeric, 40000)) AS score FROM ai.issue_overview"
-_DEVELOPMENT_COUNT_SQL = "SELECT count(*) AS issue_count FROM ai.issue_overview"
-_MARKET_COUNT_SQL = "SELECT count(*) AS voc_count FROM ai.voc_overview"
+_FIXTURE_SOURCE = "fixture-source"
+_COUNT_SQL = "SELECT count(*) AS record_count FROM ai.fixture_records"
+_SLOW_SQL = (
+    "SELECT sum(power((a.record_id + b.record_id + c.record_id + d.record_id + "
+    "e.record_id + f.record_id + g.record_id + h.record_id)::pg_catalog.numeric, "
+    "40000)) AS score FROM ai.fixture_records AS a "
+    "CROSS JOIN ai.fixture_records AS b CROSS JOIN ai.fixture_records AS c "
+    "CROSS JOIN ai.fixture_records AS d CROSS JOIN ai.fixture_records AS e "
+    "CROSS JOIN ai.fixture_records AS f CROSS JOIN ai.fixture_records AS g "
+    "CROSS JOIN ai.fixture_records AS h"
+)
 _ACTIVE_QUERY_MAN_SESSIONS = """
 SELECT count(*)
 FROM pg_catalog.pg_stat_activity
-WHERE datname = 'development_issues'
-  AND usename = 'development_issues_reader'
+WHERE datname = 'query_man'
+  AND usename = 'query_man_fixture_reader'
   AND state = 'active'
   AND application_name ~
       '^query-man:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
@@ -126,7 +132,7 @@ def _assert_exact_count(
     assert body["truncated"] is False
 
 
-async def test_source_saturation_is_isolated_and_recovers(
+async def test_source_saturation_times_out_and_recovers(
     mcp_server_settings: McpServerSettings,  # noqa: F811 -- imported pytest fixture
 ) -> None:
     required = ("POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB")
@@ -149,18 +155,15 @@ async def test_source_saturation_is_isolated_and_recovers(
     try:
         assert await _active_query_man_session_count(observer) == 0
         async with _mcp_client(mcp_server_settings) as client:
-            development_revision, market_revision = await asyncio.gather(
-                _revision(client, _DEVELOPMENT_SOURCE, "개발 문제 수"),
-                _revision(client, _MARKET_SOURCE, "시장 VOC 수"),
-            )
+            revision = await _revision(client, _FIXTURE_SOURCE, "record count")
 
             holder_tasks = [
                 asyncio.create_task(
                     _measured_query(
                         client,
-                        source_id=_DEVELOPMENT_SOURCE,
+                        source_id=_FIXTURE_SOURCE,
                         sql=_SLOW_SQL,
-                        metadata_revision=development_revision,
+                        metadata_revision=revision,
                     )
                 )
                 for _ in range(2)
@@ -170,33 +173,15 @@ async def test_source_saturation_is_isolated_and_recovers(
                 expected=2,
             )
 
-            overloaded_task = asyncio.create_task(
-                _measured_query(
-                    client,
-                    source_id=_DEVELOPMENT_SOURCE,
-                    sql=_DEVELOPMENT_COUNT_SQL,
-                    metadata_revision=development_revision,
-                )
+            overloaded_result, overloaded_wall_ms = await _measured_query(
+                client,
+                source_id=_FIXTURE_SOURCE,
+                sql=_COUNT_SQL,
+                metadata_revision=revision,
             )
-            market_task = asyncio.create_task(
-                _measured_query(
-                    client,
-                    source_id=_MARKET_SOURCE,
-                    sql=_MARKET_COUNT_SQL,
-                    metadata_revision=market_revision,
-                )
-            )
-            (
-                (overloaded_result, overloaded_wall_ms),
-                (
-                    market_result,
-                    market_wall_ms,
-                ),
-            ) = await asyncio.gather(overloaded_task, market_task)
 
             overloaded_code = _error_code(overloaded_result)
             assert overloaded_code == "QUERY_OVERLOADED"
-            _assert_exact_count(market_result, column="voc_count", count=1_200)
 
             holder_results = await asyncio.gather(*holder_tasks)
             holder_codes = [_error_code(result) for result, _wall_ms in holder_results]
@@ -204,25 +189,24 @@ async def test_source_saturation_is_isolated_and_recovers(
 
             recovered_result, recovered_wall_ms = await _measured_query(
                 client,
-                source_id=_DEVELOPMENT_SOURCE,
-                sql=_DEVELOPMENT_COUNT_SQL,
-                metadata_revision=development_revision,
+                source_id=_FIXTURE_SOURCE,
+                sql=_COUNT_SQL,
+                metadata_revision=revision,
             )
-            _assert_exact_count(recovered_result, column="issue_count", count=600)
+            _assert_exact_count(recovered_result, column="record_count", count=3)
             assert await _active_query_man_session_count(observer) == 0
 
         summary = {
             "event": "mcp_source_saturation_summary",
             "active_holders": active_holders,
             "error_codes": {
-                "development_holders": holder_codes,
-                "development_overload": overloaded_code,
+                "holders": holder_codes,
+                "overload": overloaded_code,
             },
             "wall_ms": {
-                "development_holders": [wall_ms for _result, wall_ms in holder_results],
-                "development_overload": overloaded_wall_ms,
-                "development_recovery": recovered_wall_ms,
-                "market_control": market_wall_ms,
+                "holders": [wall_ms for _result, wall_ms in holder_results],
+                "overload": overloaded_wall_ms,
+                "recovery": recovered_wall_ms,
                 "total": round((time.monotonic() - test_started) * 1_000),
             },
         }

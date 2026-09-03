@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+: "${DEVELOPMENT_ISSUES_READER_PASSWORD:?missing development reader password}"
+: "${MARKET_VOC_READER_PASSWORD:?missing market VOC reader password}"
 : "${RETAIL_COMMERCE_READER_PASSWORD:?missing retail commerce reader password}"
 : "${PARCEL_LOGISTICS_READER_PASSWORD:?missing parcel logistics reader password}"
 : "${ENERGY_TELEMETRY_READER_PASSWORD:?missing energy telemetry reader password}"
@@ -8,6 +10,8 @@ set -Eeuo pipefail
 : "${SAAS_BILLING_READER_PASSWORD:?missing SaaS billing reader password}"
 
 declare -ar databases=(
+  development_issues
+  market_voc
   retail_commerce
   parcel_logistics
   energy_telemetry
@@ -15,6 +19,8 @@ declare -ar databases=(
   saas_billing
 )
 declare -ar schema_files=(
+  development-issues-schema.sql
+  market-voc-schema.sql
   retail-commerce-schema.sql
   parcel-logistics-schema.sql
   energy-telemetry-schema.sql
@@ -22,6 +28,8 @@ declare -ar schema_files=(
   saas-billing-schema.sql
 )
 declare -ar view_files=(
+  development-issues/views.sql
+  market-voc/views.sql
   retail-commerce/views.sql
   parcel-logistics/views.sql
   energy-telemetry/views.sql
@@ -29,6 +37,8 @@ declare -ar view_files=(
   saas-billing/views.sql
 )
 declare -ar readers=(
+  development_issues_reader
+  market_voc_reader
   retail_commerce_reader
   parcel_logistics_reader
   energy_telemetry_reader
@@ -36,6 +46,8 @@ declare -ar readers=(
   saas_billing_reader
 )
 declare -ar owners=(
+  development_issues_view_owner
+  market_voc_view_owner
   retail_commerce_view_owner
   parcel_logistics_view_owner
   energy_telemetry_view_owner
@@ -43,11 +55,22 @@ declare -ar owners=(
   saas_billing_view_owner
 )
 declare -ar passwords=(
+  "$DEVELOPMENT_ISSUES_READER_PASSWORD"
+  "$MARKET_VOC_READER_PASSWORD"
   "$RETAIL_COMMERCE_READER_PASSWORD"
   "$PARCEL_LOGISTICS_READER_PASSWORD"
   "$ENERGY_TELEMETRY_READER_PASSWORD"
   "$CLINICAL_OPERATIONS_READER_PASSWORD"
   "$SAAS_BILLING_READER_PASSWORD"
+)
+declare -ar seed_files=(
+  development-issues-seed.sql
+  market-voc-seed.sql
+  ""
+  ""
+  ""
+  ""
+  ""
 )
 
 psql \
@@ -128,20 +151,10 @@ SELECT format('REVOKE ALL ON DATABASE %I FROM %I', :'database', :'reader') \gexe
 SQL
     fi
   done
-  for reader in development_issues_reader market_voc_reader; do
-    psql \
-      --username "$POSTGRES_USER" \
-      --dbname "$POSTGRES_DB" \
-      --set=ON_ERROR_STOP=1 \
-      --set=database="$database" \
-      --set=reader="$reader" <<'SQL'
-SELECT format('REVOKE ALL ON DATABASE %I FROM %I', :'database', :'reader') \gexec
-SQL
-  done
 done
 
 for reader in "${readers[@]}"; do
-  for database in development_issues market_voc query_man postgres; do
+  for database in query_man postgres; do
     psql \
       --username "$POSTGRES_USER" \
       --dbname "$POSTGRES_DB" \
@@ -158,10 +171,18 @@ for index in "${!databases[@]}"; do
     --username "$POSTGRES_USER" \
     --dbname "${databases[$index]}" \
     --set=ON_ERROR_STOP=1 \
+    --set=query_man_skip_views=1 \
     --file "/query-man-domain-lab/${schema_files[$index]}"
   psql \
     --username "$POSTGRES_USER" \
     --dbname "${databases[$index]}" \
     --set=ON_ERROR_STOP=1 \
     --file "/query-man-domain-lab-sources/${view_files[$index]}"
+  if [[ -n "${seed_files[$index]}" ]]; then
+    psql \
+      --username "$POSTGRES_USER" \
+      --dbname "${databases[$index]}" \
+      --set=ON_ERROR_STOP=1 \
+      --file "/query-man-domain-lab/${seed_files[$index]}"
+  fi
 done

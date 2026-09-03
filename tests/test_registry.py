@@ -178,23 +178,28 @@ def test_loads_public_source_fields_only() -> None:
             "QUERY_MAN_POSTGRES_HOST": "postgres",
         }
     )
-    assert len(registry) == 2
-    assert registry.get("development-issues").view_contract_version == 1  # type: ignore[union-attr]
-    assert registry.get("development-issues").connection.host == "postgres"  # type: ignore[union-attr]
-    assert registry.get("development-issues").connection.port == 55_432  # type: ignore[union-attr]
-    assert registry.list() == [
-        {
-            "source_id": "development-issues",
-            "name": "개발 문제점",
-            "description": "개발 및 검증 과정에서 발견한 문제, 원인, 대책과 댓글",
-        },
-        {
-            "source_id": "market-voc",
-            "name": "시장 VOC",
-            "description": "시장에서 접수된 불량, 제품 기기, 원인, 대응과 댓글",
-        },
-    ]
-    serialized = str(registry.list())
+    development = registry.get("development-issues")
+    assert development is not None
+    assert development.view_contract_version == 1
+    assert development.connection.host == "postgres"
+    assert development.connection.port == 55_432
+
+    listed = registry.list()
+    assert len(registry) == len(registry.source_ids())
+    assert [source["source_id"] for source in listed] == sorted(registry.source_ids())
+    assert all(
+        set(source) == {"source_id", "name", "description"}
+        for source in listed
+    )
+    development_public = next(
+        source for source in listed if source["source_id"] == "development-issues"
+    )
+    assert development_public == {
+        "source_id": "development-issues",
+        "name": "개발 문제점",
+        "description": "개발 및 검증 과정에서 발견한 문제, 원인, 대책과 댓글",
+    }
+    serialized = str(listed)
     assert "development-test-secret" not in serialized
     assert "password" not in serialized
     assert "database" not in serialized

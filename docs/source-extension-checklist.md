@@ -1,6 +1,6 @@
 # Source Onboarding And Extension Checklist
 
-Status: Source package authority defined by ADR 0034; first-launch inventory frozen by ADR 0025
+Status: Source package authority defined by ADR 0034; reviewed startup inventory defined by ADR 0035
 
 Source 하나의 Git authority는 정확히 다음 두 파일이다.
 
@@ -13,7 +13,8 @@ config/sources/<source-id>/
 `source.yaml`은 Query Man이 어디를 어떤 제한과 업무 의미로 읽을지 정하고, `views.sql`은 DB owner가
 검토한 Query Man 전용 공개면을 정의한다. Source별 세 번째 acceptance file은 없고 Runtime은 SQL을
 실행하지 않는다. 자세한 결정은
-[ADR 0034](decisions/0034-source-view-package-and-direct-admission.md), no-PII 경계는
+[ADR 0034](decisions/0034-source-view-package-and-direct-admission.md), inventory는
+[ADR 0035](decisions/0035-reviewed-source-package-inventory.md), no-PII 경계는
 [ADR 0031](decisions/0031-no-pii-curated-view-boundary.md), TLS는
 [ADR 0033](decisions/0033-explicit-source-tls-modes.md)을 따른다.
 
@@ -26,9 +27,11 @@ config/sources/<source-id>/
 | 현재 package 구조/YAML 확인 | `uv run qm source list`, `show`, `validate`를 사용한다. DB나 파일을 바꾸지 않는다. |
 | 실제 source 데이터 질문 | [`query-man-text-to-sql` Skill](../skills/query-man-text-to-sql/SKILL.md)의 context→query 흐름을 사용한다. |
 
-새 source 또는 공개 view 변경은 persisted format, policy/lifecycle, ownership과 protected procedure에
-영향을 줄 수 있다. Exact source, DB, 이유, output/grant 변화, migration/rollback과 검증 계획을 승인받기
-전에는 current inventory를 바꾸지 않는다. Repository 승인은 protected DB 실행 권한이 아니다.
+새 source package 두 파일의 pull request review가 repository inventory 승인이다. 별도 source-name 목록,
+source별 test case, expected-result file이나 문서 등록은 만들지 않는다. Public view 변경은 여전히
+persisted format, policy/lifecycle, ownership과 protected procedure에 영향을 줄 수 있으므로 exact source,
+DB, 이유, output/grant 변화, migration/rollback과 검증 계획을 함께 review한다. Repository 승인은
+protected DB 실행 권한이 아니다.
 
 ## 두 파일에 무엇을 두나요?
 
@@ -70,8 +73,9 @@ unknown file와 이전 format fallback은 거부한다. Password, token, full DS
 - Runtime migration hook, database 선택/deploy/traffic/environment 분기
 - `SELECT *`, `SELECT ON ALL TABLES`, broad future/default grant
 
-`views.sql`은 application Runtime이 읽거나 실행하지 않는다. Local fixture는 명시적 fixture wiring으로,
-protected environment는 별도 승인된 DBA 절차로 적용한다.
+`views.sql`은 application Runtime이 읽거나 실행하지 않는다. Required CI의 real-PostgreSQL gate는
+production package와 분리된 작은 test-local source로 공통 안전 경계만 검증한다. Production
+`views.sql`은 protected environment에서 별도 승인된 DBA 절차로 적용한다.
 
 ## View marker와 version
 
@@ -187,13 +191,15 @@ uv run mypy src
 uv run pytest
 ```
 
-DB/fixture 변경은 PostgreSQL integration, static privilege validation, container, load와 soak도 실행한다.
+공통 DB safety kernel이나 fixture topology 변경은 PostgreSQL integration, container, load와 soak도
+실행한다. Source package 두 파일만 추가·변경할 때 test-local DB fixture를 함께 수정하지 않는다.
 Repository PASS는 exact commit/CI evidence일 뿐 protected apply 완료 증거가 아니다.
 
 ## 보통 필요하지 않은 것
 
 - Source별 Python branch, endpoint 또는 MCP tool
 - Source별 세 번째 acceptance/expected-result file
+- Active source 이름·개수를 복제하는 test나 문서 목록
 - YAML의 exhaustive column list나 Git/live definition hash
 - 새 budget profile이나 caller별 grant
 - Control DB, hot reload, runtime writer/migration hook

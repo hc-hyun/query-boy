@@ -10,14 +10,16 @@ Status: Active — `DBENV-01`, `AUTHENV-01` 완료 후 `LAUNCH-02`
 [ADR 0025](decisions/0025-static-non-rls-first-launch.md)의 `LAUNCH-01-A` repository 구현과 local
 acceptance는 완료됐습니다.
 [ADR 0034](decisions/0034-source-view-package-and-direct-admission.md)에 따라 source authority는 source별
-`source.yaml`과 `views.sql` package입니다. Budget은 ADR 0030의 Git-reviewed YAML을 유지합니다.
+`source.yaml`과 `views.sql` package입니다. Reviewed package 집합이 startup inventory라는 기준은
+[ADR 0035](decisions/0035-reviewed-source-package-inventory.md), budget은 ADR 0030의 Git-reviewed YAML을
+따릅니다.
 [ADR 0031](decisions/0031-no-pii-curated-view-boundary.md)에 따라 source data plane은 개인정보
 탐지·분류·마스킹 기능을 제공하지 않으며, DB owner가 개인정보를 제거했다고 확인한 curated view만
 source로 받습니다.
 
 | 항목 | 현재 값 |
 |---|---|
-| Source | `development-issues`, `market-voc` |
+| Source | Approved Git revision의 reviewed `config/sources/` package 전체 |
 | Runtime | 단일 Query Man replica |
 | Source authority | Git-reviewed source package와 budget YAML |
 | 개인정보 경계 | DB-owner-confirmed no-PII curated view |
@@ -54,9 +56,9 @@ versioned configuration이 없으면 해당 작업을 중단하고 별도 reposi
 
 ### DBENV-01: 실제 DB 환경 연결
 
-현재 두 source manifest는 `provenance.environment=development`, loopback host와
-`sslmode=disable`을 사용한다. Host·port·password는 환경변수로 resolve할 수 있지만 두 source는 현재
-같은 host/port 환경변수 key를 공유한다. Database와 reader user, required TLS mode(`disable`,
+Protected binding 전에는 approved revision의 모든 source manifest에서 environment, endpoint와 TLS를
+확인한다. Development fixture manifest는 loopback host와 `sslmode=disable`을 사용할 수 있다.
+Host·port·password는 환경변수로 resolve한다. Database와 reader user, required TLS mode(`disable`,
 `require`, `verify-full`), allowed schema/relation kind와 semantic overlay는 reviewed manifest에 고정된다.
 `prefer`, `allow`, `verify-ca`와 mode 생략은 거부한다. `require`의 no-plaintext·no-hostname-verification
 경계와 CA/SAN 개선 조건은 [ADR 0033](decisions/0033-explicit-source-tls-modes.md)을 따른다. Source는 TCP
@@ -73,10 +75,10 @@ set은 승인된 DB DDL inventory와 metadata revision으로 검증한다.
 5. Source checkout에서 검증했다면 exact Git commit과 clean/reviewed config provenance를 기록한다.
    Application image를 사용했다면 OCI revision label이 그 commit과 일치하는 image digest를 기록한다.
 
-실제 대상이 현재 두 source의 database/user/view/TLS 의미와 다르거나, source별로 서로 다른 host/port
-환경변수 key가 필요하거나, 새 database/source라면 `DBENV-01`에서 manifest를 즉석 수정하지 않는다.
-[Source onboarding](source-extension-checklist.md)과 inventory 변경을 별도 승인·review한 뒤 이 작업을
-다시 시작한다. Public view definition/output/security/grant가 달라지면 DB 현장에서 즉석 수정하지 않고
+실제 대상이 approved package의 database/user/view/TLS 의미와 다르거나 새 database/source가 필요하면
+`DBENV-01`에서 manifest를 즉석 수정하지 않는다. [Source onboarding](source-extension-checklist.md)에 따라
+두 파일 package 변경을 review한 뒤 이 작업을 다시 시작한다. Public view
+definition/output/security/grant가 달라지면 DB 현장에서 즉석 수정하지 않고
 source package의 `view_contract_version`, 모든 view marker와 `views.sql` 변경을 별도 승인·검증한다.
 
 ### AUTHENV-01: 실제 인증 환경 연결
@@ -110,9 +112,9 @@ JWT Discovery/JWKS, signature, issuer, audience, time, scope/role과 401/403 검
 1. 승인된 Git commit, OCI revision label이 그 commit과 일치하는 application image digest와 upstream
    image digest를 고정한다.
 2. TLS, secret, backup, 직전 image/config/SQL policy와 rollback route를 재확인한다.
-3. Accepted 단일 replica를 traffic 밖에서 시작하고 exact readiness, 두 source, RLS 0건,
-   PostgreSQL 18/UTF-8, view marker/권한, Metadata와 SQL revision, seven-OID corpus, security/integration과
-   인증 acceptance를 다시 확인한다.
+3. Accepted 단일 replica를 traffic 밖에서 시작하고 exact readiness, approved package inventory 전체,
+   RLS 0건, PostgreSQL 18/UTF-8, view marker/권한, Metadata와 SQL revision, seven-OID corpus,
+   security/integration과 인증 acceptance를 다시 확인한다.
 4. Old route를 닫고 신규 유입·active query·source connection을 drain한 뒤 accepted replica만 route한다.
 5. 오류·resource·DB connection을 관찰하고 실행 결과와 rollback 가능 상태를 environment evidence로
    남긴다.
@@ -138,7 +140,7 @@ Repository 문서나 한 작업의 procedure를 승인한 것만으로 다른 pr
 
 ## 완료 조건
 
-- `DBENV-01`: 승인 inventory와 실제 DB가 일치하고, 두 source의 no-PII view·reader·TLS/secret·PG18/UTF-8·
+- `DBENV-01`: 승인 inventory와 실제 DB가 일치하고, 모든 source의 no-PII view·reader·TLS/secret·PG18/UTF-8·
   RLS 0건, marker/source/version, exact owner/ACL, dynamic column과 metadata/reader probe를 통과함.
   해당 artifact와 결과를 environment evidence로 남김
 - `AUTHENV-01`: authority가 하나뿐이고 선택 mode가 지원하는 permission 성공, 해당하는 권한 거부 403,

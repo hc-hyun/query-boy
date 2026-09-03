@@ -20,9 +20,14 @@ Registry는 두 파일의 이름·위치와 YAML을 검사하지만 SQL 내용�
 Metadata, Guarded Query와 Delivery는 `SourceReader`만 소비하며 실행 중 source writer나 fallback authority는
 없다.
 
+`config/sources/`의 valid immediate child package 전체가 startup inventory다. 새 source의 repository
+등록은 위 두 파일을 같은 review에 추가하는 것으로 끝나며 별도 source 목록, Python branch, test case나
+문서 등록을 요구하지 않는다.
+
 ## 소유 책임
 
 - Source package의 exact directory/file layout와 manifest version 4 validation
+- Reviewed child package의 process-start inventory discovery
 - `SourceProfile`, connection, allowlist, provenance, semantic overlay와 budget DTO
 - `SourceReader`와 process-start `SourceRegistry` loading
 - PostgreSQL 18, UTF-8, no-SQL connection/session reader policy
@@ -63,7 +68,8 @@ class SourceReader(Protocol):
 
 `SourceRegistry.load(source_directory, budget_file, environment)`는 각 immediate child directory를 source
 후보로 읽는다. Directory 이름과 `source_id`가 같고 regular non-symlink `source.yaml`, `views.sql`만
-있어야 한다. Flat YAML, `.yml`, unknown file, nested directory와 구 format fallback은 없다.
+있어야 한다. 하나라도 invalid하면 전체 load가 실패한다. Flat YAML, `.yml`, unknown file, nested
+directory와 구 format fallback은 없다. 이 directory 외에 유지하는 source-name registry는 없다.
 
 `source.yaml`은 `allowed_relation_kinds: [view]`, 양의 정수 `view_contract_version`, 같은 package의
 `views.sql`을 가리키는 `provenance.database_migration_ref`를 요구한다. `views.sql`의 존재를 확인하되
@@ -90,6 +96,7 @@ SQL의 DDL과 temporary relation은 Guarded Query가 계속 차단한다.
 ## 불변조건
 
 - Source authority는 `config/sources/<source-id>/{source.yaml,views.sql}`와 budget YAML의 reviewed revision이다.
+- Reviewed immediate child package 전체가 startup inventory이며 test나 문서가 그 이름·개수를 복제하지 않는다.
 - Source directory에는 정확히 두 regular non-symlink file만 존재한다.
 - Manifest version은 4, relation kind는 view만, `view_contract_version`은 양의 정수다.
 - Password 값은 Git/YAML에 없고 manifest가 지정한 environment key에서만 resolve한다.
@@ -120,7 +127,8 @@ rollback artifact와 change-record owner의 실행 승인이 필요하다.
 uv run pytest tests/test_registry.py tests/test_reader_policy.py tests/test_operator_shell.py
 ```
 
-Source/fixture 변경은 Metadata, integration, container와 static privilege 검증도 실행한다.
+Source package 변경은 Metadata와 static desired-view 검증을 실행한다. 공통 test-local fixture를 변경할
+때만 PostgreSQL integration, container, load와 soak를 함께 실행한다.
 
 ## 집중해서 읽을 범위
 
@@ -129,5 +137,5 @@ Source/fixture 변경은 Metadata, integration, container와 static privilege �
 | Package/manifest | `models.py`, `registry.py`, source package, `test_registry.py` |
 | Reader/TLS/session | `reader_policy.py`, Metadata/Guarded Query consumer, `test_reader_policy.py` |
 | Semantic overlay/budget | `models.py`, source YAML, Metadata validation/revision tests |
-| Desired view SQL | ADR 0034, source package, fixture wiring, Metadata marker/admission tests |
+| Desired view SQL | ADR 0034, source package, static SQL gate, Metadata marker/admission tests |
 | Onboarding | source extension checklist, onboarding Skill과 its tests |

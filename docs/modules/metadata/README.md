@@ -116,10 +116,10 @@ metadata revision을 정상 회전시킬 수 있다.
 ```bash
 uv run pytest tests/test_catalog.py tests/test_metadata.py tests/test_revision.py \
   tests/test_relevance.py
-uv run pytest tests/test_source_database_corners.py -k catalog
+uv run pytest tests/test_database_integration.py -m integration
 ```
 
-DB/catalog 변경은 integration, corner, container와 revision mismatch tests도 실행한다.
+DB/catalog 변경은 integration safety kernel, container와 revision mismatch tests도 실행한다.
 
 ## 집중해서 읽을 범위
 
@@ -129,4 +129,4 @@ DB/catalog 변경은 integration, corner, container와 revision mismatch tests�
 | Admission/cache/stale | `service.py`, direct consumers, `test_metadata.py` |
 | Revision/signature | `revision.py`, Guarded Query mismatch path, `test_revision.py` |
 | Relevance/context limits | `relevance.py`, response builder, `test_relevance.py` |
-| Reader connection | Source reader policy, catalog pool, integration/corner tests |
+| Reader connection | Source reader policy, catalog pool, database integration tests |

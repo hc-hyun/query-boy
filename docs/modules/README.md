@@ -45,13 +45,13 @@ Python 구현은 `src/query_man` 아래 `source_catalog`, `metadata`, `guarded_q
 
 ## 현재 공통 기준선
 
-[ADR 0025](../decisions/0025-static-non-rls-first-launch.md)의 `LAUNCH-01-A`는 current serving
+[ADR 0025](../decisions/0025-static-non-rls-first-launch.md)의 `LAUNCH-01-A`는 current serving safety
 범위를, [ADR 0034](../decisions/0034-source-view-package-and-direct-admission.md)는 source package와
-publication을 정한다.
+publication을, [ADR 0035](../decisions/0035-reviewed-source-package-inventory.md)는 startup inventory를 정한다.
 
 - `config/sources/<source-id>/{source.yaml,views.sql}`와 `config/budget-profiles.yaml`의 Git-reviewed
   version이 source inventory와 관련 설정의 authority다.
-- Runtime은 `development-issues`, `market-voc` 두 non-RLS source와 단일 replica를 조립한다.
+- Runtime은 reviewed `config/sources/` package 전체와 단일 replica를 조립한다.
 - Runtime hot reload와 관리 API는 없다. 변경은 pull request review, 검증, 배포/재시작을 거쳐 반영한다.
 - `qm source list|show|validate`는 local source package를 사람이 읽을 수 있게 확인하는 read-only CLI다.
 - Source Catalog는 RLS manifest를 거부하며 PostgreSQL 18/UTF-8 reader 정책과 manifest v4의 명시적

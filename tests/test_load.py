@@ -21,62 +21,49 @@ from tests.helpers import ROOT_DIRECTORY
 @pytest.mark.asyncio
 async def test_interactive_budget_under_representative_local_load() -> None:
     load_dotenv(ROOT_DIRECTORY / ".env")
-    required = ["DEVELOPMENT_ISSUES_READER_PASSWORD", "MARKET_VOC_READER_PASSWORD"]
-    if any(not os.environ.get(name) for name in required):
-        pytest.skip("local reader credentials are not configured")
+    reader_password = os.environ.get("DEVELOPMENT_ISSUES_READER_PASSWORD")
+    if not reader_password:
+        pytest.skip("local fixture reader credentials are not configured")
 
+    environment = dict(os.environ)
+    environment["FIXTURE_SOURCE_READER_PASSWORD"] = reader_password
+    environment["QUERY_MAN_POSTGRES_HOST"] = "127.0.0.1"
     registry = SourceRegistry.load(
-        ROOT_DIRECTORY / "config" / "sources",
+        ROOT_DIRECTORY / "tests" / "fixtures" / "config" / "sources",
         ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
+        environment,
     )
     catalog = PostgresCatalog()
     executor = PostgresQueryExecutor()
     metadata = MetadataService(registry, catalog, cache_ttl_ms=30_000)
     service = QueryService(registry, metadata, executor)
-    cases = {
-        "development-issues": (
-            "SELECT status, count(*) AS issue_count "
-            "FROM ai.issue_overview GROUP BY status ORDER BY status"
-        ),
-        "market-voc": (
-            "SELECT status, count(*) AS voc_count "
-            "FROM ai.voc_overview GROUP BY status ORDER BY status"
-        ),
-    }
+    source_id = "fixture-source"
+    query = "SELECT record_id, text_value FROM ai.fixture_records ORDER BY record_id"
     try:
-        revisions = {
-            source_id: (await metadata.get_published(source_id)).revision for source_id in cases
-        }
+        revision = (await metadata.get_published(source_id)).revision
         metadata.invalidate()
 
-        async def measured_query(source_id: str, sql: str) -> tuple[str, int, dict[str, object]]:
+        async def measured_query() -> tuple[int, dict[str, object]]:
             started = time.monotonic()
             result = await service.query(
                 source_id,
-                sql,
-                revisions[source_id],
+                query,
+                revision,
                 SQL_POLICY_REVISION,
             )
-            return source_id, round((time.monotonic() - started) * 1000), result
+            return round((time.monotonic() - started) * 1000), result
 
-        queries = [
-            measured_query(source_id, sql)
-            for _iteration in range(20)
-            for source_id, sql in cases.items()
-        ]
-        results = await asyncio.gather(*queries)
-        service_wall = [duration for _source_id, duration, _result in results]
-        execution = [
-            int(result["elapsed_ms"]) for _source_id, _duration, result in results
-        ]
-        queue = [int(result["queue_ms"]) for _source_id, _duration, result in results]
+        results = await asyncio.gather(*(measured_query() for _iteration in range(20)))
+        service_wall = [duration for duration, _result in results]
+        execution = [int(result["elapsed_ms"]) for _duration, result in results]
+        queue = [int(result["queue_ms"]) for _duration, result in results]
         plan_costs = [
             float(result["plan_summary"]["total_cost"])  # type: ignore[index]
-            for _source_id, _duration, result in results
+            for _duration, result in results
         ]
         summary = {
             "queries": len(results),
-            "sources": sorted(cases),
+            "source": source_id,
             "service_wall_ms_p50": _percentile(service_wall, 0.50),
             "service_wall_ms_p95": _percentile(service_wall, 0.95),
             "service_wall_ms_max": max(service_wall),
@@ -89,8 +76,8 @@ async def test_interactive_budget_under_representative_local_load() -> None:
         }
         print(json.dumps(summary, sort_keys=True))
 
-        assert all(result["status"] == "ok" for _source_id, _duration, result in results)
-        assert all(int(result["row_count"]) > 0 for _source_id, _duration, result in results)
+        assert all(result["status"] == "ok" for _duration, result in results)
+        assert all(result["row_count"] == 3 for _duration, result in results)
         assert max(service_wall) < 8_000
         assert max(execution) < 8_000
         assert max(queue) <= 1_000

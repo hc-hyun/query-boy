@@ -15,8 +15,9 @@ Status: current Git-reviewed source-package first-launch runbook
 
 현재 source authority는 Git-reviewed source package, budget authority는 Git-reviewed YAML뿐입니다. Runtime admin
 mutation, Control DB, hot reload과 source convergence 운영 절차는 제공하지 않습니다.
-정확한 source 결정 기준은 [ADR 0034](decisions/0034-source-view-package-and-direct-admission.md), budget과
-retired managed 경계는 [ADR 0030](decisions/0030-git-reviewed-yaml-source-authority.md)입니다.
+정확한 source package 기준은 [ADR 0034](decisions/0034-source-view-package-and-direct-admission.md), startup
+inventory는 [ADR 0035](decisions/0035-reviewed-source-package-inventory.md), budget과 retired managed 경계는
+[ADR 0030](decisions/0030-git-reviewed-yaml-source-authority.md)입니다.
 실제 protected environment 작업은 [Active TODO](development-todo.md)의 DB 연결 `DBENV-01`, 인증 연결
 `AUTHENV-01`과 그 뒤의 배포·전환 `LAUNCH-02` 순서입니다.
 
@@ -35,8 +36,8 @@ Base `compose.yaml`은 application-only topology이며 source PostgreSQL을 prov
 runbook입니다. DB DDL/reader/view, source manifest, AuthBridge mapper나 application code를 이 단계에서
 새로 구현하지 않고, 승인된 inventory를 traffic 밖에서 다시 검증합니다.
 
-- `development-issues`, `market-voc` 두 source
-- Git-reviewed `config/sources/<source-id>/{source.yaml,views.sql}`, `config/budget-profiles.yaml`
+- Approved Git revision의 reviewed `config/sources/<source-id>/{source.yaml,views.sql}` package 전체
+- Git-reviewed `config/budget-profiles.yaml`
 - PostgreSQL 18, server/client UTF-8, RLS source 0개
 - final result OID `20, 21, 23, 25, 1082, 1184, 1700`
 - SQL policy v3, metadata/view contract admission과 repository security/integration/container gate
@@ -85,9 +86,12 @@ docker compose up -d --wait postgres query-man
 ./scripts/verify-container.sh
 ```
 
-Exact readiness, 두 source, RLS 0개, PostgreSQL 18/UTF-8, view marker/source/version, direct semantic
-admission, metadata/SQL revision mismatch, seven-OID positive/negative와 HTTP/MCP parity를 모두
-확인합니다. AuthBridge를 선택하면 JWT
+위 local command는 test-local `fixture-source` 하나의 readiness와 공통 safety path만 검증하며 approved
+package inventory 전체의 protected evidence가 아닙니다. Protected acceptance에서는 exact target 명령으로 approved
+package 전체의 RLS 0개, PostgreSQL 18/UTF-8, view marker/source/version, direct semantic admission,
+metadata/SQL revision mismatch, seven-OID positive/negative와 HTTP/MCP parity를 확인합니다. Source
+이름·개수는 문서에 복제하지 않고 exact artifact의 `qm source list`와 change record를 대조합니다.
+AuthBridge를 선택하면 JWT
 access token 서명·issuer·audience·exp/nbf·scope/role를 Discovery의 `jwks_uri`로 로컬
 검증하고 ID token, refresh token, 다른 audience와 만료 token을 거부합니다. JWKS는 cache하되
 알 수 없는 `kid`가 오면 한 번 갱신합니다. Authorization header와 token을 log에 남기지
@@ -229,7 +233,6 @@ load balancer가 일반 traffic을 막은 뒤에는 operator/canary의 검증 qu
 ```bash
 test -f .env || cp .env.fixture.example .env
 docker compose up -d --wait postgres
-./scripts/apply-db.sh
 docker compose up -d --build --wait query-man
 ./scripts/verify-container.sh
 ```
@@ -238,6 +241,9 @@ docker compose up -d --build --wait query-man
 container `3000`, host loopback `${QUERY_MAN_PORT:-3000}`입니다. Token과 reader password는 `.env`에서
 주입하고 image build context·Git·application log에 넣지 않습니다.
 Application container에 PostgreSQL administrator password를 전달하지 않습니다.
+Fresh volume은 PostgreSQL init으로 3행짜리 test-local source를 준비합니다. 기존 local volume에 같은
+fixture를 다시 적용할 때만 `./scripts/apply-db.sh`를 실행합니다. Production source의 `views.sql`은 이
+스크립트로 적용하지 않습니다.
 
 MCP의 Host/Origin, content type, protocol version과 duplicate security header를 fail-closed로 검증합니다.
 Reverse proxy 배포는 exact HTTPS Host/Origin allowlist를 설정하고 wildcard를 사용하지 않습니다.

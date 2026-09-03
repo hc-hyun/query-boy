@@ -35,6 +35,12 @@ SOURCE_VIEW_ADR = (
     / "decisions"
     / "0034-source-view-package-and-direct-admission.md"
 )
+SOURCE_INVENTORY_ADR = (
+    ROOT_DIRECTORY
+    / "docs"
+    / "decisions"
+    / "0035-reviewed-source-package-inventory.md"
+)
 PII_BOUNDARY_ADR = (
     ROOT_DIRECTORY
     / "docs"
@@ -112,6 +118,7 @@ def test_current_tree_keeps_current_decisions_and_git_archive_pointer() -> None:
         "0030-git-reviewed-yaml-source-authority.md",
         "0033-explicit-source-tls-modes.md",
         "0034-source-view-package-and-direct-admission.md",
+        "0035-reviewed-source-package-inventory.md",
     }
     decision_files = {
         path.name for path in DECISION_DIRECTORY.glob("[0-9][0-9][0-9][0-9]-*.md")
@@ -167,7 +174,7 @@ def test_active_todo_is_small_open_work_only() -> None:
     assert "Git history를 rewrite하지 않습니다" in todo
 
 
-def test_adr_0025_is_the_narrow_current_launch_authority() -> None:
+def test_adr_0025_keeps_launch_safety_after_inventory_supersession() -> None:
     adr = LAUNCH_ADR.read_text(encoding="utf-8")
     assert "Status: Accepted" in adr
     assert "Decision ID: `LAUNCH-01-A`" in adr
@@ -188,15 +195,11 @@ def test_adr_0025_is_the_narrow_current_launch_authority() -> None:
         assert f"`{type_name}` | {oid}" in adr
     assert "SQL policy version은 2에서 3으로" in adr
     assert "0034-source-view-package-and-direct-admission.md" in adr
+    assert "0035-reviewed-source-package-inventory.md" in adr
     assert "protected execution" in adr
 
     assert sql_validation_module._SQL_POLICY_VERSION == 3
     assert sql_validation_module.SQL_POLICY_REVISION in adr
-    assert {
-        path.name
-        for path in (ROOT_DIRECTORY / "config" / "sources").iterdir()
-        if path.is_dir()
-    } == {"development-issues", "market-voc"}
 
 
 def test_adr_0030_retains_budget_and_retired_managed_boundaries() -> None:
@@ -249,6 +252,22 @@ def test_adr_0034_is_the_current_source_package_and_admission_authority() -> Non
     assert not (ROOT_DIRECTORY / "config" / "verified-queries.yaml").exists()
 
 
+def test_adr_0035_makes_reviewed_packages_the_only_inventory_registration() -> None:
+    adr = SOURCE_INVENTORY_ADR.read_text(encoding="utf-8")
+
+    for fragment in (
+        "Status: Accepted",
+        "Decision ID: `SOURCE-INVENTORY-01`",
+        "Every immediate child directory under `config/sources/`",
+        "No third registration file",
+        "Tests verify behavior, not a duplicate inventory",
+        "every authenticated query principal",
+        "one tiny synthetic database",
+        "Protected activation remains separately authorized",
+    ):
+        assert fragment in adr
+
+
 def test_adr_0031_moves_source_pii_boundary_to_db_owner_views() -> None:
     adr = PII_BOUNDARY_ADR.read_text(encoding="utf-8")
 
@@ -289,8 +308,7 @@ def test_current_navigation_documents_agree_on_launch_scope() -> None:
         content = path.read_text(encoding="utf-8")
         assert "0025-static-non-rls-first-launch.md" in content, label
         assert "0034-source-view-package-and-direct-admission.md" in content, label
-        assert "development-issues" in content, label
-        assert "market-voc" in content, label
+        assert "0035-reviewed-source-package-inventory.md" in content, label
         assert "RLS" in content, label
 
     readme = launch_documents["README"].read_text(encoding="utf-8")
@@ -327,8 +345,8 @@ def test_parked_research_is_not_presented_as_current_implementation() -> None:
     ):
         assert topic in decisions
     assert "현재 모든 RLS source를 DB 접근 전에 차단" in decisions
-    assert "test_rls_source_requires_base_policy_drift_to_preserve_isolation" in decisions
-    assert "test_enc_01_" in decisions
+    assert "별도 real-DB acceptance" in decisions
+    assert "공통 PostgreSQL safety kernel" in decisions
 
 
 def test_consolidated_current_contracts_cover_archived_decisions() -> None:
@@ -487,7 +505,8 @@ def test_current_docs_use_source_package_and_direct_admission_terms_only() -> No
             assert term not in content, f"{path.relative_to(ROOT_DIRECTORY)}: {term}"
 
 
-def test_runtime_has_no_fixture_source_specialization() -> None:
+def test_runtime_has_no_known_fixture_source_specialization() -> None:
+    # This is a non-exhaustive regression corpus, not the active source inventory.
     forbidden = {
         "development-issues",
         "development_issues",

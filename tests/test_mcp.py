@@ -309,12 +309,24 @@ async def test_mcp_exposes_fixed_tools_and_shared_gateway_sources() -> None:
         )
 
         sources = await client.call_tool("list_sources")
-        assert len(json.dumps(sources.structured_content).encode()) < 1_024
-        assert [source["source_id"] for source in sources.structured_content["sources"]] == [  # type: ignore[index]
-            "development-issues",
-            "market-voc",
-        ]
-        assert "password" not in str(sources.structured_content)
+        listed_sources = cast(
+            list[dict[str, str]],
+            sources.structured_content["sources"],  # type: ignore[index]
+        )
+        assert [source["source_id"] for source in listed_sources] == sorted(
+            load_test_registry().source_ids()
+        )
+        assert all(
+            set(source) == {"source_id", "name", "description"}
+            for source in listed_sources
+        )
+        assert all(
+            all(isinstance(value, str) and value for value in source.values())
+            for source in listed_sources
+        )
+        rendered_sources = str(sources.structured_content)
+        assert "password" not in rendered_sources
+        assert "development_issues_reader" not in rendered_sources
 
         rejected_extras = [
             await client.call_tool("list_sources", {"host": "attacker.invalid"}),

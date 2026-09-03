@@ -20,6 +20,7 @@ execution work outside this plan-only Skill's authority.
 For every plan, read only the current material needed to produce it:
 
 - [source package and direct admission](../../docs/decisions/0034-source-view-package-and-direct-admission.md);
+- [reviewed source package inventory](../../docs/decisions/0035-reviewed-source-package-inventory.md);
 - [no-PII curated-view boundary](../../docs/decisions/0031-no-pii-curated-view-boundary.md);
 - [reader TEMP admission boundary](../../docs/decisions/0032-reader-temp-admission-relaxation.md);
 - [explicit source TLS modes](../../docs/decisions/0033-explicit-source-tls-modes.md);
@@ -42,8 +43,10 @@ The Git source authority is exactly
 `config/sources/<source-id>/{source.yaml,views.sql}`; budget configuration remains a separate Git authority.
 Runtime validates `source.yaml` and the live PostgreSQL catalog. It does not interpret or execute `views.sql` and
 does not receive administrator credentials. The Skill may inspect the package schema and propose a reviewable
-two-file change, tests and rollback, but never edits either file. A new source or public-view change stops until
-the exact package change is approved; repository approval is not protected database execution approval.
+two-file change, applicable generic gates and rollback, but never edits either file. The reviewed package is the
+startup inventory registration; do not propose a third registry file, source-specific test or documentation list.
+A new source or public-view change stops until the exact package change is approved; repository approval is not
+protected database execution approval.
 
 ## Handle Inputs Safely
 

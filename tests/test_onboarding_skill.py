@@ -88,6 +88,7 @@ def test_onboarding_skill_has_no_executable_mutation_recipe() -> None:
         in normalized_content
     )
     assert "0034-source-view-package-and-direct-admission.md" in normalized_content
+    assert "0035-reviewed-source-package-inventory.md" in normalized_content
     assert "0031-no-pii-curated-view-boundary.md" in normalized_content
     assert "0032-reader-temp-admission-relaxation.md" in normalized_content
     assert "0033-explicit-source-tls-modes.md" in normalized_content
@@ -115,6 +116,7 @@ def test_onboarding_skill_has_no_executable_mutation_recipe() -> None:
     )
     assert "allowed-schema `CREATE` denial" in normalized_content
     assert "exact two-file change-set approval" in normalized_content
+    assert "do not propose a third registry file" in normalized_content
     assert "Do not fetch production inventory or connect" in normalized_content
     assert (
         "query-man:source=<source-id>;view-contract=<positive integer>"
