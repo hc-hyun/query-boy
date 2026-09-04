@@ -18,8 +18,8 @@ HTTP client는 다음 세 endpoint를 순서대로 사용합니다.
 결정적으로 반환합니다. Runtime은 자연어 질문의 관련도를 추측하거나 여러 데이터베이스를 federation하지
 않습니다.
 
-Application 상태는 `/health`, `/ready`, operator 상태는 `/admin/health`, `/admin/metrics`, 활성 query
-수동 취소는 `DELETE /queries/{query_id}`로 제공합니다.
+Application 상태는 `/health`, `/ready`, operator용 상세 상태와 process-local 지표는
+`/admin/health`, `/admin/metrics`로 제공합니다.
 
 ## 안전 경계
 

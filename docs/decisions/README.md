@@ -23,7 +23,7 @@
 | [ADR 0034](0034-source-view-package-and-direct-admission.md) | Manifest version 5, two-file package, marker와 direct admission |
 | [ADR 0035](0035-reviewed-source-package-inventory.md) | Reviewed package directory 전체가 startup inventory |
 
-현재 application surface는 HTTP `/sources`, `/meta`, `/query`, query cancel과 health/admin endpoint입니다.
+현재 application surface는 HTTP `/sources`, `/meta`, `/query`와 health/admin monitoring endpoint입니다.
 Authentication은 loopback anonymous, 단일 opaque API token 또는 opaque access-policy token만 지원합니다.
 정확한 wire는 implementation과 [ADR 0002](0002-guarded-query-contract.md), 운영 절차는
 [Operations](../operations.md)를 따릅니다.

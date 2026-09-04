@@ -131,10 +131,9 @@ class PlanSummary:
 
 @dataclass
 class _ActiveQuery:
-    source_id: str
     connection: AsyncConnection[dict[str, Any]]
     task: asyncio.Task[Any]
-    cancel_reason: Literal["operator", "shutdown"] | None = None
+    cancel_reason: Literal["shutdown"] | None = None
 
 
 class QueryService:
@@ -190,9 +189,6 @@ class QueryService:
         )
         result["sql_policy_revision"] = SQL_POLICY_REVISION
         return result
-
-    async def cancel(self, query_id: str) -> bool:
-        return await self._executor.cancel(query_id)
 
 
 class PostgresQueryExecutor:
@@ -326,7 +322,6 @@ class PostgresQueryExecutor:
                             raise
                         async with self._active_lock:
                             active_query = _ActiveQuery(
-                                source.source_id,
                                 connection,
                                 task,
                             )
@@ -353,14 +348,8 @@ class PostgresQueryExecutor:
                 raise QueryTimeoutError from error
             except errors.QueryCanceled as error:
                 reason = active_query.cancel_reason if active_query is not None else None
-                metric = {
-                    "operator": "query_cancelled",
-                    "shutdown": "query_shutdown_cancelled",
-                    None: "query_timeout",
-                }[reason]
+                metric = "query_shutdown_cancelled" if reason == "shutdown" else "query_timeout"
                 operations.increment(metric, source.source_id)
-                if reason is not None:
-                    raise QueryTimeoutError from error
                 raise QueryTimeoutError from error
             except (
                 errors.OperationalError,
@@ -380,26 +369,6 @@ class PostgresQueryExecutor:
                 raise QueryUnavailableError from error
         finally:
             semaphore.release()
-
-    async def cancel(self, query_id: str) -> bool:
-        async with self._active_lock:
-            active = self._active.get(query_id)
-            if active is None:
-                return False
-            active.cancel_reason = "operator"
-            await active.connection.cancel_safe(timeout=1)
-            operations.increment("query_cancel_requested", active.source_id)
-            audit_logger.info(
-                "query_cancel_signal query_id=%s source_id=%s cancel_reason=operator",
-                query_id,
-                active.source_id,
-                extra={
-                    "query_id": query_id,
-                    "source_id": active.source_id,
-                    "cancel_reason": "operator",
-                },
-            )
-            return True
 
     def stop_accepting(self) -> None:
         self._accepting = False

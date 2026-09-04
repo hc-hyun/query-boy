@@ -80,10 +80,6 @@ class RecordingExecutor:
     async def close(self) -> None:
         pass
 
-    async def cancel(self, _query_id: str) -> bool:
-        return False
-
-
 class _PlanCursor:
     async def fetchone(self) -> dict[str, object]:
         return {
@@ -1088,88 +1084,6 @@ async def test_query_pool_requests_approved_connection_policy(
         assert kwargs["gssencmode"] == "disable"
     finally:
         await executor.close()
-
-
-@pytest.mark.asyncio
-async def test_executor_distinguishes_operator_cancel_from_statement_timeout() -> None:
-    source = load_test_registry().get("development-issues")
-    assert source is not None
-    executor = PostgresQueryExecutor()
-    started = asyncio.Event()
-    cancelled = asyncio.Event()
-    wait_for_operator = True
-
-    class FakeConnection:
-        info = _ConnectionInfo()
-        pgconn = _PGConnection()
-
-        async def cancel_safe(self, **options: int) -> None:
-            assert options == {"timeout": 1}
-            cancelled.set()
-
-    connection = FakeConnection()
-
-    class ConnectionContext:
-        async def __aenter__(self) -> FakeConnection:
-            return connection
-
-        async def __aexit__(self, *_args: object) -> None:
-            pass
-
-    class FakePool:
-        def connection(self, *, timeout: float) -> ConnectionContext:
-            assert timeout > 0
-            return ConnectionContext()
-
-    async def get_pool(_source: SourceProfile) -> FakePool:
-        return FakePool()
-
-    async def execute_connection(*_args: object, **_kwargs: object) -> dict[str, object]:
-        if wait_for_operator:
-            started.set()
-            await cancelled.wait()
-        raise errors.QueryCanceled
-
-    executor._get_pool = get_pool  # type: ignore[method-assign]
-    executor._execute_connection = execute_connection  # type: ignore[method-assign]
-    validated = ValidatedSql("pg_query:test", (), (), ())
-    query_id = "00000000-0000-0000-0000-000000000001"
-    operations.reset()
-    try:
-        pending = asyncio.create_task(
-            executor.execute(
-                source,
-                "SELECT 1",
-                "test-revision",
-                validated,
-                query_id=query_id,
-            )
-        )
-        await started.wait()
-        assert await executor.cancel(query_id)
-        with pytest.raises(QueryTimeoutError) as operator_cancelled:
-            await pending
-        assert operator_cancelled.value.code == "QUERY_TIMEOUT"
-
-        wait_for_operator = False
-        with pytest.raises(QueryTimeoutError) as timed_out:
-            await executor.execute(
-                source,
-                "SELECT 1",
-                "test-revision",
-                validated,
-            )
-        assert type(timed_out.value) is QueryTimeoutError
-
-        metrics = {
-            (metric["name"], metric.get("source_id")): metric["value"] for metric in operations.snapshot()["metrics"]
-        }
-        assert metrics[("query_cancel_requested", source.source_id)] == 1
-        assert metrics[("query_cancelled", source.source_id)] == 1
-        assert metrics[("query_timeout", source.source_id)] == 1
-    finally:
-        await executor.close()
-        operations.reset()
 
 
 @pytest.mark.asyncio

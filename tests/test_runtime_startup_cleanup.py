@@ -75,9 +75,6 @@ class _RecordingExecutor:
     async def execute(self, *_args: object, **_kwargs: object) -> dict[str, object]:
         raise AssertionError("Query execution is not expected")
 
-    async def cancel(self, _query_id: str) -> bool:
-        return False
-
     def stop_accepting(self) -> None:
         self.accepting = False
         self._events.append("query_stop_accepting")

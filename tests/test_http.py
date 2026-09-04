@@ -100,15 +100,6 @@ class RecordingGateway:
             "truncated": False,
         }
 
-    async def cancel_query(
-        self,
-        caller: CallerContext,
-        query_id: str,
-    ) -> dict[str, str]:
-        self._raise("cancel")
-        self.calls.append(("cancel", caller, query_id))
-        return {"status": "cancel_requested", "query_id": query_id}
-
     def _raise(self, operation: str) -> None:
         error = self.failures.get(operation)
         if error is not None:
@@ -205,7 +196,6 @@ def test_exposes_only_the_http_api_surface() -> None:
         "/sources": {"get"},
         "/meta": {"post"},
         "/query": {"post"},
-        "/queries/{query_id}": {"delete"},
     }
 
 
@@ -294,7 +284,7 @@ async def test_opaque_bearer_authentication_is_fail_closed(
 
 
 @pytest.mark.asyncio
-async def test_operator_endpoints_enforce_operator_identity(tmp_path: Path) -> None:
+async def test_monitoring_endpoints_enforce_operator_identity(tmp_path: Path) -> None:
     policy = _access_policy(tmp_path)
     operations.reconcile_sources(["source-a"])
     operations.set_source_health("source-a", "healthy")
@@ -305,14 +295,13 @@ async def test_operator_endpoints_enforce_operator_identity(tmp_path: Path) -> N
 
     async with session:
         denied_health = await session.get("/admin/health", headers=query_headers)
-        denied_cancel = await session.delete(f"/queries/{_QUERY_ID}", headers=query_headers)
+        denied_metrics = await session.get("/admin/metrics", headers=query_headers)
         health = await session.get("/admin/health", headers=operator_headers)
         metrics = await session.get("/admin/metrics", headers=operator_headers)
-        invalid_id = await session.delete("/queries/not-a-uuid", headers=operator_headers)
-        cancelled = await session.delete(f"/queries/{_QUERY_ID}", headers=operator_headers)
 
-    assert denied_health.status_code == denied_cancel.status_code == 403
+    assert denied_health.status_code == denied_metrics.status_code == 403
     assert denied_health.json()["error"]["code"] == "OPERATOR_REQUIRED"
+    assert denied_metrics.json()["error"]["code"] == "OPERATOR_REQUIRED"
     assert denied_health.headers["www-authenticate"] == 'Bearer error="insufficient_scope"'
     assert health.json() == {
         "status": "ready",
@@ -326,18 +315,7 @@ async def test_operator_endpoints_enforce_operator_identity(tmp_path: Path) -> N
             "value": 1,
         }
     ]
-    assert invalid_id.status_code == 400
-    assert cancelled.json() == {
-        "status": "cancel_requested",
-        "query_id": _QUERY_ID,
-    }
-    assert gateway.calls == [
-        (
-            "cancel",
-            CallerContext("operator", "operations", operator=True),
-            _QUERY_ID,
-        )
-    ]
+    assert not gateway.calls
 
 
 @pytest.mark.asyncio

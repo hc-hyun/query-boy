@@ -103,10 +103,6 @@ class DisconnectExecutor:
             self.cancelled.set()
         return {"query_id": query_id or "unreachable"}
 
-    async def cancel(self, _query_id: str) -> bool:
-        return False
-
-
 @asynccontextmanager
 async def _empty_lifespan(_app: FastAPI) -> AsyncIterator[None]:
     yield

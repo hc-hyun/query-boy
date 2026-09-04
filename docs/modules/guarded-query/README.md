@@ -12,7 +12,6 @@ read-only transaction에서 실행합니다. Timeout·cancel·disconnect·shutdo
 
 - SQL policy revision과 relation/function/operator/cast allowlist
 - `QueryService.query(...)`: revisions 확인, validation, admission과 execution
-- `QueryService.cancel(...)`: operator cancel 진입점
 - `PostgresQueryExecutor.drain(...)`, `close(...)`: active query lifecycle
 - `PostgresQueryExecutor`: reader pool, transaction/session validation, plan과 result limit
 - Exact result OID와 canonical JSON encoding
@@ -30,7 +29,7 @@ read-only transaction에서 실행합니다. Timeout·cancel·disconnect·shutdo
 | `guarded_query/result_encoding.py` | Exact OID와 canonical result encoding |
 
 Metadata는 current snapshot/revisions를, Source Catalog는 reader와 budget을 제공합니다. Delivery는 public
-query/cancel error를 render하지만 PostgreSQL detail을 받지 않습니다.
+query error를 render하지만 PostgreSQL detail을 받지 않습니다.
 
 ## 불변조건과 승인
 

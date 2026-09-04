@@ -44,9 +44,8 @@ PostgreSQL adapter를 우회하지 않습니다.
 7. Named cursor가 결과를 bounded batch로 읽고 row·byte·OID 제한을 적용합니다.
 8. 성공은 commit하고 timeout, cancel, disconnect, shutdown과 오류는 cancel·rollback·cleanup합니다.
 
-HTTP는 `/health`, `/ready`, operator `/admin/health`, `/admin/metrics`와
-`DELETE /queries/{query_id}`도 제공합니다. 어느 endpoint도 DSN, password, token, SQL literal이나 내부
-database 오류를 반환하지 않습니다.
+HTTP는 `/health`, `/ready`와 operator용 `/admin/health`, `/admin/metrics`도 제공합니다. 어느 endpoint도
+DSN, password, token, SQL literal이나 내부 database 오류를 반환하지 않습니다.
 
 ## Source와 revision
 

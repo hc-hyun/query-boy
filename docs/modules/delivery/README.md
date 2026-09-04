@@ -11,13 +11,13 @@ HTTP API로 제공합니다. DB 정책을 transport에서 다시 구현하지 �
 
 - Loopback anonymous, single opaque API token과 opaque access-policy token 인증
 - Query/operator capability와 source authorization
-- `GatewayService`: source list, metadata context, guarded query와 manual cancel
+- `GatewayService`: source list, metadata context와 guarded query
 - HTTP strict body/header validation, public response/error와 disconnect propagation
 - `/health`, `/ready`, `/admin/health`, `/admin/metrics`
 
 업무 API는 `GET /sources`, `POST /meta`, `POST /query`이며 `/meta` input은 `source_id` 하나입니다.
-Operator만 `DELETE /queries/{query_id}`와 admin endpoint를 사용할 수 있습니다. Non-loopback bind는 API
-token 또는 access-policy가 없으면 startup을 거부합니다.
+Operator만 admin monitoring endpoint를 사용할 수 있습니다. Non-loopback bind는 API token 또는
+access-policy가 없으면 startup을 거부합니다.
 
 ## 코드 지도
 

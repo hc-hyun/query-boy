@@ -51,7 +51,7 @@ application admission을 차단하고 DBA가 승인된 역순 DDL 또는 직전 
 5. `/query`는 두 revision, AST/allowlist, read-only transaction과 모든 resource limit을 적용합니다.
 6. 잘못된 credential, stale revision, write SQL, forbidden relation/function/operator와 unsupported OID를
    fail-closed합니다.
-7. Timeout, manual cancel, disconnect와 shutdown에서 cancel·rollback·connection reuse를 확인합니다.
+7. Timeout, disconnect와 shutdown에서 cancel·rollback·connection reuse를 확인합니다.
 
 실패 응답이나 log에서 token, password, DSN, SQL literal과 PostgreSQL 내부 message가 보이면 전환하지
 않습니다.
@@ -79,7 +79,6 @@ readiness와 negative probe 재검증입니다. DB 변경 rollback은 applicatio
 - `GET /ready`: startup admission과 serving readiness
 - `GET /admin/health`: operator용 component 상태
 - `GET /admin/metrics`: bounded process-local counters
-- `DELETE /queries/{query_id}`: operator의 활성 query cancel 요청
 
 일반 log는 request/query ID, source, pseudonymous caller, public outcome, duration과 bounded resource 수치만
 기록합니다. Authorization header, raw request body, question, SQL, literal, DSN과 database error는 기록하지

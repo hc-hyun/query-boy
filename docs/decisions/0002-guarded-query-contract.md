@@ -15,9 +15,8 @@ enforces policy independently of client behavior.
 source_id, sql, metadata_revision, sql_policy_revision
 ```
 
-Operator caller may request cancellation with `DELETE /queries/{query_id}`. Success returns no original SQL and
-contains `status`, `query_id`, both revisions, literal-free `fingerprint`, columns/rows, row and byte counts,
-`truncated`, queue/elapsed time and bounded plan summary.
+Success returns no original SQL and contains `status`, `query_id`, both revisions, literal-free `fingerprint`,
+columns/rows, row and byte counts, `truncated`, queue/elapsed time and bounded plan summary.
 
 Execution order is fixed.
 
@@ -42,9 +41,7 @@ brackets and separators. A row that crosses the limit is omitted and sets `trunc
 |---:|---|---|
 | 400 | `QUERY_REJECTED` | AST, object or plan policy rejection |
 | 400 | `QUERY_INVALID` | Safely classified, client-correctable SQL meaning error |
-| 403 | `OPERATOR_REQUIRED` | Cancel requires operator capability |
 | 404 | `SOURCE_NOT_FOUND` | Source is absent or not disclosed to caller |
-| 404 | `QUERY_NOT_FOUND` | Active query is absent or outside caller visibility |
 | 408 | `QUERY_TIMEOUT` | Deadline or cancellation |
 | 409 | `METADATA_REVISION_MISMATCH` | Context revision is stale |
 | 429 | `QUERY_OVERLOADED` | Source admission queue is full |
@@ -62,10 +59,11 @@ Privilege, connection/session, commit, unknown SQLSTATE, driver and serializatio
 
 - Plan admission complements rather than replaces transaction timeout, concurrency and result bounds.
 - `max_concurrent_queries <= max_pool_size`; pool availability failure after admission is unavailable, not overload.
-- Query ID is created before execution and joins safe audit, PostgreSQL `application_name` and operator cancel.
+- Query ID is created before execution and joins safe audit with PostgreSQL `application_name`.
 - Completion log may include source, pseudonymous caller, fingerprint, timing, rows/bytes and public outcome, but
   never SQL, literal, token, DSN or database detail.
-- Cancel lookup and pool return are serialized; a failed or cancelled transaction is never reused before rollback.
+- Active-query cleanup and pool return are serialized; a failed or cancelled transaction is never reused before
+  rollback.
 - Process-local limits do not promise a shared multi-replica quota.
 
 Budget operation is documented in [Query 제한](../query-cost-control.md). Reader/object rules are

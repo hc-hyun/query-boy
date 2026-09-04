@@ -13,7 +13,7 @@ Query Man의 budget은 비용 금액이 아니라 query 한 건과 source pool�
 | Transaction | `REPEATABLE READ READ ONLY`, statement/transaction/lock timeout, UTC | timeout 또는 비공개 unavailable |
 | Plan | `EXPLAIN` total cost, 최대 rows와 node 수 | `QUERY_REJECTED` |
 | Result | Exact OID, row 수, compact UTF-8 JSON byte | bounded result 또는 fail-closed |
-| Lifecycle | Manual cancel, disconnect, shutdown | cancel·rollback·cleanup |
+| Lifecycle | Timeout, disconnect, shutdown | cancel·rollback·cleanup |
 
 현재 `interactive` profile의 값은 YAML에서 직접 확인합니다. 대표 기본값은 query statement 5초,
 transaction 8초, queue 1초, pool/concurrency 2, result 1,000행/1 MiB입니다. 문서의 숫자를 별도

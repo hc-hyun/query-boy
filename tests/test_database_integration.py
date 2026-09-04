@@ -418,7 +418,7 @@ async def test_exact_seven_result_oids_and_unsupported_oid_recovery() -> None:
 
 
 @pytest.mark.asyncio
-async def test_timeout_cancel_and_multibyte_limit_restore_pooled_connection() -> None:
+async def test_timeout_task_cancel_and_multibyte_limit_restore_pooled_connection() -> None:
     source = _fixture_source()
     catalog = PostgresCatalog()
     metadata = MetadataService(SourceRegistry([source]), catalog)
@@ -506,8 +506,8 @@ async def test_timeout_cancel_and_multibyte_limit_restore_pooled_connection() ->
             await asyncio.sleep(0.01)
         else:
             pytest.fail("slow query did not become active")
-        assert await executor.cancel(query_id)
-        with pytest.raises(QueryTimeoutError):
+        slow_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
             await slow_task
         slow_task = None
 

@@ -5,7 +5,7 @@ import logging
 import uuid
 
 from query_man.delivery.access import CallerContext, caller_audit_fields
-from query_man.errors import AppError, OperatorRequiredError, QueryNotFoundError, SourceNotFoundError
+from query_man.errors import AppError, SourceNotFoundError
 from query_man.guarded_query.query import QueryService
 from query_man.metadata.service import MetadataService
 from query_man.runtime.operations import operations
@@ -125,26 +125,6 @@ class GatewayService:
             ),
         )
         return result
-
-    async def cancel_query(self, caller: CallerContext, query_id: str) -> dict[str, str]:
-        if not caller.operator:
-            logger.warning(
-                "authorization_denied",
-                extra=_audit_extra(caller, operation="cancel_query"),
-            )
-            raise OperatorRequiredError
-        cancelled = await self._queries.cancel(query_id)
-        if not cancelled:
-            raise QueryNotFoundError
-        logger.info(
-            "query_cancel_requested",
-            extra=_audit_extra(
-                caller,
-                query_id=query_id,
-                cancel_reason="operator",
-            ),
-        )
-        return {"status": "cancel_requested", "query_id": query_id}
 
     def _require_source(
         self,

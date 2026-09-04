@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import uuid
 from collections.abc import Callable, Coroutine
 from contextlib import AbstractAsyncContextManager, suppress
 
@@ -219,24 +218,6 @@ def build_http_app(
             payload.sql_policy_revision,
         )
         return await _until_disconnect(request, pending)
-
-    @app.delete("/queries/{query_id}")
-    async def cancel_query(query_id: str, request: Request) -> dict[str, str]:
-        caller = _require_operator(request)
-        try:
-            parsed_query_id = uuid.UUID(query_id)
-        except ValueError as error:
-            raise RequestValidationError(
-                [
-                    {
-                        "type": "uuid_parsing",
-                        "loc": ("path", "query_id"),
-                        "msg": "Invalid UUID.",
-                        "input": query_id,
-                    }
-                ]
-            ) from error
-        return await gateway.cancel_query(caller, str(parsed_query_id))
 
     return app
 
