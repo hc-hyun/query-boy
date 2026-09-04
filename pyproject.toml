@@ -16,7 +16,6 @@ dependencies = [
 
 [project.scripts]
 query-man = "query_man.runtime.server:main"
-qm = "query_man.runtime.operator_shell:main"
 
 [dependency-groups]
 dev = [

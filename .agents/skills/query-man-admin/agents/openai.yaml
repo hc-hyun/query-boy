@@ -1,0 +1,7 @@
+interface:
+  display_name: "Query Man Admin"
+  short_description: "Repository-scoped onboarding and server status"
+  default_prompt: "Use $query-man-admin to safely prepare a Query Man source or database change, or inspect server status."
+
+policy:
+  allow_implicit_invocation: false

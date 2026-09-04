@@ -10,8 +10,8 @@ append-only/immutable change record로 증명합니다.
 - Production `config/database-profiles.yaml`이 없습니다.
 - Versioned budget, access-policy example과 security corpus는 있습니다.
 - Query Cave는 certificate-authenticated production 경로를 검증하는 disposable assurance 환경입니다.
-- 따라서 첫 production source가 review되기 전의 Runtime과 `qm source validate`는 의도적으로
-  fail-closed합니다.
+- 따라서 첫 production source가 review되기 전의 Runtime과 repository-local source validator는
+  의도적으로 fail-closed합니다.
 
 Repository에는 protected target이나 실행 evidence를 저장하지 않으므로 아래 protected 작업은 완료로
 간주하지 않습니다.

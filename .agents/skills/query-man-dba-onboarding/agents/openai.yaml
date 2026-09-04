@@ -1,0 +1,7 @@
+interface:
+  display_name: "Query Man DBA Onboarding"
+  short_description: "Guarded PostgreSQL onboarding for Query Man"
+  default_prompt: "Use $query-man-dba-onboarding to prepare a protected PostgreSQL onboarding plan without exposing credentials."
+
+policy:
+  allow_implicit_invocation: false

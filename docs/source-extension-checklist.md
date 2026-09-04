@@ -86,7 +86,7 @@ curated view만 승인해야 합니다. Public description에도 실제 개인�
 ## Repository 검증
 
 ```bash
-uv run qm source validate
+uv run python .agents/skills/query-man-admin/scripts/validate_source_packages.py
 uv run pytest tests/test_registry.py tests/test_source_view_artifacts.py \
   tests/test_catalog.py tests/test_revision.py tests/test_documentation.py
 uv run ruff check .
@@ -95,8 +95,8 @@ uv run pytest
 ```
 
 검사는 package를 발견해 공통 규칙을 적용합니다. 새 source 이름·개수를 다른 test나 문서에 등록하지
-않습니다. CLI는 certificate file을 읽거나 DB에 연결하지 않으며 output에 credential path나 값을
-노출하지 않습니다.
+않습니다. Repository-local skill validator는 environment, certificate file을 읽거나 DB에 연결하지 않으며
+output에 endpoint, credential path나 값을 노출하지 않습니다. 설치형 source 관리 CLI는 제공하지 않습니다.
 
 ## Protected apply와 rollback
 

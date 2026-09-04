@@ -10,6 +10,7 @@
 |---|---|---|
 | 제품 이해·API 사용 | [프로젝트 README](../README.md) | [Architecture](architecture.md), [용어 사전](glossary.md) |
 | 코드 변경 | [활성 개발 지침](development-guidelines.md) | [Module index](modules/README.md)에서 primary module 선택 |
+| Repository skill 사용 | [Skill 사용 가이드](skills.md) | 요청에 맞는 skill을 `$이름`으로 명시 호출 |
 | 기존 DB에 source 추가 | [Source onboarding checklist](source-extension-checklist.md) | 해당 DB의 기존 profile과 certificate 재사용 |
 | 새 물리 DB 연결 | [Source onboarding checklist](source-extension-checklist.md) | [Database client certificate guide](database-certificate-authentication.md) |
 | 시작·배포·rollback | [Operations](operations.md) | [Query 제한과 자원](query-cost-control.md) |
@@ -30,6 +31,7 @@
 | [Operations](operations.md) | protected startup, acceptance, cutover와 rollback 순서 |
 | [Source onboarding checklist](source-extension-checklist.md) | source package 작성, review와 DB apply 절차 |
 | [Database client certificate guide](database-certificate-authentication.md) | DB별 인증서 발급·mapping·rotation 절차 |
+| [Skill 사용 가이드](skills.md) | Repository 전용 skill의 선택, 호출, credential과 승인 경계 |
 | [Query 제한과 자원](query-cost-control.md) | budget 강제 계층과 장애 조사 |
 | [Active TODO](development-todo.md) | 현재 baseline과 아직 완료되지 않은 작업 |
 | [현재 결정](decisions/README.md) | accepted policy와 ADR index |

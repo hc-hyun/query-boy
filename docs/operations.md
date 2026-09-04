@@ -25,11 +25,11 @@ Source package와 database profile은 protected action 전에 repository에서 r
 명령으로 검사합니다.
 
 ```bash
-uv run qm source validate
+uv run python .agents/skills/query-man-admin/scripts/validate_source_packages.py
 ```
 
-이 명령은 versioned artifact만 검증하며 certificate file을 읽거나 DB에 연결하고 DDL을 실행하지
-않습니다. 첫 source와 새 DB를 준비하는 파일·review·apply 절차는
+이 repository-local skill helper는 versioned artifact만 검증하며 environment나 certificate file을 읽거나
+DB에 연결하고 DDL을 실행하지 않습니다. 첫 source와 새 DB를 준비하는 파일·review·apply 절차는
 [Source onboarding](source-extension-checklist.md), certificate/HBA/DN mapping은
 [Database certificate guide](database-certificate-authentication.md)의 owner와 중단 조건을 따릅니다.
 

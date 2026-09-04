@@ -61,6 +61,11 @@ Source 추가는 [Source onboarding checklist](docs/source-extension-checklist.m
 연결할 때만 [Database client certificate guide](docs/database-certificate-authentication.md)도 함께
 따릅니다. Repository review와 protected DB apply는 별도 작업입니다.
 
+Agent와 함께 source/database profile을 준비하거나 서버 상태를 조회할 때는 `$query-man-admin`, DB/role,
+reviewed view와 certificate/HBA 작업을 계획할 때는 `$query-man-dba-onboarding`을 명시적으로 호출합니다.
+두 repository 전용 skill의 예시와 credential·실행 승인 경계는 [Skill 사용 가이드](docs/skills.md)에
+있습니다. 설치형 `qm` 관리 CLI는 제공하지 않으며 `query-man` server entrypoint만 유지합니다.
+
 ## 개발
 
 ```bash

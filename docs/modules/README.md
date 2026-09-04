@@ -11,7 +11,7 @@ Query Man은 하나의 repository, wheel과 process를 유지하는 modular mono
 | PostgreSQL catalog, context, metadata revision | Metadata | [README](metadata/README.md) |
 | SQL allowlist, execution limit, result, cancel | Guarded Query | [README](guarded-query/README.md) |
 | HTTP, authentication, authorization | Delivery | [README](delivery/README.md) |
-| Config, composition, readiness, shutdown, CLI | Runtime | [README](runtime/README.md) |
+| Config, composition, readiness, shutdown | Runtime | [README](runtime/README.md) |
 | Security/integration/container/load gate | Assurance | [README](assurance/README.md) |
 
 Primary module README의 `30초 요약`과 `집중해서 읽을 범위`를 따라 owner leaf file, 직접 consumer와 root
@@ -45,7 +45,7 @@ rendering은 Delivery, error 발생 조건은 owner module이 책임집니다.
 - Delivery: `delivery/__init__.py`, `delivery/access.py`, `delivery/gateway.py`,
   `delivery/app.py`
 - Runtime: `runtime/__init__.py`, `runtime/config.py`, `runtime/composition.py`,
-  `runtime/operations.py`, `runtime/operator_shell.py`, `runtime/server.py`
+  `runtime/operations.py`, `runtime/server.py`
 - Assurance: `assurance/__init__.py`
 
 주요 non-Python owner는 다음과 같습니다.
