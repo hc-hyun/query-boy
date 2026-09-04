@@ -263,6 +263,18 @@ def _expected_final_acl_surface(
     return surface
 
 
+def test_query_cave_source_packages_match_reviewed_two_file_contract() -> None:
+    source_entries = tuple(sorted(SOURCE_ROOT.iterdir()))
+    assert source_entries
+
+    for package in source_entries:
+        assert package.is_dir(), f"Unexpected source entry: {package.relative_to(ROOT_DIRECTORY)}"
+        assert {path.name for path in package.iterdir()} == {"source.yaml", "views.sql"}
+        manifest = yaml.safe_load((package / "source.yaml").read_text(encoding="utf-8"))
+        assert manifest["source_id"] == package.name
+        assert set(manifest) >= {"database_profile", "reader_user"}
+
+
 @pytest.mark.parametrize(
     "package",
     SOURCE_PACKAGES,

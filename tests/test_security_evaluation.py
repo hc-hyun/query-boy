@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 import yaml
 
 from query_man.guarded_query.sql_validation import SqlValidationError, validate_sql
+from tests.helpers import ROOT_DIRECTORY
 
 CORPUS_PATH = Path(__file__).parents[1] / "config" / "security-evaluation.yaml"
 ALLOWED_RELATIONS = {"signal_schema.case_files_view"}
@@ -44,3 +48,47 @@ def test_security_corpus_fails_closed(case: dict[str, object]) -> None:
         )
 
     assert captured.value.code == case["expected_code"]
+
+
+def test_bounded_pytest_traceback_does_not_render_argument_secrets(
+    tmp_path: Path,
+) -> None:
+    secret = "synthetic-database-password-for-traceback-probe"
+    probe = tmp_path / "test_traceback_secret_probe.py"
+    probe.write_text(
+        """
+import os
+
+
+def fail_with_secret_argument(secret: str) -> None:
+    raise RuntimeError("bounded traceback probe")
+
+
+def test_traceback_probe() -> None:
+    fail_with_secret_argument(os.environ["QUERY_MAN_TRACEBACK_PROBE"])
+""".lstrip(),
+        encoding="utf-8",
+    )
+    environment = dict(os.environ)
+    environment.pop("PYTEST_ADDOPTS", None)
+    environment["QUERY_MAN_TRACEBACK_PROBE"] = secret
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "--config-file",
+            str(ROOT_DIRECTORY / "pyproject.toml"),
+            "--quiet",
+            str(probe),
+        ],
+        check=False,
+        capture_output=True,
+        cwd=ROOT_DIRECTORY,
+        env=environment,
+        text=True,
+    )
+    output = result.stdout + result.stderr
+    assert result.returncode == 1
+    assert "RuntimeError: bounded traceback probe" in output
+    assert secret not in output

@@ -85,6 +85,16 @@ def _load_single_manifest(
     )
 
 
+def test_repository_production_source_inventory_is_intentionally_empty() -> None:
+    database_file = ROOT_DIRECTORY / "config" / "database-profiles.yaml"
+    source_directory = ROOT_DIRECTORY / "config" / "sources"
+
+    assert not database_file.exists(), "SOURCE-01 must review the first production database profile"
+    assert not source_directory.exists() or not tuple(source_directory.iterdir()), (
+        "SOURCE-01 must review the first production source package"
+    )
+
+
 def test_empty_source_inventory_fails_closed(tmp_path: Path) -> None:
     source_directory = tmp_path / "config" / "sources"
     source_directory.mkdir(parents=True)
@@ -97,6 +107,22 @@ def test_empty_source_inventory_fails_closed(tmp_path: Path) -> None:
             Path("/run/secrets/query-man/databases"),
             DUMMY_ENVIRONMENT,
         )
+
+
+def test_query_cave_database_profiles_use_production_certificate_policy() -> None:
+    databases = _database_profiles()
+    profiles = databases.get("profiles")
+
+    assert databases.get("version") == 1
+    assert isinstance(profiles, dict) and profiles
+    invalid_profiles = [
+        profile_id
+        for profile_id, profile in profiles.items()
+        if not isinstance(profile, dict)
+        or profile.get("authentication") != {"type": "client-certificate"}
+        or profile.get("sslmode") != "verify-full"
+    ]
+    assert not invalid_profiles, f"Query Cave profiles without production certificate policy: {invalid_profiles}"
 
 
 def test_published_source_profile_is_immutable() -> None:
