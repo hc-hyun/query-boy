@@ -20,6 +20,7 @@
 - [Architecture](architecture.md): HTTP 요청 흐름과 trust boundary
 - [Source onboarding과 extension checklist](source-extension-checklist.md): 두 파일 source package와 DBA apply
 - [Database client certificate](database-certificate-authentication.md): DB별 인증서, reader mapping과 rotation
+- [Query Cave](../query-cave/README.md): 최초 온보딩 참고와 수동 DB/container assurance
 - [Query 제한과 자원](query-cost-control.md): 실행 상한과 장애 조사
 - [Operations](operations.md): startup, 관측, cutover와 rollback
 - [현재 결정](decisions/README.md): 현행 ADR index
@@ -31,5 +32,5 @@
 [ADR 0030](decisions/0030-git-reviewed-yaml-source-authority.md)이 정합니다.
 
 실제 DB 연결 `DBENV-01`, 인증 연결 `AUTHENV-01`과 traffic 전환 `LAUNCH-02`는
-[Active TODO](development-todo.md)에 남아 있습니다. Repository와 fixture의 PASS를 protected 실행 완료로
+[Active TODO](development-todo.md)에 남아 있습니다. Repository와 Query Cave의 PASS를 protected 실행 완료로
 해석하지 않습니다.

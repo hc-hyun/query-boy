@@ -2,25 +2,25 @@ version: 1
 validation_rejections:
   - id: write-insert
     category: write
-    sql: "INSERT INTO ai.issue_overview VALUES (1)"
+    sql: "INSERT INTO signal_schema.case_files_view VALUES (1)"
     expected_code: SQL_STATEMENT_NOT_ALLOWED
   - id: write-update
     category: write
-    sql: "UPDATE ai.issue_overview SET status = 'CLOSED'"
+    sql: "UPDATE signal_schema.case_files_view SET status = 'CLOSED'"
     expected_code: SQL_STATEMENT_NOT_ALLOWED
   - id: write-delete-cte
     category: write
     sql: >-
-      WITH changed AS (DELETE FROM ai.issue_overview RETURNING *)
+      WITH changed AS (DELETE FROM signal_schema.case_files_view RETURNING *)
       SELECT * FROM changed
     expected_code: SQL_NESTED_STATEMENT_NOT_ALLOWED
   - id: write-select-into
     category: write
-    sql: "SELECT * INTO TEMP snapshot FROM ai.issue_overview"
+    sql: "SELECT * INTO TEMP snapshot FROM signal_schema.case_files_view"
     expected_code: SQL_SELECT_INTO_NOT_ALLOWED
   - id: write-row-lock
     category: write
-    sql: "SELECT * FROM ai.issue_overview FOR UPDATE"
+    sql: "SELECT * FROM signal_schema.case_files_view FOR UPDATE"
     expected_code: SQL_ROW_LOCK_NOT_ALLOWED
   - id: privilege-grant
     category: privilege_escalation
@@ -32,7 +32,7 @@ validation_rejections:
     expected_code: SQL_STATEMENT_NOT_ALLOWED
   - id: privilege-call
     category: privilege_escalation
-    sql: "CALL ai.promote_user()"
+    sql: "CALL signal_schema.promote_user()"
     expected_code: SQL_STATEMENT_NOT_ALLOWED
   - id: privilege-copy-program
     category: privilege_escalation
@@ -75,7 +75,7 @@ validation_rejections:
     expected_code: SQL_RECURSIVE_CTE_NOT_ALLOWED
   - id: resource-tablesample
     category: resource_limit_bypass
-    sql: "SELECT * FROM ai.issue_overview TABLESAMPLE SYSTEM(100)"
+    sql: "SELECT * FROM signal_schema.case_files_view TABLESAMPLE SYSTEM(100)"
     expected_code: SQL_TABLESAMPLE_NOT_ALLOWED
   - id: resource-advisory-lock
     category: resource_limit_bypass
@@ -87,7 +87,7 @@ validation_rejections:
     expected_code: SQL_FUNCTION_NOT_ALLOWED
   - id: resource-multiple-statements
     category: resource_limit_bypass
-    sql: "SELECT 1; SELECT * FROM ai.issue_overview"
+    sql: "SELECT 1; SELECT * FROM signal_schema.case_files_view"
     expected_code: SQL_MULTIPLE_STATEMENTS
   - id: resource-sql-byte-limit
     category: resource_limit_bypass

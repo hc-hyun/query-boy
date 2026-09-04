@@ -8,16 +8,18 @@ from query_man.metadata.models import CatalogColumn, CatalogRelation, CatalogSna
 from query_man.source_catalog.registry import SourceRegistry
 
 ROOT_DIRECTORY = Path(__file__).resolve().parents[1]
+QUERY_CAVE_DIRECTORY = ROOT_DIRECTORY / "query-cave"
+QUERY_CAVE_CONFIG_DIRECTORY = QUERY_CAVE_DIRECTORY / "config"
 DUMMY_ENVIRONMENT = {
-    "POSTGRES_PORT": "5432",
+    "QUERY_CAVE_POSTGRES_PORT": "55432",
 }
 
 
 def load_test_registry(environment: Mapping[str, str] = DUMMY_ENVIRONMENT) -> SourceRegistry:
     return SourceRegistry.load(
-        ROOT_DIRECTORY / "config" / "sources",
-        ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
-        ROOT_DIRECTORY / "config" / "database-profiles.yaml",
+        QUERY_CAVE_CONFIG_DIRECTORY / "sources",
+        QUERY_CAVE_CONFIG_DIRECTORY / "budget-profiles.yaml",
+        QUERY_CAVE_CONFIG_DIRECTORY / "database-profiles.yaml",
         Path("/run/secrets/query-man/databases"),
         environment,
     )
@@ -42,51 +44,51 @@ def relation(
         columns=tuple(
             replace(item, ordinal=index) for index, item in enumerate(columns, 1)
         ),
-        view_contract_source="development-issues",
+        view_contract_source="query-cave",
         view_contract_version=1,
     )
 
 
-def minimal_development_snapshot() -> CatalogSnapshot:
+def minimal_query_cave_snapshot() -> CatalogSnapshot:
     return CatalogSnapshot(
         (
             relation(
-                "ai.issue_comments",
+                "signal_schema.case_notes_view",
                 [
-                    column("comment_id", "bigint"),
-                    column("issue_id", "bigint"),
-                    column("author_user_id"),
-                    column("comment"),
-                    column("commented_at", "timestamp with time zone"),
-                    column("comment_type"),
+                    column("note_id", "bigint"),
+                    column("case_id", "bigint"),
+                    column("author_code"),
+                    column("note"),
+                    column("noted_at", "timestamp with time zone"),
+                    column("note_type"),
                 ],
             ),
             relation(
-                "ai.issue_overview",
+                "signal_schema.case_files_view",
                 [
-                    column("issue_id", "bigint"),
-                    column("discovered_at", "timestamp with time zone"),
-                    column("reporter_user_id"),
-                    column("assignee_user_id"),
-                    column("problem_detail"),
-                    column("cause"),
-                    column("countermeasure"),
-                    column("hw_version"),
-                    column("sw_version"),
-                    column("comment_count", "integer"),
-                    column("issue_type"),
+                    column("case_id", "bigint"),
+                    column("reported_at", "timestamp with time zone"),
+                    column("reporter_code"),
+                    column("responder_code"),
+                    column("summary"),
+                    column("assessment"),
+                    column("response"),
+                    column("device_version"),
+                    column("software_version"),
+                    column("note_count", "integer"),
+                    column("case_type"),
                     column("severity"),
                     column("status"),
                 ],
             ),
             relation(
-                "ai.test_unit_overview",
+                "signal_schema.response_units_view",
                 [
-                    column("test_unit_id", "bigint"),
-                    column("manufactured_at", "date"),
-                    column("serial_number"),
-                    column("issue_count", "integer"),
-                    column("unresolved_issue_count", "integer"),
+                    column("unit_id", "bigint"),
+                    column("commissioned_on", "date"),
+                    column("unit_code"),
+                    column("case_count", "integer"),
+                    column("open_case_count", "integer"),
                 ],
             ),
         )

@@ -9,9 +9,14 @@ config/sources/<source-id>/
 └── views.sql
 ```
 
-별도 registry, source ID 목록, fixture, business-question corpus, 문서, Compose credential이나 source별
+별도 registry, source ID 목록, test database, business-question corpus, 문서, Compose credential이나 source별
 Python 분기를 추가하지 않습니다. 기존 `config/database-profiles.yaml` entry와 DB별 client certificate를
 재사용합니다. DB apply와 reader/DN mapping은 repository 변경과 별도의 protected 작업입니다.
+
+현재 repository처럼 production database profile이 없는 상태에서 첫 physical DB를 추가할 때는
+`config/database-profiles.yaml`의 version 1 profile도 함께 생성합니다. 이후 같은 DB의 source 추가는 다시
+두 파일만 필요합니다. [Query Cave](../query-cave/README.md)는 DB bootstrap, view/reader, 인증서와 direct
+admission을 disposable 환경에서 연결한 최초 온보딩 참고 구현입니다.
 
 ## `source.yaml`
 
@@ -38,7 +43,7 @@ field와 database profile reference는 fail-closed합니다.
 Desired SQL은 bounded standalone transaction이어야 합니다.
 
 - `BEGIN`/`COMMIT`, transaction-local `search_path=pg_catalog`, 짧은 `lock_timeout`
-- `CREATE OR REPLACE VIEW ai.<name> (<explicit columns...>)`
+- `CREATE OR REPLACE VIEW <allowed-schema>.<name> (<explicit columns...>)`
 - Schema-qualified base relation과 wildcard 없는 explicit projection
 - Dedicated `<source>_view_owner` ownership
 - `PUBLIC`과 reader 권한 revoke 뒤 필요한 schema `USAGE`, reader view `SELECT`만 grant

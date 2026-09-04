@@ -72,7 +72,7 @@ Client 질문에 따른 server-side ranking이나 업무 규칙 해석은 하지
 - Guarded Query: SQL validation/execution/cancel·rollback
 - Delivery: Caller/source authorization와 HTTP projection
 
-Source별 fixture, question/result registry, 추가 registration manifest와 documentation inventory는 만들지
+Source별 test database, question/result registry, 추가 registration manifest와 documentation inventory는 만들지
 않습니다. Tests는 discovered package에 공통 동작을 적용합니다.
 
 ## Protected apply와 rollback

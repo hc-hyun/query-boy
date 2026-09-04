@@ -34,6 +34,10 @@ Application 상태는 `/health`, `/ready`, operator용 상세 상태와 process-
 - Password, bearer token, SQL literal과 내부 database 오류는 응답이나 일반 log에 노출하지 않습니다.
 - Metadata와 SQL policy revision이 달라지면 fail-closed하고 새 context를 요구합니다.
 
+현재 repository에는 production source package와 database profile이 없습니다. 첫 source가 review되기 전의
+기본 Runtime과 `qm source validate`는 의도적으로 fail-closed합니다. Query Cave는 별도 assurance 설정이며
+production startup inventory에 포함되지 않습니다.
+
 정확한 launch 제한은 [ADR 0025](docs/decisions/0025-static-non-rls-first-launch.md), source package 계약은
 [ADR 0034](docs/decisions/0034-source-view-package-and-direct-admission.md), startup inventory는
 [ADR 0035](docs/decisions/0035-reviewed-source-package-inventory.md), DB 인증은
@@ -58,16 +62,25 @@ QUERY_MAN_OPERATOR_TOKEN=...
 
 Client private key와 token은 Git에 commit하지 않습니다. DB certificate/HBA 준비는
 [Database client certificate guide](docs/database-certificate-authentication.md)를 따릅니다. Source
-database가 따로 준비되어 있지 않다면 작은 CI용 PostgreSQL fixture로 실제 DB와 container 경계를
-검증할 수 있습니다.
+database가 따로 준비되어 있지 않다면 [Query Cave](query-cave/README.md)로 certificate-authenticated
+PostgreSQL과 container 경계를 검증할 수 있습니다.
 
 ```bash
-./scripts/verify-database.sh
+./scripts/verify-query-cave.sh
 ./scripts/verify-container.sh
 ```
 
-두 명령은 `query-man-fixture` project에 synthetic DB를 새로 만들며, 성공·실패와 관계없이 종료할 때
-container와 fixture volume을 삭제합니다. 별도 `.env` 복사나 수동 정리가 필요하지 않습니다.
+두 명령은 격리된 Query Cave project에 synthetic DB와 임시 인증서를 만들며, 성공·실패와 관계없이
+종료할 때 container, volume과 credential 작업공간을 삭제합니다. 별도 `.env` 복사나 수동 정리가
+필요하지 않습니다.
+
+Query Cave를 개발 중 계속 실행하려면 production Compose와 분리된 local lifecycle 명령을 사용합니다.
+
+```bash
+./scripts/query-cave.sh up
+./scripts/query-cave.sh status
+./scripts/query-cave.sh down
+```
 
 실제 source를 연결한 local API는 다음처럼 실행합니다.
 
@@ -85,7 +98,7 @@ curl -fsS http://127.0.0.1:3000/sources \
 curl -fsS http://127.0.0.1:3000/meta \
   -H "Authorization: Bearer $QUERY_MAN_QUERY_TOKEN" \
   -H 'Content-Type: application/json' \
-  --data '{"source_id":"development-issues"}'
+  --data '{"source_id":"<source-id>"}'
 ```
 
 `/meta`가 반환한 exact `metadata_revision`과 `sql_policy_revision`을 `/query` 요청에 그대로 전달합니다.
@@ -96,8 +109,8 @@ curl -fsS http://127.0.0.1:3000/meta \
 docker compose --env-file .env down
 ```
 
-Fixture는 개발·CI 재현용이며 production DB apply나 운영 증거가 아닙니다. 자동 삭제되는 volume에는
-synthetic test data만 두어야 합니다.
+Query Cave는 개발·온보딩·수동 assurance용이며 production DB apply나 운영 증거가 아닙니다. 자동
+삭제되는 volume에는 synthetic test data만 두어야 합니다.
 
 ## 인증
 
@@ -110,7 +123,8 @@ synthetic test data만 두어야 합니다.
 
 ## 새 source 추가
 
-새 PostgreSQL source의 repository 변경은 다음 두 파일만 추가합니다.
+기존 physical database profile에 새 PostgreSQL source를 추가하는 repository 변경은 다음 두 파일만
+추가합니다.
 
 ```text
 config/sources/<source-id>/
@@ -122,6 +136,10 @@ config/sources/<source-id>/
 provenance를 둡니다. 같은 물리 DB의 source는 DB profile과 인증서를 재사용합니다. `views.sql`은 explicit
 output column, source/version marker, dedicated owner와 exact reader grant를 가진 desired artifact입니다.
 Runtime은 이 SQL을 실행하지 않습니다.
+
+현재처럼 database profile이 하나도 없는 repository에 첫 physical DB를 연결할 때는
+`config/database-profiles.yaml`도 함께 생성합니다. 같은 DB의 두 번째 source부터는 profile과 인증서를
+재사용하므로 source package 두 파일만 추가합니다. Query Cave는 이 최초 과정을 확인하는 기준 구현입니다.
 
 DB/data owner 검토와 DBA apply는 repository 변경과 별도이며 traffic 밖에서 승인받아 수행합니다. 자세한
 stop·rollback 조건은 [Source extension checklist](docs/source-extension-checklist.md)를 따릅니다.

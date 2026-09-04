@@ -30,12 +30,12 @@ from query_man.metadata.service import MetadataService
 from query_man.runtime.operations import operations
 from query_man.source_catalog.models import SourceProfile, SSLMode
 from query_man.source_catalog.reader_policy import ReaderSessionPolicyError
-from tests.helpers import load_test_registry, minimal_development_snapshot
+from tests.helpers import load_test_registry, minimal_query_cave_snapshot
 
 
 class StaticCatalog:
     async def load(self, _source: SourceProfile) -> CatalogSnapshot:
-        snapshot = minimal_development_snapshot()
+        snapshot = minimal_query_cave_snapshot()
         return replace(
             snapshot,
             relations=tuple(
@@ -67,8 +67,8 @@ class RecordingExecutor:
             "query_id": query_id or "test-query-id",
             "metadata_revision": metadata_revision,
             "fingerprint": validated.fingerprint,
-            "columns": ["issue_count"],
-            "rows": [{"issue_count": 3}],
+            "columns": ["case_count"],
+            "rows": [{"case_count": 3}],
             "row_count": 1,
             "result_bytes": 19,
             "truncated": False,
@@ -306,30 +306,30 @@ def query_service() -> tuple[QueryService, MetadataService, RecordingExecutor]:
 @pytest.mark.asyncio
 async def test_validates_revision_and_sql_before_execution() -> None:
     service, metadata, executor = query_service()
-    published = await metadata.get_published("development-issues")
+    published = await metadata.get_published("query-cave")
 
     response = await service.query(
-        "development-issues",
-        "SELECT count(*) AS issue_count FROM ai.issue_overview",
+        "query-cave",
+        "SELECT count(*) AS case_count FROM signal_schema.case_files_view",
         published.revision,
         SQL_POLICY_REVISION,
     )
 
     assert response["status"] == "ok"
     assert len(executor.calls) == 1
-    assert executor.calls[0][3].relations == ("ai.issue_overview",)
+    assert executor.calls[0][3].relations == ("signal_schema.case_files_view",)
 
 
 @pytest.mark.asyncio
 async def test_rejects_stale_revision_before_execution() -> None:
     service, metadata, executor = query_service()
-    published = await metadata.get_published("development-issues")
+    published = await metadata.get_published("query-cave")
     old_metadata_revision = "sha256:753f2d1e3f1e5f62de423e9180cb71dc2aed1869d5e4a9b5bd8da9955bad632b"
     assert published.revision != old_metadata_revision
 
     with pytest.raises(MetadataRevisionMismatchError):
         await service.query(
-            "development-issues",
+            "query-cave",
             "SELECT 1",
             old_metadata_revision,
             SQL_POLICY_REVISION,
@@ -341,13 +341,13 @@ async def test_rejects_stale_revision_before_execution() -> None:
 @pytest.mark.asyncio
 async def test_rejects_stale_sql_policy_revision_before_execution() -> None:
     service, metadata, executor = query_service()
-    published = await metadata.get_published("development-issues")
+    published = await metadata.get_published("query-cave")
     old_sql_policy_revision = "sha256:6b68458319a21416e51bf4be059fc55c4e053b45e38e7219956c4ac3725637a6"
     assert SQL_POLICY_REVISION != old_sql_policy_revision
 
     with pytest.raises(MetadataRevisionMismatchError):
         await service.query(
-            "development-issues",
+            "query-cave",
             "SELECT 1",
             published.revision,
             old_sql_policy_revision,
@@ -359,12 +359,12 @@ async def test_rejects_stale_sql_policy_revision_before_execution() -> None:
 @pytest.mark.asyncio
 async def test_maps_ast_rejection_to_stable_query_error() -> None:
     service, metadata, executor = query_service()
-    published = await metadata.get_published("development-issues")
+    published = await metadata.get_published("query-cave")
 
     with pytest.raises(QueryRejectedError) as caught:
         await service.query(
-            "development-issues",
-            "DELETE FROM ai.issue_overview",
+            "query-cave",
+            "DELETE FROM signal_schema.case_files_view",
             published.revision,
             SQL_POLICY_REVISION,
         )
@@ -376,12 +376,12 @@ async def test_maps_ast_rejection_to_stable_query_error() -> None:
 @pytest.mark.asyncio
 async def test_maps_forbidden_between_variant_to_bounded_query_details() -> None:
     service, metadata, executor = query_service()
-    published = await metadata.get_published("development-issues")
+    published = await metadata.get_published("query-cave")
 
     with pytest.raises(QueryRejectedError) as caught:
         await service.query(
-            "development-issues",
-            "SELECT issue_id FROM ai.issue_overview WHERE issue_id NOT BETWEEN 1 AND 2",
+            "query-cave",
+            "SELECT case_id FROM signal_schema.case_files_view WHERE case_id NOT BETWEEN 1 AND 2",
             published.revision,
             SQL_POLICY_REVISION,
         )
@@ -421,8 +421,8 @@ async def test_query_service_maps_reader_policy_metadata_failure_to_unavailable(
 
     with pytest.raises(QueryUnavailableError) as captured:
         await service.query(
-            "development-issues",
-            "SELECT count(*) FROM ai.issue_overview",
+            "query-cave",
+            "SELECT count(*) FROM signal_schema.case_files_view",
             f"sha256:{'0' * 64}",
             SQL_POLICY_REVISION,
         )
@@ -461,7 +461,7 @@ def test_query_invalid_error_rejects_nonpublic_reason() -> None:
 async def test_executor_maps_user_sql_error_to_bounded_query_invalid(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source = load_test_registry().get("development-issues")
+    source = load_test_registry().get("query-cave")
     assert source is not None
     database_error = errors.InvalidParameterValue("private function argument")
     executor = PostgresQueryExecutor()
@@ -506,7 +506,7 @@ async def test_executor_maps_result_cursor_database_errors_to_query_invalid(
     phase: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source = load_test_registry().get("development-issues")
+    source = load_test_registry().get("query-cave")
     assert source is not None
     database_error = errors.InvalidParameterValue("private function argument")
     connection = _PhaseConnection(phase, database_error)
@@ -547,7 +547,7 @@ async def test_executor_keeps_internal_invalid_parameter_errors_unavailable(
     phase: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source = load_test_registry().get("development-issues")
+    source = load_test_registry().get("query-cave")
     assert source is not None
     database_error = errors.InvalidParameterValue("private internal setting")
     connection = _PhaseConnection(phase, database_error)
@@ -583,7 +583,7 @@ async def test_executor_keeps_internal_invalid_parameter_errors_unavailable(
 async def test_executor_discards_connection_policy_mismatch_before_begin_and_recovers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source = load_test_registry().get("development-issues")
+    source = load_test_registry().get("query-cave")
     assert source is not None
     database_error = errors.InvalidParameterValue("unused")
     mismatch = _PhaseConnection(
@@ -644,7 +644,7 @@ async def test_executor_discards_connection_policy_mismatch_before_begin_and_rec
 async def test_pool_timeout_is_unavailable_and_lowers_query_health(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source = load_test_registry().get("development-issues")
+    source = load_test_registry().get("query-cave")
     assert source is not None
     executor = PostgresQueryExecutor()
 
@@ -700,7 +700,7 @@ async def test_pool_creation_dependency_errors_are_mapped_and_lower_query_health
     database_error: Exception,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source = load_test_registry().get("development-issues")
+    source = load_test_registry().get("query-cave")
     assert source is not None
     executor = PostgresQueryExecutor()
 
@@ -741,7 +741,7 @@ async def test_connection_errors_lower_query_health(
     database_error: errors.Error,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source = load_test_registry().get("development-issues")
+    source = load_test_registry().get("query-cave")
     assert source is not None
     connection = _PhaseConnection("session", database_error)  # type: ignore[arg-type]
     executor = PostgresQueryExecutor()
@@ -793,7 +793,7 @@ async def test_caller_triggerable_failures_do_not_lower_query_health(
     expected_error: type[Exception],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source = load_test_registry().get("development-issues")
+    source = load_test_registry().get("query-cave")
     assert source is not None
     connection = _PhaseConnection(
         "success",
@@ -830,7 +830,7 @@ async def test_caller_triggerable_failures_do_not_lower_query_health(
 async def test_semaphore_admission_timeout_remains_overloaded_without_health_change(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source = load_test_registry().get("development-issues")
+    source = load_test_registry().get("query-cave")
     assert source is not None
     source = replace(
         source,
@@ -861,7 +861,7 @@ async def test_semaphore_admission_timeout_remains_overloaded_without_health_cha
 async def test_executor_applies_timezone_and_policy_before_planning_and_sql(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source = load_test_registry().get("development-issues")
+    source = load_test_registry().get("query-cave")
     assert source is not None
     database_error = errors.InvalidParameterValue("unused")
     connection = _PhaseConnection("success", database_error)
@@ -907,7 +907,7 @@ async def test_executor_applies_timezone_and_policy_before_planning_and_sql(
 async def test_executor_rejects_unsupported_result_before_fetch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source = load_test_registry().get("development-issues")
+    source = load_test_registry().get("query-cave")
     assert source is not None
     database_error = errors.InvalidParameterValue("unused")
     connection = _PhaseConnection(
@@ -952,7 +952,7 @@ async def test_executor_rejects_unsupported_result_before_fetch(
 async def test_executor_rejects_duplicate_result_column_without_fetch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source = load_test_registry().get("development-issues")
+    source = load_test_registry().get("query-cave")
     assert source is not None
     database_error = errors.InvalidParameterValue("unused")
     connection = _PhaseConnection(
@@ -1001,7 +1001,7 @@ async def test_executor_keeps_noncorrectable_database_errors_unavailable(
     database_error: errors.DatabaseError,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source = load_test_registry().get("development-issues")
+    source = load_test_registry().get("query-cave")
     assert source is not None
     executor = PostgresQueryExecutor()
     connection = _PhaseConnection("explain", database_error)
@@ -1034,7 +1034,7 @@ async def test_executor_keeps_noncorrectable_database_errors_unavailable(
 
 @pytest.mark.asyncio
 async def test_executor_rejects_new_queries_after_drain_starts() -> None:
-    source = load_test_registry().get("development-issues")
+    source = load_test_registry().get("query-cave")
     assert source is not None
     executor = PostgresQueryExecutor()
     await executor.drain(0)
@@ -1054,7 +1054,7 @@ async def test_query_pool_requests_approved_connection_policy(
     monkeypatch: pytest.MonkeyPatch,
     sslmode: str,
 ) -> None:
-    source = load_test_registry().get("development-issues")
+    source = load_test_registry().get("query-cave")
     assert source is not None
     source = replace(
         source,
@@ -1089,7 +1089,7 @@ async def test_query_pool_requests_approved_connection_policy(
 @pytest.mark.asyncio
 async def test_drain_cancels_active_and_queued_admitted_queries() -> None:
     operations.reset()
-    source = load_test_registry().get("development-issues")
+    source = load_test_registry().get("query-cave")
     assert source is not None
     source = replace(
         source,
@@ -1166,7 +1166,7 @@ async def test_drain_cancels_active_and_queued_admitted_queries() -> None:
 @pytest.mark.asyncio
 async def test_drain_cancels_admitted_query_waiting_for_pool_connection() -> None:
     operations.reset()
-    source = load_test_registry().get("development-issues")
+    source = load_test_registry().get("query-cave")
     assert source is not None
     source = replace(
         source,

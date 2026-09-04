@@ -5,9 +5,9 @@ on:
   push:
 
 jobs:
-  source-package:
+  quality:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
@@ -15,75 +15,9 @@ jobs:
           enable-cache: true
       - name: Install locked environment
         run: uv sync --locked
-      - name: Static source-package analysis and unit checks
+      - name: Static analysis and unit checks
         run: |
           uv run ruff check .
           uv run ruff check src/query_man/runtime --select C901 --config "lint.mccabe.max-complexity=19"
           uv run mypy src
           uv run pytest -m 'not integration and not load'
-      - name: Database, integration, and bounded load checks
-        run: ./scripts/verify-database.sh
-      - name: Stop fixtures
-        if: always()
-        run: docker compose --env-file .env.fixture.example down -v --remove-orphans
-
-  container:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: read
-    env:
-      QUERY_MAN_QUERY_TOKEN: ci-only-not-a-secret-container-token-0001
-      QUERY_MAN_VCS_REF: ${{ github.sha }}
-    steps:
-      - uses: actions/checkout@v7
-      - name: Verify containerized HTTP API
-        run: ./scripts/verify-container.sh
-      - name: Stop containerized runtime
-        if: always()
-        run: docker compose --env-file .env.fixture.example down -v --remove-orphans
-
-  security:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - uses: astral-sh/setup-uv@v7
-      - name: Audit locked Python dependencies
-        run: |
-          uv export --locked --no-dev --no-emit-project --format requirements-txt --output-file /tmp/query-man-requirements.txt
-          uvx pip-audit --requirement /tmp/query-man-requirements.txt
-      - name: Scan repository history for secrets
-        run: docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.30.1 detect --source=/repo --gitleaks-ignore-path=/repo/.gitleaksignore --no-banner
-      - name: Scan repository configuration
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          scan-type: fs
-          scan-ref: .
-          scanners: vuln,secret,misconfig
-          severity: HIGH,CRITICAL
-          exit-code: "1"
-      - name: Scan PostgreSQL fixture image
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          image-ref: postgres:18.6-bookworm@sha256:1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af
-          scanners: vuln
-          severity: CRITICAL
-          ignore-unfixed: true
-          trivyignores: .trivyignore.yaml
-          exit-code: "1"
-      - name: Build Query Man application image
-        run: docker build --pull --tag query-man:ci .
-      - name: Scan Query Man application image
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          scan-type: image
-          image-ref: query-man:ci
-          scanners: vuln
-          severity: CRITICAL
-          ignore-unfixed: true
-          exit-code: "1"

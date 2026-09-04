@@ -1,0 +1,44 @@
+name: query-cave
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Query Cave verification suite
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - database
+          - container
+
+jobs:
+  database:
+    if: inputs.suite == 'all' || inputs.suite == 'database'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Install locked environment
+        run: uv sync --locked
+      - name: Verify Query Cave database and bounded load
+        run: ./scripts/verify-query-cave.sh
+
+  container:
+    if: inputs.suite == 'all' || inputs.suite == 'container'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      QUERY_MAN_VCS_REF: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify Query Man against Query Cave
+        run: ./scripts/verify-container.sh

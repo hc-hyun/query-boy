@@ -1,0 +1,107 @@
+name: query-cave
+
+services:
+  certificates:
+    image: postgres:18.6-bookworm@sha256:1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af
+    restart: "no"
+    environment:
+      QUERY_CAVE_HOST_GID: ${QUERY_CAVE_HOST_GID:?set Query Cave host GID}
+      QUERY_CAVE_HOST_UID: ${QUERY_CAVE_HOST_UID:?set Query Cave host UID}
+    entrypoint: ["/bin/bash", "/query-cave/pki/issue-certificates.sh"]
+    volumes:
+      - ${QUERY_CAVE_ROOT_DIRECTORY:?set Query Cave root}/pki:/query-cave/pki:ro
+      - ${QUERY_CAVE_STATE_DIRECTORY:?set Query Cave state directory}:/query-cave-state
+
+  postgres:
+    image: postgres:18.6-bookworm@sha256:1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af
+    restart: "no"
+    depends_on:
+      certificates:
+        condition: service_completed_successfully
+    environment:
+      POSTGRES_DB: query_cave
+      POSTGRES_INITDB_ARGS: --data-checksums --encoding=UTF8 --auth-host=scram-sha-256
+      POSTGRES_PASSWORD: ${QUERY_CAVE_ADMIN_PASSWORD:?set disposable Query Cave admin password}
+      POSTGRES_USER: query_cave_admin
+      TZ: ${TZ:-Asia/Seoul}
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/query-cave-state/server/server.crt
+      - -c
+      - ssl_key_file=/query-cave-state/server/server.key
+      - -c
+      - ssl_ca_file=/query-cave-state/server/client-ca.crt
+      - -c
+      - hba_file=/query-cave/postgres/pg_hba.conf
+      - -c
+      - ident_file=/query-cave/postgres/pg_ident.conf
+      - -c
+      - log_min_duration_statement=1000
+    ports:
+      - "127.0.0.1:${QUERY_CAVE_POSTGRES_PORT:-55432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+      - ${QUERY_CAVE_ROOT_DIRECTORY}/postgres:/query-cave/postgres:ro
+      - ${QUERY_CAVE_ROOT_DIRECTORY}/config/sources/query-cave:/query-cave/source:ro
+      - ${QUERY_CAVE_ROOT_DIRECTORY}/postgres/bootstrap.sql:/docker-entrypoint-initdb.d/10-bootstrap.sql:ro
+      - ${QUERY_CAVE_ROOT_DIRECTORY}/postgres/apply-source.sh:/docker-entrypoint-initdb.d/20-apply-source.sh:ro
+      - ${QUERY_CAVE_STATE_DIRECTORY}:/query-cave-state:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U query_cave_admin -d query_cave"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    shm_size: 256mb
+    stop_grace_period: 30s
+
+  reader-check:
+    profiles: ["tools"]
+    image: postgres:18.6-bookworm@sha256:1c59e2c3c818eaa0f0628f695b36e7c9e362d6b219b36a54a32df645cbd7e1af
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGAPPNAME: query-cave-standalone-check
+      PGDATABASE: query_cave
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGSSLCERT: /query-cave-credentials/query-cave/client.crt
+      PGSSLKEY: /query-cave-credentials/query-cave/client.key
+      PGSSLMODE: verify-full
+      PGSSLROOTCERT: /query-cave-credentials/query-cave/ca.crt
+      PGUSER: query_cave_reader
+    entrypoint: ["psql", "--no-psqlrc", "--set=ON_ERROR_STOP=1"]
+    command:
+      - --command
+      - >-
+        SELECT case_id, summary
+        FROM signal_schema.case_files_view
+        ORDER BY case_id;
+    volumes:
+      - ${QUERY_CAVE_STATE_DIRECTORY}/check:/query-cave-credentials:ro
+
+  api:
+    profiles: ["query-man"]
+    image: query-man:local
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_PORT: "5432"
+      QUERY_CAVE_POSTGRES_PORT: "5432"
+      QUERY_MAN_BUDGET_FILE: /app/query-cave/config/budget-profiles.yaml
+      QUERY_MAN_DATABASE_FILE: /app/query-cave/config/database-profiles.yaml
+      QUERY_MAN_POSTGRES_HOST: postgres
+      QUERY_MAN_SOURCE_DIR: /app/query-cave/config/sources
+    volumes:
+      - ${QUERY_CAVE_ROOT_DIRECTORY}/config:/app/query-cave/config:ro
+      - ${QUERY_CAVE_STATE_DIRECTORY}/api:/run/secrets/query-man/databases:ro
+
+volumes:
+  postgres_data:

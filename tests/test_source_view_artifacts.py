@@ -11,9 +11,9 @@ import pytest
 import yaml
 from pglast.parser import parse_sql_json
 
-from tests.helpers import ROOT_DIRECTORY
+from tests.helpers import QUERY_CAVE_CONFIG_DIRECTORY, ROOT_DIRECTORY
 
-SOURCE_ROOT = ROOT_DIRECTORY / "config" / "sources"
+SOURCE_ROOT = QUERY_CAVE_CONFIG_DIRECTORY / "sources"
 SOURCE_PACKAGES = tuple(
     package
     for package in sorted(SOURCE_ROOT.iterdir())
@@ -180,19 +180,20 @@ def _grant_operations(statement: dict[str, Any]) -> list[AclOperation]:
 
 def _expected_acl_operations(
     *,
+    published_schema: str,
     owner: str,
     reader: str,
     base_relations: set[str],
     views: set[str],
 ) -> Counter[AclOperation]:
     operations: list[AclOperation] = [
-        AclOperation("REVOKE", "schema", "ai", "PUBLIC", "ALL"),
-        AclOperation("REVOKE", "schema", "ai", owner, "ALL"),
-        AclOperation("GRANT", "schema", "ai", owner, "USAGE"),
-        AclOperation("GRANT", "schema", "ai", owner, "CREATE"),
-        AclOperation("REVOKE", "schema", "ai", owner, "CREATE"),
-        AclOperation("REVOKE", "schema", "ai", reader, "ALL"),
-        AclOperation("GRANT", "schema", "ai", reader, "USAGE"),
+        AclOperation("REVOKE", "schema", published_schema, "PUBLIC", "ALL"),
+        AclOperation("REVOKE", "schema", published_schema, owner, "ALL"),
+        AclOperation("GRANT", "schema", published_schema, owner, "USAGE"),
+        AclOperation("GRANT", "schema", published_schema, owner, "CREATE"),
+        AclOperation("REVOKE", "schema", published_schema, owner, "CREATE"),
+        AclOperation("REVOKE", "schema", published_schema, reader, "ALL"),
+        AclOperation("GRANT", "schema", published_schema, reader, "USAGE"),
     ]
     for schema in sorted({relation.partition(".")[0] for relation in base_relations}):
         operations.extend(
@@ -239,15 +240,16 @@ def _final_acl_surface(
 
 def _expected_final_acl_surface(
     *,
+    published_schema: str,
     owner: str,
     reader: str,
     base_relations: set[str],
     views: set[str],
 ) -> dict[tuple[str, str, str], frozenset[str]]:
     surface: dict[tuple[str, str, str], frozenset[str]] = {
-        ("schema", "ai", "PUBLIC"): frozenset(),
-        ("schema", "ai", owner): frozenset({"USAGE"}),
-        ("schema", "ai", reader): frozenset({"USAGE"}),
+        ("schema", published_schema, "PUBLIC"): frozenset(),
+        ("schema", published_schema, owner): frozenset({"USAGE"}),
+        ("schema", published_schema, reader): frozenset({"USAGE"}),
     }
     for schema in {relation.partition(".")[0] for relation in base_relations}:
         surface[("schema", schema, owner)] = frozenset({"USAGE"})
@@ -273,6 +275,9 @@ def test_source_view_sql_is_a_bounded_standalone_desired_artifact(
     sql = (package / "views.sql").read_text(encoding="utf-8")
     source_id = manifest["source_id"]
     version = manifest["view_contract_version"]
+    published_schemas = manifest["allowed_schemas"]
+    assert isinstance(published_schemas, list) and len(published_schemas) == 1
+    published_schema = published_schemas[0]
     role_prefix = source_id.replace("-", "_")
 
     assert package.name == source_id
@@ -319,7 +324,7 @@ def test_source_view_sql_is_a_bounded_standalone_desired_artifact(
     views: dict[str, tuple[str, ...]] = {}
     for statement in view_statements:
         view = _range_var_name(statement["view"])
-        assert view.startswith("ai.")
+        assert view.startswith(f"{published_schema}.")
         assert statement.get("replace") is True
         aliases = tuple(alias["String"]["sval"] for alias in statement.get("aliases", ()))
         assert aliases and len(aliases) == len(set(aliases))
@@ -349,7 +354,7 @@ def test_source_view_sql_is_a_bounded_standalone_desired_artifact(
                 assert relation_name in cte_names, f"unqualified base relation: {relation_name}"
                 continue
             qualified_name = _range_var_name(relation)
-            if schema == "ai":
+            if schema == published_schema:
                 assert qualified_name in views, f"view references unpublished relation: {qualified_name}"
             else:
                 base_relations.add(qualified_name)
@@ -413,9 +418,9 @@ def test_source_view_sql_is_a_bounded_standalone_desired_artifact(
         elif kind == "GrantStmt":
             operations = _grant_operations(statement)
             acl_operations.extend(operations)
-            if AclOperation("GRANT", "schema", "ai", owner, "CREATE") in operations:
+            if AclOperation("GRANT", "schema", published_schema, owner, "CREATE") in operations:
                 grant_create_positions.append(position)
-            if AclOperation("REVOKE", "schema", "ai", owner, "CREATE") in operations:
+            if AclOperation("REVOKE", "schema", published_schema, owner, "CREATE") in operations:
                 revoke_create_positions.append(position)
 
     assert owned_views == set(views)
@@ -425,6 +430,7 @@ def test_source_view_sql_is_a_bounded_standalone_desired_artifact(
 
     actual_acl = Counter(acl_operations)
     expected_acl = _expected_acl_operations(
+        published_schema=published_schema,
         owner=owner,
         reader=reader,
         base_relations=base_relations,
@@ -435,6 +441,7 @@ def test_source_view_sql_is_a_bounded_standalone_desired_artifact(
         f"unexpected={actual_acl - expected_acl}"
     )
     assert _final_acl_surface(acl_operations) == _expected_final_acl_surface(
+        published_schema=published_schema,
         owner=owner,
         reader=reader,
         base_relations=base_relations,

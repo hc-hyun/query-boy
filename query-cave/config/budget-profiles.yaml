@@ -1,0 +1,26 @@
+version: 2
+
+profiles:
+  interactive:
+    metadata_statement_timeout_ms: 2000
+    query_statement_timeout_ms: 5000
+    query_transaction_timeout_ms: 8000
+    query_queue_timeout_ms: 1000
+    lock_timeout_ms: 250
+    work_mem_kb: 8192
+    temp_file_limit_kb: 65536
+    max_parallel_workers_per_gather: 0
+    jit_enabled: false
+    max_pool_size: 2
+    max_concurrent_queries: 2
+    max_metadata_relations: 200
+    max_metadata_columns: 5000
+    max_columns_per_relation: 300
+    max_context_columns_per_relation: 40
+    max_metadata_response_bytes: 1048576
+    max_result_rows: 1000
+    max_result_bytes: 1048576
+    max_sql_bytes: 100000
+    max_plan_total_cost: 100000
+    max_plan_rows: 1000000
+    max_plan_nodes: 100

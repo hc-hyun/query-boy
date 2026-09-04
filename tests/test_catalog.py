@@ -23,7 +23,7 @@ from query_man.source_catalog.registry import SourceRegistry
 from tests.helpers import (
     column,
     load_test_registry,
-    minimal_development_snapshot,
+    minimal_query_cave_snapshot,
     relation,
 )
 
@@ -44,18 +44,18 @@ def test_view_comment_contract_marker_is_parsed_and_not_disclosed() -> None:
     builders = catalog_module._rows_to_relations(
         [
             {
-                "schema_name": "ai",
-                "relation_name": "issue_overview",
+                "schema_name": "signal_schema",
+                "relation_name": "case_files_view",
                 "relation_kind": "v",
                 "relation_comment": (
-                    "query-man:source=development-issues;view-contract=17\n"
-                    "개발 문제 1건을 나타내는 공개 뷰"
+                    "query-man:source=query-cave;view-contract=17\n"
+                    "Query Cave 사건 1건을 나타내는 공개 뷰"
                 ),
                 "view_definition_hash": "definition-digest",
                 "security_invoker": True,
                 "security_barrier": True,
                 "ordinal": 1,
-                "column_name": "issue_id",
+                "column_name": "case_id",
                 "data_type": "bigint",
                 "is_not_null": True,
                 "column_comment": None,
@@ -65,9 +65,9 @@ def test_view_comment_contract_marker_is_parsed_and_not_disclosed() -> None:
 
     relation = builders[0].freeze()
 
-    assert relation.view_contract_source == "development-issues"
+    assert relation.view_contract_source == "query-cave"
     assert relation.view_contract_version == 17
-    assert relation.comment == "개발 문제 1건을 나타내는 공개 뷰"
+    assert relation.comment == "Query Cave 사건 1건을 나타내는 공개 뷰"
     assert "query-man:" not in relation.comment
     assert relation.security_invoker is True
     assert relation.security_barrier is True
@@ -78,10 +78,10 @@ def test_view_comment_contract_marker_is_parsed_and_not_disclosed() -> None:
     [
         "human description only",
         "query-man:source=Development-Issues;view-contract=1",
-        "query-man:source=development-issues;view-contract=0",
-        "query-man:source=development-issues;view-contract=01",
-        "query-man:source=development-issues;view-contract=1;extra=true",
-        " query-man:source=development-issues;view-contract=1",
+        "query-man:source=query-cave;view-contract=0",
+        "query-man:source=query-cave;view-contract=01",
+        "query-man:source=query-cave;view-contract=1;extra=true",
+        " query-man:source=query-cave;view-contract=1",
     ],
 )
 def test_view_comment_contract_marker_is_strict(comment: str) -> None:
@@ -95,9 +95,9 @@ def test_view_comment_contract_marker_is_strict(comment: str) -> None:
 @pytest.mark.parametrize(
     "comment",
     [
-        "query-man:source=development-issues;view-contract=1",
-        "query-man:source=development-issues;view-contract=1\n",
-        "query-man:source=development-issues;view-contract=1\n   ",
+        "query-man:source=query-cave;view-contract=1",
+        "query-man:source=query-cave;view-contract=1\n",
+        "query-man:source=query-cave;view-contract=1\n   ",
     ],
 )
 def test_view_comment_requires_human_description(comment: str) -> None:
@@ -121,7 +121,7 @@ def test_catalog_query_collects_both_view_security_options() -> None:
 async def test_catalog_load_checks_connection_before_existing_transaction_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source = load_test_registry().get("development-issues")
+    source = load_test_registry().get("query-cave")
     assert source is not None
     events: list[str] = []
 
@@ -212,7 +212,7 @@ async def test_catalog_connection_policy_mismatch_closes_without_sql_or_rollback
     monkeypatch: pytest.MonkeyPatch,
     close_fails: bool,
 ) -> None:
-    source = load_test_registry().get("development-issues")
+    source = load_test_registry().get("query-cave")
     assert source is not None
     marker = ReaderSessionPolicyError("Source reader connection policy mismatch")
 
@@ -279,7 +279,7 @@ async def test_catalog_connection_policy_mismatch_closes_without_sql_or_rollback
 async def test_catalog_connection_info_failure_preserves_transient_exception(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source = load_test_registry().get("development-issues")
+    source = load_test_registry().get("query-cave")
     assert source is not None
     failure = RuntimeError("private connection info failure")
 
@@ -344,7 +344,7 @@ async def test_catalog_connection_info_failure_preserves_transient_exception(
 async def test_catalog_pool_requests_approved_client_encoding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source = load_test_registry().get("development-issues")
+    source = load_test_registry().get("query-cave")
     assert source is not None
     configuration: dict[str, object] = {}
 
@@ -371,7 +371,7 @@ async def test_catalog_pool_passes_resolved_sslmode_unchanged(
     monkeypatch: pytest.MonkeyPatch,
     sslmode: str,
 ) -> None:
-    source = load_test_registry().get("development-issues")
+    source = load_test_registry().get("query-cave")
     assert source is not None
     source = replace(
         source,
@@ -401,7 +401,7 @@ async def test_catalog_pool_passes_resolved_sslmode_unchanged(
 async def test_catalog_limit_with_failed_rollback_never_serves_warm_stale(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source = load_test_registry().get("development-issues")
+    source = load_test_registry().get("query-cave")
     assert source is not None
     source = replace(
         source,
@@ -479,7 +479,7 @@ async def test_catalog_limit_with_failed_rollback_never_serves_warm_stale(
         async def load(self, requested_source: SourceProfile) -> CatalogSnapshot:
             self.load_count += 1
             if self.load_count == 1:
-                snapshot = minimal_development_snapshot()
+                snapshot = minimal_query_cave_snapshot()
                 return replace(
                     snapshot,
                     relations=tuple(
@@ -513,7 +513,7 @@ async def test_catalog_limit_with_failed_rollback_never_serves_warm_stale(
 
 @pytest.mark.asyncio
 async def test_common_reader_policy_rejects_non_utc_timezone() -> None:
-    source = load_test_registry().get("development-issues")
+    source = load_test_registry().get("query-cave")
     assert source is not None
 
     class Cursor:
@@ -541,7 +541,7 @@ async def test_common_reader_policy_rejects_non_utc_timezone() -> None:
 
 
 def test_published_catalog_graph_is_recursively_immutable_and_alias_free() -> None:
-    base = relation("ai.example", [column("id")])
+    base = relation("signal_schema.example", [column("id")])
     columns = list(base.columns)
     published_relation = replace(  # type: ignore[arg-type]
         base,

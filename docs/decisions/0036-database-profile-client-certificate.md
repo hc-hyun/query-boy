@@ -25,7 +25,8 @@ package 전체입니다. Database profile은 source registration 목록이 아�
 
 Metadata와 Guarded Query pool은 동일한 resolved certificate parameters를 사용합니다. Certificate
 profile은 CA/hostname 검증을 약화할 수 없으며 연결 실패는 startup admission을 fail-closed합니다.
-Disposable test fixture만 명시적인 password profile과 `disable` TLS를 사용할 수 있습니다.
+Disposable test source만 명시적인 password profile과 `disable` TLS를 사용할 수 있습니다. Current Query
+Cave assurance는 production 경로와 같은 client certificate와 `verify-full`을 사용합니다.
 
 ## Consequences
 

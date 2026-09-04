@@ -83,39 +83,39 @@ class _PolicyConnection:
 
 
 def test_reader_connection_kwargs_uses_database_client_certificate() -> None:
-    source = load_test_registry().get("development-issues")
+    source = load_test_registry().get("query-cave")
     assert source is not None
 
     parameters = reader_connection_kwargs(source, "query-man-test")
 
     assert parameters["sslmode"] == "verify-full"
     assert parameters["sslrootcert"] == (
-        "/run/secrets/query-man/databases/development-issues/ca.crt"
+        "/run/secrets/query-man/databases/query-cave/ca.crt"
     )
     assert parameters["sslcert"] == (
-        "/run/secrets/query-man/databases/development-issues/client.crt"
+        "/run/secrets/query-man/databases/query-cave/client.crt"
     )
     assert parameters["sslkey"] == (
-        "/run/secrets/query-man/databases/development-issues/client.key"
+        "/run/secrets/query-man/databases/query-cave/client.key"
     )
     assert "password" not in parameters
 
 
-def test_reader_connection_kwargs_uses_fixture_password_without_certificate() -> None:
-    source = load_test_registry().get("development-issues")
+def test_reader_connection_kwargs_uses_disposable_password_without_certificate() -> None:
+    source = load_test_registry().get("query-cave")
     assert source is not None
     source = replace(
         source,
         connection=replace(
             source.connection,
             sslmode="disable",
-            authentication=PasswordAuthentication("fixture-password"),
+            authentication=PasswordAuthentication("disposable-test-password"),
         ),
     )
 
     parameters = reader_connection_kwargs(source, "query-man-test")
 
-    assert parameters["password"] == "fixture-password"
+    assert parameters["password"] == "disposable-test-password"
     assert not {"sslrootcert", "sslcert", "sslkey"} & parameters.keys()
 
 
@@ -239,7 +239,7 @@ def test_reader_connection_policy_propagates_info_property_error_unchanged() -> 
 
 @pytest.mark.asyncio
 async def test_reader_session_policy_does_not_probe_database_temp_privilege() -> None:
-    source = load_test_registry().get("development-issues")
+    source = load_test_registry().get("query-cave")
     assert source is not None
     connection = _PolicyConnection()
 

@@ -17,11 +17,11 @@ from query_man.metadata.models import CatalogSnapshot
 from query_man.metadata.service import MetadataService
 from query_man.source_catalog.models import SourceProfile
 from query_man.source_catalog.registry import SourceRegistry
-from tests.helpers import column, load_test_registry, minimal_development_snapshot
+from tests.helpers import column, load_test_registry, minimal_query_cave_snapshot
 
 
 def _described_snapshot() -> CatalogSnapshot:
-    snapshot = minimal_development_snapshot()
+    snapshot = minimal_query_cave_snapshot()
     return replace(
         snapshot,
         relations=tuple(
@@ -86,7 +86,7 @@ async def test_unknown_source_fails_closed() -> None:
 @pytest.mark.asyncio
 async def test_requires_exact_view_contract_source_version_and_description() -> None:
     registry = load_test_registry()
-    source = registry.get("development-issues")
+    source = registry.get("query-cave")
     assert source is not None
     snapshot = _described_snapshot()
     relation = snapshot.relations[0]
@@ -127,7 +127,7 @@ async def test_rejects_empty_duplicate_or_outside_allowlist_catalog() -> None:
     for invalid in invalid_snapshots:
         service = MetadataService(registry, StaticCatalog(invalid))
         with pytest.raises(MetadataUnavailableError):
-            await service.get_published("development-issues")
+            await service.get_published("query-cave")
 
 
 @pytest.mark.asyncio
@@ -142,12 +142,12 @@ async def test_context_is_complete_deterministic_catalog_projection() -> None:
     registry = load_test_registry()
     service = MetadataService(registry, StaticCatalog(reversed_snapshot))
 
-    response = await service.get_context("development-issues")
+    response = await service.get_context("query-cave")
 
     assert [item["name"] for item in response["relations"]] == [
-        "ai.issue_comments",
-        "ai.issue_overview",
-        "ai.test_unit_overview",
+        "signal_schema.case_files_view",
+        "signal_schema.case_notes_view",
+        "signal_schema.response_units_view",
     ]
     for relation in response["relations"]:
         assert list(relation) == [
@@ -185,32 +185,37 @@ async def test_context_is_complete_deterministic_catalog_projection() -> None:
 @pytest.mark.asyncio
 async def test_context_truncates_columns_by_stable_catalog_order() -> None:
     registry = load_test_registry()
-    source = registry.get("development-issues")
+    source = registry.get("query-cave")
     assert source is not None
     source = replace(
         source,
         budget=replace(source.budget, max_context_columns_per_relation=2),
     )
     snapshot = _described_snapshot()
-    issue = snapshot.relations[1]
-    issue = replace(
-        issue,
+    case_file = snapshot.relations[1]
+    case_file = replace(
+        case_file,
         columns=(
-            *issue.columns,
+            *case_file.columns,
             replace(column("last_column"), ordinal=100),
         ),
     )
     service = MetadataService(
         SourceRegistry([source]),
-        StaticCatalog(replace(snapshot, relations=(snapshot.relations[0], issue, snapshot.relations[2]))),
+        StaticCatalog(
+            replace(
+                snapshot,
+                relations=(snapshot.relations[0], case_file, snapshot.relations[2]),
+            )
+        ),
     )
 
     response = await service.get_context(source.source_id)
-    relation = response["relations"][1]
+    relation = response["relations"][0]
 
     assert [item["name"] for item in relation["columns"]] == [
-        "issue_id",
-        "discovered_at",
+        "case_id",
+        "reported_at",
     ]
     assert relation["columns_truncated"] is True
     assert response["truncated"] is True
@@ -219,7 +224,7 @@ async def test_context_truncates_columns_by_stable_catalog_order() -> None:
 @pytest.mark.asyncio
 async def test_context_response_byte_limit_fails_closed() -> None:
     registry = load_test_registry()
-    source = registry.get("development-issues")
+    source = registry.get("query-cave")
     assert source is not None
     source = replace(
         source,
@@ -252,9 +257,9 @@ async def test_transient_refresh_failure_returns_bounded_stale_snapshot(
         now=lambda: 1_000,
     )
 
-    fresh = await service.get_context("development-issues")
-    stale = await service.get_context("development-issues")
-    stale_during_backoff = await service.get_context("development-issues")
+    fresh = await service.get_context("query-cave")
+    stale = await service.get_context("query-cave")
+    stale_during_backoff = await service.get_context("query-cave")
 
     assert fresh["snapshot_status"] == "fresh"
     assert stale["snapshot_status"] == "stale"
@@ -275,10 +280,10 @@ async def test_catalog_policy_rejection_never_returns_stale_snapshot() -> None:
         cache_ttl_ms=0,
         now=lambda: 1_000,
     )
-    await service.get_context("development-issues")
+    await service.get_context("query-cave")
 
     with pytest.raises(MetadataUnavailableError):
-        await service.get_context("development-issues")
+        await service.get_context("query-cave")
 
     assert catalog.load_count == 2
 
@@ -293,11 +298,11 @@ async def test_stale_snapshot_expires() -> None:
         max_stale_ms=10,
         now=lambda: clock[0],
     )
-    await service.get_context("development-issues")
+    await service.get_context("query-cave")
     clock[0] = 1_011
 
     with pytest.raises(MetadataUnavailableError):
-        await service.get_context("development-issues")
+        await service.get_context("query-cave")
 
 
 @pytest.mark.asyncio
@@ -324,10 +329,10 @@ async def test_same_contract_version_rejects_structure_drift_without_stale() -> 
         cache_ttl_ms=0,
         now=lambda: 1_000,
     )
-    await service.get_published("development-issues")
+    await service.get_published("query-cave")
 
     with pytest.raises(MetadataUnavailableError) as captured:
-        await service.get_published("development-issues")
+        await service.get_published("query-cave")
 
     assert captured.value.details == {
         "contract_violations": ["View structure changed without a view contract version change."]
@@ -350,10 +355,10 @@ async def test_marker_drift_never_returns_warm_stale() -> None:
         cache_ttl_ms=0,
         now=lambda: 1_000,
     )
-    await service.get_published("development-issues")
+    await service.get_published("query-cave")
 
     with pytest.raises(MetadataUnavailableError):
-        await service.get_published("development-issues")
+        await service.get_published("query-cave")
 
 
 @pytest.mark.asyncio
@@ -373,7 +378,7 @@ async def test_descriptive_change_rotates_revision_without_structure_rejection()
         now=lambda: 1_000,
     )
 
-    first = await service.get_published("development-issues")
-    second = await service.get_published("development-issues")
+    first = await service.get_published("query-cave")
+    second = await service.get_published("query-cave")
 
     assert second.revision != first.revision

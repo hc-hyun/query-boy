@@ -25,7 +25,7 @@ from query_man.metadata.models import CatalogSnapshot
 from query_man.metadata.service import MetadataService
 from query_man.runtime.operations import SafeJsonFormatter, operations
 from query_man.source_catalog.models import PasswordAuthentication, SourceProfile
-from tests.helpers import load_test_registry, minimal_development_snapshot
+from tests.helpers import load_test_registry, minimal_query_cave_snapshot
 
 
 @asynccontextmanager
@@ -69,7 +69,7 @@ async def _serve_test_app(app: FastAPI) -> AsyncIterator[str]:
 
 class DisconnectCatalog:
     async def load(self, _source: SourceProfile) -> CatalogSnapshot:
-        snapshot = minimal_development_snapshot()
+        snapshot = minimal_query_cave_snapshot()
         return replace(
             snapshot,
             relations=tuple(
@@ -110,7 +110,7 @@ async def _empty_lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 @pytest.mark.asyncio
 async def test_closed_database_port_is_unavailable_and_redacts_dependency_log() -> None:
-    source = load_test_registry().get("development-issues")
+    source = load_test_registry().get("query-cave")
     assert source is not None
 
     closed_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -232,13 +232,13 @@ async def test_socket_disconnect_cancels_http_query() -> None:
         async with httpx.AsyncClient(base_url=server_url) as session:
             context = await session.post(
                 "/meta",
-                json={"source_id": "development-issues"},
+                json={"source_id": "query-cave"},
             )
             context.raise_for_status()
         body = json.dumps(
             {
-                "source_id": "development-issues",
-                "sql": "SELECT count(*) FROM ai.issue_overview",
+                "source_id": "query-cave",
+                "sql": "SELECT count(*) FROM signal_schema.case_files_view",
                 "metadata_revision": context.json()["metadata_revision"],
                 "sql_policy_revision": context.json()["sql_policy_revision"],
             }

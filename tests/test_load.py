@@ -7,41 +7,38 @@ import time
 from pathlib import Path
 
 import pytest
-from dotenv import load_dotenv
 
 from query_man.guarded_query.query import PostgresQueryExecutor, QueryService
 from query_man.guarded_query.sql_validation import SQL_POLICY_REVISION
 from query_man.metadata.catalog import PostgresCatalog
 from query_man.metadata.service import MetadataService
 from query_man.source_catalog.registry import SourceRegistry
-from tests.helpers import ROOT_DIRECTORY
+from tests.helpers import QUERY_CAVE_CONFIG_DIRECTORY
 
 
 @pytest.mark.integration
 @pytest.mark.load
 @pytest.mark.asyncio
 async def test_interactive_budget_under_representative_local_load() -> None:
-    load_dotenv(ROOT_DIRECTORY / ".env")
-    reader_password = os.environ.get("DEVELOPMENT_ISSUES_READER_PASSWORD")
-    if not reader_password:
-        pytest.skip("local fixture reader credentials are not configured")
+    state_directory = os.environ.get("QUERY_CAVE_STATE_DIRECTORY")
+    if not state_directory:
+        pytest.skip("Query Cave is not running")
 
     environment = dict(os.environ)
-    environment["FIXTURE_SOURCE_READER_PASSWORD"] = reader_password
     environment["QUERY_MAN_POSTGRES_HOST"] = "127.0.0.1"
     registry = SourceRegistry.load(
-        ROOT_DIRECTORY / "tests" / "fixtures" / "config" / "sources",
-        ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
-        ROOT_DIRECTORY / "tests" / "fixtures" / "config" / "database-profiles.yaml",
-        Path("/unused-test-credentials"),
+        QUERY_CAVE_CONFIG_DIRECTORY / "sources",
+        QUERY_CAVE_CONFIG_DIRECTORY / "budget-profiles.yaml",
+        QUERY_CAVE_CONFIG_DIRECTORY / "database-profiles.yaml",
+        Path(state_directory) / "host",
         environment,
     )
     catalog = PostgresCatalog()
     executor = PostgresQueryExecutor()
     metadata = MetadataService(registry, catalog, cache_ttl_ms=30_000)
     service = QueryService(registry, metadata, executor)
-    source_id = "fixture-source"
-    query = "SELECT record_id, text_value FROM ai.fixture_records ORDER BY record_id"
+    source_id = "query-cave"
+    query = "SELECT case_id, summary FROM signal_schema.case_files_view ORDER BY case_id"
     try:
         revision = (await metadata.get_published(source_id)).revision
         async def measured_query() -> tuple[int, dict[str, object]]:

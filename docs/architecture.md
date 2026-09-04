@@ -65,6 +65,10 @@ metadata/query pool은 source별로 유지됩니다.
 않습니다. Live view comment의 `query-man:source=<id>;view-contract=<version>` marker가 package와 다르거나
 reader가 허용 범위를 벗어나면 source는 fail-closed합니다.
 
+현재 repository에는 production source와 database profile이 없습니다. Missing/empty inventory는 ready로
+간주하지 않고 startup을 fail-closed하며, `query-cave/`의 assurance inventory는 명시적인 test 실행에서만
+사용합니다.
+
 Metadata revision은 source 설정, budget, admitted relation·column·type·comment와 view contract를
 포함합니다. SQL policy revision은 전역 AST/function/operator/type 정책을 나타냅니다. Client는 같은
 context의 두 값을 query에 전달해야 하며 mismatch에서는 context를 다시 받아야 합니다.

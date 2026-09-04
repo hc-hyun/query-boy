@@ -10,14 +10,14 @@ from query_man.metadata.revision import (
     create_metadata_revision,
     create_view_structure_signature,
 )
-from tests.helpers import load_test_registry, minimal_development_snapshot
+from tests.helpers import load_test_registry, minimal_query_cave_snapshot
 
 
 def test_revision_is_stable_across_catalog_order() -> None:
-    source = load_test_registry().get("development-issues")
+    source = load_test_registry().get("query-cave")
     assert source is not None
-    first = minimal_development_snapshot()
-    second = minimal_development_snapshot()
+    first = minimal_query_cave_snapshot()
+    second = minimal_query_cave_snapshot()
     second = replace(
         second,
         relations=tuple(reversed(second.relations)),
@@ -30,9 +30,9 @@ def test_revision_is_stable_across_catalog_order() -> None:
 
 
 def test_revision_changes_with_every_published_query_contract_input() -> None:
-    source = load_test_registry().get("development-issues")
+    source = load_test_registry().get("query-cave")
     assert source is not None
-    snapshot = minimal_development_snapshot()
+    snapshot = minimal_query_cave_snapshot()
     relation = snapshot.relations[0]
     column = relation.columns[0]
     baseline = create_metadata_revision(source, snapshot)
@@ -83,9 +83,9 @@ def test_revision_changes_with_every_published_query_contract_input() -> None:
 
 
 def test_revision_ignores_transport_provenance_and_admission_markers() -> None:
-    source = load_test_registry().get("development-issues")
+    source = load_test_registry().get("query-cave")
     assert source is not None
-    snapshot = minimal_development_snapshot()
+    snapshot = minimal_query_cave_snapshot()
     baseline = create_metadata_revision(source, snapshot)
     source_variants = (
         replace(source, connection=replace(source.connection, sslmode="require")),
@@ -114,9 +114,9 @@ def test_revision_ignores_transport_provenance_and_admission_markers() -> None:
 def test_revision_changes_with_canonical_time_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source = load_test_registry().get("development-issues")
+    source = load_test_registry().get("query-cave")
     assert source is not None
-    snapshot = minimal_development_snapshot()
+    snapshot = minimal_query_cave_snapshot()
     baseline = create_metadata_revision(source, snapshot)
     changed = dict(revision_module.CANONICAL_TIME_POLICY_MATERIAL)
     changed["reader_session_timezone"] = "Asia/Seoul"
@@ -135,7 +135,7 @@ def test_sql_and_metadata_revisions_share_canonical_time_material() -> None:
 
 
 def test_view_structure_signature_tracks_exact_query_surface() -> None:
-    snapshot = minimal_development_snapshot()
+    snapshot = minimal_query_cave_snapshot()
     relation = snapshot.relations[0]
     first_column = relation.columns[0]
     baseline = create_view_structure_signature(snapshot)
@@ -181,7 +181,7 @@ def test_view_structure_signature_tracks_exact_query_surface() -> None:
 
 
 def test_view_structure_signature_ignores_descriptive_and_marker_data() -> None:
-    snapshot = minimal_development_snapshot()
+    snapshot = minimal_query_cave_snapshot()
     relation = snapshot.relations[0]
     descriptive = replace(
         snapshot,

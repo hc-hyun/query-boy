@@ -102,16 +102,30 @@ docker compose --env-file .env down
 포함하는 host directory를 가리켜야 합니다. 발급, PostgreSQL mapping과 rotation은
 [Database certificate guide](database-certificate-authentication.md)를 따릅니다.
 
-Synthetic fixture 검증은 lifecycle을 소유하는 script로 실행합니다.
+Query Cave 검증은 lifecycle을 소유하는 script로 실행합니다.
 
 ```bash
-./scripts/verify-database.sh
+./scripts/verify-query-cave.sh
 ./scripts/verify-container.sh
 ```
 
-Script는 `query-man-fixture` project만 사용하고 성공·실패 때 모두 container와 volume을 삭제합니다.
-Fixture database는 개발·CI 재현용이며 production inventory, backup이나 protected evidence가 아닙니다.
-자동 삭제 대상에는 synthetic test data만 두어야 합니다.
+Script는 격리된 Query Cave project만 사용하고 성공·실패 때 모두 container, volume과 임시 인증서를
+삭제합니다. Query Cave는 개발·온보딩·수동 assurance용이며 production inventory, backup이나 protected
+evidence가 아닙니다. 자동 삭제 대상에는 synthetic test data만 두어야 합니다.
+
+개발자가 Query Cave를 계속 살펴볼 때만 별도 local project를 명시적으로 시작합니다.
+
+```bash
+./scripts/query-cave.sh up
+./scripts/query-cave.sh status
+./scripts/query-cave.sh down
+```
+
+이 project는 기본 Compose나 production startup inventory에 포함되지 않습니다. `down`은 전용 synthetic
+database volume과 임시 credential까지 삭제하며 실제 DB나 production credential을 참조하지 않습니다.
+
+PR/push는 Docker 없는 경량 gate만 자동 실행합니다. Query Cave DB/container와 image security scan은 각각
+GitHub Actions의 `query-cave`, `security` workflow를 수동 실행합니다.
 
 ## Graceful shutdown
 

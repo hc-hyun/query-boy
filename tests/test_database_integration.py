@@ -8,8 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from dotenv import load_dotenv
-from psycopg import AsyncConnection, errors, sql
+from psycopg import AsyncConnection, OperationalError, errors, sql
 from psycopg.conninfo import make_conninfo
 
 from query_man.errors import (
@@ -28,43 +27,43 @@ from query_man.metadata.service import MetadataService
 from query_man.source_catalog.models import SourceProfile
 from query_man.source_catalog.reader_policy import reader_connection_kwargs
 from query_man.source_catalog.registry import SourceRegistry
-from tests.helpers import ROOT_DIRECTORY
+from tests.helpers import QUERY_CAVE_CONFIG_DIRECTORY
 
 pytestmark = pytest.mark.integration
 
-_FIXTURE_SOURCE_DIRECTORY = (
-    ROOT_DIRECTORY / "tests" / "fixtures" / "config" / "sources"
+_QUERY_CAVE_SOURCE_DIRECTORY = (
+    QUERY_CAVE_CONFIG_DIRECTORY / "sources"
 )
-_BUDGET_FILE = ROOT_DIRECTORY / "config" / "budget-profiles.yaml"
+_BUDGET_FILE = QUERY_CAVE_CONFIG_DIRECTORY / "budget-profiles.yaml"
 _EXPECTED_COLUMNS = [
-    "record_id",
-    "small_value",
-    "integer_value",
-    "text_value",
-    "date_value",
-    "timestamp_value",
-    "numeric_value",
+    "case_id",
+    "priority",
+    "response_code",
+    "summary",
+    "reported_on",
+    "reported_at",
+    "risk_score",
 ]
 _EXPECTED_OIDS = (20, 21, 23, 25, 1082, 1184, 1700)
 
 
-def _fixture_source() -> SourceProfile:
-    load_dotenv(ROOT_DIRECTORY / ".env")
-    reader_password = os.environ.get("DEVELOPMENT_ISSUES_READER_PASSWORD")
-    if not reader_password:
-        pytest.skip("local fixture reader credentials are not configured")
+def _query_cave_source() -> SourceProfile:
+    state_directory = os.environ.get("QUERY_CAVE_STATE_DIRECTORY")
+    if not state_directory:
+        pytest.skip("Query Cave is not running")
     environment = dict(os.environ)
-    environment["FIXTURE_SOURCE_READER_PASSWORD"] = reader_password
     environment["QUERY_MAN_POSTGRES_HOST"] = "127.0.0.1"
-    environment["POSTGRES_PORT"] = os.environ.get("POSTGRES_PORT", "5432")
+    environment["QUERY_CAVE_POSTGRES_PORT"] = os.environ.get(
+        "QUERY_CAVE_POSTGRES_PORT", "55432"
+    )
     registry = SourceRegistry.load(
-        _FIXTURE_SOURCE_DIRECTORY,
+        _QUERY_CAVE_SOURCE_DIRECTORY,
         _BUDGET_FILE,
-        ROOT_DIRECTORY / "tests" / "fixtures" / "config" / "database-profiles.yaml",
-        Path("/unused-test-credentials"),
+        QUERY_CAVE_CONFIG_DIRECTORY / "database-profiles.yaml",
+        Path(state_directory) / "host",
         environment,
     )
-    source = registry.get("fixture-source")
+    source = registry.get("query-cave")
     assert source is not None
     return source
 
@@ -74,17 +73,20 @@ def _connection_dsn(source: SourceProfile) -> str:
 
 
 async def _admin_connection() -> AsyncConnection[tuple[object, ...]]:
-    load_dotenv(ROOT_DIRECTORY / ".env")
-    if not os.environ.get("POSTGRES_USER") or not os.environ.get("POSTGRES_PASSWORD"):
-        pytest.skip("local PostgreSQL administrator credentials are not configured")
+    state_directory = os.environ.get("QUERY_CAVE_STATE_DIRECTORY")
+    if not state_directory:
+        pytest.skip("Query Cave is not running")
+    credentials = Path(state_directory) / "admin"
     return await AsyncConnection.connect(
         make_conninfo(
             host="127.0.0.1",
-            port=os.environ.get("POSTGRES_PORT", "5432"),
-            dbname="query_man",
-            user=os.environ["POSTGRES_USER"],
-            password=os.environ["POSTGRES_PASSWORD"],
-            sslmode="disable",
+            port=os.environ.get("QUERY_CAVE_POSTGRES_PORT", "55432"),
+            dbname="query_cave",
+            user="query_cave_admin",
+            sslmode="verify-full",
+            sslrootcert=str(credentials / "ca.crt"),
+            sslcert=str(credentials / "admin.crt"),
+            sslkey=str(credentials / "admin.key"),
         ),
         autocommit=True,
     )
@@ -93,6 +95,32 @@ async def _admin_connection() -> AsyncConnection[tuple[object, ...]]:
 def _source_for_relation(source: SourceProfile, qualified_name: str) -> SourceProfile:
     schema, _name = qualified_name.split(".", 1)
     return replace(source, allowed_schemas=(schema,))
+
+
+@pytest.mark.parametrize(
+    "probe",
+    ["missing-certificate", "untrusted-ca", "unmapped-dn", "hostname-mismatch"],
+)
+@pytest.mark.asyncio
+async def test_client_certificate_admission_fails_closed(probe: str) -> None:
+    source = _query_cave_source()
+    parameters = reader_connection_kwargs(source, "query-man-certificate-negative")
+    state_directory = Path(os.environ["QUERY_CAVE_STATE_DIRECTORY"])
+    probes = state_directory / "probes"
+    if probe == "missing-certificate":
+        parameters.pop("sslcert")
+        parameters.pop("sslkey")
+    elif probe == "untrusted-ca":
+        parameters["sslcert"] = str(probes / "untrusted.crt")
+        parameters["sslkey"] = str(probes / "untrusted.key")
+    elif probe == "unmapped-dn":
+        parameters["sslcert"] = str(probes / "unmapped.crt")
+        parameters["sslkey"] = str(probes / "unmapped.key")
+    else:
+        parameters["host"] = "localhost"
+
+    with pytest.raises(OperationalError):
+        await AsyncConnection.connect(make_conninfo(**parameters))
 
 
 async def _create_test_view(
@@ -115,13 +143,13 @@ async def _create_test_view(
             )
         )
         await admin.execute(
-            sql.SQL("GRANT USAGE ON TYPE {}.positive_integer TO query_man_fixture_reader").format(
+            sql.SQL("GRANT USAGE ON TYPE {}.positive_integer TO query_cave_reader").format(
                 sql.Identifier(schema)
             )
         )
     else:
         await admin.execute(
-            sql.SQL("CREATE TABLE {}.base_records (record_id bigint, label text)").format(
+            sql.SQL("CREATE TABLE {}.base_records (case_id bigint, label text)").format(
                 sql.Identifier(schema)
             )
         )
@@ -133,25 +161,25 @@ async def _create_test_view(
         await admin.execute(
             sql.SQL(
                 "CREATE VIEW {}.records WITH (security_barrier = true) "
-                "AS SELECT record_id, label FROM {}.base_records"
+                "AS SELECT case_id, label FROM {}.base_records"
             ).format(sql.Identifier(schema), sql.Identifier(schema))
         )
     await admin.execute(
         sql.SQL("COMMENT ON VIEW {}.records IS {}").format(
             sql.Identifier(schema),
             sql.Literal(
-                "query-man:source=fixture-source;view-contract=1\n"
+                "query-man:source=query-cave;view-contract=1\n"
                 "Temporary PostgreSQL safety-kernel view."
             ),
         )
     )
     await admin.execute(
-        sql.SQL("GRANT USAGE ON SCHEMA {} TO query_man_fixture_reader").format(
+        sql.SQL("GRANT USAGE ON SCHEMA {} TO query_cave_reader").format(
             sql.Identifier(schema)
         )
     )
     await admin.execute(
-        sql.SQL("GRANT SELECT ON {}.records TO query_man_fixture_reader").format(
+        sql.SQL("GRANT SELECT ON {}.records TO query_cave_reader").format(
             sql.Identifier(schema)
         )
     )
@@ -167,7 +195,7 @@ async def _drop_test_schema(
 
 @pytest.mark.asyncio
 async def test_pg18_utf8_session_policy_and_database_write_denial() -> None:
-    source = _fixture_source()
+    source = _query_cave_source()
     reader = await AsyncConnection.connect(_connection_dsn(source))
     executor = PostgresQueryExecutor()
     try:
@@ -183,34 +211,36 @@ async def test_pg18_utf8_session_policy_and_database_write_denial() -> None:
         assert await settings.fetchone() == ("on", "pg_catalog")
         with pytest.raises(errors.DatabaseError) as denied:
             await reader.execute(
-                "INSERT INTO fixture.fixture_records "
-                "(record_id, small_value, integer_value, text_value, date_value, "
-                "timestamp_value, numeric_value) VALUES "
+                "INSERT INTO gotham_schema.incidents_table "
+                "(case_id, priority, response_code, summary, reported_on, "
+                "reported_at, risk_score) VALUES "
                 "(9, 9, 9, 'denied', DATE '2026-01-09', "
                 "TIMESTAMPTZ '2026-01-09 00:00:00+00', 9.00)"
             )
         assert denied.value.sqlstate in {"25006", "42501"}
         await reader.rollback()
-        recovered = await reader.execute("SELECT count(*) FROM ai.fixture_records")
+        recovered = await reader.execute(
+            "SELECT count(*) FROM signal_schema.case_files_view"
+        )
         assert await recovered.fetchone() == (3,)
 
         policy_sql = (
-            "SELECT record_id, "
+            "SELECT case_id, "
             "pg_catalog.current_setting('transaction_read_only')::text AS read_only, "
             "pg_catalog.current_setting('transaction_isolation')::text AS isolation, "
             "pg_catalog.current_setting('TimeZone')::text AS timezone, "
             "pg_catalog.current_setting('search_path')::text AS search_path "
-            "FROM ai.fixture_records ORDER BY record_id LIMIT 1"
+            "FROM signal_schema.case_files_view ORDER BY case_id LIMIT 1"
         )
         validated = validate_sql(
             policy_sql,
-            allowed_relations=("ai.fixture_records",),
+            allowed_relations=("signal_schema.case_files_view",),
             allowed_functions=DEFAULT_ALLOWED_FUNCTIONS | {"current_setting"},
         )
         result = await executor.execute(source, policy_sql, "session-policy", validated)
         assert result["rows"] == [
             {
-                "record_id": 1,
+                "case_id": 1,
                 "read_only": "on",
                 "isolation": "repeatable read",
                 "timezone": "UTC",
@@ -225,16 +255,16 @@ async def test_pg18_utf8_session_policy_and_database_write_denial() -> None:
 
 @pytest.mark.asyncio
 async def test_live_view_contract_and_base_privilege_boundary() -> None:
-    source = _fixture_source()
+    source = _query_cave_source()
     catalog = PostgresCatalog()
     reader = await AsyncConnection.connect(_connection_dsn(source), autocommit=True)
     try:
         snapshot = await catalog.load(source)
         assert len(snapshot.relations) == 1
         relation = snapshot.relations[0]
-        assert relation.qualified_name == "ai.fixture_records"
+        assert relation.qualified_name == "signal_schema.case_files_view"
         assert relation.kind == "view"
-        assert relation.view_contract_source == "fixture-source"
+        assert relation.view_contract_source == "query-cave"
         assert relation.view_contract_version == 1
         assert relation.definition_hash is not None
         assert len(relation.definition_hash) == 32
@@ -243,29 +273,32 @@ async def test_live_view_contract_and_base_privilege_boundary() -> None:
 
         privileges = await reader.execute(
             "SELECT "
-            "pg_catalog.has_table_privilege(session_user, 'ai.fixture_records', 'SELECT'), "
+            "pg_catalog.has_table_privilege(session_user, 'signal_schema.case_files_view', 'SELECT'), "
             "(SELECT pg_catalog.has_table_privilege(session_user, base.oid, 'SELECT') "
             "FROM pg_catalog.pg_class AS base "
             "JOIN pg_catalog.pg_namespace AS base_namespace "
             "ON base_namespace.oid = base.relnamespace "
-            "WHERE base_namespace.nspname = 'fixture' "
-            "AND base.relname = 'fixture_records'), "
-            "pg_catalog.has_schema_privilege(session_user, 'ai', 'CREATE'), "
+            "WHERE base_namespace.nspname = 'gotham_schema' "
+            "AND base.relname = 'incidents_table'), "
+            "pg_catalog.has_schema_privilege(session_user, 'signal_schema', 'CREATE'), "
             "owner.rolname "
             "FROM pg_catalog.pg_class AS relation "
             "JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace "
             "JOIN pg_catalog.pg_roles AS owner ON owner.oid = relation.relowner "
-            "WHERE namespace.nspname = 'ai' AND relation.relname = 'fixture_records'"
+            "WHERE namespace.nspname = 'signal_schema' "
+            "AND relation.relname = 'case_files_view'"
         )
         assert await privileges.fetchone() == (
             True,
             False,
             False,
-            "query_man_fixture_owner",
+            "query_cave_view_owner",
         )
         with pytest.raises(errors.InsufficientPrivilege):
-            await reader.execute("SELECT * FROM fixture.fixture_records")
-        visible = await reader.execute("SELECT count(*) FROM ai.fixture_records")
+            await reader.execute("SELECT * FROM gotham_schema.incidents_table")
+        visible = await reader.execute(
+            "SELECT count(*) FROM signal_schema.case_files_view"
+        )
         assert await visible.fetchone() == (3,)
     finally:
         await reader.close()
@@ -274,7 +307,7 @@ async def test_live_view_contract_and_base_privilege_boundary() -> None:
 
 @pytest.mark.asyncio
 async def test_live_view_definition_drift_fails_closed() -> None:
-    source = _fixture_source()
+    source = _query_cave_source()
     admin = await _admin_connection()
     schema = f"kernel_drift_{uuid.uuid4().hex}"
     catalog = PostgresCatalog()
@@ -288,13 +321,13 @@ async def test_live_view_definition_drift_fails_closed() -> None:
             max_stale_ms=0,
         )
         original = await metadata.get_published(drift_source.source_id)
-        assert original.snapshot.relations[0].view_contract_source == "fixture-source"
+        assert original.snapshot.relations[0].view_contract_source == "query-cave"
         assert original.snapshot.relations[0].definition_hash is not None
 
         await admin.execute(
             sql.SQL(
                 "CREATE OR REPLACE VIEW {}.records WITH (security_barrier = true) "
-                "AS SELECT record_id, label || '-drift'::text AS label "
+                "AS SELECT case_id, label || '-drift'::text AS label "
                 "FROM {}.base_records"
             ).format(sql.Identifier(schema), sql.Identifier(schema))
         )
@@ -313,7 +346,7 @@ async def test_live_view_definition_drift_fails_closed() -> None:
 
 @pytest.mark.asyncio
 async def test_domain_output_is_rejected_during_metadata_admission() -> None:
-    source = _fixture_source()
+    source = _query_cave_source()
     admin = await _admin_connection()
     schema = f"kernel_domain_{uuid.uuid4().hex}"
     catalog = PostgresCatalog()
@@ -333,7 +366,7 @@ async def test_domain_output_is_rejected_during_metadata_admission() -> None:
 
 @pytest.mark.asyncio
 async def test_exact_seven_result_oids_and_unsupported_oid_recovery() -> None:
-    source = _fixture_source()
+    source = _query_cave_source()
     registry = SourceRegistry([source])
     catalog = PostgresCatalog()
     metadata = MetadataService(registry, catalog)
@@ -342,8 +375,8 @@ async def test_exact_seven_result_oids_and_unsupported_oid_recovery() -> None:
     reader = await AsyncConnection.connect(_connection_dsn(source), autocommit=True)
     try:
         oid_cursor = await reader.execute(
-            "SELECT record_id, small_value, integer_value, text_value, date_value, "
-            "timestamp_value, numeric_value FROM ai.fixture_records ORDER BY record_id"
+            "SELECT case_id, priority, response_code, summary, reported_on, "
+            "reported_at, risk_score FROM signal_schema.case_files_view ORDER BY case_id"
         )
         assert oid_cursor.description is not None
         assert tuple(column.type_code for column in oid_cursor.description) == _EXPECTED_OIDS
@@ -351,47 +384,47 @@ async def test_exact_seven_result_oids_and_unsupported_oid_recovery() -> None:
         published = await metadata.get_published(source.source_id)
         result = await query.query(
             source.source_id,
-            "SELECT record_id, small_value, integer_value, text_value, date_value, "
-            "timestamp_value, numeric_value FROM ai.fixture_records ORDER BY record_id",
+            "SELECT case_id, priority, response_code, summary, reported_on, "
+            "reported_at, risk_score FROM signal_schema.case_files_view ORDER BY case_id",
             published.revision,
             SQL_POLICY_REVISION,
         )
         assert result["columns"] == _EXPECTED_COLUMNS
         assert result["rows"] == [
             {
-                "record_id": 1,
-                "small_value": 10,
-                "integer_value": 100,
-                "text_value": "alpha",
-                "date_value": "2026-01-01",
-                "timestamp_value": "2026-01-01T00:00:00+00:00",
-                "numeric_value": "1.25",
+                "case_id": 1,
+                "priority": 10,
+                "response_code": 100,
+                "summary": "Rooftop signal inspection",
+                "reported_on": "2026-01-01",
+                "reported_at": "2026-01-01T00:00:00+00:00",
+                "risk_score": "1.25",
             },
             {
-                "record_id": 2,
-                "small_value": 20,
-                "integer_value": 200,
-                "text_value": "beta",
-                "date_value": "2026-01-02",
-                "timestamp_value": "2026-01-02T00:00:00+00:00",
-                "numeric_value": "2.50",
+                "case_id": 2,
+                "priority": 20,
+                "response_code": 200,
+                "summary": "Museum alarm review",
+                "reported_on": "2026-01-02",
+                "reported_at": "2026-01-02T00:00:00+00:00",
+                "risk_score": "2.50",
             },
             {
-                "record_id": 3,
-                "small_value": 30,
-                "integer_value": 300,
-                "text_value": "gamma",
-                "date_value": "2026-01-03",
-                "timestamp_value": "2026-01-03T00:00:00+00:00",
-                "numeric_value": "3.75",
+                "case_id": 3,
+                "priority": 30,
+                "response_code": 300,
+                "summary": "Harbor patrol report",
+                "reported_on": "2026-01-03",
+                "reported_at": "2026-01-03T00:00:00+00:00",
+                "risk_score": "3.75",
             },
         ]
 
         with pytest.raises(QueryUnavailableError) as unavailable:
             await query.query(
                 source.source_id,
-                "SELECT record_id = 1 AS unsupported_bool "
-                "FROM ai.fixture_records ORDER BY record_id",
+                "SELECT case_id = 1 AS unsupported_bool "
+                "FROM signal_schema.case_files_view ORDER BY case_id",
                 published.revision,
                 SQL_POLICY_REVISION,
             )
@@ -399,14 +432,14 @@ async def test_exact_seven_result_oids_and_unsupported_oid_recovery() -> None:
 
         recovered = await query.query(
             source.source_id,
-            "SELECT record_id FROM ai.fixture_records ORDER BY record_id",
+            "SELECT case_id FROM signal_schema.case_files_view ORDER BY case_id",
             published.revision,
             SQL_POLICY_REVISION,
         )
         assert recovered["rows"] == [
-            {"record_id": 1},
-            {"record_id": 2},
-            {"record_id": 3},
+            {"case_id": 1},
+            {"case_id": 2},
+            {"case_id": 3},
         ]
     finally:
         await reader.close()
@@ -416,22 +449,22 @@ async def test_exact_seven_result_oids_and_unsupported_oid_recovery() -> None:
 
 @pytest.mark.asyncio
 async def test_timeout_task_cancel_and_multibyte_limit_restore_pooled_connection() -> None:
-    source = _fixture_source()
+    source = _query_cave_source()
     catalog = PostgresCatalog()
     metadata = MetadataService(SourceRegistry([source]), catalog)
     executor = PostgresQueryExecutor()
     admin = await _admin_connection()
     slow_task: asyncio.Task[dict[str, object]] | None = None
     try:
-        await admin.execute("ANALYZE fixture.fixture_records")
+        await admin.execute("ANALYZE gotham_schema.incidents_table")
         published = await metadata.get_published(source.source_id)
         aliases = tuple(f"r{index}" for index in range(18))
         slow_sql = "SELECT count(*) AS total FROM " + ", ".join(
-            f"ai.fixture_records AS {alias}" for alias in aliases
+            f"signal_schema.case_files_view AS {alias}" for alias in aliases
         )
         slow_validated = validate_sql(
             slow_sql,
-            allowed_relations=("ai.fixture_records",),
+            allowed_relations=("signal_schema.case_files_view",),
         )
         unbounded_plan = replace(
             source.budget,
@@ -454,10 +487,10 @@ async def test_timeout_task_cancel_and_multibyte_limit_restore_pooled_connection
                 slow_validated,
             )
 
-        fast_sql = "SELECT record_id FROM ai.fixture_records ORDER BY record_id"
+        fast_sql = "SELECT case_id FROM signal_schema.case_files_view ORDER BY case_id"
         fast_validated = validate_sql(
             fast_sql,
-            allowed_relations=("ai.fixture_records",),
+            allowed_relations=("signal_schema.case_files_view",),
         )
         recovered = await executor.execute(
             source,
@@ -466,9 +499,9 @@ async def test_timeout_task_cancel_and_multibyte_limit_restore_pooled_connection
             fast_validated,
         )
         assert recovered["rows"] == [
-            {"record_id": 1},
-            {"record_id": 2},
-            {"record_id": 3},
+            {"case_id": 1},
+            {"case_id": 2},
+            {"case_id": 3},
         ]
 
         query_id = str(uuid.uuid4())
@@ -516,7 +549,7 @@ async def test_timeout_task_cancel_and_multibyte_limit_restore_pooled_connection
         )
         assert recovered_after_cancel["row_count"] == 3
 
-        first_row = {"record_id": 1, "text_value": "한글🙂"}
+        first_row = {"case_id": 1, "summary": "한글🙂"}
         first_row_bytes = len(
             json.dumps(
                 first_row,
@@ -530,8 +563,8 @@ async def test_timeout_task_cancel_and_multibyte_limit_restore_pooled_connection
             budget=replace(source.budget, max_result_bytes=2 + first_row_bytes),
         )
         multibyte_sql = (
-            "SELECT record_id, '한글🙂'::text AS text_value "
-            "FROM ai.fixture_records ORDER BY record_id"
+            "SELECT case_id, '한글🙂'::text AS summary "
+            "FROM signal_schema.case_files_view ORDER BY case_id"
         )
         multibyte = await executor.execute(
             limited_source,
@@ -539,7 +572,7 @@ async def test_timeout_task_cancel_and_multibyte_limit_restore_pooled_connection
             published.revision,
             validate_sql(
                 multibyte_sql,
-                allowed_relations=("ai.fixture_records",),
+                allowed_relations=("signal_schema.case_files_view",),
             ),
         )
         assert multibyte["rows"] == [first_row]

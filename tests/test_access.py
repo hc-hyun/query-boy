@@ -83,7 +83,7 @@ def test_policy_enforces_token_length(
 @pytest.mark.parametrize(
     "unsupported",
     [
-        "allowed_sources: [development-issues]",
+        "allowed_sources: [query-cave]",
         "all_sources: true",
     ],
 )

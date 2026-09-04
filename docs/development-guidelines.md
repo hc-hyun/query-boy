@@ -206,7 +206,7 @@ Root [agent router](../AGENTS.md#non-negotiable-safety)의 안전 불변조건�
   `test/` tree가 아니라 pytest marker와 파일명으로 표현한다.
 - Branch, loop, parser, cache, concurrency, 비용 또는 보안 경계를 변경하면 그 동작을 깨뜨렸을 때
   실패하는 runnable test를 남긴다.
-- 기존 pytest helper와 integration fixture를 우선 재사용한다. 테스트용 framework나 abstraction을
+- 기존 pytest helper와 Query Cave integration 경로를 우선 재사용한다. 테스트용 framework나 abstraction을
   새로 만들지 않는다.
 - 단순 전달 코드에는 과도한 단위 테스트를 만들지 않는다.
 - 보안 parser와 데이터 손실 경로는 최소 테스트 원칙의 예외다. 허용·거부 corpus, 우회 사례와

@@ -16,12 +16,17 @@ from query_man.source_catalog.registry import (
     SourceRegistry,
     load_budget_profiles,
 )
-from tests.helpers import DUMMY_ENVIRONMENT, ROOT_DIRECTORY, load_test_registry
+from tests.helpers import (
+    DUMMY_ENVIRONMENT,
+    QUERY_CAVE_CONFIG_DIRECTORY,
+    ROOT_DIRECTORY,
+    load_test_registry,
+)
 
 
-def _development_manifest() -> dict[str, object]:
+def _query_cave_manifest() -> dict[str, object]:
     raw: object = yaml.safe_load(
-        (ROOT_DIRECTORY / "config" / "sources" / "development-issues" / "source.yaml").read_text(encoding="utf-8")
+        (QUERY_CAVE_CONFIG_DIRECTORY / "sources" / "query-cave" / "source.yaml").read_text(encoding="utf-8")
     )
     assert isinstance(raw, dict)
     return raw
@@ -29,7 +34,7 @@ def _development_manifest() -> dict[str, object]:
 
 def _database_profiles() -> dict[str, object]:
     raw: object = yaml.safe_load(
-        (ROOT_DIRECTORY / "config" / "database-profiles.yaml").read_text(encoding="utf-8")
+        (QUERY_CAVE_CONFIG_DIRECTORY / "database-profiles.yaml").read_text(encoding="utf-8")
     )
     assert isinstance(raw, dict)
     return raw
@@ -42,10 +47,10 @@ def _write_database_profiles(tmp_path: Path, raw: dict[str, object]) -> Path:
     return path
 
 
-def _development_database(raw: dict[str, object]) -> dict[str, object]:
+def _query_cave_database(raw: dict[str, object]) -> dict[str, object]:
     profiles = raw["profiles"]
     assert isinstance(profiles, dict)
-    profile = profiles["development-issues"]
+    profile = profiles["query-cave"]
     assert isinstance(profile, dict)
     return profile
 
@@ -68,19 +73,35 @@ def _load_single_manifest(
         yaml.safe_dump(raw),
         encoding="utf-8",
     )
-    (source_path / "views.sql").write_text("-- reviewed test view artifact\n", encoding="utf-8")
+    (source_path / "views.sql").write_text(
+        "-- reviewed test view artifact\n", encoding="utf-8"
+    )
     return SourceRegistry.load(
         source_directory,
         budget_file or ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
-        database_file or ROOT_DIRECTORY / "config" / "database-profiles.yaml",
+        database_file or QUERY_CAVE_CONFIG_DIRECTORY / "database-profiles.yaml",
         Path("/run/secrets/query-man/databases"),
         environment or DUMMY_ENVIRONMENT,
     )
 
 
+def test_empty_source_inventory_fails_closed(tmp_path: Path) -> None:
+    source_directory = tmp_path / "config" / "sources"
+    source_directory.mkdir(parents=True)
+
+    with pytest.raises(RegistryConfigurationError, match="No source directories"):
+        SourceRegistry.load(
+            source_directory,
+            QUERY_CAVE_CONFIG_DIRECTORY / "budget-profiles.yaml",
+            QUERY_CAVE_CONFIG_DIRECTORY / "database-profiles.yaml",
+            Path("/run/secrets/query-man/databases"),
+            DUMMY_ENVIRONMENT,
+        )
+
+
 def test_published_source_profile_is_immutable() -> None:
     registry = load_test_registry()
-    source = registry.get("development-issues")
+    source = registry.get("query-cave")
     assert source is not None
 
     assert isinstance(source.allowed_schemas, tuple)
@@ -91,7 +112,7 @@ def test_published_source_profile_is_immutable() -> None:
 
 
 def test_source_profile_construction_does_not_retain_mutable_schema_list() -> None:
-    source = load_test_registry().get("development-issues")
+    source = load_test_registry().get("query-cave")
     assert source is not None
     schemas = list(source.allowed_schemas)
 
@@ -105,40 +126,40 @@ def test_loads_public_source_fields_only() -> None:
     registry = load_test_registry(
         {
             **DUMMY_ENVIRONMENT,
-            "POSTGRES_PORT": "55432",
+            "QUERY_CAVE_POSTGRES_PORT": "55432",
             "QUERY_MAN_POSTGRES_HOST": "postgres",
         }
     )
-    development = registry.get("development-issues")
-    assert development is not None
-    assert development.view_contract_version == 1
-    assert development.connection.host == "postgres"
-    assert development.connection.port == 55_432
+    cave = registry.get("query-cave")
+    assert cave is not None
+    assert cave.view_contract_version == 1
+    assert cave.connection.host == "postgres"
+    assert cave.connection.port == 55_432
 
     listed = registry.list()
     assert [source["source_id"] for source in listed] == sorted(registry.source_ids())
     assert all(set(source) == {"source_id", "name", "description"} for source in listed)
-    development_public = next(source for source in listed if source["source_id"] == "development-issues")
-    assert development_public == {
-        "source_id": "development-issues",
-        "name": "개발 문제점",
-        "description": "개발 및 검증 과정에서 발견한 문제, 원인, 대책과 댓글",
+    cave_public = next(source for source in listed if source["source_id"] == "query-cave")
+    assert cave_public == {
+        "source_id": "query-cave",
+        "name": "Query Cave",
+        "description": "Small certificate-authenticated source for onboarding and assurance checks",
     }
     serialized = str(listed)
     assert "development-test-secret" not in serialized
     assert "password" not in serialized
     assert "database" not in serialized
-    assert "development.issues" not in serialized
+    assert "gotham_schema.incidents_table" not in serialized
 
 
 def test_rejects_retired_managed_observability_field(tmp_path: Path) -> None:
-    raw = _development_manifest()
+    raw = _query_cave_manifest()
     raw["observability"] = {
         "representative_records": {
-            "grain": "development_issue",
-            "physical_relation": "development.issues",
+            "grain": "query_cave_case",
+            "physical_relation": "gotham_schema.incidents_table",
         },
-        "storage_relations": ["development.issues"],
+        "storage_relations": ["gotham_schema.incidents_table"],
     }
 
     with pytest.raises(RegistryConfigurationError, match="observability"):
@@ -220,30 +241,30 @@ def test_rejects_older_budget_schema_version(tmp_path: Path) -> None:
 
 
 def test_resolves_database_scoped_client_certificate_paths() -> None:
-    source = load_test_registry().get("development-issues")
+    source = load_test_registry().get("query-cave")
 
     assert source is not None
-    assert source.connection.database_profile == "development-issues"
+    assert source.connection.database_profile == "query-cave"
     authentication = source.connection.authentication
     assert isinstance(authentication, ClientCertificateAuthentication)
     assert authentication.root_certificate == Path(
-        "/run/secrets/query-man/databases/development-issues/ca.crt"
+        "/run/secrets/query-man/databases/query-cave/ca.crt"
     )
     assert authentication.client_certificate == Path(
-        "/run/secrets/query-man/databases/development-issues/client.crt"
+        "/run/secrets/query-man/databases/query-cave/client.crt"
     )
     assert authentication.client_key == Path(
-        "/run/secrets/query-man/databases/development-issues/client.key"
+        "/run/secrets/query-man/databases/query-cave/client.key"
     )
 
 
-def test_missing_fixture_password_fails_closed(tmp_path: Path) -> None:
-    manifest = _development_manifest()
+def test_missing_disposable_test_password_fails_closed(tmp_path: Path) -> None:
+    manifest = _query_cave_manifest()
     provenance = manifest["provenance"]
     assert isinstance(provenance, dict)
     provenance["environment"] = "test"
     databases = _database_profiles()
-    database = _development_database(databases)
+    database = _query_cave_database(databases)
     database["sslmode"] = "disable"
     database["authentication"] = {
         "type": "password",
@@ -255,13 +276,17 @@ def test_missing_fixture_password_fails_closed(tmp_path: Path) -> None:
             tmp_path,
             manifest,
             database_file=_write_database_profiles(tmp_path, databases),
-            environment={"POSTGRES_PORT": "5432"},
+            environment={"QUERY_CAVE_POSTGRES_PORT": "55432"},
         )
 
 
 def test_rejects_password_authentication_for_non_test_source(tmp_path: Path) -> None:
+    manifest = _query_cave_manifest()
+    provenance = manifest["provenance"]
+    assert isinstance(provenance, dict)
+    provenance["environment"] = "development"
     databases = _database_profiles()
-    database = _development_database(databases)
+    database = _query_cave_database(databases)
     database["sslmode"] = "disable"
     database["authentication"] = {
         "type": "password",
@@ -271,17 +296,17 @@ def test_rejects_password_authentication_for_non_test_source(tmp_path: Path) -> 
     with pytest.raises(RegistryConfigurationError, match="allowed only for test sources"):
         _load_single_manifest(
             tmp_path,
-            _development_manifest(),
+            manifest,
             database_file=_write_database_profiles(tmp_path, databases),
             environment={
                 **DUMMY_ENVIRONMENT,
-                "TEST_DATABASE_READER_PASSWORD": "fixture-password",
+                "TEST_DATABASE_READER_PASSWORD": "disposable-test-password",
             },
         )
 
 
 def test_rejects_unknown_database_profile(tmp_path: Path) -> None:
-    manifest = _development_manifest()
+    manifest = _query_cave_manifest()
     manifest["database_profile"] = "missing-database"
 
     with pytest.raises(RegistryConfigurationError, match="unknown database profile"):
@@ -299,21 +324,21 @@ def test_rejects_non_v1_database_profile_file(
     with pytest.raises(RegistryConfigurationError, match="version"):
         _load_single_manifest(
             tmp_path,
-            _development_manifest(),
+            _query_cave_manifest(),
             database_file=_write_database_profiles(tmp_path, databases),
         )
 
 
 def test_rejects_database_profile_unknown_authentication_field(tmp_path: Path) -> None:
     databases = _database_profiles()
-    authentication = _development_database(databases)["authentication"]
+    authentication = _query_cave_database(databases)["authentication"]
     assert isinstance(authentication, dict)
     authentication["private_key"] = "must-not-be-versioned"
 
     with pytest.raises(RegistryConfigurationError, match="private_key"):
         _load_single_manifest(
             tmp_path,
-            _development_manifest(),
+            _query_cave_manifest(),
             database_file=_write_database_profiles(tmp_path, databases),
         )
 
@@ -340,20 +365,20 @@ def test_non_tcp_connection_host_fails_closed(host: str) -> None:
 
 
 def test_rejects_flat_source_manifest(tmp_path: Path) -> None:
-    (tmp_path / "development-issues.yaml").write_text("version: 4\n", encoding="utf-8")
+    (tmp_path / "query-cave.yaml").write_text("version: 4\n", encoding="utf-8")
 
     with pytest.raises(RegistryConfigurationError, match="Unexpected source entry"):
         SourceRegistry.load(
             tmp_path,
             ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
-            ROOT_DIRECTORY / "config" / "database-profiles.yaml",
+            QUERY_CAVE_CONFIG_DIRECTORY / "database-profiles.yaml",
             Path("/run/secrets/query-man/databases"),
             DUMMY_ENVIRONMENT,
         )
 
 
 def test_source_directory_name_must_match_source_id(tmp_path: Path) -> None:
-    raw = _development_manifest()
+    raw = _query_cave_manifest()
     source_directory = tmp_path / "sources"
     source_path = source_directory / "wrong-name"
     source_path.mkdir(parents=True)
@@ -367,7 +392,7 @@ def test_source_directory_name_must_match_source_id(tmp_path: Path) -> None:
         SourceRegistry.load(
             source_directory,
             ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
-            ROOT_DIRECTORY / "config" / "database-profiles.yaml",
+            QUERY_CAVE_CONFIG_DIRECTORY / "database-profiles.yaml",
             Path("/run/secrets/query-man/databases"),
             DUMMY_ENVIRONMENT,
         )
@@ -378,9 +403,9 @@ def test_source_directory_requires_exact_artifact_pair(
     tmp_path: Path,
     artifact: str,
 ) -> None:
-    raw = _development_manifest()
+    raw = _query_cave_manifest()
     source_directory = tmp_path / "sources"
-    source_path = source_directory / "development-issues"
+    source_path = source_directory / "query-cave"
     source_path.mkdir(parents=True)
     if artifact != "source.yaml":
         (source_path / "source.yaml").write_text(
@@ -399,7 +424,7 @@ def test_source_directory_requires_exact_artifact_pair(
         SourceRegistry.load(
             source_directory,
             ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
-            ROOT_DIRECTORY / "config" / "database-profiles.yaml",
+            QUERY_CAVE_CONFIG_DIRECTORY / "database-profiles.yaml",
             Path("/run/secrets/query-man/databases"),
             DUMMY_ENVIRONMENT,
         )
@@ -410,10 +435,10 @@ def test_source_package_rejects_symlinks(
     tmp_path: Path,
     artifact: str,
 ) -> None:
-    raw = _development_manifest()
+    raw = _query_cave_manifest()
     source_directory = tmp_path / "config" / "sources"
     source_directory.mkdir(parents=True)
-    source_path = source_directory / "development-issues"
+    source_path = source_directory / "query-cave"
     if artifact == "source-directory":
         real_source_path = tmp_path / "real-source-package"
         real_source_path.mkdir()
@@ -446,7 +471,7 @@ def test_source_package_rejects_symlinks(
         SourceRegistry.load(
             source_directory,
             ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
-            ROOT_DIRECTORY / "config" / "database-profiles.yaml",
+            QUERY_CAVE_CONFIG_DIRECTORY / "database-profiles.yaml",
             Path("/run/secrets/query-man/databases"),
             DUMMY_ENVIRONMENT,
         )
@@ -455,17 +480,17 @@ def test_source_package_rejects_symlinks(
 def test_database_migration_ref_must_point_to_sibling_views_sql(
     tmp_path: Path,
 ) -> None:
-    raw = _development_manifest()
+    raw = _query_cave_manifest()
     provenance = raw["provenance"]
     assert isinstance(provenance, dict)
-    provenance["database_migration_ref"] = "unrelated/development-issues/views.sql"
+    provenance["database_migration_ref"] = "unrelated/query-cave/views.sql"
 
     with pytest.raises(RegistryConfigurationError, match=r"sibling views\.sql"):
         _load_single_manifest(tmp_path, raw)
 
 
 def test_system_schemas_are_rejected(tmp_path: Path) -> None:
-    raw = _development_manifest()
+    raw = _query_cave_manifest()
     raw["source_id"] = "system-test"
     raw["allowed_schemas"] = ["pg_catalog"]
     raw["provenance"] = {
@@ -479,7 +504,7 @@ def test_system_schemas_are_rejected(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("version", [0, 1, 2, 3, 4, 5, 7, "6", 6.0, True])
 def test_rejects_non_v6_source_manifest(tmp_path: Path, version: object) -> None:
-    raw = _development_manifest()
+    raw = _query_cave_manifest()
     raw["version"] = version
 
     with pytest.raises(RegistryConfigurationError, match="version"):
@@ -491,7 +516,7 @@ def test_rejects_invalid_view_contract_version(
     tmp_path: Path,
     version: object,
 ) -> None:
-    raw = _development_manifest()
+    raw = _query_cave_manifest()
     raw["view_contract_version"] = version
 
     with pytest.raises(RegistryConfigurationError, match="view_contract_version"):
@@ -501,26 +526,26 @@ def test_rejects_invalid_view_contract_version(
 def test_accepts_arbitrarily_large_positive_view_contract_version(
     tmp_path: Path,
 ) -> None:
-    raw = _development_manifest()
+    raw = _query_cave_manifest()
     raw["view_contract_version"] = 10**100
 
-    source = _load_single_manifest(tmp_path, raw).get("development-issues")
+    source = _load_single_manifest(tmp_path, raw).get("query-cave")
 
     assert source is not None
     assert source.view_contract_version == 10**100
 
 
 @pytest.mark.parametrize("sslmode", ["disable", "require", "verify-full"])
-def test_fixture_password_authentication_accepts_supported_sslmode(
+def test_disposable_password_authentication_accepts_supported_sslmode(
     tmp_path: Path,
     sslmode: str,
 ) -> None:
-    manifest = _development_manifest()
+    manifest = _query_cave_manifest()
     provenance = manifest["provenance"]
     assert isinstance(provenance, dict)
     provenance["environment"] = "test"
     databases = _database_profiles()
-    database = _development_database(databases)
+    database = _query_cave_database(databases)
     database["sslmode"] = sslmode
     database["authentication"] = {
         "type": "password",
@@ -532,13 +557,15 @@ def test_fixture_password_authentication_accepts_supported_sslmode(
         database_file=_write_database_profiles(tmp_path, databases),
         environment={
             **DUMMY_ENVIRONMENT,
-            "TEST_DATABASE_READER_PASSWORD": "fixture-password",
+            "TEST_DATABASE_READER_PASSWORD": "disposable-test-password",
         },
-    ).get("development-issues")
+    ).get("query-cave")
 
     assert source is not None
     assert source.connection.sslmode == sslmode
-    assert source.connection.authentication == PasswordAuthentication("fixture-password")
+    assert source.connection.authentication == PasswordAuthentication(
+        "disposable-test-password"
+    )
 
 
 @pytest.mark.parametrize("sslmode", ["disable", "require"])
@@ -547,12 +574,12 @@ def test_client_certificate_requires_verify_full(
     sslmode: str,
 ) -> None:
     databases = _database_profiles()
-    _development_database(databases)["sslmode"] = sslmode
+    _query_cave_database(databases)["sslmode"] = sslmode
 
     with pytest.raises(RegistryConfigurationError, match="requires sslmode verify-full"):
         _load_single_manifest(
             tmp_path,
-            _development_manifest(),
+            _query_cave_manifest(),
             database_file=_write_database_profiles(tmp_path, databases),
         )
 
@@ -566,18 +593,18 @@ def test_rejects_unsupported_database_sslmode(
     sslmode: object,
 ) -> None:
     databases = _database_profiles()
-    _development_database(databases)["sslmode"] = sslmode
+    _query_cave_database(databases)["sslmode"] = sslmode
 
     with pytest.raises(RegistryConfigurationError, match="sslmode"):
         _load_single_manifest(
             tmp_path,
-            _development_manifest(),
+            _query_cave_manifest(),
             database_file=_write_database_profiles(tmp_path, databases),
         )
 
 
 def test_rejects_legacy_source_connection_fields(tmp_path: Path) -> None:
-    manifest = _development_manifest()
+    manifest = _query_cave_manifest()
     manifest["connection"] = {"password_env": "RETIRED_PASSWORD"}
 
     with pytest.raises(RegistryConfigurationError, match="connection"):
@@ -587,13 +614,13 @@ def test_rejects_legacy_source_connection_fields(tmp_path: Path) -> None:
 def test_accepts_postgresql_identifier_boundary_in_source_fields(
     tmp_path: Path,
 ) -> None:
-    raw = _development_manifest()
+    raw = _query_cave_manifest()
     identifier = "a" * POSTGRES_IDENTIFIER_MAX_LENGTH
     raw["allowed_schemas"] = [identifier]
     raw["budget_profile"] = identifier
     raw["reader_user"] = identifier
     databases = _database_profiles()
-    _development_database(databases)["database"] = identifier
+    _query_cave_database(databases)["database"] = identifier
     database_file = _write_database_profiles(tmp_path, databases)
     budget_raw = yaml.safe_load((ROOT_DIRECTORY / "config" / "budget-profiles.yaml").read_text(encoding="utf-8"))
     assert isinstance(budget_raw, dict)
@@ -608,7 +635,7 @@ def test_accepts_postgresql_identifier_boundary_in_source_fields(
         raw,
         budget_file=budget_file,
         database_file=database_file,
-    ).get("development-issues")
+    ).get("query-cave")
 
     assert source is not None
     assert source.budget.name == identifier
@@ -629,7 +656,7 @@ def test_rejects_source_identifiers_above_postgresql_limit(
     field: str,
     value: object,
 ) -> None:
-    raw = _development_manifest()
+    raw = _query_cave_manifest()
     raw[field] = value
 
     with pytest.raises(RegistryConfigurationError, match=field):
@@ -687,7 +714,7 @@ def test_rejects_invalid_source_provenance(
     tmp_path: Path,
     provenance: object,
 ) -> None:
-    raw = _development_manifest()
+    raw = _query_cave_manifest()
     raw["provenance"] = provenance
 
     with pytest.raises(RegistryConfigurationError, match="provenance"):
@@ -695,7 +722,7 @@ def test_rejects_invalid_source_provenance(
 
 
 def test_requires_source_provenance(tmp_path: Path) -> None:
-    raw = _development_manifest()
+    raw = _query_cave_manifest()
     raw.pop("provenance")
 
     with pytest.raises(RegistryConfigurationError, match="provenance"):
@@ -708,7 +735,7 @@ def test_multiple_sources_can_reuse_one_database_profile(tmp_path: Path) -> None
         ("first-source", "first_reader"),
         ("second-source", "second_reader"),
     ):
-        manifest = _development_manifest()
+        manifest = _query_cave_manifest()
         manifest["source_id"] = source_id
         manifest["reader_user"] = reader_user
         manifest["provenance"] = {
@@ -724,7 +751,7 @@ def test_multiple_sources_can_reuse_one_database_profile(tmp_path: Path) -> None
     registry = SourceRegistry.load(
         source_directory,
         ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
-        ROOT_DIRECTORY / "config" / "database-profiles.yaml",
+        QUERY_CAVE_CONFIG_DIRECTORY / "database-profiles.yaml",
         Path("/run/secrets/query-man/databases"),
         DUMMY_ENVIRONMENT,
     )
@@ -746,7 +773,7 @@ def test_source_relation_kind_allowlist_is_exactly_view(
     tmp_path: Path,
     relation_kinds: list[str],
 ) -> None:
-    raw = _development_manifest()
+    raw = _query_cave_manifest()
     raw["allowed_relation_kinds"] = relation_kinds
 
     with pytest.raises(RegistryConfigurationError, match="allowed_relation_kinds"):
@@ -758,7 +785,7 @@ def test_rejects_retired_source_policy_fields(
     tmp_path: Path,
     retired_field: str,
 ) -> None:
-    raw = _development_manifest()
+    raw = _query_cave_manifest()
     raw[retired_field] = "rls" if retired_field == "tenant_isolation" else {}
 
     with pytest.raises(RegistryConfigurationError, match=retired_field):

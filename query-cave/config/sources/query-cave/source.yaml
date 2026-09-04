@@ -1,0 +1,17 @@
+version: 6
+
+source_id: query-cave
+name: Query Cave
+description: Small certificate-authenticated source for onboarding and assurance checks
+view_contract_version: 1
+provenance:
+  owner: query-man
+  environment: test
+  database_migration_ref: config/sources/query-cave/views.sql
+database_profile: query-cave
+reader_user: query_cave_reader
+allowed_schemas:
+  - signal_schema
+allowed_relation_kinds:
+  - view
+budget_profile: interactive

@@ -17,9 +17,9 @@ from query_man.guarded_query.sql_validation import (
 from query_man.source_catalog.reader_policy import READER_CLIENT_ENCODING
 
 ALLOWED_RELATIONS = {
-    "ai.issue_comments",
-    "ai.issue_overview",
-    "ai.test_unit_overview",
+    "signal_schema.case_notes_view",
+    "signal_schema.case_files_view",
+    "signal_schema.response_units_view",
 }
 
 
@@ -57,10 +57,10 @@ def test_accepts_question_answering_select_and_extracts_dependencies() -> None:
     result = validate_sql(
         """
         SELECT
-          date_trunc('month', discovered_at) AS month,
-          count(*) AS issue_count,
-          sum(comment_count) AS comment_count
-        FROM ai.issue_overview
+          date_trunc('month', reported_at) AS month,
+          count(*) AS case_count,
+          sum(note_count) AS note_count
+        FROM signal_schema.case_files_view
         WHERE status <> 'RESOLVED'
         GROUP BY 1
         ORDER BY 1
@@ -68,7 +68,7 @@ def test_accepts_question_answering_select_and_extracts_dependencies() -> None:
         allowed_relations=ALLOWED_RELATIONS,
     )
 
-    assert result.relations == ("ai.issue_overview",)
+    assert result.relations == ("signal_schema.case_files_view",)
     assert result.functions == (
         "pg_catalog.count",
         "pg_catalog.date_trunc",
@@ -82,30 +82,30 @@ def test_accepts_non_recursive_read_only_cte() -> None:
     result = validate_sql(
         """
         WITH recent AS (
-          SELECT issue_id, comment_count
-          FROM ai.issue_overview
-          WHERE discovered_at >= current_date - interval '90 days'
+          SELECT case_id, note_count
+          FROM signal_schema.case_files_view
+          WHERE reported_at >= current_date - interval '90 days'
         )
-        SELECT count(*), sum(comment_count)
+        SELECT count(*), sum(note_count)
         FROM recent
         """,
         allowed_relations=ALLOWED_RELATIONS,
     )
 
-    assert result.relations == ("ai.issue_overview",)
+    assert result.relations == ("signal_schema.case_files_view",)
 
 
 def test_accepts_date_between_and_records_effective_comparison_operators() -> None:
     result = validate_sql(
         """
         SELECT *
-        FROM ai.issue_overview
+        FROM signal_schema.case_files_view
         WHERE discovered_on BETWEEN DATE '2026-05-01' AND DATE '2026-05-31'
         """,
         allowed_relations=ALLOWED_RELATIONS,
     )
 
-    assert result.relations == ("ai.issue_overview",)
+    assert result.relations == ("signal_schema.case_files_view",)
     assert result.operators == ("<=", ">=")
 
 
@@ -165,20 +165,20 @@ def test_accepts_unqualified_date_and_text_casts() -> None:
     result = validate_sql(
         """
         SELECT
-          CAST(discovered_at AS date) AS discovered_on,
-          issue_id::text AS issue_id_text
-        FROM ai.issue_overview
+          CAST(reported_at AS date) AS discovered_on,
+          case_id::text AS case_id_text
+        FROM signal_schema.case_files_view
         """,
         allowed_relations=ALLOWED_RELATIONS,
     )
 
     assert DEFAULT_ALLOWED_UNQUALIFIED_TYPES == frozenset({"date", "text"})
-    assert result.relations == ("ai.issue_overview",)
+    assert result.relations == ("signal_schema.case_files_view",)
 
 
 @pytest.mark.parametrize(
     "type_name",
-    ["ai.date", "ai.text", "pg_temp.text", '"PG_CATALOG".date', '"PG_CATALOG".text'],
+    ["signal_schema.date", "signal_schema.text", "pg_temp.text", '"PG_CATALOG".date', '"PG_CATALOG".text'],
 )
 def test_rejects_untrusted_schema_qualified_date_and_text_casts(type_name: str) -> None:
     with pytest.raises(SqlValidationError) as captured:
@@ -193,22 +193,22 @@ def test_rejects_untrusted_schema_qualified_date_and_text_casts(type_name: str) 
 @pytest.mark.parametrize(
     ("expression", "function"),
     [
-        ("rank() OVER (ORDER BY issue_id)", "rank"),
-        ("lag(status) OVER (ORDER BY discovered_at)", "lag"),
-        ("lead(status) OVER (ORDER BY discovered_at)", "lead"),
-        ("extract(year FROM discovered_at)", "extract"),
+        ("rank() OVER (ORDER BY case_id)", "rank"),
+        ("lag(status) OVER (ORDER BY reported_at)", "lag"),
+        ("lead(status) OVER (ORDER BY reported_at)", "lead"),
+        ("extract(year FROM reported_at)", "extract"),
         ("regexp_replace(title, '[0-9]+', '#', 'g')", "regexp_replace"),
         ("position('error' IN title)", "position"),
         (
-            "percentile_cont(0.5) WITHIN GROUP (ORDER BY comment_count)",
+            "percentile_cont(0.5) WITHIN GROUP (ORDER BY note_count)",
             "percentile_cont",
         ),
         ("dense_rank() OVER (ORDER BY severity)", "dense_rank"),
         (
-            "jsonb_build_object('id', issue_id, 'status', status)",
+            "jsonb_build_object('id', case_id, 'status', status)",
             "jsonb_build_object",
         ),
-        ("to_jsonb(issue_id)", "to_jsonb"),
+        ("to_jsonb(case_id)", "to_jsonb"),
     ],
 )
 def test_accepts_common_query_functions_and_records_resolved_dependency(
@@ -216,7 +216,7 @@ def test_accepts_common_query_functions_and_records_resolved_dependency(
     function: str,
 ) -> None:
     result = validate_sql(
-        f"SELECT {expression} FROM ai.issue_overview",
+        f"SELECT {expression} FROM signal_schema.case_files_view",
         allowed_relations=ALLOWED_RELATIONS,
     )
 
@@ -226,22 +226,22 @@ def test_accepts_common_query_functions_and_records_resolved_dependency(
 @pytest.mark.parametrize(
     ("expression", "function"),
     [
-        ("rank() OVER (ORDER BY issue_id)", "rank"),
-        ("lag(status) OVER (ORDER BY discovered_at)", "lag"),
-        ("lead(status) OVER (ORDER BY discovered_at)", "lead"),
-        ("extract(year FROM discovered_at)", "extract"),
+        ("rank() OVER (ORDER BY case_id)", "rank"),
+        ("lag(status) OVER (ORDER BY reported_at)", "lag"),
+        ("lead(status) OVER (ORDER BY reported_at)", "lead"),
+        ("extract(year FROM reported_at)", "extract"),
         ("regexp_replace(title, '[0-9]+', '#', 'g')", "regexp_replace"),
         ("position('error' IN title)", "position"),
         (
-            "percentile_cont(0.5) WITHIN GROUP (ORDER BY comment_count)",
+            "percentile_cont(0.5) WITHIN GROUP (ORDER BY note_count)",
             "percentile_cont",
         ),
         ("dense_rank() OVER (ORDER BY severity)", "dense_rank"),
         (
-            "jsonb_build_object('id', issue_id, 'status', status)",
+            "jsonb_build_object('id', case_id, 'status', status)",
             "jsonb_build_object",
         ),
-        ("to_jsonb(issue_id)", "to_jsonb"),
+        ("to_jsonb(case_id)", "to_jsonb"),
     ],
 )
 def test_common_query_functions_honor_the_function_allowlist(
@@ -250,7 +250,7 @@ def test_common_query_functions_honor_the_function_allowlist(
 ) -> None:
     with pytest.raises(SqlValidationError) as captured:
         validate_sql(
-            f"SELECT {expression} FROM ai.issue_overview",
+            f"SELECT {expression} FROM signal_schema.case_files_view",
             allowed_relations=ALLOWED_RELATIONS,
             allowed_functions=DEFAULT_ALLOWED_FUNCTIONS - {function},
         )
@@ -258,20 +258,20 @@ def test_common_query_functions_honor_the_function_allowlist(
     assert captured.value.code == "SQL_FUNCTION_NOT_ALLOWED"
 
 
-@pytest.mark.parametrize("schema", ["ai", '"PG_CATALOG"'])
+@pytest.mark.parametrize("schema", ["signal_schema", '"PG_CATALOG"'])
 @pytest.mark.parametrize(
     "expression_template",
     [
-        "{schema}.rank() OVER (ORDER BY issue_id)",
-        "{schema}.lag(status) OVER (ORDER BY discovered_at)",
-        "{schema}.lead(status) OVER (ORDER BY discovered_at)",
-        "{schema}.extract('year', discovered_at)",
+        "{schema}.rank() OVER (ORDER BY case_id)",
+        "{schema}.lag(status) OVER (ORDER BY reported_at)",
+        "{schema}.lead(status) OVER (ORDER BY reported_at)",
+        "{schema}.extract('year', reported_at)",
         "{schema}.regexp_replace(title, '[0-9]+', '#', 'g')",
         "{schema}.position('error', title)",
-        "{schema}.percentile_cont(0.5) WITHIN GROUP (ORDER BY comment_count)",
+        "{schema}.percentile_cont(0.5) WITHIN GROUP (ORDER BY note_count)",
         "{schema}.dense_rank() OVER (ORDER BY severity)",
-        "{schema}.jsonb_build_object('id', issue_id, 'status', status)",
-        "{schema}.to_jsonb(issue_id)",
+        "{schema}.jsonb_build_object('id', case_id, 'status', status)",
+        "{schema}.to_jsonb(case_id)",
     ],
 )
 def test_rejects_untrusted_schema_qualified_common_functions(
@@ -280,7 +280,7 @@ def test_rejects_untrusted_schema_qualified_common_functions(
 ) -> None:
     with pytest.raises(SqlValidationError) as captured:
         validate_sql(
-            f"SELECT {expression_template.format(schema=schema)} FROM ai.issue_overview",
+            f"SELECT {expression_template.format(schema=schema)} FROM signal_schema.case_files_view",
             allowed_relations=ALLOWED_RELATIONS,
         )
 
@@ -328,7 +328,7 @@ def test_cte_visibility_follows_nested_query_scope() -> None:
 def test_cte_cannot_reference_a_later_cte_name() -> None:
     sql = """
         WITH first AS (SELECT * FROM later),
-             later AS (SELECT * FROM ai.issue_overview)
+             later AS (SELECT * FROM signal_schema.case_files_view)
         SELECT * FROM first
     """
 
@@ -341,25 +341,28 @@ def test_cte_cannot_reference_a_later_cte_name() -> None:
 def test_accepts_nested_selects_and_multiple_published_relations() -> None:
     result = validate_sql(
         """
-        SELECT issue_id
-        FROM ai.issue_overview
-        WHERE issue_id IN (
-          SELECT issue_id FROM ai.issue_comments WHERE comment_type = 'DECISION'
+        SELECT case_id
+        FROM signal_schema.case_files_view
+        WHERE case_id IN (
+          SELECT case_id FROM signal_schema.case_notes_view WHERE note_type = 'DECISION'
         )
         """,
         allowed_relations=ALLOWED_RELATIONS,
     )
 
-    assert result.relations == ("ai.issue_comments", "ai.issue_overview")
+    assert result.relations == (
+        "signal_schema.case_files_view",
+        "signal_schema.case_notes_view",
+    )
 
 
 def test_fingerprint_ignores_literals_and_formatting() -> None:
     first = validate_sql(
-        "SELECT * FROM ai.issue_overview WHERE issue_id = 1",
+        "SELECT * FROM signal_schema.case_files_view WHERE case_id = 1",
         allowed_relations=ALLOWED_RELATIONS,
     )
     second = validate_sql(
-        "select * from ai.issue_overview\nwhere issue_id=999",
+        "select * from signal_schema.case_files_view\nwhere case_id=999",
         allowed_relations=ALLOWED_RELATIONS,
     )
 
@@ -368,64 +371,64 @@ def test_fingerprint_ignores_literals_and_formatting() -> None:
 
 def test_single_statement_with_comments_and_trailing_semicolon_is_allowed() -> None:
     result = validate_sql(
-        "/* generated query */ SELECT count(*) FROM ai.issue_overview; -- done",
+        "/* generated query */ SELECT count(*) FROM signal_schema.case_files_view; -- done",
         allowed_relations=ALLOWED_RELATIONS,
     )
 
-    assert result.relations == ("ai.issue_overview",)
+    assert result.relations == ("signal_schema.case_files_view",)
 
 
 @pytest.mark.parametrize(
     ("sql", "code"),
     [
         ("", "SQL_EMPTY"),
-        ("SELECT * FROM ai.issue_overview; SELECT 1", "SQL_MULTIPLE_STATEMENTS"),
+        ("SELECT * FROM signal_schema.case_files_view; SELECT 1", "SQL_MULTIPLE_STATEMENTS"),
         ("SELECT * FROM", "SQL_PARSE_ERROR"),
-        ("INSERT INTO ai.issue_overview VALUES (1)", "SQL_STATEMENT_NOT_ALLOWED"),
-        ("UPDATE ai.issue_overview SET status = 'CLOSED'", "SQL_STATEMENT_NOT_ALLOWED"),
-        ("DELETE FROM ai.issue_overview", "SQL_STATEMENT_NOT_ALLOWED"),
-        ("COPY ai.issue_overview TO STDOUT", "SQL_STATEMENT_NOT_ALLOWED"),
-        ("SET search_path = ai", "SQL_STATEMENT_NOT_ALLOWED"),
-        ("EXPLAIN SELECT * FROM ai.issue_overview", "SQL_STATEMENT_NOT_ALLOWED"),
+        ("INSERT INTO signal_schema.case_files_view VALUES (1)", "SQL_STATEMENT_NOT_ALLOWED"),
+        ("UPDATE signal_schema.case_files_view SET status = 'CLOSED'", "SQL_STATEMENT_NOT_ALLOWED"),
+        ("DELETE FROM signal_schema.case_files_view", "SQL_STATEMENT_NOT_ALLOWED"),
+        ("COPY signal_schema.case_files_view TO STDOUT", "SQL_STATEMENT_NOT_ALLOWED"),
+        ("SET search_path = signal_schema", "SQL_STATEMENT_NOT_ALLOWED"),
+        ("EXPLAIN SELECT * FROM signal_schema.case_files_view", "SQL_STATEMENT_NOT_ALLOWED"),
         (
-            "WITH changed AS (DELETE FROM ai.issue_overview RETURNING *) SELECT * FROM changed",
+            "WITH changed AS (DELETE FROM signal_schema.case_files_view RETURNING *) SELECT * FROM changed",
             "SQL_NESTED_STATEMENT_NOT_ALLOWED",
         ),
         (
-            "SELECT * INTO TEMP snapshot FROM ai.issue_overview",
+            "SELECT * INTO TEMP snapshot FROM signal_schema.case_files_view",
             "SQL_SELECT_INTO_NOT_ALLOWED",
         ),
-        ("SELECT * FROM ai.issue_overview FOR UPDATE", "SQL_ROW_LOCK_NOT_ALLOWED"),
-        ("SELECT * FROM ai.issue_overview FOR SHARE", "SQL_ROW_LOCK_NOT_ALLOWED"),
+        ("SELECT * FROM signal_schema.case_files_view FOR UPDATE", "SQL_ROW_LOCK_NOT_ALLOWED"),
+        ("SELECT * FROM signal_schema.case_files_view FOR SHARE", "SQL_ROW_LOCK_NOT_ALLOWED"),
         (
             "WITH RECURSIVE items AS (SELECT 1 UNION ALL SELECT 1 FROM items) SELECT * FROM items",
             "SQL_RECURSIVE_CTE_NOT_ALLOWED",
         ),
-        ("SELECT * FROM issue_overview", "SQL_RELATION_MUST_BE_QUALIFIED"),
+        ("SELECT * FROM case_files_view", "SQL_RELATION_MUST_BE_QUALIFIED"),
         ("SELECT * FROM pg_catalog.pg_roles", "SQL_RELATION_NOT_ALLOWED"),
         ("SELECT * FROM pg_temp.session_data", "SQL_RELATION_NOT_ALLOWED"),
         ("SELECT * FROM other.secret", "SQL_RELATION_NOT_ALLOWED"),
-        ('SELECT * FROM ai."이슈"', "SQL_RELATION_NOT_ALLOWED"),
-        ("SELECT * FROM database.ai.issue_overview", "SQL_CROSS_DATABASE_REFERENCE"),
+        ('SELECT * FROM signal_schema."이슈"', "SQL_RELATION_NOT_ALLOWED"),
+        ("SELECT * FROM database.signal_schema.case_files_view", "SQL_CROSS_DATABASE_REFERENCE"),
         ("SELECT pg_sleep(10)", "SQL_FUNCTION_NOT_ALLOWED"),
-        ("SELECT ai.secret_function()", "SQL_FUNCTION_SCHEMA_NOT_ALLOWED"),
+        ("SELECT signal_schema.secret_function()", "SQL_FUNCTION_SCHEMA_NOT_ALLOWED"),
         ("SELECT nextval('secret_sequence')", "SQL_FUNCTION_NOT_ALLOWED"),
         ("SELECT * FROM generate_series(1, 100)", "SQL_TABLE_FUNCTION_NOT_ALLOWED"),
         (
-            "SELECT * FROM ai.issue_overview TABLESAMPLE SYSTEM(10)",
+            "SELECT * FROM signal_schema.case_files_view TABLESAMPLE SYSTEM(10)",
             "SQL_TABLESAMPLE_NOT_ALLOWED",
         ),
         ("SELECT current_user", "SQL_VALUE_FUNCTION_NOT_ALLOWED"),
         ("SELECT current_catalog", "SQL_VALUE_FUNCTION_NOT_ALLOWED"),
         (
-            "SELECT * FROM ai.issue_overview WHERE issue_id = $1",
+            "SELECT * FROM signal_schema.case_files_view WHERE case_id = $1",
             "SQL_PARAMETER_NOT_ALLOWED",
         ),
         ("SELECT 1::custom.type", "SQL_TYPE_NOT_ALLOWED"),
         ("SELECT 1::int4", "SQL_TYPE_NOT_ALLOWED"),
         ("SELECT CAST('x' AS)", "SQL_PARSE_ERROR"),
         ("SELECT 'x' COLLATE \"C\"", "SQL_COLLATION_NOT_ALLOWED"),
-        ("SELECT 1 OPERATOR(ai.+) 2", "SQL_OPERATOR_NOT_ALLOWED"),
+        ("SELECT 1 OPERATOR(signal_schema.+) 2", "SQL_OPERATOR_NOT_ALLOWED"),
         ("SELECT XMLPARSE(DOCUMENT '<root/>')", "SQL_CONSTRUCT_NOT_ALLOWED"),
     ],
 )
@@ -448,7 +451,7 @@ def test_rejects_query_over_byte_limit_without_echoing_sql() -> None:
 
 def test_supports_explicit_policy_extension() -> None:
     result = validate_sql(
-        "SELECT pg_catalog.width_bucket(comment_count, 0, 100, 10) FROM ai.issue_overview",
+        "SELECT pg_catalog.width_bucket(note_count, 0, 100, 10) FROM signal_schema.case_files_view",
         allowed_relations=ALLOWED_RELATIONS,
         allowed_functions={"width_bucket"},
     )
@@ -471,11 +474,11 @@ def test_arbitrary_input_always_fails_closed(value: str) -> None:
 @given(st.integers(), st.integers())
 def test_fingerprint_normalizes_generated_integer_literals(first: int, second: int) -> None:
     first_result = validate_sql(
-        f"SELECT * FROM ai.issue_overview WHERE issue_id = {first}",
+        f"SELECT * FROM signal_schema.case_files_view WHERE case_id = {first}",
         allowed_relations=ALLOWED_RELATIONS,
     )
     second_result = validate_sql(
-        f"SELECT * FROM ai.issue_overview WHERE issue_id = {second}",
+        f"SELECT * FROM signal_schema.case_files_view WHERE case_id = {second}",
         allowed_relations=ALLOWED_RELATIONS,
     )
 
@@ -485,16 +488,16 @@ def test_fingerprint_normalizes_generated_integer_literals(first: int, second: i
 @given(
     st.sampled_from(
         [
-            "DELETE FROM ai.issue_overview",
-            "UPDATE ai.issue_overview SET status = 'CLOSED'",
+            "DELETE FROM signal_schema.case_files_view",
+            "UPDATE signal_schema.case_files_view SET status = 'CLOSED'",
             "SELECT pg_sleep(1)",
-            "COPY ai.issue_overview TO STDOUT",
+            "COPY signal_schema.case_files_view TO STDOUT",
         ]
     ),
     st.text(alphabet=" \t\n", max_size=20),
 )
 def test_appended_second_statement_is_never_accepted(statement: str, whitespace: str) -> None:
-    sql = f"SELECT * FROM ai.issue_overview;{whitespace}{statement}"
+    sql = f"SELECT * FROM signal_schema.case_files_view;{whitespace}{statement}"
 
     with pytest.raises(SqlValidationError) as captured:
         validate_sql(sql, allowed_relations=ALLOWED_RELATIONS)

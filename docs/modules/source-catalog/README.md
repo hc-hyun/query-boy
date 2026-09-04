@@ -12,13 +12,13 @@ immutable `SourceProfile`을 만듭니다. DB에 연결하거나 `views.sql`을 
 - `SourceRegistry.load(...)`: DB profile을 resolve하고 모든 immediate child source package를 load
 - `source_ids()`, `get(source_id)`: immutable startup inventory 조회
 - Manifest version 6, exact two-file layout, DB profile/reader와 view-only allowlist 검증
-- Database profile version 1, client-certificate `verify-full`과 fixture-only password validation
+- Database profile version 1, client-certificate `verify-full`과 disposable-test-only password validation
 - Budget schema, 범위와 `max_concurrent_queries <= max_pool_size` 같은 cross-field 검증
 - PostgreSQL reader connection/session policy descriptor 제공
 
 Production client certificate path는 runtime credential root와 DB profile ID에서 결정하며 private
 material을 읽거나 public projection에 노출하지 않습니다. Unknown field/file, YAML duplicate, unresolved
-fixture secret, RLS/tenant 설정과 retired alternate authority는 fail-closed합니다.
+test secret, RLS/tenant 설정과 retired alternate authority는 fail-closed합니다.
 
 ## 코드 지도
 

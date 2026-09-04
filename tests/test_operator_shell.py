@@ -8,19 +8,19 @@ import pytest
 import yaml
 
 from query_man.runtime.operator_shell import run_main
-from tests.helpers import ROOT_DIRECTORY
+from tests.helpers import QUERY_CAVE_DIRECTORY, ROOT_DIRECTORY
 
 
 def _copy_source_configuration(target_root: Path) -> None:
     target_config = target_root / "config"
     target_config.mkdir()
-    shutil.copytree(ROOT_DIRECTORY / "config" / "sources", target_config / "sources")
+    shutil.copytree(QUERY_CAVE_DIRECTORY / "config" / "sources", target_config / "sources")
     shutil.copy2(
-        ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
+        QUERY_CAVE_DIRECTORY / "config" / "budget-profiles.yaml",
         target_config / "budget-profiles.yaml",
     )
     shutil.copy2(
-        ROOT_DIRECTORY / "config" / "database-profiles.yaml",
+        QUERY_CAVE_DIRECTORY / "config" / "database-profiles.yaml",
         target_config / "database-profiles.yaml",
     )
 
@@ -35,6 +35,17 @@ def test_console_script_targets_runtime_operator_shell() -> None:
     )
 
 
+def test_repository_root_validation_fails_closed_without_source_inventory(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert run_main(["--root", str(ROOT_DIRECTORY), "source", "validate"]) == 1
+
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert "Source package validation failed" in output.err
+    assert "Traceback" not in output.err
+
+
 def test_source_validate_succeeds_without_database_credentials(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -42,12 +53,12 @@ def test_source_validate_succeeds_without_database_credentials(
     private_value = "database-password-must-not-appear"
     monkeypatch.setenv("UNRELATED_DATABASE_SECRET", private_value)
 
-    assert run_main(["--root", str(ROOT_DIRECTORY), "source", "validate"]) == 0
+    assert run_main(["--root", str(QUERY_CAVE_DIRECTORY), "source", "validate"]) == 0
 
     output = capsys.readouterr()
     document = yaml.safe_load(output.out)
     expected_source_ids = sorted(
-        path.name for path in (ROOT_DIRECTORY / "config" / "sources").iterdir()
+        path.name for path in (QUERY_CAVE_DIRECTORY / "config" / "sources").iterdir()
     )
     assert document == {
         "status": "valid",
@@ -79,11 +90,11 @@ def test_source_validate_resolves_local_environment_without_printing_it(
     )
     private_host = "private-database.internal"
     (tmp_path / ".env").write_text(
-        f"QUERY_MAN_POSTGRES_HOST={private_host}\nPOSTGRES_PORT=5432\n",
+        f"QUERY_MAN_POSTGRES_HOST={private_host}\nQUERY_CAVE_POSTGRES_PORT=55432\n",
         encoding="utf-8",
     )
     monkeypatch.delenv("QUERY_MAN_POSTGRES_HOST", raising=False)
-    monkeypatch.delenv("POSTGRES_PORT", raising=False)
+    monkeypatch.delenv("QUERY_CAVE_POSTGRES_PORT", raising=False)
 
     assert run_main(["--root", str(tmp_path), "source", "validate"]) == 0
 
@@ -98,7 +109,7 @@ def test_source_validate_failure_is_redacted_and_returns_one(
 ) -> None:
     _copy_source_configuration(tmp_path)
     manifest_path = (
-        tmp_path / "config" / "sources" / "development-issues" / "source.yaml"
+        tmp_path / "config" / "sources" / "query-cave" / "source.yaml"
     )
     manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
     accidental_secret = "accidental-plaintext-credential"
@@ -123,7 +134,7 @@ def test_source_validate_rejects_symlink_without_reading_target(
 ) -> None:
     _copy_source_configuration(tmp_path)
     manifest_path = (
-        tmp_path / "config" / "sources" / "development-issues" / "source.yaml"
+        tmp_path / "config" / "sources" / "query-cave" / "source.yaml"
     )
     accidental_secret = "must-not-read-symlink-target-secret"
     external_manifest = tmp_path / "external-source.yaml"

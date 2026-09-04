@@ -8,7 +8,7 @@ import yaml
 from query_man.guarded_query.sql_validation import SqlValidationError, validate_sql
 
 CORPUS_PATH = Path(__file__).parents[1] / "config" / "security-evaluation.yaml"
-ALLOWED_RELATIONS = {"ai.issue_overview"}
+ALLOWED_RELATIONS = {"signal_schema.case_files_view"}
 REQUIRED_CATEGORIES = {
     "write",
     "privilege_escalation",

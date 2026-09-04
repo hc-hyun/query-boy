@@ -56,7 +56,7 @@ rendering은 Delivery, error 발생 조건은 owner module이 책임집니다.
 | `config/access-policies*.yaml` | Delivery |
 | `config/security-evaluation.yaml`, root `tests/` | Assurance와 behavior owner |
 | `Dockerfile`, `compose*.yaml`, `.env*.example` | Runtime; container는 Assurance consumer |
-| `.github/workflows/ci.yml`, `scripts/verify-database.sh`, `scripts/verify-container.sh` | Assurance shared gate |
+| `query-cave/`, `.github/workflows/`, `scripts/verify-query-cave.sh`, `scripts/verify-container.sh` | Assurance shared gate |
 | `pyproject.toml`, `uv.lock` | Runtime/dependency shared artifact |
 
 `AGENTS.md`, development guidelines, 이 index, decision/TODO/verification index와 CI workflow는 shared
@@ -70,6 +70,9 @@ validation이 package를 발견하므로 source ID를 code, test, 문서나 별�
 않습니다. DB/data owner review와 DBA apply는 repository 변경과 별도 승인입니다. 자세한 절차는
 [Source extension checklist](../source-extension-checklist.md)와
 [DB certificate guide](../database-certificate-authentication.md)를 따릅니다.
+
+Production profile이 없는 현재 baseline의 첫 physical DB는 database profile을 함께 추가합니다. Query Cave
+config는 assurance 전용이며 production inventory가 아닙니다.
 
 ## 변경 승인
 

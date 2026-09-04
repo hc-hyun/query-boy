@@ -157,5 +157,5 @@ DB에서 먼저 신뢰하게 하고 traffic 밖의 새 Query Man instance로 neg
 막고 새 instance를 종료한 뒤 직전 credential mount, image와 DB trust 설정으로 rollback합니다. Private
 key 유출 의심에서는 일반 rollback보다 즉시 폐기와 incident 절차를 우선합니다.
 
-Disposable PostgreSQL fixture의 `password` database profile은 TLS certificate 기능 자체를 대신하는
-production mode가 아니라 repository의 transaction/query 회귀 검증용 예외입니다.
+Disposable test database의 `password` profile 지원은 TLS certificate 기능을 대신하는 production mode가
+아닙니다. 현재 Query Cave integration은 production 경로와 같은 client certificate를 사용합니다.

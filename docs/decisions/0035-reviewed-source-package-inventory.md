@@ -23,7 +23,8 @@ principal은 현재 reviewed source 전체를 사용할 수 있고 access policy
 
 Tests verify behavior, not a duplicate inventory. Generic registry, view-SQL, HTTP와 startup test는 discovered
 package의 completeness, ordering, public projection과 redaction을 검사하며 production source 이름·개수를
-별도 expected list로 복제하지 않습니다. Real-DB safety kernel은 one tiny synthetic database만 사용합니다.
+별도 expected list로 복제하지 않습니다. Real-DB safety kernel은 production inventory와 분리된 Query Cave만
+사용합니다.
 
 ## 변경과 rollback
 

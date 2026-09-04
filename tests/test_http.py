@@ -172,7 +172,7 @@ callers:
     )
 
 
-def _query_payload(sql: str = "SELECT count(*) FROM ai.items") -> dict[str, str]:
+def _query_payload(sql: str = "SELECT count(*) FROM signal_schema.items") -> dict[str, str]:
     return {
         "source_id": "source-a",
         "sql": sql,
@@ -237,7 +237,7 @@ async def test_routes_source_metadata_and_query_to_the_gateway() -> None:
             "query",
             local,
             "source-a",
-            "SELECT count(*) FROM ai.items",
+            "SELECT count(*) FROM signal_schema.items",
             _METADATA_REVISION,
             _SQL_POLICY_REVISION,
         ),

@@ -19,7 +19,7 @@ driver 기본값도 배포마다 다른 transport를 만들 수 있습니다.
 
 Runtime은 선택한 mode를 metadata/query pool 모두에 동일하게 전달합니다. ADR 0036의 production
 client-certificate profile은 `verify-full`만 허용합니다. `disable`과 `require`는 disposable password
-fixture 호환 범위이며 protected certificate profile에 사용할 수 없습니다. Unknown mode나 필요한 CA가
+test compatibility 범위이며 protected certificate profile에 사용할 수 없습니다. Unknown mode나 필요한 CA가
 없으면 startup/direct admission을 fail-closed합니다.
 
 ## 변경과 rollback

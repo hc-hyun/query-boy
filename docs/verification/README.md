@@ -15,7 +15,7 @@ uv run pytest
 
 DB catalog/query 경계는 하나의 test-local source를 사용하는 integration lane, container/release 경계는
 built-image acceptance와 bounded load를 추가합니다. Production source별 schema·seed나 업무 결과 corpus를
-CI fixture로 복제하지 않습니다.
+Query Cave로 복제하지 않습니다.
 
 PASS는 실행한 exact commit, command/CI run과 결과에만 적용됩니다. 과거 PASS나 다른 commit의 결과를
 현재 tree 전체의 증거로 확장하지 않습니다.

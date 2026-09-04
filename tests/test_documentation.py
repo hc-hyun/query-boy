@@ -9,7 +9,7 @@ from urllib.parse import unquote
 
 import yaml
 
-from tests.helpers import ROOT_DIRECTORY
+from tests.helpers import QUERY_CAVE_DIRECTORY, ROOT_DIRECTORY
 
 DOCS = ROOT_DIRECTORY / "docs"
 DECISIONS = DOCS / "decisions"
@@ -109,7 +109,11 @@ def test_current_docs_do_not_reference_retired_artifacts() -> None:
 
 
 def test_source_contract_is_two_files_and_documented() -> None:
-    packages = sorted((ROOT_DIRECTORY / "config" / "sources").iterdir())
+    assert not (ROOT_DIRECTORY / "config" / "database-profiles.yaml").exists()
+    production_source_root = ROOT_DIRECTORY / "config" / "sources"
+    assert not production_source_root.exists() or not tuple(production_source_root.iterdir())
+
+    packages = sorted((QUERY_CAVE_DIRECTORY / "config" / "sources").iterdir())
     assert packages
     for package in packages:
         assert package.is_dir()
@@ -119,7 +123,7 @@ def test_source_contract_is_two_files_and_documented() -> None:
         assert set(manifest) >= {"database_profile", "reader_user"}
 
     databases = yaml.safe_load(
-        (ROOT_DIRECTORY / "config" / "database-profiles.yaml").read_text(encoding="utf-8")
+        (QUERY_CAVE_DIRECTORY / "config" / "database-profiles.yaml").read_text(encoding="utf-8")
     )
     assert databases["version"] == 1
     assert all(

@@ -1,0 +1,12 @@
+version: 1
+
+profiles:
+  query-cave:
+    host: 127.0.0.1
+    host_env: QUERY_MAN_POSTGRES_HOST
+    port: 55432
+    port_env: QUERY_CAVE_POSTGRES_PORT
+    database: query_cave
+    sslmode: verify-full
+    authentication:
+      type: client-certificate
