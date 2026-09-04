@@ -46,5 +46,5 @@
 | Repository acceptance | 코드와 local/CI 검증 상태입니다. Protected 환경에 적용됐다는 뜻은 아닙니다. |
 | Cutover / rollback | 새 version으로 traffic을 전환하거나 직전 안전한 version·설정으로 돌아가는 작업입니다. |
 
-`DBENV-01` 같은 작업 ID는 [Active TODO](development-todo.md), 현재 결정은
+`SOURCE-01` 같은 작업 ID는 [Active TODO](development-todo.md), 현재 결정은
 [Decision index](decisions/README.md)에서 확인합니다.

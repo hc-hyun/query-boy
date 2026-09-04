@@ -44,6 +44,6 @@ External API, persisted format, policy/revision, safety lifecycle, ownership 또
 
 ## Git archive
 
-삭제한 roadmap, 날짜별 verification, retired 기능과 과거 ADR은 archive baseline
-`1ff390ab67df215181810a84ac8b2ca8570eceee` 또는 해당 경로의 Git history에서 확인합니다. 과거 `Complete`
-표시는 현재 serving이나 protected 실행 증거가 아닙니다. Git history를 rewrite하지 않습니다.
+삭제한 roadmap, 날짜별 verification, retired 기능과 과거 ADR의 baseline과 탐색 명령은
+[검증과 Git 기록](../verification/README.md#삭제한-기록-찾기)을 따릅니다. 과거 결정은 current authority나
+protected 실행 증거가 아닙니다.

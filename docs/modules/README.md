@@ -64,15 +64,10 @@ single-writer artifact입니다.
 
 ## Source 추가 영향
 
-Repository에는 `config/sources/<source-id>/source.yaml`과 `views.sql` 두 파일만 추가합니다. Generic
-validation이 package를 발견하므로 source ID를 code, test, 문서나 별도 registry에 등록하지 않습니다.
-기존 물리 DB의 profile과 client certificate를 재사용하므로 Compose와 credential을 source마다 추가하지
-않습니다. DB/data owner review와 DBA apply는 repository 변경과 별도 승인입니다. 자세한 절차는
-[Source extension checklist](../source-extension-checklist.md)와
-[DB certificate guide](../database-certificate-authentication.md)를 따릅니다.
-
-Production profile이 없는 현재 baseline의 첫 physical DB는 database profile을 함께 추가합니다. Query Cave
-config는 assurance 전용이며 production inventory가 아닙니다.
+Source별 파일, 최초 database profile, review와 protected apply의 정확한 절차는
+[Source onboarding checklist](../source-extension-checklist.md)가 소유합니다. Source Catalog가 package를
+발견하므로 source 이름이나 개수를 code, test, 이 index에 별도로 등록하지 않습니다. 새 물리 DB의 인증
+절차만 [Database certificate guide](../database-certificate-authentication.md)를 추가로 따릅니다.
 
 ## 변경 승인
 

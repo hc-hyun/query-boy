@@ -17,11 +17,17 @@ CURRENT_ENTRYPOINTS = (
     ROOT_DIRECTORY / "README.md",
     DOCS / "README.md",
     DOCS / "architecture.md",
+    DOCS / "glossary.md",
     DOCS / "operations.md",
     DOCS / "source-extension-checklist.md",
+    DOCS / "database-certificate-authentication.md",
+    DOCS / "query-cost-control.md",
+    DOCS / "development-todo.md",
     DOCS / "development-guidelines.md",
     DOCS / "modules" / "README.md",
+    DOCS / "decisions" / "README.md",
     DOCS / "verification" / "README.md",
+    QUERY_CAVE_DIRECTORY / "README.md",
 )
 
 
@@ -58,7 +64,7 @@ def _markdown_heading_anchors(path: Path) -> set[str]:
     return anchors
 
 
-def test_current_documentation_has_one_navigable_entrypoint() -> None:
+def test_documentation_index_links_every_current_entrypoint() -> None:
     assert all(path.is_file() for path in CURRENT_ENTRYPOINTS)
 
     root_targets = _markdown_targets(ROOT_DIRECTORY / "README.md")
