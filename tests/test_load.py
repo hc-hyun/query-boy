@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import time
+from pathlib import Path
 
 import pytest
 from dotenv import load_dotenv
@@ -31,6 +32,8 @@ async def test_interactive_budget_under_representative_local_load() -> None:
     registry = SourceRegistry.load(
         ROOT_DIRECTORY / "tests" / "fixtures" / "config" / "sources",
         ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
+        ROOT_DIRECTORY / "tests" / "fixtures" / "config" / "database-profiles.yaml",
+        Path("/unused-test-credentials"),
         environment,
     )
     catalog = PostgresCatalog()

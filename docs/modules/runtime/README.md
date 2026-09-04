@@ -15,9 +15,10 @@ Runtime는 environment를 검증하고 production registry, catalog, query, gate
 - Safe structured logging, source health와 bounded process metrics
 - `qm source validate`: local package validation만 수행하는 read-only CLI
 
-Config는 source directory와 budget file, bind/log, authentication, metadata cache, shutdown grace를
-제공합니다. Password/token 값을 exception이나 representation에 포함하지 않습니다. Non-loopback bind의
-인증 누락, conflicting authority와 retired source-authority setting은 startup을 fail-closed합니다.
+Config는 source directory, database profile/credential directory와 budget file, bind/log, API
+authentication, metadata cache, shutdown grace를 제공합니다. Private key/password/token 값을 exception이나
+representation에 포함하지 않습니다. Non-loopback bind의 인증 누락, conflicting authority와 retired
+source-authority setting은 startup을 fail-closed합니다.
 
 ## 코드 지도
 

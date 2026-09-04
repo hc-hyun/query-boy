@@ -1,0 +1,22 @@
+version: 1
+
+profiles:
+  development-issues:
+    host: 127.0.0.1
+    host_env: QUERY_MAN_POSTGRES_HOST
+    port: 5432
+    port_env: POSTGRES_PORT
+    database: development_issues
+    sslmode: verify-full
+    authentication:
+      type: client-certificate
+
+  market-voc:
+    host: 127.0.0.1
+    host_env: QUERY_MAN_POSTGRES_HOST
+    port: 5432
+    port_env: POSTGRES_PORT
+    database: market_voc
+    sslmode: verify-full
+    authentication:
+      type: client-certificate

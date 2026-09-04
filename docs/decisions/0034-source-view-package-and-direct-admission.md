@@ -22,10 +22,11 @@ config/sources/<source-id>/
 └── views.sql
 ```
 
-Manifest version 5는 source ID/name/description, 양의 `view_contract_version`, provenance,
-connection environment key, allowed schema, exact view-only relation kind와 기존 budget profile만
-정의합니다. Secret 값, DSN, 업무별 semantic overlay나 실행 SQL은 넣지 않습니다. Unknown file/field,
-symlink, 중복 key와 environment substitution failure는 startup을 fail-closed합니다.
+Manifest version 6은 source ID/name/description, 양의 `view_contract_version`, provenance, 기존
+`database_profile`, source별 `reader_user`, allowed schema, exact view-only relation kind와 기존 budget
+profile만 정의합니다. Physical endpoint와 authentication은 ADR 0036의 database profile이 소유합니다.
+Secret 값, DSN, 업무별 semantic overlay나 실행 SQL은 넣지 않습니다. Unknown file/field, symlink, 중복
+key와 reference failure는 startup을 fail-closed합니다.
 
 ### Desired view artifact
 

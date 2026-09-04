@@ -24,7 +24,7 @@ from query_man.guarded_query.sql_validation import ValidatedSql
 from query_man.metadata.models import CatalogSnapshot
 from query_man.metadata.service import MetadataService
 from query_man.runtime.operations import SafeJsonFormatter, operations
-from query_man.source_catalog.models import SourceProfile
+from query_man.source_catalog.models import PasswordAuthentication, SourceProfile
 from tests.helpers import load_test_registry, minimal_development_snapshot
 
 
@@ -124,8 +124,8 @@ async def test_closed_database_port_is_unavailable_and_redacts_dependency_log() 
             port=closed_port,
             database="leak-database-marker",
             user="leak-user-marker",
-            password="leak-password-marker",
             sslmode="disable",
+            authentication=PasswordAuthentication("leak-password-marker"),
         ),
         budget=replace(
             source.budget,

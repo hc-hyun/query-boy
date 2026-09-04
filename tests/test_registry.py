@@ -6,6 +6,10 @@ from pathlib import Path
 import pytest
 import yaml
 
+from query_man.source_catalog.models import (
+    ClientCertificateAuthentication,
+    PasswordAuthentication,
+)
 from query_man.source_catalog.registry import (
     POSTGRES_IDENTIFIER_MAX_LENGTH,
     RegistryConfigurationError,
@@ -23,11 +27,35 @@ def _development_manifest() -> dict[str, object]:
     return raw
 
 
+def _database_profiles() -> dict[str, object]:
+    raw: object = yaml.safe_load(
+        (ROOT_DIRECTORY / "config" / "database-profiles.yaml").read_text(encoding="utf-8")
+    )
+    assert isinstance(raw, dict)
+    return raw
+
+
+def _write_database_profiles(tmp_path: Path, raw: dict[str, object]) -> Path:
+    path = tmp_path / "config" / "database-profiles.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    return path
+
+
+def _development_database(raw: dict[str, object]) -> dict[str, object]:
+    profiles = raw["profiles"]
+    assert isinstance(profiles, dict)
+    profile = profiles["development-issues"]
+    assert isinstance(profile, dict)
+    return profile
+
+
 def _load_single_manifest(
     tmp_path: Path,
     raw: dict[str, object],
     *,
     budget_file: Path | None = None,
+    database_file: Path | None = None,
     environment: dict[str, str] | None = None,
 ) -> SourceRegistry:
     source_directory = tmp_path / "config" / "sources"
@@ -44,6 +72,8 @@ def _load_single_manifest(
     return SourceRegistry.load(
         source_directory,
         budget_file or ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
+        database_file or ROOT_DIRECTORY / "config" / "database-profiles.yaml",
+        Path("/run/secrets/query-man/databases"),
         environment or DUMMY_ENVIRONMENT,
     )
 
@@ -189,9 +219,103 @@ def test_rejects_older_budget_schema_version(tmp_path: Path) -> None:
         load_budget_profiles(path)
 
 
-def test_missing_secret_fails_closed() -> None:
-    with pytest.raises(RegistryConfigurationError, match="DEVELOPMENT_ISSUES_READER_PASSWORD"):
-        load_test_registry({"POSTGRES_PORT": "5432", "MARKET_VOC_READER_PASSWORD": "secret"})
+def test_resolves_database_scoped_client_certificate_paths() -> None:
+    source = load_test_registry().get("development-issues")
+
+    assert source is not None
+    assert source.connection.database_profile == "development-issues"
+    authentication = source.connection.authentication
+    assert isinstance(authentication, ClientCertificateAuthentication)
+    assert authentication.root_certificate == Path(
+        "/run/secrets/query-man/databases/development-issues/ca.crt"
+    )
+    assert authentication.client_certificate == Path(
+        "/run/secrets/query-man/databases/development-issues/client.crt"
+    )
+    assert authentication.client_key == Path(
+        "/run/secrets/query-man/databases/development-issues/client.key"
+    )
+
+
+def test_missing_fixture_password_fails_closed(tmp_path: Path) -> None:
+    manifest = _development_manifest()
+    provenance = manifest["provenance"]
+    assert isinstance(provenance, dict)
+    provenance["environment"] = "test"
+    databases = _database_profiles()
+    database = _development_database(databases)
+    database["sslmode"] = "disable"
+    database["authentication"] = {
+        "type": "password",
+        "password_env": "TEST_DATABASE_READER_PASSWORD",
+    }
+
+    with pytest.raises(RegistryConfigurationError, match="TEST_DATABASE_READER_PASSWORD"):
+        _load_single_manifest(
+            tmp_path,
+            manifest,
+            database_file=_write_database_profiles(tmp_path, databases),
+            environment={"POSTGRES_PORT": "5432"},
+        )
+
+
+def test_rejects_password_authentication_for_non_test_source(tmp_path: Path) -> None:
+    databases = _database_profiles()
+    database = _development_database(databases)
+    database["sslmode"] = "disable"
+    database["authentication"] = {
+        "type": "password",
+        "password_env": "TEST_DATABASE_READER_PASSWORD",
+    }
+
+    with pytest.raises(RegistryConfigurationError, match="allowed only for test sources"):
+        _load_single_manifest(
+            tmp_path,
+            _development_manifest(),
+            database_file=_write_database_profiles(tmp_path, databases),
+            environment={
+                **DUMMY_ENVIRONMENT,
+                "TEST_DATABASE_READER_PASSWORD": "fixture-password",
+            },
+        )
+
+
+def test_rejects_unknown_database_profile(tmp_path: Path) -> None:
+    manifest = _development_manifest()
+    manifest["database_profile"] = "missing-database"
+
+    with pytest.raises(RegistryConfigurationError, match="unknown database profile"):
+        _load_single_manifest(tmp_path, manifest)
+
+
+@pytest.mark.parametrize("version", [0, 2, "1", 1.0, True])
+def test_rejects_non_v1_database_profile_file(
+    tmp_path: Path,
+    version: object,
+) -> None:
+    databases = _database_profiles()
+    databases["version"] = version
+
+    with pytest.raises(RegistryConfigurationError, match="version"):
+        _load_single_manifest(
+            tmp_path,
+            _development_manifest(),
+            database_file=_write_database_profiles(tmp_path, databases),
+        )
+
+
+def test_rejects_database_profile_unknown_authentication_field(tmp_path: Path) -> None:
+    databases = _database_profiles()
+    authentication = _development_database(databases)["authentication"]
+    assert isinstance(authentication, dict)
+    authentication["private_key"] = "must-not-be-versioned"
+
+    with pytest.raises(RegistryConfigurationError, match="private_key"):
+        _load_single_manifest(
+            tmp_path,
+            _development_manifest(),
+            database_file=_write_database_profiles(tmp_path, databases),
+        )
 
 
 def test_blank_connection_host_environment_fails_closed() -> None:
@@ -222,6 +346,8 @@ def test_rejects_flat_source_manifest(tmp_path: Path) -> None:
         SourceRegistry.load(
             tmp_path,
             ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
+            ROOT_DIRECTORY / "config" / "database-profiles.yaml",
+            Path("/run/secrets/query-man/databases"),
             DUMMY_ENVIRONMENT,
         )
 
@@ -241,6 +367,8 @@ def test_source_directory_name_must_match_source_id(tmp_path: Path) -> None:
         SourceRegistry.load(
             source_directory,
             ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
+            ROOT_DIRECTORY / "config" / "database-profiles.yaml",
+            Path("/run/secrets/query-man/databases"),
             DUMMY_ENVIRONMENT,
         )
 
@@ -271,6 +399,8 @@ def test_source_directory_requires_exact_artifact_pair(
         SourceRegistry.load(
             source_directory,
             ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
+            ROOT_DIRECTORY / "config" / "database-profiles.yaml",
+            Path("/run/secrets/query-man/databases"),
             DUMMY_ENVIRONMENT,
         )
 
@@ -316,6 +446,8 @@ def test_source_package_rejects_symlinks(
         SourceRegistry.load(
             source_directory,
             ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
+            ROOT_DIRECTORY / "config" / "database-profiles.yaml",
+            Path("/run/secrets/query-man/databases"),
             DUMMY_ENVIRONMENT,
         )
 
@@ -341,20 +473,12 @@ def test_system_schemas_are_rejected(tmp_path: Path) -> None:
         "environment": "test",
         "database_migration_ref": "config/sources/system-test/views.sql",
     }
-    connection = raw["connection"]
-    assert isinstance(connection, dict)
-    connection["password_env"] = "SYSTEM_TEST_READER_PASSWORD"
-
     with pytest.raises(RegistryConfigurationError, match="system schema"):
-        _load_single_manifest(
-            tmp_path,
-            raw,
-            environment={"SYSTEM_TEST_READER_PASSWORD": "secret"},
-        )
+        _load_single_manifest(tmp_path, raw)
 
 
-@pytest.mark.parametrize("version", [0, 1, 2, 3, 4, 6, "5", 5.0, True])
-def test_rejects_non_v5_source_manifest(tmp_path: Path, version: object) -> None:
+@pytest.mark.parametrize("version", [0, 1, 2, 3, 4, 5, 7, "6", 6.0, True])
+def test_rejects_non_v6_source_manifest(tmp_path: Path, version: object) -> None:
     raw = _development_manifest()
     raw["version"] = version
 
@@ -387,75 +511,77 @@ def test_accepts_arbitrarily_large_positive_view_contract_version(
 
 
 @pytest.mark.parametrize("sslmode", ["disable", "require", "verify-full"])
-def test_accepts_supported_sslmode(tmp_path: Path, sslmode: str) -> None:
-    raw = _development_manifest()
-    connection = raw["connection"]
-    assert isinstance(connection, dict)
-    connection["sslmode"] = sslmode
-
-    source = _load_single_manifest(tmp_path, raw).get("development-issues")
+def test_fixture_password_authentication_accepts_supported_sslmode(
+    tmp_path: Path,
+    sslmode: str,
+) -> None:
+    manifest = _development_manifest()
+    provenance = manifest["provenance"]
+    assert isinstance(provenance, dict)
+    provenance["environment"] = "test"
+    databases = _database_profiles()
+    database = _development_database(databases)
+    database["sslmode"] = sslmode
+    database["authentication"] = {
+        "type": "password",
+        "password_env": "TEST_DATABASE_READER_PASSWORD",
+    }
+    source = _load_single_manifest(
+        tmp_path,
+        manifest,
+        database_file=_write_database_profiles(tmp_path, databases),
+        environment={
+            **DUMMY_ENVIRONMENT,
+            "TEST_DATABASE_READER_PASSWORD": "fixture-password",
+        },
+    ).get("development-issues")
 
     assert source is not None
     assert source.connection.sslmode == sslmode
+    assert source.connection.authentication == PasswordAuthentication("fixture-password")
 
 
-def test_requires_explicit_sslmode(tmp_path: Path) -> None:
-    raw = _development_manifest()
-    connection = raw["connection"]
-    assert isinstance(connection, dict)
-    connection.pop("sslmode")
+@pytest.mark.parametrize("sslmode", ["disable", "require"])
+def test_client_certificate_requires_verify_full(
+    tmp_path: Path,
+    sslmode: str,
+) -> None:
+    databases = _database_profiles()
+    _development_database(databases)["sslmode"] = sslmode
 
-    with pytest.raises(RegistryConfigurationError, match="sslmode"):
-        _load_single_manifest(tmp_path, raw)
+    with pytest.raises(RegistryConfigurationError, match="requires sslmode verify-full"):
+        _load_single_manifest(
+            tmp_path,
+            _development_manifest(),
+            database_file=_write_database_profiles(tmp_path, databases),
+        )
 
 
 @pytest.mark.parametrize(
     "sslmode",
     ["prefer", "allow", "verify-ca", "unknown", "REQUIRE", True, None],
 )
-def test_rejects_unsupported_sslmode(
+def test_rejects_unsupported_database_sslmode(
     tmp_path: Path,
     sslmode: object,
 ) -> None:
-    raw = _development_manifest()
-    connection = raw["connection"]
-    assert isinstance(connection, dict)
-    connection["sslmode"] = sslmode
+    databases = _database_profiles()
+    _development_database(databases)["sslmode"] = sslmode
 
     with pytest.raises(RegistryConfigurationError, match="sslmode"):
-        _load_single_manifest(tmp_path, raw)
-
-
-def test_rejects_legacy_ssl_field(tmp_path: Path) -> None:
-    raw = _development_manifest()
-    connection = raw["connection"]
-    assert isinstance(connection, dict)
-    connection["ssl"] = False
-
-    with pytest.raises(RegistryConfigurationError, match="ssl"):
-        _load_single_manifest(tmp_path, raw)
-
-
-def test_sslmode_validation_error_does_not_expose_resolved_secret(
-    tmp_path: Path,
-) -> None:
-    raw = _development_manifest()
-    connection = raw["connection"]
-    assert isinstance(connection, dict)
-    connection["sslmode"] = "prefer"
-    secret = "sslmode-validation-secret-marker"
-
-    with pytest.raises(RegistryConfigurationError) as captured:
         _load_single_manifest(
             tmp_path,
-            raw,
-            environment={
-                **DUMMY_ENVIRONMENT,
-                "DEVELOPMENT_ISSUES_READER_PASSWORD": secret,
-            },
+            _development_manifest(),
+            database_file=_write_database_profiles(tmp_path, databases),
         )
 
-    assert secret not in str(captured.value)
+
+def test_rejects_legacy_source_connection_fields(tmp_path: Path) -> None:
+    manifest = _development_manifest()
+    manifest["connection"] = {"password_env": "RETIRED_PASSWORD"}
+
+    with pytest.raises(RegistryConfigurationError, match="connection"):
+        _load_single_manifest(tmp_path, manifest)
 
 
 def test_accepts_postgresql_identifier_boundary_in_source_fields(
@@ -465,10 +591,10 @@ def test_accepts_postgresql_identifier_boundary_in_source_fields(
     identifier = "a" * POSTGRES_IDENTIFIER_MAX_LENGTH
     raw["allowed_schemas"] = [identifier]
     raw["budget_profile"] = identifier
-    connection = raw["connection"]
-    assert isinstance(connection, dict)
-    connection["database"] = identifier
-    connection["user"] = identifier
+    raw["reader_user"] = identifier
+    databases = _database_profiles()
+    _development_database(databases)["database"] = identifier
+    database_file = _write_database_profiles(tmp_path, databases)
     budget_raw = yaml.safe_load((ROOT_DIRECTORY / "config" / "budget-profiles.yaml").read_text(encoding="utf-8"))
     assert isinstance(budget_raw, dict)
     profiles = budget_raw["profiles"]
@@ -477,7 +603,12 @@ def test_accepts_postgresql_identifier_boundary_in_source_fields(
     budget_file = tmp_path / "budget-profiles.yaml"
     budget_file.write_text(yaml.safe_dump(budget_raw), encoding="utf-8")
 
-    source = _load_single_manifest(tmp_path, raw, budget_file=budget_file).get("development-issues")
+    source = _load_single_manifest(
+        tmp_path,
+        raw,
+        budget_file=budget_file,
+        database_file=database_file,
+    ).get("development-issues")
 
     assert source is not None
     assert source.budget.name == identifier
@@ -571,26 +702,40 @@ def test_requires_source_provenance(tmp_path: Path) -> None:
         _load_single_manifest(tmp_path, raw)
 
 
-def test_rejects_non_source_scoped_secret_environment(
-    tmp_path: Path,
-) -> None:
-    raw = _development_manifest()
-    connection = raw["connection"]
-    assert isinstance(connection, dict)
-    connection["password_env"] = "SHARED_READER_PASSWORD"
-
-    with pytest.raises(
-        RegistryConfigurationError,
-        match="must use the source-scoped secret",
+def test_multiple_sources_can_reuse_one_database_profile(tmp_path: Path) -> None:
+    source_directory = tmp_path / "config" / "sources"
+    for source_id, reader_user in (
+        ("first-source", "first_reader"),
+        ("second-source", "second_reader"),
     ):
-        _load_single_manifest(
-            tmp_path,
-            raw,
-            environment={
-                **DUMMY_ENVIRONMENT,
-                "SHARED_READER_PASSWORD": "shared-secret",
-            },
-        )
+        manifest = _development_manifest()
+        manifest["source_id"] = source_id
+        manifest["reader_user"] = reader_user
+        manifest["provenance"] = {
+            "owner": "query-man",
+            "environment": "test",
+            "database_migration_ref": f"config/sources/{source_id}/views.sql",
+        }
+        package = source_directory / source_id
+        package.mkdir(parents=True)
+        (package / "source.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
+        (package / "views.sql").write_text("-- reviewed\n", encoding="utf-8")
+
+    registry = SourceRegistry.load(
+        source_directory,
+        ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
+        ROOT_DIRECTORY / "config" / "database-profiles.yaml",
+        Path("/run/secrets/query-man/databases"),
+        DUMMY_ENVIRONMENT,
+    )
+
+    first = registry.get("first-source")
+    second = registry.get("second-source")
+    assert first is not None and second is not None
+    assert first.connection.database_profile == second.connection.database_profile
+    assert first.connection.database == second.connection.database
+    assert first.connection.authentication == second.connection.authentication
+    assert first.connection.user != second.connection.user
 
 
 @pytest.mark.parametrize(

@@ -37,6 +37,7 @@ services:
     environment:
       FIXTURE_SOURCE_READER_PASSWORD: ${DEVELOPMENT_ISSUES_READER_PASSWORD}
       POSTGRES_PORT: "5432"
+      QUERY_MAN_DATABASE_FILE: /app/test-fixtures/config/database-profiles.yaml
       QUERY_MAN_POSTGRES_HOST: postgres
       QUERY_MAN_SOURCE_DIR: /app/test-fixtures/config/sources
     volumes:

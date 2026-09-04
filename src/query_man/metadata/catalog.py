@@ -18,10 +18,10 @@ from query_man.metadata.models import (
 )
 from query_man.source_catalog.models import SourceProfile
 from query_man.source_catalog.reader_policy import (
-    READER_CLIENT_ENCODING,
     READER_SESSION_BUDGET_SETTERS,
     READER_SESSION_TIMEZONE_SETTER,
     ReaderSessionPolicyError,
+    reader_connection_kwargs,
     reader_session_budget_values,
     require_reader_connection_policy,
     require_reader_session_policy,
@@ -185,20 +185,13 @@ class PostgresCatalog:
             existing = self._pools.get(source.source_id)
             if existing is not None:
                 return existing
-            connection = source.connection
             pool = AsyncConnectionPool(
                 conninfo="",
                 kwargs={
-                    "host": connection.host,
-                    "port": connection.port,
-                    "dbname": connection.database,
-                    "user": connection.user,
-                    "password": connection.password,
-                    "sslmode": connection.sslmode,
-                    "gssencmode": "disable",
-                    "application_name": f"query-man-meta:{source.source_id}",
-                    "connect_timeout": 2,
-                    "client_encoding": READER_CLIENT_ENCODING,
+                    **reader_connection_kwargs(
+                        source,
+                        f"query-man-meta:{source.source_id}",
+                    ),
                     # ponytail: explicit BEGIN must not be preceded by psycopg's implicit BEGIN.
                     "autocommit": True,
                     "row_factory": dict_row,

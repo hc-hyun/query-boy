@@ -8,10 +8,9 @@ services:
     restart: unless-stopped
     init: true
     environment:
-      DEVELOPMENT_ISSUES_READER_PASSWORD: ${DEVELOPMENT_ISSUES_READER_PASSWORD:?set source reader password}
-      MARKET_VOC_READER_PASSWORD: ${MARKET_VOC_READER_PASSWORD:?set source reader password}
       POSTGRES_PORT: ${POSTGRES_PORT:-5432}
       QUERY_MAN_ACCESS_POLICY_FILE: /app/config/access-policies.compose.yaml
+      QUERY_MAN_DATABASE_CREDENTIAL_DIRECTORY: /run/secrets/query-man/databases
       QUERY_MAN_QUERY_TOKEN: ${QUERY_MAN_QUERY_TOKEN:?set QUERY_MAN_QUERY_TOKEN in .env}
       QUERY_MAN_OPERATOR_TOKEN: ${QUERY_MAN_OPERATOR_TOKEN:?set QUERY_MAN_OPERATOR_TOKEN in .env}
       QUERY_MAN_HOST: 0.0.0.0
@@ -25,6 +24,8 @@ services:
       TZ: ${TZ:-Asia/Seoul}
     ports:
       - "127.0.0.1:${QUERY_MAN_PORT:-3000}:3000"
+    volumes:
+      - ${QUERY_MAN_DATABASE_CREDENTIAL_MOUNT:?set database credential directory}:/run/secrets/query-man/databases:ro
     healthcheck:
       test:
         - CMD

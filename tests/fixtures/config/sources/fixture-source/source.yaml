@@ -1,4 +1,4 @@
-version: 5
+version: 6
 
 source_id: fixture-source
 name: Query Man test fixture
@@ -8,15 +8,8 @@ provenance:
   owner: query-man
   environment: test
   database_migration_ref: config/sources/fixture-source/views.sql
-connection:
-  host: 127.0.0.1
-  host_env: QUERY_MAN_POSTGRES_HOST
-  port: 5432
-  port_env: POSTGRES_PORT
-  database: query_man
-  user: query_man_fixture_reader
-  password_env: FIXTURE_SOURCE_READER_PASSWORD
-  sslmode: disable
+database_profile: fixture
+reader_user: query_man_fixture_reader
 allowed_schemas:
   - ai
 allowed_relation_kinds:

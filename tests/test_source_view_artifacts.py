@@ -276,7 +276,7 @@ def test_source_view_sql_is_a_bounded_standalone_desired_artifact(
     role_prefix = source_id.replace("-", "_")
 
     assert package.name == source_id
-    assert manifest["version"] == 5
+    assert manifest["version"] == 6
     assert manifest["allowed_relation_kinds"] == ["view"]
     assert isinstance(version, int) and not isinstance(version, bool) and version > 0
     assert sql.startswith("BEGIN;\n")

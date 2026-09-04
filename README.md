@@ -24,6 +24,7 @@ Application 상태는 `/health`, `/ready`, operator용 상세 상태와 process-
 ## 안전 경계
 
 - Source는 `config/sources/<source-id>/source.yaml`과 `views.sql` 두 파일로 review합니다.
+- 물리 DB endpoint와 client certificate는 `config/database-profiles.yaml`의 DB profile로 공유합니다.
 - Process 시작 때 모든 package를 load하며 별도 source 등록 목록은 없습니다.
 - RLS source, 허용하지 않은 schema·relation kind와 reader 권한은 DB query 전에 거부합니다.
 - SQL은 PostgreSQL AST로 검사하고 relation·function·operator·cast를 allowlist로 제한합니다.
@@ -35,11 +36,12 @@ Application 상태는 `/health`, `/ready`, operator용 상세 상태와 process-
 
 정확한 launch 제한은 [ADR 0025](docs/decisions/0025-static-non-rls-first-launch.md), source package 계약은
 [ADR 0034](docs/decisions/0034-source-view-package-and-direct-admission.md), startup inventory는
-[ADR 0035](docs/decisions/0035-reviewed-source-package-inventory.md)를 따릅니다.
+[ADR 0035](docs/decisions/0035-reviewed-source-package-inventory.md), DB 인증은
+[ADR 0036](docs/decisions/0036-database-profile-client-certificate.md)을 따릅니다.
 
 ## 로컬 실행
 
-필요한 것은 Docker Compose와 각 example source의 reader password입니다.
+실제 source 실행에는 Docker Compose, DB별 client certificate directory와 API token이 필요합니다.
 
 ```bash
 cp .env.example .env
@@ -49,14 +51,15 @@ cp .env.example .env
 
 ```dotenv
 QUERY_MAN_POSTGRES_HOST=127.0.0.1
-DEVELOPMENT_ISSUES_READER_PASSWORD=...
-MARKET_VOC_READER_PASSWORD=...
+QUERY_MAN_DATABASE_CREDENTIAL_MOUNT=/secure/query-man/databases
 QUERY_MAN_QUERY_TOKEN=...
 QUERY_MAN_OPERATOR_TOKEN=...
 ```
 
-Password와 token은 Git에 commit하지 않습니다. Source database가 따로 준비되어 있지 않다면 작은 CI용
-PostgreSQL fixture로 실제 DB와 container 경계를 검증할 수 있습니다.
+Client private key와 token은 Git에 commit하지 않습니다. DB certificate/HBA 준비는
+[Database client certificate guide](docs/database-certificate-authentication.md)를 따릅니다. Source
+database가 따로 준비되어 있지 않다면 작은 CI용 PostgreSQL fixture로 실제 DB와 container 경계를
+검증할 수 있습니다.
 
 ```bash
 ./scripts/verify-database.sh
@@ -115,9 +118,10 @@ config/sources/<source-id>/
 └── views.sql
 ```
 
-`source.yaml`에는 secret 값이 아니라 password environment key, view-only allowlist, budget과 provenance를
-둡니다. `views.sql`은 explicit output column, source/version marker, dedicated owner와 exact reader grant를
-가진 desired artifact입니다. Runtime은 이 SQL을 실행하지 않습니다.
+`source.yaml`에는 기존 `database_profile`, source별 `reader_user`, view-only allowlist, budget과
+provenance를 둡니다. 같은 물리 DB의 source는 DB profile과 인증서를 재사용합니다. `views.sql`은 explicit
+output column, source/version marker, dedicated owner와 exact reader grant를 가진 desired artifact입니다.
+Runtime은 이 SQL을 실행하지 않습니다.
 
 DB/data owner 검토와 DBA apply는 repository 변경과 별도이며 traffic 밖에서 승인받아 수행합니다. 자세한
 stop·rollback 조건은 [Source extension checklist](docs/source-extension-checklist.md)를 따릅니다.

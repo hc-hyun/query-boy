@@ -116,6 +116,17 @@ def test_source_contract_is_two_files_and_documented() -> None:
         assert {path.name for path in package.iterdir()} == {"source.yaml", "views.sql"}
         manifest = yaml.safe_load((package / "source.yaml").read_text(encoding="utf-8"))
         assert manifest["source_id"] == package.name
+        assert set(manifest) >= {"database_profile", "reader_user"}
+
+    databases = yaml.safe_load(
+        (ROOT_DIRECTORY / "config" / "database-profiles.yaml").read_text(encoding="utf-8")
+    )
+    assert databases["version"] == 1
+    assert all(
+        profile["authentication"] == {"type": "client-certificate"}
+        and profile["sslmode"] == "verify-full"
+        for profile in databases["profiles"].values()
+    )
 
     contract = (DOCS / "source-extension-checklist.md").read_text(encoding="utf-8")
     assert "source.yaml" in contract

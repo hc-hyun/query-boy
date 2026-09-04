@@ -6,14 +6,15 @@
 ## 시작 전 고정할 것
 
 - Approved commit과 immutable image revision
-- `config/sources/<source-id>/{source.yaml,views.sql}` 전체와 `config/budget-profiles.yaml`
+- `config/sources/<source-id>/{source.yaml,views.sql}` 전체, `config/database-profiles.yaml`과 budget
 - 실제 PostgreSQL target, DBA·service 실행자와 change-record 위치
-- Password/token secret reference와 전달 방식
+- DB별 client certificate fingerprint/expiry/mount와 API token 전달 방식
 - Traffic-off 검증 시간, stop condition, 직전 image/config/route
 - DB view 변경이 있으면 backup과 DBA rollback SQL
 
-RLS source나 unreviewed package를 임시로 허용하지 않습니다. `require` TLS mode는 암호화하지만 hostname을
-검증하지 않으므로 승인된 risk와 `verify-full` 전환 조건을 기록해야 합니다.
+RLS source나 unreviewed package를 임시로 허용하지 않습니다. Production DB profile은
+`client-certificate`와 `verify-full`만 사용하며 인증 실패를 password나 약한 TLS로 downgrade하지
+않습니다.
 
 ## Source 검증과 DB apply
 
@@ -23,7 +24,8 @@ Repository 안의 package는 local read-only 명령으로 검사합니다.
 uv run qm source validate
 ```
 
-이 명령은 manifest와 desired SQL을 검증할 뿐 DB에 연결하거나 DDL을 실행하지 않습니다.
+이 명령은 database/source manifest와 desired SQL을 검증할 뿐 certificate file을 읽거나 DB에 연결하고
+DDL을 실행하지 않습니다.
 
 DB/data owner는 `views.sql`의 explicit output, no-PII 경계, base relation과 comment를 review합니다. DBA는
 별도 승인 뒤 traffic 밖에서 exact SQL을 적용하고 reader grant를 확인합니다. Runtime이 대신 적용하거나
@@ -44,17 +46,19 @@ application admission을 차단하고 DBA가 승인된 역순 DDL 또는 직전 
 
 단일 replica를 traffic 밖에서 시작하고 다음을 순서대로 확인합니다.
 
-1. 모든 reviewed package가 strict load되고 unknown file·field와 누락 secret은 startup을 실패시킵니다.
-2. Live catalog의 PostgreSQL 18/UTF-8, source/version marker, RLS 0개와 reader identity를 admission합니다.
+1. 모든 database profile과 reviewed package가 strict load되고 unknown field/reference는 startup을
+   실패시킵니다.
+2. DB별 CA/hostname/client certificate/DN mapping과 live catalog의 PostgreSQL 18/UTF-8,
+   source/version marker, RLS 0개와 reader identity를 admission합니다.
 3. `/health`는 process 생존, `/ready`는 startup source와 query pool 준비 상태를 반영합니다.
 4. `/sources`와 `/meta`는 인증·source authorization 뒤 secret 없는 public projection만 반환합니다.
 5. `/query`는 두 revision, AST/allowlist, read-only transaction과 모든 resource limit을 적용합니다.
-6. 잘못된 credential, stale revision, write SQL, forbidden relation/function/operator와 unsupported OID를
-   fail-closed합니다.
+6. 인증서 없음·잘못된 CA/key/hostname/DN, stale revision, write SQL, forbidden
+   relation/function/operator와 unsupported OID를 fail-closed합니다.
 7. Timeout, disconnect와 shutdown에서 cancel·rollback·connection reuse를 확인합니다.
 
-실패 응답이나 log에서 token, password, DSN, SQL literal과 PostgreSQL 내부 message가 보이면 전환하지
-않습니다.
+실패 응답이나 log에서 token, private key/certificate path, password, DSN, SQL literal과 PostgreSQL 내부
+message가 보이면 전환하지 않습니다.
 
 ## Cutover와 rollback
 
@@ -93,6 +97,10 @@ docker compose --env-file .env up --build -d
 curl -fsS http://127.0.0.1:3000/ready
 docker compose --env-file .env down
 ```
+
+`.env`의 `QUERY_MAN_DATABASE_CREDENTIAL_MOUNT`는 DB profile ID별 `ca.crt`, `client.crt`, `client.key`를
+포함하는 host directory를 가리켜야 합니다. 발급, PostgreSQL mapping과 rotation은
+[Database certificate guide](database-certificate-authentication.md)를 따릅니다.
 
 Synthetic fixture 검증은 lifecycle을 소유하는 script로 실행합니다.
 

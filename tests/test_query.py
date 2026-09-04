@@ -115,7 +115,7 @@ class _ConnectionInfo:
 
 
 class _PGConnection:
-    ssl_in_use = False
+    ssl_in_use = True
 
 
 @dataclass(frozen=True)

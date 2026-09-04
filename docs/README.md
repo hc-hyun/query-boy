@@ -19,13 +19,15 @@
 
 - [Architecture](architecture.md): HTTP 요청 흐름과 trust boundary
 - [Source onboarding과 extension checklist](source-extension-checklist.md): 두 파일 source package와 DBA apply
+- [Database client certificate](database-certificate-authentication.md): DB별 인증서, reader mapping과 rotation
 - [Query 제한과 자원](query-cost-control.md): 실행 상한과 장애 조사
 - [Operations](operations.md): startup, 관측, cutover와 rollback
 - [현재 결정](decisions/README.md): 현행 ADR index
 
 현재 launch safety는 [ADR 0025](decisions/0025-static-non-rls-first-launch.md), source package는
 [ADR 0034](decisions/0034-source-view-package-and-direct-admission.md), startup inventory는
-[ADR 0035](decisions/0035-reviewed-source-package-inventory.md), budget YAML은
+[ADR 0035](decisions/0035-reviewed-source-package-inventory.md), DB 인증은
+[ADR 0036](decisions/0036-database-profile-client-certificate.md), budget YAML은
 [ADR 0030](decisions/0030-git-reviewed-yaml-source-authority.md)이 정합니다.
 
 실제 DB 연결 `DBENV-01`, 인증 연결 `AUTHENV-01`과 traffic 전환 `LAUNCH-02`는

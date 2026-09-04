@@ -181,7 +181,8 @@ format이다. 범주가 여러 개라는 이유로 관련 없는 변경까지 �
 - 새 abstraction은 중복된 실제 사용 사례가 생겼을 때 도입한다. 한 번 쓰는 코드는 가까운 위치에 둔다.
 - 가능하면 추가보다 삭제, 영리한 기법보다 명시적이고 평범한 코드를 선택한다.
 - 파일, class와 configuration layer 수를 최소화한다. 이름만 바꿔 전달하는 계층은 만들지 않는다.
-- Source별 차이는 Python 분기문이 아니라 `config/sources`, budget profile과 curated database view로 표현한다.
+- Source별 차이는 Python 분기문이 아니라 `config/sources`, database/budget profile과 curated database
+  view로 표현한다.
 - 복잡한 요청은 독립적으로 검증 가능한 가장 작은 end-to-end slice부터 완료한다.
 - 의도적으로 단순화해 알려진 한계가 생기면 `ponytail:` comment에 한계와 확장 조건을 짧게 기록한다.
 

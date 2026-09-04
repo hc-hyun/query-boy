@@ -13,8 +13,6 @@ from query_man.source_catalog.registry import (
     SourceRegistry,
 )
 
-_VALIDATION_SECRET = "query-man-source-validation-placeholder"
-
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -37,27 +35,13 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _environment(root: Path, source_directory: Path) -> dict[str, str]:
+def _environment(root: Path) -> dict[str, str]:
     values = {
         key: value
         for key, value in dotenv_values(root / ".env").items()
         if value is not None
     }
     values.update(os.environ)
-
-    try:
-        package_directories = tuple(source_directory.iterdir())
-    except OSError as error:
-        raise RegistryConfigurationError("Cannot read source directory") from error
-
-    # Validation never connects to PostgreSQL. Source-scoped placeholders let it
-    # check password references without requiring or retaining database secrets.
-    for package_directory in package_directories:
-        password_environment = (
-            package_directory.name.replace("-", "_").upper()
-            + "_READER_PASSWORD"
-        )
-        values[password_environment] = _VALIDATION_SECRET
     return values
 
 
@@ -65,18 +49,22 @@ def validate_sources(root: Path) -> dict[str, object]:
     root = root.resolve()
     source_directory = root / "config" / "sources"
     budget_file = root / "config" / "budget-profiles.yaml"
-    if source_directory.is_symlink() or budget_file.is_symlink():
+    database_file = root / "config" / "database-profiles.yaml"
+    if source_directory.is_symlink() or budget_file.is_symlink() or database_file.is_symlink():
         raise RegistryConfigurationError("Configuration symlinks are not allowed")
     registry = SourceRegistry.load(
         source_directory,
         budget_file,
-        _environment(root, source_directory),
+        database_file,
+        Path("/run/secrets/query-man/databases"),
+        _environment(root),
     )
     source_ids = sorted(registry.source_ids())
     return {
         "status": "valid",
         "source_directory": "config/sources",
         "budget_file": "config/budget-profiles.yaml",
+        "database_file": "config/database-profiles.yaml",
         "source_count": len(source_ids),
         "source_ids": source_ids,
         "live_database_checked": False,
@@ -90,7 +78,7 @@ def run_main(arguments: list[str]) -> int:
     except (OSError, UnicodeDecodeError, RegistryConfigurationError, yaml.YAMLError):
         print(
             "Source package validation failed. Check config/sources and "
-            "config/budget-profiles.yaml.",
+            "config/database-profiles.yaml and config/budget-profiles.yaml.",
             file=sys.stderr,
         )
         return 1

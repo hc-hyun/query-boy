@@ -1,6 +1,8 @@
 .env
 .idea/
 .vscode/
+secrets/
+.secrets/
 *.log
 .venv/
 __pycache__/

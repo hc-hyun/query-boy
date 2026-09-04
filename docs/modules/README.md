@@ -52,7 +52,7 @@ rendering은 Delivery, error 발생 조건은 owner module이 책임집니다.
 
 | 경로 | Owner |
 |---|---|
-| `config/sources/`, `config/budget-profiles.yaml` | Source Catalog |
+| `config/sources/`, `config/database-profiles.yaml`, `config/budget-profiles.yaml` | Source Catalog |
 | `config/access-policies*.yaml` | Delivery |
 | `config/security-evaluation.yaml`, root `tests/` | Assurance와 behavior owner |
 | `Dockerfile`, `compose*.yaml`, `.env*.example` | Runtime; container는 Assurance consumer |
@@ -66,8 +66,10 @@ single-writer artifact입니다.
 
 Repository에는 `config/sources/<source-id>/source.yaml`과 `views.sql` 두 파일만 추가합니다. Generic
 validation이 package를 발견하므로 source ID를 code, test, 문서나 별도 registry에 등록하지 않습니다.
-DB/data owner review와 DBA apply는 repository 변경과 별도 승인입니다. 자세한 절차는
-[Source extension checklist](../source-extension-checklist.md)를 따릅니다.
+기존 물리 DB의 profile과 client certificate를 재사용하므로 Compose와 credential을 source마다 추가하지
+않습니다. DB/data owner review와 DBA apply는 repository 변경과 별도 승인입니다. 자세한 절차는
+[Source extension checklist](../source-extension-checklist.md)와
+[DB certificate guide](../database-certificate-authentication.md)를 따릅니다.
 
 ## 변경 승인
 

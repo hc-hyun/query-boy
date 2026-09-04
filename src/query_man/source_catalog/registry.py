@@ -10,6 +10,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from query_man.source_catalog.models import (
     BudgetProfile,
+    ClientCertificateAuthentication,
+    PasswordAuthentication,
     ResolvedConnection,
     SourceEnvironment,
     SourceProfile,
@@ -94,15 +96,44 @@ class _BudgetFile(_StrictModel):
         return self
 
 
-class _Connection(_StrictModel):
+class _PasswordAuthentication(_StrictModel):
+    type: Literal["password"]
+    password_env: EnvironmentVariableName
+
+
+class _ClientCertificateAuthentication(_StrictModel):
+    type: Literal["client-certificate"]
+
+
+class _DatabaseProfile(_StrictModel):
     host: str = Field(min_length=1, max_length=253)
     host_env: EnvironmentVariableName | None = None
     port: int = Field(ge=1, le=65_535)
     port_env: EnvironmentVariableName | None = None
     database: Identifier
-    user: Identifier
-    password_env: EnvironmentVariableName
     sslmode: SSLMode
+    authentication: _PasswordAuthentication | _ClientCertificateAuthentication = Field(
+        discriminator="type"
+    )
+
+    @model_validator(mode="after")
+    def require_verified_tls_for_client_certificates(self) -> _DatabaseProfile:
+        if isinstance(self.authentication, _ClientCertificateAuthentication) and self.sslmode != "verify-full":
+            raise ValueError("client-certificate authentication requires sslmode verify-full")
+        return self
+
+
+class _DatabaseFile(_StrictModel):
+    version: int = Field(strict=True)
+    profiles: dict[StableSlug, _DatabaseProfile]
+
+    @model_validator(mode="after")
+    def require_version_one(self) -> _DatabaseFile:
+        if self.version != 1:
+            raise ValueError("version must be 1")
+        if not self.profiles:
+            raise ValueError("profiles must not be empty")
+        return self
 
 
 class _Provenance(_StrictModel):
@@ -124,7 +155,8 @@ class _SourceFile(_StrictModel):
     name: ShortText
     description: Description
     provenance: _Provenance
-    connection: _Connection
+    database_profile: StableSlug
+    reader_user: Identifier
     allowed_schemas: list[Identifier] = Field(min_length=1, max_length=20)
     allowed_relation_kinds: list[Literal["view"]] = Field(min_length=1, max_length=1)
     view_contract_version: int = Field(strict=True, ge=1)
@@ -132,8 +164,8 @@ class _SourceFile(_StrictModel):
 
     @model_validator(mode="after")
     def require_current_contract(self) -> _SourceFile:
-        if self.version != 5:
-            raise ValueError("version must be 5")
+        if self.version != 6:
+            raise ValueError("version must be 6")
         if self.allowed_relation_kinds != ["view"]:
             raise ValueError("allowed_relation_kinds must be exactly [view]")
         return self
@@ -148,10 +180,13 @@ class SourceRegistry:
         cls,
         source_directory: Path,
         budget_file: Path,
+        database_file: Path,
+        credential_directory: Path,
         environment: Mapping[str, str] | None = None,
     ) -> SourceRegistry:
         env = os.environ if environment is None else environment
         budgets = load_budget_profiles(budget_file)
+        databases = _parse_model(database_file, _DatabaseFile).profiles
         try:
             source_paths = sorted(source_directory.iterdir())
         except OSError as error:
@@ -175,7 +210,16 @@ class SourceRegistry:
             if parsed.source_id in seen:
                 raise RegistryConfigurationError(f"Duplicate source_id: {parsed.source_id}")
             seen.add(parsed.source_id)
-            sources.append(_resolve_source(parsed, budgets, env, manifest_path))
+            sources.append(
+                _resolve_source(
+                    parsed,
+                    budgets,
+                    databases,
+                    credential_directory,
+                    env,
+                    manifest_path,
+                )
+            )
         return cls(sources)
 
     def list(self) -> list[dict[str, str]]:
@@ -241,21 +285,22 @@ def load_budget_profiles(path: Path) -> dict[str, BudgetProfile]:
 def _resolve_source(
     parsed: _SourceFile,
     budgets: dict[str, BudgetProfile],
+    databases: dict[str, _DatabaseProfile],
+    credential_directory: Path,
     environment: Mapping[str, str],
     path: Path | str,
 ) -> SourceProfile:
     budget = budgets.get(parsed.budget_profile)
     if budget is None:
         raise RegistryConfigurationError(f"{path} references unknown budget profile: {parsed.budget_profile}")
-    expected_secret = f"{parsed.source_id.replace('-', '_').upper()}_READER_PASSWORD"
-    if parsed.connection.password_env != expected_secret:
-        raise RegistryConfigurationError(f"{path} must use the source-scoped secret {expected_secret}")
-    password = environment.get(parsed.connection.password_env)
-    if not password:
-        raise RegistryConfigurationError(f"{path} requires environment variable {parsed.connection.password_env}")
+    database = databases.get(parsed.database_profile)
+    if database is None:
+        raise RegistryConfigurationError(
+            f"{path} references unknown database profile: {parsed.database_profile}"
+        )
 
-    raw_host = environment.get(parsed.connection.host_env) if parsed.connection.host_env is not None else None
-    host = parsed.connection.host if raw_host is None else raw_host.strip()
+    raw_host = environment.get(database.host_env) if database.host_env is not None else None
+    host = database.host if raw_host is None else raw_host.strip()
     host_parts = host.split(",")
     normalized_hosts = tuple(item.strip() for item in host_parts)
     if (
@@ -268,9 +313,9 @@ def _resolve_source(
     ):
         raise RegistryConfigurationError(f"{path} resolved an invalid host")
 
-    raw_port = environment.get(parsed.connection.port_env) if parsed.connection.port_env is not None else None
+    raw_port = environment.get(database.port_env) if database.port_env is not None else None
     try:
-        port = parsed.connection.port if raw_port is None else int(raw_port)
+        port = database.port if raw_port is None else int(raw_port)
     except ValueError as error:
         raise RegistryConfigurationError(f"{path} resolved an invalid port") from error
     if not 1 <= port <= 65_535:
@@ -281,17 +326,38 @@ def _resolve_source(
         if _is_forbidden_schema(schema):
             raise RegistryConfigurationError(f"{path} cannot publish PostgreSQL system schema: {schema}")
 
+    authentication: PasswordAuthentication | ClientCertificateAuthentication
+    if isinstance(database.authentication, _PasswordAuthentication):
+        if parsed.provenance.environment != "test":
+            raise RegistryConfigurationError(
+                f"{path} password authentication is allowed only for test sources"
+            )
+        password = environment.get(database.authentication.password_env)
+        if not password:
+            raise RegistryConfigurationError(
+                f"{path} requires environment variable {database.authentication.password_env}"
+            )
+        authentication = PasswordAuthentication(password)
+    else:
+        certificate_directory = credential_directory / parsed.database_profile
+        authentication = ClientCertificateAuthentication(
+            root_certificate=certificate_directory / "ca.crt",
+            client_certificate=certificate_directory / "client.crt",
+            client_key=certificate_directory / "client.key",
+        )
+
     return SourceProfile(
         source_id=parsed.source_id,
         name=parsed.name,
         description=parsed.description,
         connection=ResolvedConnection(
+            database_profile=parsed.database_profile,
             host=host,
             port=port,
-            database=parsed.connection.database,
-            user=parsed.connection.user,
-            password=password,
-            sslmode=parsed.connection.sslmode,
+            database=database.database,
+            user=parsed.reader_user,
+            sslmode=database.sslmode,
+            authentication=authentication,
         ),
         allowed_schemas=tuple(parsed.allowed_schemas),
         allowed_relation_kinds=("view",),

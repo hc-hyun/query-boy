@@ -13,7 +13,8 @@ Reviewed package 외에 source ID 목록, registration manifest나 source별 acc
 
 Every immediate child directory under `config/sources/` is a requested startup source package. 각 directory는
 [ADR 0034](0034-source-view-package-and-direct-admission.md)의 `source.yaml`과 `views.sql` 두 파일만 가져야
-합니다. No third registration file exists.
+합니다. No third source-registration file exists. ADR 0036의 database profile은 여러 source가 공유하는
+physical connection/authentication authority이며 source inventory가 아닙니다.
 
 Runtime은 package 전체를 strict load하고 하나라도 malformed, unresolved secret, duplicate source ID,
 RLS, reader-policy 또는 live direct-admission failure이면 ready가 되지 않습니다. 모든 인증된 query

@@ -1,6 +1,7 @@
 # Source Onboarding And Extension Checklist
 
-새 PostgreSQL source의 repository 변경은 directory 하나에 두 파일을 추가하는 것으로 끝납니다.
+기존 physical database에 새 source를 추가하는 repository 변경은 directory 하나에 두 파일을 추가하는
+것으로 끝납니다.
 
 ```text
 config/sources/<source-id>/
@@ -8,27 +9,29 @@ config/sources/<source-id>/
 └── views.sql
 ```
 
-별도 registry, source ID 목록, fixture, business-question corpus, 문서나 source별 Python 분기를 추가하지
-않습니다. DB apply와 secret 설치는 repository 변경과 별도의 protected 작업입니다.
+별도 registry, source ID 목록, fixture, business-question corpus, 문서, Compose credential이나 source별
+Python 분기를 추가하지 않습니다. 기존 `config/database-profiles.yaml` entry와 DB별 client certificate를
+재사용합니다. DB apply와 reader/DN mapping은 repository 변경과 별도의 protected 작업입니다.
 
 ## `source.yaml`
 
-Manifest version 5의 현재 항목만 사용합니다.
+Manifest version 6의 현재 항목만 사용합니다.
 
 - `source_id`, public `name`과 `description`
 - 양의 `view_contract_version`
 - `provenance`: owner, environment, `database_migration_ref`
-- `connection`: host/port와 optional environment override key, database, reader user,
-  `password_env`, explicit `sslmode`
+- 기존 `database_profile`과 source별 `reader_user`
 - `allowed_schemas`
 - exact `allowed_relation_kinds: [view]`
 - 기존 `budget_profile`
 
-Password, token, DSN 값과 private key를 넣지 않습니다. `password_env` 이름만 versioned manifest에 두고
-실제 secret은 배포 환경이 제공합니다. Unknown field와 environment substitution은 fail-closed합니다.
+Password, token, DSN, certificate path와 private key를 넣지 않습니다. Database endpoint, `verify-full`과
+client certificate type은 DB profile이 소유하고 credential path는 profile ID에서 결정됩니다. Unknown
+field와 database profile reference는 fail-closed합니다.
 
-`sslmode`는 `disable`, `require`, `verify-full`만 허용합니다. `require`는 hostname을 검증하지 않으므로
-승인된 compatibility risk와 CA/SAN 개선 조건이 있어야 합니다.
+같은 물리 DB의 source는 한 profile을 공유하되 reader와 curated schema/grant는 source별로 유지합니다.
+새 물리 DB를 추가하는 경우에만 database profile과 certificate/HBA lifecycle을
+[Database client certificate guide](database-certificate-authentication.md)에 따라 준비합니다.
 
 ## `views.sql`
 
@@ -66,10 +69,10 @@ privileged DDL이나 function/operator/collation/semantic setting이 바뀌는 �
 
 | 주체 | 책임 |
 |---|---|
-| Source owner | 두 파일 작성, public 설명·budget과 secret-free manifest 확인 |
+| Source owner | 두 파일 작성, 기존 DB profile, reader, public 설명·budget과 secret-free manifest 확인 |
 | DB/data owner | Exact output, no-PII, row 의미와 base dependency review |
-| DBA | Protected target 확인, view/owner/grant apply와 rollback |
-| Runtime | Package strict load, live catalog/marker/reader direct admission |
+| DBA | Protected target, view/owner/grant, certificate DN-reader mapping과 rollback |
+| Runtime | DB profile/source strict load, certificate 연결과 live catalog/reader admission |
 | Delivery | Caller 인증 뒤 source authorization |
 
 Query Man은 개인정보를 탐지·masking하는 boundary가 아닙니다. DB owner는 개인정보와 민감정보를 제거한
@@ -87,15 +90,19 @@ uv run pytest
 ```
 
 검사는 package를 발견해 공통 규칙을 적용합니다. 새 source 이름·개수를 다른 test나 문서에 등록하지
-않습니다. Password environment는 검증용 dummy 값만 사용하며 output에 노출하지 않습니다.
+않습니다. CLI는 certificate file을 읽거나 DB에 연결하지 않으며 output에 credential path나 값을
+노출하지 않습니다.
 
 ## Protected apply와 rollback
 
-1. Approved commit, exact target DB/role, 실행자, backup, stop condition과 change-record 위치를 승인받습니다.
+1. Approved commit, database profile, exact target DB/reader, certificate identity, 실행자, backup, stop
+   condition과 change-record 위치를 승인받습니다.
 2. DB/data owner가 no-PII와 exact view output을 sign off합니다.
 3. DBA가 traffic 밖에서 reviewed `views.sql`을 적용합니다.
-4. Owner/reader grant, RLS 0개, marker/source/version과 Runtime direct admission을 확인합니다.
-5. Negative privilege, bounded query, timeout/cancel/rollback과 secret redaction을 검증합니다.
+4. Certificate DN-reader mapping, owner/reader grant, RLS 0개, marker/source/version과 Runtime direct
+   admission을 확인합니다.
+5. 잘못된 certificate/DN, negative privilege, bounded query, timeout/cancel/rollback과 credential
+   redaction을 검증합니다.
 6. Application을 재배포·재시작한 뒤에만 source가 startup inventory에 들어옵니다.
 
 Target, dependency, privilege나 output이 예상과 다르면 transaction을 rollback하고 적용을 중단합니다.

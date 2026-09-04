@@ -1,4 +1,4 @@
-version: 5
+version: 6
 
 source_id: development-issues
 name: 개발 문제점
@@ -8,15 +8,8 @@ provenance:
   owner: query-man
   environment: development
   database_migration_ref: config/sources/development-issues/views.sql
-connection:
-  host: 127.0.0.1
-  host_env: QUERY_MAN_POSTGRES_HOST
-  port: 5432
-  port_env: POSTGRES_PORT
-  database: development_issues
-  user: development_issues_reader
-  password_env: DEVELOPMENT_ISSUES_READER_PASSWORD
-  sslmode: disable
+database_profile: development-issues
+reader_user: development_issues_reader
 allowed_schemas:
   - ai
 allowed_relation_kinds:

@@ -30,6 +30,12 @@ class _Environment(BaseModel):
     api_token: str | None = Field(None, alias="QUERY_MAN_API_TOKEN", min_length=32, max_length=512)
     source_dir: str | None = Field(None, alias="QUERY_MAN_SOURCE_DIR")
     budget_file: str | None = Field(None, alias="QUERY_MAN_BUDGET_FILE")
+    database_file: str | None = Field(None, alias="QUERY_MAN_DATABASE_FILE")
+    database_credential_directory: str = Field(
+        "/run/secrets/query-man/databases",
+        alias="QUERY_MAN_DATABASE_CREDENTIAL_DIRECTORY",
+        min_length=1,
+    )
     access_policy_file: str | None = Field(None, alias="QUERY_MAN_ACCESS_POLICY_FILE")
     cache_ttl_ms: int = Field(30_000, alias="QUERY_MAN_METADATA_CACHE_TTL_MS", ge=0, le=3_600_000)
     max_stale_ms: int = Field(300_000, alias="QUERY_MAN_METADATA_MAX_STALE_MS", ge=0, le=86_400_000)
@@ -49,6 +55,13 @@ class _Environment(BaseModel):
             raise ValueError("invalid log level")
         return value.lower()
 
+    @field_validator("database_credential_directory")
+    @classmethod
+    def absolute_database_credential_directory(cls, value: str) -> str:
+        if not Path(value).is_absolute():
+            raise ValueError("must be an absolute path")
+        return value
+
 
 @dataclass(frozen=True)
 class RuntimeConfig:
@@ -58,6 +71,8 @@ class RuntimeConfig:
     api_token: str | None
     source_directory: Path
     budget_file: Path
+    database_file: Path
+    database_credential_directory: Path
     access_policy_file: Path | None
     metadata_cache_ttl_ms: int
     metadata_max_stale_ms: int
@@ -106,6 +121,7 @@ def load_runtime_config(
             "QUERY_MAN_API_TOKEN or QUERY_MAN_ACCESS_POLICY_FILE is required when "
             "QUERY_MAN_HOST is not loopback"
         )
+    credential_directory = Path(parsed.database_credential_directory)
     root = (root_directory or Path.cwd()).resolve()
     return RuntimeConfig(
         host=parsed.host,
@@ -114,6 +130,10 @@ def load_runtime_config(
         api_token=parsed.api_token,
         source_directory=Path(parsed.source_dir) if parsed.source_dir else root / "config" / "sources",
         budget_file=Path(parsed.budget_file) if parsed.budget_file else root / "config" / "budget-profiles.yaml",
+        database_file=Path(parsed.database_file)
+        if parsed.database_file
+        else root / "config" / "database-profiles.yaml",
+        database_credential_directory=credential_directory,
         access_policy_file=Path(parsed.access_policy_file) if parsed.access_policy_file else None,
         metadata_cache_ttl_ms=parsed.cache_ttl_ms,
         metadata_max_stale_ms=parsed.max_stale_ms,

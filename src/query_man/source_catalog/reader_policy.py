@@ -4,7 +4,12 @@ from typing import Any, Final
 
 from psycopg import AsyncConnection
 
-from query_man.source_catalog.models import SourceProfile, SSLMode
+from query_man.source_catalog.models import (
+    ClientCertificateAuthentication,
+    PasswordAuthentication,
+    SourceProfile,
+    SSLMode,
+)
 
 
 class ReaderSessionPolicyError(RuntimeError):
@@ -23,6 +28,36 @@ READER_SESSION_BUDGET_SETTERS = """
   pg_catalog.set_config('max_parallel_workers_per_gather', %s, true),
   pg_catalog.set_config('jit', %s, true)
 """
+
+
+def reader_connection_kwargs(
+    source: SourceProfile,
+    application_name: str,
+) -> dict[str, object]:
+    connection = source.connection
+    parameters: dict[str, object] = {
+        "host": connection.host,
+        "port": connection.port,
+        "dbname": connection.database,
+        "user": connection.user,
+        "sslmode": connection.sslmode,
+        "gssencmode": "disable",
+        "application_name": application_name,
+        "connect_timeout": 2,
+        "client_encoding": READER_CLIENT_ENCODING,
+    }
+    authentication = connection.authentication
+    if isinstance(authentication, PasswordAuthentication):
+        parameters["password"] = authentication.password
+    elif isinstance(authentication, ClientCertificateAuthentication):
+        parameters.update(
+            {
+                "sslrootcert": str(authentication.root_certificate),
+                "sslcert": str(authentication.client_certificate),
+                "sslkey": str(authentication.client_key),
+            }
+        )
+    return parameters
 
 _READER_SESSION_POLICY_QUERY = """
   SELECT
@@ -59,7 +94,14 @@ _READER_SESSION_POLICY_QUERY = """
     pg_catalog.current_setting('row_security') = 'on' AS row_security_enabled,
     coalesce(
       pg_catalog.current_setting('query_man.tenant_id', true), ''
-    ) = %s AS trusted_tenant_context
+    ) = %s AS trusted_tenant_context,
+    CASE WHEN %s::boolean THEN EXISTS (
+      SELECT 1
+      FROM pg_catalog.pg_stat_ssl AS ssl_session
+      WHERE ssl_session.pid = pg_catalog.pg_backend_pid()
+        AND ssl_session.ssl
+        AND coalesce(ssl_session.client_dn, '') <> ''
+    ) ELSE true END AS client_certificate_presented
   FROM pg_catalog.pg_roles AS role
   WHERE role.rolname = session_user
 """
@@ -112,6 +154,7 @@ async def require_reader_session_policy(
             source.budget.max_parallel_workers_per_gather,
             source.budget.jit_enabled,
             trusted_tenant,
+            isinstance(source.connection.authentication, ClientCertificateAuthentication),
         ),
     )
     policy = await cursor.fetchone()

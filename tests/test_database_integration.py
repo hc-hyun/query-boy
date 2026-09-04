@@ -5,6 +5,7 @@ import json
 import os
 import uuid
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from dotenv import load_dotenv
@@ -25,6 +26,7 @@ from query_man.guarded_query.sql_validation import (
 from query_man.metadata.catalog import PostgresCatalog
 from query_man.metadata.service import MetadataService
 from query_man.source_catalog.models import SourceProfile
+from query_man.source_catalog.reader_policy import reader_connection_kwargs
 from query_man.source_catalog.registry import SourceRegistry
 from tests.helpers import ROOT_DIRECTORY
 
@@ -58,6 +60,8 @@ def _fixture_source() -> SourceProfile:
     registry = SourceRegistry.load(
         _FIXTURE_SOURCE_DIRECTORY,
         _BUDGET_FILE,
+        ROOT_DIRECTORY / "tests" / "fixtures" / "config" / "database-profiles.yaml",
+        Path("/unused-test-credentials"),
         environment,
     )
     source = registry.get("fixture-source")
@@ -66,14 +70,7 @@ def _fixture_source() -> SourceProfile:
 
 
 def _connection_dsn(source: SourceProfile) -> str:
-    return make_conninfo(
-        host=source.connection.host,
-        port=source.connection.port,
-        dbname=source.connection.database,
-        user=source.connection.user,
-        password=source.connection.password,
-        sslmode=source.connection.sslmode,
-    )
+    return make_conninfo(**reader_connection_kwargs(source, "query-man-integration"))
 
 
 async def _admin_connection() -> AsyncConnection[tuple[object, ...]]:

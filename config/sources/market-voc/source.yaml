@@ -1,4 +1,4 @@
-version: 5
+version: 6
 
 source_id: market-voc
 name: 시장 VOC
@@ -8,15 +8,8 @@ provenance:
   owner: query-man
   environment: development
   database_migration_ref: config/sources/market-voc/views.sql
-connection:
-  host: 127.0.0.1
-  host_env: QUERY_MAN_POSTGRES_HOST
-  port: 5432
-  port_env: POSTGRES_PORT
-  database: market_voc
-  user: market_voc_reader
-  password_env: MARKET_VOC_READER_PASSWORD
-  sslmode: disable
+database_profile: market-voc
+reader_user: market_voc_reader
 allowed_schemas:
   - ai
 allowed_relation_kinds:

@@ -21,7 +21,7 @@ catalog/revision     AST/plan/transaction/result
    +----------+---------+
               v
        Source Catalog
-       reviewed package/budget
+       source/database profile/budget
               |
               v
        PostgreSQL curated views
@@ -57,7 +57,10 @@ config/sources/<source-id>/
 └── views.sql
 ```
 
-`source.yaml`은 connection environment key, allowed schema/relation kind, budget과 provenance를 정합니다.
+`config/database-profiles.yaml`은 physical database endpoint와 DB별 client certificate authentication을
+정합니다. `source.yaml`은 기존 database profile과 source별 reader user, allowed schema/relation kind,
+budget과 provenance를 정합니다. 여러 source가 한 database profile을 공유해도 source inventory와
+metadata/query pool은 source별로 유지됩니다.
 `views.sql`은 DB owner가 별도 승인으로 적용하는 desired curated-view artifact이며 Runtime은 실행하지
 않습니다. Live view comment의 `query-man:source=<id>;view-contract=<version>` marker가 package와 다르거나
 reader가 허용 범위를 벗어나면 source는 fail-closed합니다.
@@ -82,7 +85,7 @@ context의 두 값을 query에 전달해야 하며 mismatch에서는 context를 
 
 | Module | 책임 |
 |---|---|
-| Source Catalog | 두 파일 package, connection/reader/budget strict validation |
+| Source Catalog | 두 파일 package, database profile, reader와 budget strict validation |
 | Metadata | Live catalog admission, bounded context와 revision |
 | Guarded Query | SQL policy, execution limit, result encoding, cancel·rollback |
 | Delivery | HTTP authentication, authorization와 public wire |
@@ -101,5 +104,6 @@ context의 두 값을 query에 전달해야 하며 mismatch에서는 context를 
 
 Current authority는 [ADR 0025](decisions/0025-static-non-rls-first-launch.md),
 [ADR 0034](decisions/0034-source-view-package-and-direct-admission.md),
-[ADR 0035](decisions/0035-reviewed-source-package-inventory.md)입니다. Protected 환경 연결과 전환은
+[ADR 0035](decisions/0035-reviewed-source-package-inventory.md),
+[ADR 0036](decisions/0036-database-profile-client-certificate.md)입니다. Protected 환경 연결과 전환은
 [Operations](operations.md)와 [Active TODO](development-todo.md)를 따릅니다.

@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import inspect
+from dataclasses import replace
 from typing import Any, get_type_hints
 
 import pytest
 from psycopg import AsyncConnection
 
 import query_man.source_catalog.reader_policy as reader_policy_module
-from query_man.source_catalog.models import SSLMode
+from query_man.source_catalog.models import PasswordAuthentication, SSLMode
 from query_man.source_catalog.reader_policy import (
     READER_CLIENT_ENCODING,
     ReaderSessionPolicyError,
+    reader_connection_kwargs,
     require_reader_connection_policy,
     require_reader_session_policy,
 )
@@ -78,6 +80,43 @@ class _PolicyConnection:
     ) -> _PolicyCursor:
         self.calls.append((query, params))
         return _PolicyCursor()
+
+
+def test_reader_connection_kwargs_uses_database_client_certificate() -> None:
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+
+    parameters = reader_connection_kwargs(source, "query-man-test")
+
+    assert parameters["sslmode"] == "verify-full"
+    assert parameters["sslrootcert"] == (
+        "/run/secrets/query-man/databases/development-issues/ca.crt"
+    )
+    assert parameters["sslcert"] == (
+        "/run/secrets/query-man/databases/development-issues/client.crt"
+    )
+    assert parameters["sslkey"] == (
+        "/run/secrets/query-man/databases/development-issues/client.key"
+    )
+    assert "password" not in parameters
+
+
+def test_reader_connection_kwargs_uses_fixture_password_without_certificate() -> None:
+    source = load_test_registry().get("development-issues")
+    assert source is not None
+    source = replace(
+        source,
+        connection=replace(
+            source.connection,
+            sslmode="disable",
+            authentication=PasswordAuthentication("fixture-password"),
+        ),
+    )
+
+    parameters = reader_connection_kwargs(source, "query-man-test")
+
+    assert parameters["password"] == "fixture-password"
+    assert not {"sslrootcert", "sslcert", "sslkey"} & parameters.keys()
 
 
 def test_reader_connection_policy_interface_has_exact_approved_shape() -> None:
@@ -212,3 +251,5 @@ async def test_reader_session_policy_does_not_probe_database_temp_privilege() ->
     assert "'TEMP'" not in query
     assert "has_schema_privilege" in query
     assert "temp_file_limit" in query
+    assert "pg_stat_ssl" in query
+    assert _params[-1] is True

@@ -30,6 +30,8 @@ def _runtime_config(*, shutdown_grace_ms: int = 10_000) -> RuntimeConfig:
         api_token=None,
         source_directory=ROOT_DIRECTORY / "config" / "sources",
         budget_file=ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
+        database_file=ROOT_DIRECTORY / "config" / "database-profiles.yaml",
+        database_credential_directory=Path("/run/secrets/query-man/databases"),
         access_policy_file=None,
         metadata_cache_ttl_ms=0,
         metadata_max_stale_ms=300_000,
@@ -125,9 +127,13 @@ def _build_runtime(
         _cls: type[SourceRegistry],
         source_directory: Path,
         budget_file: Path,
+        database_file: Path,
+        credential_directory: Path,
     ) -> SourceRegistry:
         assert source_directory == ROOT_DIRECTORY / "config" / "sources"
         assert budget_file == ROOT_DIRECTORY / "config" / "budget-profiles.yaml"
+        assert database_file == ROOT_DIRECTORY / "config" / "database-profiles.yaml"
+        assert credential_directory == Path("/run/secrets/query-man/databases")
         return registry
 
     def build_catalog() -> _RecordingCatalog:

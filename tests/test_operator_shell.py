@@ -19,6 +19,10 @@ def _copy_source_configuration(target_root: Path) -> None:
         ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
         target_config / "budget-profiles.yaml",
     )
+    shutil.copy2(
+        ROOT_DIRECTORY / "config" / "database-profiles.yaml",
+        target_config / "database-profiles.yaml",
+    )
 
 
 def test_console_script_targets_runtime_operator_shell() -> None:
@@ -36,8 +40,7 @@ def test_source_validate_succeeds_without_database_credentials(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     private_value = "database-password-must-not-appear"
-    monkeypatch.setenv("DEVELOPMENT_ISSUES_READER_PASSWORD", private_value)
-    monkeypatch.setenv("MARKET_VOC_READER_PASSWORD", private_value)
+    monkeypatch.setenv("UNRELATED_DATABASE_SECRET", private_value)
 
     assert run_main(["--root", str(ROOT_DIRECTORY), "source", "validate"]) == 0
 
@@ -50,6 +53,7 @@ def test_source_validate_succeeds_without_database_credentials(
         "status": "valid",
         "source_directory": "config/sources",
         "budget_file": "config/budget-profiles.yaml",
+        "database_file": "config/database-profiles.yaml",
         "source_count": len(expected_source_ids),
         "source_ids": expected_source_ids,
         "live_database_checked": False,
@@ -65,13 +69,14 @@ def test_source_validate_resolves_local_environment_without_printing_it(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     _copy_source_configuration(tmp_path)
-    for manifest_path in (tmp_path / "config" / "sources").glob("*/source.yaml"):
-        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
-        manifest["connection"]["host"] = "/invalid-without-env-resolution"
-        manifest_path.write_text(
-            yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False),
-            encoding="utf-8",
-        )
+    database_file = tmp_path / "config" / "database-profiles.yaml"
+    databases = yaml.safe_load(database_file.read_text(encoding="utf-8"))
+    for profile in databases["profiles"].values():
+        profile["host"] = "/invalid-without-env-resolution"
+    database_file.write_text(
+        yaml.safe_dump(databases, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
     private_host = "private-database.internal"
     (tmp_path / ".env").write_text(
         f"QUERY_MAN_POSTGRES_HOST={private_host}\nPOSTGRES_PORT=5432\n",

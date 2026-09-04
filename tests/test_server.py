@@ -40,6 +40,8 @@ def test_main_configures_ceil_uvicorn_shutdown_timeout(
         api_token=None,
         source_directory=Path("unused-sources"),
         budget_file=Path("unused-budgets.yaml"),
+        database_file=Path("unused-databases.yaml"),
+        database_credential_directory=Path("/unused-credentials"),
         access_policy_file=None,
         metadata_cache_ttl_ms=30_000,
         metadata_max_stale_ms=300_000,

@@ -18,4 +18,6 @@ docs
 docker
 htmlcov
 scripts
+secrets
+.secrets
 tests

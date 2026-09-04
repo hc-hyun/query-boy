@@ -104,7 +104,12 @@ class _CleanupErrors:
 def build_app(runtime_config: RuntimeConfig) -> FastAPI:
     operations.reset()
     shutdown_deadline = _ShutdownDeadline(runtime_config.shutdown_grace_ms)
-    registry = SourceRegistry.load(runtime_config.source_directory, runtime_config.budget_file)
+    registry = SourceRegistry.load(
+        runtime_config.source_directory,
+        runtime_config.budget_file,
+        runtime_config.database_file,
+        runtime_config.database_credential_directory,
+    )
     operations.reconcile_sources(registry.source_ids())
     catalog = PostgresCatalog()
     metadata = MetadataService(

@@ -19,9 +19,10 @@
 | [ADR 0030](0030-git-reviewed-yaml-source-authority.md) | Budget YAML authority와 retired managed capability |
 | [ADR 0031](0031-no-pii-curated-view-boundary.md) | DB-owner-confirmed no-PII curated view |
 | [ADR 0032](0032-reader-temp-admission-relaxation.md) | Database `TEMP`를 admission 조건으로 쓰지 않는 제한된 예외 |
-| [ADR 0033](0033-explicit-source-tls-modes.md) | Explicit `disable`/`require`/`verify-full` transport policy |
-| [ADR 0034](0034-source-view-package-and-direct-admission.md) | Manifest version 5, two-file package, marker와 direct admission |
+| [ADR 0033](0033-explicit-source-tls-modes.md) | Explicit TLS mode와 production `verify-full` transport policy |
+| [ADR 0034](0034-source-view-package-and-direct-admission.md) | Manifest version 6, two-file package, marker와 direct admission |
 | [ADR 0035](0035-reviewed-source-package-inventory.md) | Reviewed package directory 전체가 startup inventory |
+| [ADR 0036](0036-database-profile-client-certificate.md) | DB profile별 client certificate와 source reader mapping |
 
 현재 application surface는 HTTP `/sources`, `/meta`, `/query`와 health/admin monitoring endpoint입니다.
 Authentication은 loopback anonymous, 단일 opaque API token 또는 opaque access-policy token만 지원합니다.

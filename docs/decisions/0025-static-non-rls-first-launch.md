@@ -32,7 +32,7 @@ fail-closed합니다. 현재 access policy는 caller/source authorization만 제
 
 - `180000 <= server_version < 190000`
 - `server_encoding == "UTF8"`, `client_encoding == "UTF8"`
-- Explicit source TLS mode와 exact database/session user
+- DB profile의 `verify-full` client certificate와 exact database/session user
 - Minimum-privilege reader, no role switch와 허용 view-only access
 - Query transaction의 `REPEATABLE READ READ ONLY`, UTC와 bounded session setting
 

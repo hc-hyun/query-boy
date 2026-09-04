@@ -18,6 +18,8 @@ def test_defaults_to_local_http_and_reviewed_source_files() -> None:
     assert loaded.access_policy_file is None
     assert loaded.source_directory == ROOT_DIRECTORY / "config" / "sources"
     assert loaded.budget_file == ROOT_DIRECTORY / "config" / "budget-profiles.yaml"
+    assert loaded.database_file == ROOT_DIRECTORY / "config" / "database-profiles.yaml"
+    assert loaded.database_credential_directory == Path("/run/secrets/query-man/databases")
     assert loaded.metadata_cache_ttl_ms == 30_000
     assert loaded.metadata_max_stale_ms == 300_000
     assert loaded.metadata_retry_delay_ms == 5_000
@@ -90,6 +92,7 @@ def test_rejects_retired_source_authority_settings_without_disclosure() -> None:
         {"QUERY_MAN_METADATA_MAX_STALE_MS": "-1"},
         {"QUERY_MAN_METADATA_RETRY_DELAY_MS": "99"},
         {"QUERY_MAN_SHUTDOWN_GRACE_MS": "300001"},
+        {"QUERY_MAN_DATABASE_CREDENTIAL_DIRECTORY": "relative/credentials"},
     ],
 )
 def test_rejects_invalid_bounded_configuration(
@@ -106,6 +109,8 @@ def test_loads_explicit_paths_and_runtime_limits() -> None:
             "QUERY_MAN_PORT": "8080",
             "QUERY_MAN_SOURCE_DIR": "/srv/query-man/sources",
             "QUERY_MAN_BUDGET_FILE": "/srv/query-man/budgets.yaml",
+            "QUERY_MAN_DATABASE_FILE": "/srv/query-man/databases.yaml",
+            "QUERY_MAN_DATABASE_CREDENTIAL_DIRECTORY": "/srv/query-man/database-credentials",
             "QUERY_MAN_METADATA_CACHE_TTL_MS": "0",
             "QUERY_MAN_METADATA_MAX_STALE_MS": "1000",
             "QUERY_MAN_METADATA_RETRY_DELAY_MS": "100",
@@ -118,6 +123,8 @@ def test_loads_explicit_paths_and_runtime_limits() -> None:
     assert loaded.port == 8080
     assert loaded.source_directory == Path("/srv/query-man/sources")
     assert loaded.budget_file == Path("/srv/query-man/budgets.yaml")
+    assert loaded.database_file == Path("/srv/query-man/databases.yaml")
+    assert loaded.database_credential_directory == Path("/srv/query-man/database-credentials")
     assert (
         loaded.metadata_cache_ttl_ms,
         loaded.metadata_max_stale_ms,

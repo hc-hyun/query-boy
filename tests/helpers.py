@@ -10,8 +10,6 @@ from query_man.source_catalog.registry import SourceRegistry
 ROOT_DIRECTORY = Path(__file__).resolve().parents[1]
 DUMMY_ENVIRONMENT = {
     "POSTGRES_PORT": "5432",
-    "DEVELOPMENT_ISSUES_READER_PASSWORD": "development-test-secret",
-    "MARKET_VOC_READER_PASSWORD": "market-test-secret",
 }
 
 
@@ -19,6 +17,8 @@ def load_test_registry(environment: Mapping[str, str] = DUMMY_ENVIRONMENT) -> So
     return SourceRegistry.load(
         ROOT_DIRECTORY / "config" / "sources",
         ROOT_DIRECTORY / "config" / "budget-profiles.yaml",
+        ROOT_DIRECTORY / "config" / "database-profiles.yaml",
+        Path("/run/secrets/query-man/databases"),
         environment,
     )
 

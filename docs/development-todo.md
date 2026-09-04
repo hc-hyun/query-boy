@@ -14,15 +14,16 @@ Repository implementation과 local acceptance는 protected environment 전환 �
 
 ## DBENV-01
 
-Approved Git revision의 `config/sources/` package 전체와 `config/budget-profiles.yaml`을 고정합니다.
+Approved Git revision의 `config/sources/` package 전체, `config/database-profiles.yaml`과 budget을
+고정합니다.
 DB owner와 DBA가 다음을 traffic 밖에서 확인합니다.
 
-- PostgreSQL 18, UTF-8와 manifest의 TLS mode
+- PostgreSQL 18, UTF-8, DB profile의 `verify-full`과 client certificate identity
 - View marker의 source ID와 contract version
 - RLS 0개, 허용 schema의 view-only catalog와 예상 column
-- Reader의 exact database/user, login과 최소 privilege
+- Certificate DN mapping과 reader의 exact database/user, login과 최소 privilege
 - Base relation 접근·write·role switch·함수/operator 우회 거부
-- Metadata revision, bounded query, timeout/cancel/rollback과 credential 비공개
+- 잘못된 CA/key/hostname/DN 거부, metadata revision, bounded query, timeout/cancel/rollback과 credential 비공개
 
 불일치하면 DDL이나 manifest를 현장에서 고치지 말고 중단합니다. 원인은 DB apply 또는 repository
 change-set으로 분리해 review한 뒤 처음부터 다시 실행합니다.
@@ -43,7 +44,7 @@ token, query/operator 권한 분리, source authorization과 redaction을 실제
 `DBENV-01`과 `AUTHENV-01`의 exact inventory와 evidence가 완료된 뒤에만 진행합니다.
 
 1. Approved commit과 immutable image revision을 고정합니다.
-2. Source package, budget와 secret reference를 재확인합니다.
+2. Database profile/certificate mount, source package, budget와 API secret reference를 재확인합니다.
 3. 단일 replica를 traffic 밖에서 시작하고 `/ready`, `/admin/health`, 대표 metadata/query와 negative
    safety probe를 확인합니다.
 4. Traffic을 제한적으로 연결하고 error, timeout, queue, row/byte와 pool 지표를 관찰합니다.

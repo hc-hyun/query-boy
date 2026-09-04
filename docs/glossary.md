@@ -6,9 +6,10 @@
 
 | 용어 | 뜻 |
 |---|---|
-| Source | Query Man이 조회 대상으로 다루는 PostgreSQL database 단위입니다. Client는 접속 주소 대신 Source ID를 사용합니다. |
+| Source | Query Man이 하나의 reader와 curated-view 계약으로 노출하는 논리 조회 단위입니다. 여러 Source가 같은 물리 DB를 사용할 수 있습니다. |
 | Source package | Git에서 review하는 `config/sources/<source-id>/` 폴더입니다. `source.yaml`과 `views.sql`만 둡니다. |
-| Source manifest | `source.yaml`입니다. 접속 환경 변수, 허용 범위, budget과 provenance를 정의하며 password 값은 넣지 않습니다. |
+| Source manifest | `source.yaml`입니다. DB profile, reader, 허용 범위, budget과 provenance를 정의하며 credential 값은 넣지 않습니다. |
+| Database profile | `config/database-profiles.yaml`의 물리 PostgreSQL endpoint와 DB별 인증 설정입니다. 여러 Source가 공유할 수 있습니다. |
 | Desired view SQL | `views.sql`입니다. DB owner가 적용할 curated view와 exact grant를 정의하지만 Runtime은 실행하지 않습니다. |
 | Curated view | 원본 table에서 공개해도 되는 column과 의미를 DB owner가 정리한 읽기 전용 view입니다. |
 | View contract version | Manifest와 공개 view comment marker가 공유하는 양의 정수입니다. 공개 구조 변경 때 올립니다. |
@@ -20,6 +21,7 @@
 | 용어 | 뜻 |
 |---|---|
 | Reader | Source를 읽는 최소 권한 DB 계정입니다. 원본 schema 쓰기나 관리자 권한이 없습니다. |
+| Client certificate | Query Man deployment가 PostgreSQL에 system identity를 증명하는 DB별 인증서입니다. Source별 reader 권한을 대신하지 않습니다. |
 | DB owner / DBA | View, role, grant와 backup을 관리하는 주체입니다. Query 요청 처리에는 사용하지 않습니다. |
 | DSN | DB 접속 주소와 설정의 묶음입니다. Client가 선택하거나 볼 수 없습니다. |
 | Allowlist | 명시적으로 허용한 schema, relation, function, operator 등만 통과시키는 정책입니다. |

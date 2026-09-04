@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 SourceEnvironment = Literal["production", "staging", "development", "test"]
@@ -37,13 +38,29 @@ class BudgetProfile:
 
 
 @dataclass(frozen=True)
+class PasswordAuthentication:
+    password: str
+
+
+@dataclass(frozen=True)
+class ClientCertificateAuthentication:
+    root_certificate: Path
+    client_certificate: Path
+    client_key: Path
+
+
+DatabaseAuthentication = PasswordAuthentication | ClientCertificateAuthentication
+
+
+@dataclass(frozen=True)
 class ResolvedConnection:
+    database_profile: str
     host: str
     port: int
     database: str
     user: str
-    password: str
     sslmode: SSLMode
+    authentication: DatabaseAuthentication
 
 
 @dataclass(frozen=True)
