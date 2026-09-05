@@ -14,12 +14,20 @@ from pathlib import Path
 from typing import BinaryIO
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, HTTPSHandler, Request, build_opener
 
 MAX_RESPONSE_BYTES = 1024 * 1024
 REQUEST_TIMEOUT_SECONDS = 5.0
 TOKEN_MIN_BYTES = 32
 TOKEN_MAX_BYTES = 512
+
+
+class _NoRedirect(HTTPRedirectHandler):
+    def redirect_request(
+        self, request: Request, response: BinaryIO, code: int, message: str, headers: object, new_url: str
+    ) -> None:
+        # Redirect targets have not passed the server URL or credential checks.
+        return None
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -109,6 +117,16 @@ def _read_body(stream: BinaryIO) -> bytes:
     return body
 
 
+def _redact_token(value: object, token: str) -> object:
+    if isinstance(value, str):
+        return value.replace(token, "[REDACTED]")
+    if isinstance(value, list):
+        return [_redact_token(item, token) for item in value]
+    if isinstance(value, dict):
+        return {key.replace(token, "[REDACTED]"): _redact_token(item, token) for key, item in value.items()}
+    return value
+
+
 def _request(command: str, source_id: str | None) -> tuple[int, object]:
     routes = {
         "ready": ("GET", "/ready"),
@@ -134,19 +152,21 @@ def _request(command: str, source_id: str | None) -> tuple[int, object]:
     if ca_file:
         context = ssl.create_default_context(cafile=ca_file)
     request = Request(f"{_server_url()}{path}", data=body, headers=headers, method=method)
+    opener = build_opener(HTTPSHandler(context=context), _NoRedirect())
     try:
-        with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS, context=context) as response:
+        with opener.open(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
             status = response.status
             raw_response = _read_body(response)
     except HTTPError as error:
-        status = error.code
-        raw_response = _read_body(error)
-    if token is not None:
-        raw_response = raw_response.replace(token, b"[REDACTED]")
+        with error:
+            message = "server redirect blocked" if 300 <= error.code < 400 else "server rejected the request"
+            return error.code, {"error": message}
     try:
         response_body = json.loads(raw_response)
     except (UnicodeDecodeError, json.JSONDecodeError):
         response_body = {"error": "server returned a non-JSON response"}
+    if token is not None:
+        response_body = _redact_token(response_body, token.decode("ascii"))
     return status, response_body
 
 
@@ -154,7 +174,7 @@ def run(arguments: list[str]) -> int:
     parsed = _parser().parse_args(arguments)
     try:
         status, response = _request(parsed.command, getattr(parsed, "source_id", None))
-    except (OSError, UnicodeError, URLError, ValueError):
+    except (OSError, RecursionError, UnicodeError, URLError, ValueError):
         print("Query Man request failed; no credential or response details were printed.", file=sys.stderr)
         return 1
     print(json.dumps({"http_status": status, "response": response}, ensure_ascii=False, indent=2))

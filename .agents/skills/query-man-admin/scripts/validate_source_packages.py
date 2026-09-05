@@ -42,6 +42,8 @@ def validate(root: Path) -> dict[str, object]:
     source_ids = sorted(registry.source_ids())
     return {
         "status": "valid",
+        "validation_scope": "configuration_and_package_layout",
+        "views_sql_validated": False,
         "source_count": len(source_ids),
         "source_ids": source_ids,
         "runtime_environment_read": False,

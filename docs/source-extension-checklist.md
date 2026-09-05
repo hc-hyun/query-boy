@@ -95,8 +95,16 @@ uv run pytest
 ```
 
 검사는 package를 발견해 공통 규칙을 적용합니다. 새 source 이름·개수를 다른 test나 문서에 등록하지
-않습니다. Repository-local skill validator는 environment, certificate file을 읽거나 DB에 연결하지 않으며
-output에 endpoint, credential path나 값을 노출하지 않습니다. 설치형 source 관리 CLI는 제공하지 않습니다.
+않습니다. Repository-local skill helper는 manifest/profile과 두 파일 layout을 검사하고,
+`tests/test_source_view_artifacts.py`는 production과 Query Cave의 `views.sql`을 모두 검사합니다. Helper의
+성공만으로 SQL 검증까지 끝났다고 해석하지 않습니다. 이 과정은 runtime environment나 certificate file을
+읽거나 DB에 연결하지 않으며 helper output에 endpoint, credential path나 값을 노출하지 않습니다.
+설치형 source 관리 CLI는 제공하지 않습니다.
+
+Repository gate는 production source가 없는 초기 상태와 source가 추가된 상태를 모두 검사합니다. 빈
+inventory를 고정된 expected list로 유지하지 않으므로 첫 source도 이후 source와 같은 검사로 검증합니다.
+Runtime과 helper는 source가 없으면 여전히 fail-closed합니다. 최초 추가는 `SOURCE-01`의 profile/package
+review를 거치며, 테스트 성공이 DB apply나 runtime 활성화 승인으로 바뀌지는 않습니다.
 
 ## Protected apply와 rollback
 
@@ -104,11 +112,13 @@ output에 endpoint, credential path나 값을 노출하지 않습니다. 설치�
    condition과 change-record 위치를 승인받습니다.
 2. DB/data owner가 no-PII와 exact view output을 sign off합니다.
 3. DBA가 traffic 밖에서 reviewed `views.sql`을 적용합니다.
-4. Certificate DN-reader mapping, owner/reader grant, RLS 0개, marker/source/version과 Runtime direct
-   admission을 확인합니다.
-5. 잘못된 certificate/DN, negative privilege, bounded query, timeout/cancel/rollback과 credential
-   redaction을 검증합니다.
-6. Application을 재배포·재시작한 뒤에만 source가 startup inventory에 들어옵니다.
+4. Certificate DN-reader mapping, reader parameter 권한, owner/reader grant, RLS 0개와
+   marker/source/version을 확인합니다.
+5. Approved image/config와 credential mount로 traffic을 끈 상태에서 application을 재배포·재시작합니다.
+   이때 source가 startup inventory에 들어가며 전체 inventory의 Runtime direct admission을 확인합니다.
+6. [Operations의 traffic-off acceptance](operations.md#2-traffic-off-acceptance)에 따라 잘못된 certificate/DN,
+   negative privilege, bounded query, timeout/cancel/rollback, 복구 후 재조회와 credential redaction을
+   검증합니다. 모두 통과한 뒤 승인된 cutover 절차로 traffic을 연결합니다.
 
 Target, dependency, privilege나 output이 예상과 다르면 transaction을 rollback하고 적용을 중단합니다.
 Commit 뒤 문제가 발견되면 신규 admission을 막고 직전 view definition과 grant를 DBA가 복구한 뒤 직전

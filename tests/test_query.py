@@ -374,6 +374,26 @@ async def test_maps_ast_rejection_to_stable_query_error() -> None:
 
 
 @pytest.mark.asyncio
+async def test_rejects_deeply_nested_sql_before_execution() -> None:
+    service, metadata, executor = query_service()
+    published = await metadata.get_published("query-cave")
+    sql = "SELECT (" * 200 + "SELECT 'private-literal'" + ")" * 200
+
+    with pytest.raises(Exception) as caught:
+        await service.query(
+            "query-cave",
+            sql,
+            published.revision,
+            SQL_POLICY_REVISION,
+        )
+
+    assert isinstance(caught.value, QueryRejectedError)
+    assert caught.value.status_code == 400
+    assert caught.value.details == {"reason_code": "SQL_PARSE_ERROR"}
+    assert executor.calls == []
+
+
+@pytest.mark.asyncio
 async def test_maps_forbidden_between_variant_to_bounded_query_details() -> None:
     service, metadata, executor = query_service()
     published = await metadata.get_published("query-cave")

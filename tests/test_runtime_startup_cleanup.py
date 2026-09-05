@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi import FastAPI
 
@@ -11,6 +13,7 @@ from query_man.runtime.config import RuntimeConfig
 from query_man.runtime.operations import operations
 from query_man.source_catalog.registry import SourceRegistry
 from tests.helpers import ROOT_DIRECTORY, load_test_registry
+from tests.test_metadata import StaticCatalog, _described_snapshot
 
 _NORMAL_SHUTDOWN_EVENTS = [
     "probe",
@@ -181,6 +184,28 @@ async def test_lifespan_probes_before_serving_then_stops_drains_and_closes(
 
     assert executor.drain_timeouts == [3_000]
     assert events == _NORMAL_SHUTDOWN_EVENTS
+
+
+@pytest.mark.asyncio
+async def test_real_startup_probe_rejects_oversized_context_before_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = load_test_registry().get("query-cave")
+    assert source is not None
+    source = replace(source, budget=replace(source.budget, max_metadata_response_bytes=1024))
+    registry = SourceRegistry([source])
+    monkeypatch.setattr(composition_module.SourceRegistry, "load", lambda *_args: registry)
+    monkeypatch.setattr(composition_module, "PostgresCatalog", lambda: StaticCatalog(_described_snapshot()))
+    app = composition_module.build_app(_runtime_config())
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            ready = await client.get("/ready")
+            context = await client.post("/meta", json={"source_id": source.source_id})
+        assert ready.status_code == 503
+        assert ready.json() == {"status": "unavailable"}
+        assert context.status_code == 503
+        assert context.json()["error"]["code"] == "METADATA_UNAVAILABLE"
+    operations.reset()
 
 
 @pytest.mark.asyncio

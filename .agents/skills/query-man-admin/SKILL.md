@@ -5,8 +5,9 @@ description: Repository-scoped Query Man source/database onboarding and read-onl
 
 # Query Man Admin
 
-Use this skill only from the repository root that contains this file at
-`.agents/skills/query-man-admin/SKILL.md`. Follow the root `AGENTS.md` and the accepted ADRs. This
+Locate the repository root containing this file at `.agents/skills/query-man-admin/SKILL.md` and run
+the commands below from that root, even if the request starts in a subdirectory. Use this skill only
+in that repository. Follow the root `AGENTS.md` and the accepted ADRs. This
 skill prepares Git-reviewed repository artifacts and inspects an already-running server. It is not
 the source authority, a deployment controller, or a business-data query tool.
 
@@ -41,21 +42,27 @@ reference, view contract, and budget. Add only:
 - `config/sources/<source-id>/source.yaml`
 - `config/sources/<source-id>/views.sql`
 
-Use `config/sources/query-cave/` only as a structural reference; do not copy Gotham identifiers.
+Use `query-cave/config/sources/query-cave/` only as a structural reference; do not copy Gotham identifiers.
 Do not invent columns, meanings, PII classifications, grants, or migration evidence. Never add
 credentials, DSNs, real data, certificate content, or runtime secret paths to a source package.
 Explain that a merged package takes effect after a reviewed restart; do not claim live admission.
 
-Validate versioned packages without reading `.env`, process credentials, certificate files, or a
-database:
+Validate the versioned manifest/profile references and desired SQL separately, without reading `.env`,
+process credentials, certificate files, or a database:
 
 ```bash
 uv run python .agents/skills/query-man-admin/scripts/validate_source_packages.py
+uv run pytest tests/test_registry.py tests/test_source_view_artifacts.py
 ```
+
+The helper validates configuration and the two-file layout; the tests validate `views.sql` contents
+for both Query Cave and discovered production packages. The repository gate supports the current
+empty production inventory and reviewed source additions. The runtime and helper still fail closed
+when no source exists. Do not add a source-name list or change tests for each new source.
 
 ## Add a database profile
 
-Read `docs/database-certificate-authentication.md`, ADR 0036, and the database-profile section of
+Read `docs/database-certificate-authentication.md`, ADR 0036, and
 `docs/source-extension-checklist.md`. Create or modify `config/database-profiles.yaml` version 1. Production
 profiles use `verify-full` and client-certificate authentication.
 

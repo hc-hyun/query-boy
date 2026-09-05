@@ -31,6 +31,9 @@ distinct scopes. Approval for one is not approval for another.
 - Pin the approved commit; reject local/unreviewed edits for the apply input.
 - Validate the complete discovered inventory with
   `uv run python .agents/skills/query-man-admin/scripts/validate_source_packages.py`.
+- Validate desired SQL with `uv run pytest tests/test_registry.py tests/test_source_view_artifacts.py`;
+  the configuration helper alone does not inspect the SQL body. Complete the repository gate in
+  `docs/source-extension-checklist.md` before applying the approved commit.
 - Confirm manifest version 6 and database-profile version 1.
 - Confirm production `sslmode: verify-full` and `authentication.type: client-certificate`.
 - Confirm exact source reader, allowed schema, view-only relation kind, contract version, migration
@@ -62,9 +65,10 @@ revoke, drop, or overwrite to force the target into shape.
    Never automatically drop a created database.
 2. **Role and schema bootstrap:** create the reader with `LOGIN`, no password, a positive reviewed
    connection limit, and `NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS`.
-   Create the dedicated view owner as `NOLOGIN` with the same negative attributes. Apply database-local
-   read-only/time/resource settings derived from the reviewed budget. Create only the approved curated
-   schema if absent.
+   Create the dedicated view owner as `NOLOGIN` with the same negative attributes. Follow the reader
+   setup in `docs/database-certificate-authentication.md`, including `temp_file_limit` parameter SET
+   privilege and database-local read-only/time/resource defaults derived from the reviewed budget.
+   Create only the approved curated schema if absent.
 3. **Reviewed view transaction:** while traffic is off, run the exact approved `views.sql` with
    `ON_ERROR_STOP`. It owns exact base dependencies, view ownership, PUBLIC revocation, reader schema
    `USAGE`, view `SELECT`, and source/version comments. Roll back on any error or drift; do not patch at
@@ -78,20 +82,20 @@ revoke, drop, or overwrite to force the target into shape.
 
 ## Acceptance
 
-Keep traffic off until all checks pass:
+Keep traffic off and use the canonical acceptance procedures in full:
 
-- approved certificate succeeds for each mapped reader; missing, untrusted, expired, wrong-hostname,
-  mismatched-key, unmapped-DN, wrong-reader, and wrong-database probes fail;
-- session identity is exact and transactions are read-only with approved time/resource settings;
-- reader has database `CONNECT`, curated-schema `USAGE`, and curated-view `SELECT`, but no base-relation,
-  write, schema `CREATE`, role-switch, elevated role, or unintended database access;
-- view owner is `NOLOGIN`, has only exact base-read dependencies, and owns the curated views;
-- live views have the approved columns/types/nullability, security properties, and first-line
-  `query-man:source=<source-id>;view-contract=<version>` marker;
-- Query Man traffic-off startup admits the entire reviewed inventory and `/ready` plus operator health
-  pass without credential or internal-error disclosure.
+- `docs/source-extension-checklist.md`: exact view output/marker/ownership, reader privileges, and
+  source admission.
+- `docs/database-certificate-authentication.md`: reader parameter privileges and session settings,
+  positive/negative certificate and reader probes, and credential delivery.
+- `docs/operations.md`, section `2. Traffic-off acceptance`: bounded API query with matching
+  revisions, rejected writes/invalid inputs, resource limits, timeout/cancel/rollback, disconnect and
+  shutdown cleanup, and connection reuse after recovery. Readiness and operator health are only part
+  of this acceptance.
 
-Use catalog and privilege probes; do not print business rows. Any mismatch blocks traffic.
+Use bounded, owner-approved probes without printing business rows. Record DBA preparation and full
+application acceptance separately; if application checks are outside the execution approval, report
+them as pending. Any mismatch blocks traffic.
 
 ## Rollback and handoff
 

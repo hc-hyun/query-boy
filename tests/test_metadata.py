@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import replace
 
@@ -15,7 +16,9 @@ from query_man.guarded_query.sql_validation import (
 from query_man.metadata.catalog import _CatalogValidationError
 from query_man.metadata.models import CatalogSnapshot
 from query_man.metadata.service import MetadataService
+from query_man.runtime.operations import operations
 from query_man.source_catalog.models import SourceProfile
+from query_man.source_catalog.reader_policy import ReaderSessionPolicyError
 from query_man.source_catalog.registry import SourceRegistry
 from tests.helpers import column, load_test_registry, minimal_query_cave_snapshot
 
@@ -60,13 +63,16 @@ class SequencedCatalog(StaticCatalog):
 
 
 class SnapshotSequenceCatalog:
-    def __init__(self, snapshots: list[CatalogSnapshot]) -> None:
+    def __init__(self, snapshots: list[CatalogSnapshot | Exception]) -> None:
         self.snapshots = iter(snapshots)
         self.load_count = 0
 
     async def load(self, _source: SourceProfile) -> CatalogSnapshot:
         self.load_count += 1
-        return next(self.snapshots)
+        snapshot = next(self.snapshots)
+        if isinstance(snapshot, Exception):
+            raise snapshot
+        return snapshot
 
     async def close(self) -> None:
         pass
@@ -382,3 +388,163 @@ async def test_descriptive_change_rotates_revision_without_structure_rejection()
     second = await service.get_published("query-cave")
 
     assert second.revision != first.revision
+
+
+@pytest.mark.parametrize("rejection", ["structure", "marker", "catalog", "reader"])
+@pytest.mark.asyncio
+async def test_rejected_cache_stays_unavailable_until_revalidated(rejection: str) -> None:
+    snapshot = _described_snapshot()
+    rejected: CatalogSnapshot | Exception
+    if rejection == "structure":
+        rejected = replace(snapshot, relations=(
+            replace(snapshot.relations[0], definition_hash="changed"), *snapshot.relations[1:],
+        ))
+    elif rejection == "marker":
+        rejected = replace(snapshot, relations=(
+            replace(snapshot.relations[0], view_contract_source="wrong-source"), *snapshot.relations[1:],
+        ))
+    elif rejection == "catalog":
+        rejected = _CatalogValidationError("Catalog policy mismatch")
+    else:
+        rejected = ReaderSessionPolicyError("Reader policy mismatch")
+    catalog = SnapshotSequenceCatalog([
+        snapshot, rejected, RuntimeError("temporary connection failure"), rejected, snapshot,
+    ])
+    service = MetadataService(load_test_registry(), catalog, cache_ttl_ms=0, now=lambda: 1_000)
+    original = await service.get_published("query-cave")
+
+    for _ in range(3):
+        with pytest.raises(MetadataUnavailableError):
+            await service.get_published("query-cave")
+
+    restored = await service.get_published("query-cave")
+    assert restored.revision == original.revision
+    assert catalog.load_count == 5
+
+
+@pytest.mark.parametrize("cancel_first", [False, True])
+@pytest.mark.asyncio
+async def test_cancelled_request_does_not_cancel_another_metadata_request(cancel_first: bool) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class BlockingCatalog(StaticCatalog):
+        async def load(self, source: SourceProfile) -> CatalogSnapshot:
+            started.set()
+            await release.wait()
+            return await super().load(source)
+
+    service = MetadataService(load_test_registry(), BlockingCatalog(_described_snapshot()))
+    first = asyncio.create_task(service.get_context("query-cave"))
+    await asyncio.wait_for(started.wait(), timeout=1)
+    second = asyncio.create_task(service.get_context("query-cave"))
+    try:
+        await asyncio.sleep(0)
+        cancelled, surviving = (first, second) if cancel_first else (second, first)
+        cancelled.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await cancelled
+        release.set()
+        response = await asyncio.wait_for(surviving, timeout=1)
+        assert response["snapshot_status"] == "fresh"
+    finally:
+        release.set()
+        first.cancel()
+        second.cancel()
+        await asyncio.gather(first, second, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_metadata_requests_reuse_refreshed_cache() -> None:
+    catalog = SequencedCatalog(_described_snapshot())
+    service = MetadataService(load_test_registry(), catalog)
+
+    first, second = await asyncio.gather(
+        service.get_context("query-cave"), service.get_context("query-cave"),
+    )
+
+    assert first == second
+    assert catalog.load_count == 1
+
+
+@pytest.mark.asyncio
+async def test_cancelled_refresh_finishes_cleanup_before_next_request_loads() -> None:
+    started = asyncio.Event()
+    cleanup_started = asyncio.Event()
+    finish_cleanup = asyncio.Event()
+    cleaned_up = asyncio.Event()
+    load_count = 0
+
+    class CleaningCatalog(StaticCatalog):
+        async def load(self, source: SourceProfile) -> CatalogSnapshot:
+            nonlocal load_count
+            load_count += 1
+            if load_count == 1:
+                started.set()
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    cleanup_started.set()
+                    await finish_cleanup.wait()
+                    cleaned_up.set()
+            assert cleaned_up.is_set()
+            return await super().load(source)
+
+    service = MetadataService(load_test_registry(), CleaningCatalog(_described_snapshot()))
+    first = asyncio.create_task(service.get_published("query-cave"))
+    await asyncio.wait_for(started.wait(), timeout=1)
+    first.cancel()
+    await asyncio.wait_for(cleanup_started.wait(), timeout=1)
+    second = asyncio.create_task(service.get_published("query-cave"))
+    try:
+        await asyncio.sleep(0)
+        assert load_count == 1
+        finish_cleanup.set()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        assert (await asyncio.wait_for(second, timeout=1)).snapshot.relations
+        assert load_count == 2
+    finally:
+        finish_cleanup.set()
+        first.cancel()
+        second.cancel()
+        await asyncio.gather(first, second, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_oversized_context_is_not_published_or_reported_ready() -> None:
+    source = load_test_registry().get("query-cave")
+    assert source is not None
+    source = replace(source, budget=replace(source.budget, max_metadata_response_bytes=1024))
+    service = MetadataService(SourceRegistry([source]), StaticCatalog(_described_snapshot()))
+    operations.reset()
+    operations.reconcile_sources([source.source_id])
+    try:
+        for read in (service.get_published, service.get_context):
+            with pytest.raises(MetadataUnavailableError):
+                await read(source.source_id)
+            assert operations.public_status() == "unavailable"
+    finally:
+        operations.reset()
+
+
+@pytest.mark.asyncio
+async def test_oversized_refresh_does_not_restore_previous_cache_after_connection_failure() -> None:
+    snapshot = _described_snapshot()
+    oversized = replace(snapshot, relations=tuple(
+        replace(relation, comment="x" * 2000, columns=tuple(
+            replace(item, comment="x" * 2000) for item in relation.columns
+        )) for relation in snapshot.relations
+    ))
+    catalog = SnapshotSequenceCatalog([snapshot, oversized, RuntimeError("connection failed"), snapshot])
+    source = load_test_registry().get("query-cave")
+    assert source is not None
+    source = replace(source, budget=replace(source.budget, max_metadata_response_bytes=8192))
+    service = MetadataService(SourceRegistry([source]), catalog, cache_ttl_ms=0, now=lambda: 1_000)
+    original = await service.get_published("query-cave")
+
+    for _ in range(2):
+        with pytest.raises(MetadataUnavailableError):
+            await service.get_published("query-cave")
+
+    assert (await service.get_published("query-cave")).revision == original.revision

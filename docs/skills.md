@@ -5,7 +5,8 @@ Query Man의 관리 작업은 설치형 관리 CLI 대신 repository에 함께 v
 `$skill-name`으로 명시했을 때만 사용하도록 설정했습니다.
 
 Skill 호출은 shell 명령이 아니라 Codex에게 보내는 요청입니다. Repository root 또는 그 하위 directory에서
-Codex 작업을 시작하고 요청 첫 부분에 정확한 이름을 적습니다.
+Codex 작업을 시작하고 요청 첫 부분에 정확한 이름을 적습니다. Skill은 repository root를 확인하고 모든
+상대 경로 명령을 그 root에서 실행합니다.
 
 ## 어떤 skill을 쓰나
 
@@ -43,10 +44,15 @@ DSN, token, certificate body/private key와 secret-store 식별자를 대화나 
 
 ```bash
 uv run python .agents/skills/query-man-admin/scripts/validate_source_packages.py
+uv run pytest tests/test_registry.py tests/test_source_view_artifacts.py
 ```
 
-이 helper는 versioned 설정만 읽고 `.env`, process environment, certificate file과 database를 읽지 않습니다.
-완료 전에는 source checklist의 focused test와 repository 전체 gate도 실행합니다.
+Helper는 versioned 설정과 두 파일 layout을 검사하며, SQL 본문은 pytest가 production과 Query Cave에서
+발견한 모든 package를 대상으로 검사합니다. Helper의 `valid`는 `validation_scope`에 표시한 설정/layout에만
+적용되며 `views_sql_validated: false`로 SQL 본문을 검사하지 않았음을 명시합니다.
+`.env`, process credential, certificate file이나 database는
+읽지 않습니다. 첫 source를 추가해도 검사 대상이 자동으로 포함되며 테스트에 source 이름을 등록할 필요가
+없습니다. 완료 전에는 [source checklist](source-extension-checklist.md#repository-검증)의 전체 gate도 실행합니다.
 
 ## 서버 상태 조회
 
@@ -67,6 +73,9 @@ export QUERY_MAN_SERVER_URL=https://query-man.example
 export QUERY_MAN_OPERATOR_TOKEN_FILE=/approved/non-repository/path/operator-token
 python3 .agents/skills/query-man-admin/scripts/query_man_request.py status
 ```
+
+주소 이동 응답은 자동으로 따라가지 않습니다. 성공 JSON은 해석한 후 토큰을 가리고, HTTP 오류는 status와
+정해진 오류 메시지만 표시합니다. 인증 실패에 응답한 서버의 원문이나 header는 출력하지 않습니다.
 
 현재 Query Man server 자체의 query/operator token 전달은 여전히 runtime access policy의 environment
 contract입니다. 위 token-file 방식은 관리 client helper의 credential 노출을 줄이는 기능이며 server-side
@@ -105,7 +114,9 @@ certificate, HBA, output이 예상과 다르면 skill은 실행을 시작하거�
 2. Owner review와 approved commit을 고정합니다.
 3. `$query-man-dba-onboarding`으로 secret-free 실행 packet을 만들고 protected 실행 범위를 승인합니다.
 4. Traffic을 끈 상태에서 승인된 owner가 DB/PKI/deployment 작업과 positive/negative probe를 수행합니다.
-5. 별도 승인으로 Query Man을 시작한 뒤 `$query-man-admin`으로 readiness와 operator 상태를 조회합니다.
+5. 별도 승인으로 Query Man을 시작하고 [Operations의 traffic-off acceptance](operations.md#2-traffic-off-acceptance)를
+   완료합니다. `$query-man-admin`의 readiness/operator 상태 조회와 함께 실제 bounded query 및 timeout,
+   cancel·rollback 이후 복구를 확인해야 합니다.
 
 Repository PASS를 protected DB 적용이나 production activation 완료로 기록하지 않습니다. 실제 결과는
 승인된 환경의 append-only change record에만 남깁니다.

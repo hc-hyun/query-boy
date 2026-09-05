@@ -6,7 +6,8 @@ description: Plan and, with separate execution authorization, guide protected Po
 # Query Man DBA Onboarding
 
 Use this skill only from the repository containing it at
-`.agents/skills/query-man-dba-onboarding/SKILL.md`. Treat the repository's `AGENTS.md`, accepted
+`.agents/skills/query-man-dba-onboarding/SKILL.md`; locate its root and run repository commands there.
+Treat the repository's `AGENTS.md`, accepted
 ADRs, `docs/source-extension-checklist.md`, `docs/database-certificate-authentication.md`, and
 `docs/operations.md` as the authorities. If they disagree, stop and report the conflict.
 
@@ -27,13 +28,14 @@ a password, token, certificate, private key, Secret value, or connection string.
 ## Prepare the execution packet
 
 1. Pin the approved commit and identify the exact source package and database profile.
-2. Run the `$query-man-admin` repository-local source validator and inspect the source's
-   `source.yaml` and reviewed `views.sql`.
+2. Run the configuration helper and SQL tests listed in `docs/source-extension-checklist.md`, then
+   inspect the source's `source.yaml` and reviewed `views.sql`.
 3. Resolve only non-secret facts: target database, source reader, dedicated `NOLOGIN` view owner,
    curated schema/views, approved client-certificate DN/fingerprint, Query Man egress CIDR, and
    source budget limits.
-4. Separate cluster-wide work (database creation, certificate trust, `pg_hba.conf`, `pg_ident.conf`)
-   from transactional database work (roles, curated schema, reviewed view, revoke/grant).
+4. Separate cluster-wide scope (database/role creation, parameter SET grants, certificate trust,
+   `pg_hba.conf`, `pg_ident.conf`) from database-local scope (schema/view ownership, object grants,
+   reader defaults). Role DDL can be transactional; database creation cannot.
 5. Produce positive and negative acceptance checks plus a rollback plan. Do not store protected
    environment facts or execution evidence in this repository unless an accepted authority explicitly
    requires that exact artifact.
@@ -56,6 +58,8 @@ on any target, dependency, existing-role, privilege, certificate, HBA, or output
 - Create new roles without passwords. The reader is `LOGIN` with a positive approved connection
   limit and no elevated attributes; the view owner is `NOLOGIN`. If either role already exists with
   unexpected ownership or attributes, stop instead of altering it into compliance.
+- Follow the reader bootstrap in `docs/database-certificate-authentication.md`, including the
+  parameter privilege required by runtime budget settings and a check using the reader session.
 - Apply the exact approved `views.sql` with `ON_ERROR_STOP` while traffic is off. Do not patch SQL at
   the console and continue.
 - Have the authorized PostgreSQL configuration owner apply exact DN-to-reader and narrow
@@ -72,5 +76,6 @@ evidence automatically.
 
 Record only secret-free evidence in the approved append-only environment record: commit, target
 identity, certificate fingerprint/expiry, applied artifact digest, role/grant and HBA outcomes,
-positive/negative probe results, executor, timestamps, and rollback disposition. Never claim runtime
-admission until the separately approved Query Man traffic-off startup and readiness checks pass.
+positive/negative probe results, executor, timestamps, and rollback disposition. Report DBA preparation
+and application acceptance separately. Application activation requires the full traffic-off acceptance
+in `docs/operations.md`, including bounded queries and failure recovery; readiness alone is insufficient.

@@ -41,7 +41,9 @@ The bundled request helper accepts exactly one of these sources:
 
 Set `QUERY_MAN_SERVER_URL`. HTTPS is required except for loopback HTTP. If a private CA is needed,
 set `QUERY_MAN_SERVER_CA_FILE` to its approved trust-bundle path. The helper builds the Authorization
-header in memory, caps response size, and redacts an exact reflected token.
+header in memory and does not follow redirects, including same-server redirects. Successful JSON
+responses are size-limited and token-masked after decoding, including object keys and nested values.
+HTTP failures print the status and a fixed error message, never the server's error body or headers.
 
 On an authentication or TLS failure, report the normalized failure once. Do not dump request
 headers, retry with weaker settings, or reveal credential content.

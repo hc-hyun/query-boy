@@ -449,6 +449,35 @@ def test_rejects_query_over_byte_limit_without_echoing_sql() -> None:
     assert secret not in captured.value.message
 
 
+def test_rejects_deeply_nested_sql_with_bounded_parse_error() -> None:
+    sql = "SELECT (" * 200 + "SELECT 'private-literal'" + ")" * 200
+
+    # Capture before asserting the type so a regression does not render the recursive AST traceback.
+    with pytest.raises(Exception) as captured:
+        validate_sql(sql, allowed_relations=ALLOWED_RELATIONS)
+
+    assert isinstance(captured.value, SqlValidationError)
+    assert captured.value.code == "SQL_PARSE_ERROR"
+    assert captured.value.message == "SQL could not be parsed."
+
+
+@pytest.mark.parametrize("phase", ("parse_sql", "_walk_nodes", "fingerprint"))
+def test_maps_recursion_failures_to_bounded_parse_error(
+    monkeypatch: pytest.MonkeyPatch,
+    phase: str,
+) -> None:
+    def exhausted(_value: object) -> None:
+        raise RecursionError("private parser input")
+
+    monkeypatch.setattr(sql_validation_module, phase, exhausted)
+
+    with pytest.raises(SqlValidationError) as captured:
+        validate_sql("SELECT 1", allowed_relations=ALLOWED_RELATIONS)
+
+    assert captured.value.code == "SQL_PARSE_ERROR"
+    assert captured.value.message == "SQL could not be parsed."
+
+
 def test_supports_explicit_policy_extension() -> None:
     result = validate_sql(
         "SELECT pg_catalog.width_bucket(note_count, 0, 100, 10) FROM signal_schema.case_files_view",

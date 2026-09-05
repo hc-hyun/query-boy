@@ -26,7 +26,7 @@ business question/result corpus, production source 목록 복제나 test-only pu
 | `config/security-evaluation.yaml` | Versioned security corpus |
 | `tests/test_security_evaluation.py` | SQL/input fail-closed와 test-output secret redaction |
 | `tests/test_documentation.py` | Current 문서 탐색, ADR index, retired reference와 local link |
-| `tests/test_source_view_artifacts.py` | Reviewed source package와 desired view SQL artifact |
+| `tests/test_registry.py`, `tests/test_source_view_artifacts.py` | Discovered production/Query Cave package, manifest와 desired view SQL artifact |
 | `tests/test_database_integration.py` | Real PostgreSQL reader/transaction safety kernel |
 | `query-cave/` | Production inventory와 분리된 certificate-authenticated source와 PostgreSQL |
 | `tests/test_integration.py`, `tests/test_load.py` | Composition/disconnect와 bounded load |

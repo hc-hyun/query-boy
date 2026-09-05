@@ -34,6 +34,8 @@ query error를 render하지만 PostgreSQL detail을 받지 않습니다.
 ## 불변조건과 승인
 
 - 한 개의 read-only `SELECT`/`WITH`와 allowlisted object만 실행합니다.
+- Parser, AST 직렬화·순회 또는 fingerprint 계산의 재귀 한계 오류는 실행 전에 기존
+  `400 QUERY_REJECTED`와 `SQL_PARSE_ERROR` reason으로 거부합니다.
 - Query는 current metadata와 SQL policy revision 둘 다 일치해야 합니다.
 - Timeout, concurrency, plan, memory/temp, row/byte와 OID limit을 우회하지 않습니다.
 - SQL, literal, credential과 database error detail을 public response/log에 노출하지 않습니다.

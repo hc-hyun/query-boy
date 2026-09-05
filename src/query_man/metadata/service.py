@@ -56,7 +56,7 @@ class MetadataService:
         self._refresh_retry_ms = refresh_retry_ms
         self._now = now or (lambda: time.monotonic_ns() // 1_000_000)
         self._cache: dict[str, _CacheEntry] = {}
-        self._refreshes: dict[str, asyncio.Task[PreparedMetadata]] = {}
+        self._refresh_locks: dict[str, asyncio.Lock] = {}
         self._view_structure_signatures: dict[tuple[str, int], str] = {}
 
     async def get_context(self, source_id: str) -> dict[str, object]:
@@ -64,39 +64,7 @@ class MetadataService:
         if source is None:
             raise SourceNotFoundError
         prepared, stale = await self._get_prepared(source)
-        relations = [
-            _to_relation_response(
-                relation,
-                source.budget.max_context_columns_per_relation,
-            )
-            for relation in sorted(
-                prepared.snapshot.relations,
-                key=lambda item: item.qualified_name,
-            )
-        ]
-        response: dict[str, object] = {
-            "source_id": source.source_id,
-            "source_name": source.name,
-            "source_description": source.description,
-            "metadata_revision": prepared.revision,
-            "sql_policy_revision": SQL_POLICY_REVISION,
-            "snapshot_status": "stale" if stale else "fresh",
-            "sql_capabilities": {
-                "functions": sorted(DEFAULT_ALLOWED_FUNCTIONS),
-                "cast_types": sorted(DEFAULT_ALLOWED_TYPES),
-                "unqualified_cast_types": sorted(DEFAULT_ALLOWED_UNQUALIFIED_TYPES),
-            },
-            "relations": relations,
-            "truncated": any(bool(relation["columns_truncated"]) for relation in relations),
-        }
-        encoded = json.dumps(
-            response,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ).encode()
-        if len(encoded) > source.budget.max_metadata_response_bytes:
-            raise MetadataUnavailableError({"contract_violations": ["Metadata response exceeds its byte limit."]})
-        return response
+        return _context_response(source, prepared, stale=stale)
 
     async def get_published(self, source_id: str) -> PreparedMetadata:
         source = self._registry.get(source_id)
@@ -106,48 +74,43 @@ class MetadataService:
         return prepared
 
     async def _get_prepared(self, source: SourceProfile) -> tuple[PreparedMetadata, bool]:
-        cached = self._cache.get(source.source_id)
-        now = self._now()
-        if cached and cached.expires_at > now:
-            operations.set_source_health(source.source_id, "healthy")
-            return cached.value, False
-        if cached and cached.next_refresh_at > now:
-            if now - cached.loaded_at <= self._max_stale_ms:
-                operations.increment("metadata_stale_served", source.source_id)
-                operations.set_source_health(source.source_id, "stale")
-                return cached.value, True
-            operations.set_source_health(source.source_id, "unavailable")
-            raise MetadataUnavailableError
-        try:
-            return await self._refresh(source), False
-        except MetadataUnavailableError:
-            raise
-        except (ReaderSessionPolicyError, _CatalogValidationError) as error:
-            operations.increment("metadata_refresh_failed", source.source_id)
-            operations.set_source_health(source.source_id, "unavailable")
-            raise MetadataUnavailableError from error
-        except Exception as error:
-            failed_at = self._now()
-            if cached and failed_at - cached.loaded_at <= self._max_stale_ms:
-                cached.next_refresh_at = failed_at + self._refresh_retry_ms
+        # Keep refresh owned by its request; cancelling a lock waiter cannot cancel the loader.
+        lock = self._refresh_locks.setdefault(source.source_id, asyncio.Lock())
+        async with lock:
+            cached = self._cache.get(source.source_id)
+            now = self._now()
+            if cached and cached.expires_at > now:
+                operations.set_source_health(source.source_id, "healthy")
+                return cached.value, False
+            if cached and cached.next_refresh_at > now:
+                if now - cached.loaded_at <= self._max_stale_ms:
+                    operations.increment("metadata_stale_served", source.source_id)
+                    operations.set_source_health(source.source_id, "stale")
+                    return cached.value, True
+                operations.set_source_health(source.source_id, "unavailable")
+                raise MetadataUnavailableError
+            try:
+                return await self._load_and_validate(source), False
+            except MetadataUnavailableError:
+                self._cache.pop(source.source_id, None)
+                operations.set_source_health(source.source_id, "unavailable")
+                raise
+            except (ReaderSessionPolicyError, _CatalogValidationError) as error:
+                self._cache.pop(source.source_id, None)
                 operations.increment("metadata_refresh_failed", source.source_id)
-                operations.increment("metadata_stale_served", source.source_id)
-                operations.set_source_health(source.source_id, "stale")
-                return cached.value, True
-            operations.increment("metadata_refresh_failed", source.source_id)
-            operations.set_source_health(source.source_id, "unavailable")
-            raise MetadataUnavailableError from error
-
-    async def _refresh(self, source: SourceProfile) -> PreparedMetadata:
-        active = self._refreshes.get(source.source_id)
-        if active is not None:
-            return await active
-        task = asyncio.create_task(self._load_and_validate(source))
-        self._refreshes[source.source_id] = task
-        try:
-            return await task
-        finally:
-            self._refreshes.pop(source.source_id, None)
+                operations.set_source_health(source.source_id, "unavailable")
+                raise MetadataUnavailableError from error
+            except Exception as error:
+                failed_at = self._now()
+                if cached and failed_at - cached.loaded_at <= self._max_stale_ms:
+                    cached.next_refresh_at = failed_at + self._refresh_retry_ms
+                    operations.increment("metadata_refresh_failed", source.source_id)
+                    operations.increment("metadata_stale_served", source.source_id)
+                    operations.set_source_health(source.source_id, "stale")
+                    return cached.value, True
+                operations.increment("metadata_refresh_failed", source.source_id)
+                operations.set_source_health(source.source_id, "unavailable")
+                raise MetadataUnavailableError from error
 
     async def _load_and_validate(
         self,
@@ -170,6 +133,8 @@ class MetadataService:
             snapshot,
             create_metadata_revision(source, snapshot),
         )
+        # Use the exact public projection before publishing, including startup/query-only reads.
+        _context_response(source, candidate, stale=False)
         current_signature = self._view_structure_signatures.get(signature_key)
         if current_signature is not None and current_signature != structure_signature:
             operations.increment("metadata_validation_rejected", source.source_id)
@@ -191,6 +156,33 @@ class MetadataService:
             expires_at=loaded_at + self._cache_ttl_ms,
             next_refresh_at=loaded_at + self._cache_ttl_ms,
         )
+
+
+def _context_response(source: SourceProfile, prepared: PreparedMetadata, *, stale: bool) -> dict[str, object]:
+    relations = [
+        _to_relation_response(relation, source.budget.max_context_columns_per_relation)
+        for relation in sorted(prepared.snapshot.relations, key=lambda item: item.qualified_name)
+    ]
+    response: dict[str, object] = {
+        "source_id": source.source_id,
+        "source_name": source.name,
+        "source_description": source.description,
+        "metadata_revision": prepared.revision,
+        "sql_policy_revision": SQL_POLICY_REVISION,
+        "snapshot_status": "stale" if stale else "fresh",
+        "sql_capabilities": {
+            "functions": sorted(DEFAULT_ALLOWED_FUNCTIONS),
+            "cast_types": sorted(DEFAULT_ALLOWED_TYPES),
+            "unqualified_cast_types": sorted(DEFAULT_ALLOWED_UNQUALIFIED_TYPES),
+        },
+        "relations": relations,
+        "truncated": any(bool(relation["columns_truncated"]) for relation in relations),
+    }
+    encoded = json.dumps(response, ensure_ascii=False, separators=(",", ":")).encode()
+    if len(encoded) > source.budget.max_metadata_response_bytes:
+        raise MetadataUnavailableError({"contract_violations": ["Metadata response exceeds its byte limit."]})
+    return response
+
 
 def _validate_snapshot(source: SourceProfile, snapshot: CatalogSnapshot) -> list[str]:
     if not snapshot.relations:

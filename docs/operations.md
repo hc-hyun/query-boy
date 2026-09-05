@@ -26,10 +26,12 @@ Source package와 database profile은 protected action 전에 repository에서 r
 
 ```bash
 uv run python .agents/skills/query-man-admin/scripts/validate_source_packages.py
+uv run pytest tests/test_registry.py tests/test_source_view_artifacts.py
 ```
 
-이 repository-local skill helper는 versioned artifact만 검증하며 environment나 certificate file을 읽거나
-DB에 연결하고 DDL을 실행하지 않습니다. 첫 source와 새 DB를 준비하는 파일·review·apply 절차는
+Skill helper는 manifest/profile과 두 파일 layout을 검증하고, pytest는 discovered production package와
+Query Cave의 desired `views.sql`도 검사합니다. 이 검사는 environment나 certificate file을 읽거나 DB에
+연결하고 DDL을 실행하지 않습니다. 첫 source와 새 DB를 준비하는 파일·review·apply 절차는
 [Source onboarding](source-extension-checklist.md), certificate/HBA/DN mapping은
 [Database certificate guide](database-certificate-authentication.md)의 owner와 중단 조건을 따릅니다.
 
@@ -49,7 +51,9 @@ transaction이 실패하면 rollback하고 중단합니다. 현장에서 manifes
 4. `/sources`와 `/meta`는 인증·source authorization 뒤 secret 없는 projection만 반환합니다.
 5. `/query`는 두 revision, AST/object allowlist, read-only transaction과 resource limit을 적용합니다.
 6. 잘못된 인증서·권한, stale revision, write SQL, forbidden object와 unsupported OID가 fail-closed합니다.
-7. Timeout, disconnect와 shutdown에서 cancel·rollback·connection cleanup을 확인합니다.
+7. Timeout, disconnect와 shutdown에서 cancel·rollback·connection cleanup을 확인합니다. 계속 실행 중인
+   process는 timeout/cancel 복구 뒤 다음 bounded query가 성공해 pool connection을 재사용할 수 있는지도
+   확인합니다.
 
 응답이나 log에 token, private key/certificate path, password, DSN, SQL literal 또는 PostgreSQL 내부
 message가 보이거나 위 경계 하나라도 확인되지 않으면 traffic을 연결하지 않습니다.

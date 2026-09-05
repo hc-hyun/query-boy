@@ -85,14 +85,102 @@ def _load_single_manifest(
     )
 
 
-def test_repository_production_source_inventory_is_intentionally_empty() -> None:
-    database_file = ROOT_DIRECTORY / "config" / "database-profiles.yaml"
-    source_directory = ROOT_DIRECTORY / "config" / "sources"
+def _validate_repository_inventory(config_directory: Path, empty_directory: Path) -> SourceRegistry | None:
+    database_file = config_directory / "database-profiles.yaml"
+    budget_file = config_directory / "budget-profiles.yaml"
+    source_directory = config_directory / "sources"
+    for path in (database_file, budget_file, source_directory):
+        assert not path.is_symlink(), f"Configuration symlink is not allowed: {path.name}"
+    load_budget_profiles(budget_file)
+    source_entries = tuple(source_directory.iterdir()) if source_directory.exists() else ()
+    if not source_entries and not database_file.exists():
+        return None
 
-    assert not database_file.exists(), "SOURCE-01 must review the first production database profile"
-    assert not source_directory.exists() or not tuple(source_directory.iterdir()), (
-        "SOURCE-01 must review the first production source package"
+    if source_entries:
+        registry = SourceRegistry.load(
+            source_directory,
+            budget_file,
+            database_file,
+            Path("/run/secrets/query-man/databases"),
+            {},
+        )
+        assert registry.source_ids() == {path.name for path in source_entries}
+        assert [source["source_id"] for source in registry.list()] == sorted(registry.source_ids())
+        assert all(set(source) == {"source_id", "name", "description"} for source in registry.list())
+    else:
+        # The public loader validates database profiles before rejecting an empty startup inventory.
+        empty_directory.mkdir()
+        with pytest.raises(RegistryConfigurationError, match="No source directories"):
+            SourceRegistry.load(
+                empty_directory,
+                budget_file,
+                database_file,
+                Path("/run/secrets/query-man/databases"),
+                {},
+            )
+        registry = None
+
+    databases = yaml.safe_load(database_file.read_text(encoding="utf-8"))
+    assert all(
+        profile["authentication"] == {"type": "client-certificate"}
+        and profile["sslmode"] == "verify-full"
+        for profile in databases["profiles"].values()
+    ), "Repository database profiles must use verified client-certificate authentication"
+    return registry
+
+
+def test_repository_production_source_inventory_uses_discovered_packages(tmp_path: Path) -> None:
+    _validate_repository_inventory(ROOT_DIRECTORY / "config", tmp_path / "empty-sources")
+
+
+@pytest.mark.parametrize("with_database", [False, True])
+def test_repository_gate_accepts_empty_inventory(tmp_path: Path, with_database: bool) -> None:
+    config_directory = tmp_path / "config"
+    config_directory.mkdir()
+    (config_directory / "budget-profiles.yaml").write_text(
+        (ROOT_DIRECTORY / "config" / "budget-profiles.yaml").read_text(encoding="utf-8"),
+        encoding="utf-8",
     )
+    if with_database:
+        _write_database_profiles(tmp_path, _database_profiles())
+
+    assert _validate_repository_inventory(config_directory, tmp_path / "empty-sources") is None
+
+
+def test_repository_gate_accepts_first_production_source(tmp_path: Path) -> None:
+    database_file = _write_database_profiles(tmp_path, _database_profiles())
+    (database_file.parent / "budget-profiles.yaml").write_text(
+        (ROOT_DIRECTORY / "config" / "budget-profiles.yaml").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    manifest = _query_cave_manifest()
+    manifest["source_id"] = "first-source"
+    manifest["reader_user"] = "report_reader"
+    manifest["allowed_schemas"] = ["published_reports", "published_summary"]
+    manifest["provenance"] = {
+        "owner": "reporting",
+        "environment": "production",
+        "database_migration_ref": "config/sources/first-source/views.sql",
+    }
+    _load_single_manifest(tmp_path, manifest, database_file=database_file)
+
+    registry = _validate_repository_inventory(database_file.parent, tmp_path / "empty-sources")
+
+    assert registry is not None
+    assert registry.get("first-source") is not None
+
+
+def test_repository_gate_rejects_invalid_database_before_first_source(tmp_path: Path) -> None:
+    databases = _database_profiles()
+    _query_cave_database(databases)["unexpected"] = "invalid"
+    database_file = _write_database_profiles(tmp_path, databases)
+    (database_file.parent / "budget-profiles.yaml").write_text(
+        (ROOT_DIRECTORY / "config" / "budget-profiles.yaml").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(AssertionError):
+        _validate_repository_inventory(database_file.parent, tmp_path / "empty-sources")
 
 
 def test_empty_source_inventory_fails_closed(tmp_path: Path) -> None:

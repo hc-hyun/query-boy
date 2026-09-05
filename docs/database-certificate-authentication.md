@@ -126,10 +126,36 @@ HBA는 exact database, reader와 Query Man egress CIDR로 좁힙니다. 넓은 `
 password rule을 certificate 실패의 fallback으로 사용하지 않습니다. 설정 reload 전
 `pg_hba_file_rules` 오류와 rule order를 확인합니다.
 
-각 reader는 `LOGIN`, 양의 connection limit과 exact database `CONNECT`, source schema `USAGE`, curated
-view `SELECT`만 가집니다. `SUPERUSER`, `CREATEDB`, `CREATEROLE`, `INHERIT`, `REPLICATION`, `BYPASSRLS`,
+각 reader는 `LOGIN`, 양의 connection limit을 가지며 데이터 접근 권한은 exact database `CONNECT`, source
+schema `USAGE`, curated view `SELECT`로 제한합니다. `SUPERUSER`, `CREATEDB`, `CREATEROLE`, `INHERIT`, `REPLICATION`, `BYPASSRLS`,
 base relation, write, schema `CREATE`와 role switch 권한은 주지 않습니다. View는 별도 `NOLOGIN` owner가
 소유하고 필요한 base relation만 읽습니다.
+
+### Reader의 budget 설정 권한
+
+Reader의 database-local 기본값은 `default_transaction_read_only=on`과 승인된 budget의 시간·자원 제한에
+맞춥니다. Runtime은 metadata/query transaction을 시작할 때 budget을 다시 설정합니다.
+`temp_file_limit`은 일반 reader가 기본적으로 변경할 수 없는 parameter이므로, DBA가 해당 reader에
+이 parameter의 `SET` 권한도 부여해야 합니다. `ALTER ROLE ... SET temp_file_limit`로 기본값만 지정하면
+runtime의 `set_config` 호출 권한은 생기지 않습니다.
+
+승인된 reader가 `sales_reader`인 경우의 예시입니다. 실제 target과 role을 확인한 DBA 실행 범위에서만
+적용합니다.
+
+```sql
+GRANT SET ON PARAMETER temp_file_limit TO sales_reader;
+SELECT pg_catalog.has_parameter_privilege('sales_reader', 'temp_file_limit', 'SET')
+  AS can_set_temp_file_limit;
+```
+
+Parameter grant는 cluster 범위이므로 공유 cluster의 `PUBLIC` 권한을 일괄 변경하거나 reader에
+superuser 권한을 주지 않습니다. Query Cave bootstrap의 cluster-wide revoke를 production에 복사하지
+않습니다. 기존 권한이 예상과 다르면 승인된 변경 범위를 다시 확인합니다.
+
+이후 실제 reader 인증으로 read-only transaction을 열어 승인된 budget의 `temp_file_limit` 값을
+transaction-local로 설정하고 `current_setting`으로 일치 여부를 확인한 뒤 rollback합니다. DBA session의
+성공만으로 reader의 설정 권한을 증명하지 않습니다. 자세한 parameter 권한은
+[PostgreSQL 문서](https://www.postgresql.org/docs/18/runtime-config-resource.html)를 따릅니다.
 
 ## Traffic-off acceptance
 
@@ -139,13 +165,16 @@ base relation, write, schema `CREATE`와 role switch 권한은 주지 않습니�
 2. Server CA/hostname과 client CA/DN mapping을 확인합니다.
 3. Query Man UID가 세 credential file을 읽을 수 있고 다른 container user가 private key를 읽지 못하는지
    확인합니다.
-4. 올바른 certificate로 각 reader login, metadata admission과 bounded query를 확인합니다.
-5. 인증서 없음, 잘못된 CA/key, 잘못된 hostname, 미매핑 DN, 미허용 reader와 source 밖 view 접근이 모두
-   실패하는지 확인합니다.
+4. 올바른 certificate로 각 reader login, parameter SET 권한과 실제 transaction budget 설정, metadata
+   admission과 bounded query를 확인합니다.
+5. 인증서 없음·만료, 잘못된 CA/key, 잘못된 hostname, 미매핑 DN, 미허용 reader/database와 source 밖
+   view 접근이 모두 실패하는지 확인합니다.
 6. `/ready`, `/admin/health`, credential redaction, timeout·rollback과 pool reuse를 확인합니다.
 
 하나라도 실패하면 traffic을 연결하지 않습니다. Runtime은 certificate file을 직접 발급하거나 DB
 설정을 변경하지 않으며 연결 실패를 password나 약한 TLS로 fallback하지 않습니다.
+전체 application 활성화는 [Operations의 traffic-off acceptance](operations.md#2-traffic-off-acceptance)도
+모두 통과해야 합니다. DB 준비 완료와 application 활성화 완료는 별도로 기록합니다.
 
 ## Rotation과 rollback
 

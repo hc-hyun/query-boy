@@ -318,34 +318,34 @@ def validate_sql(
 
     try:
         statements = parse_sql(sql)
-    except ParseError as error:
-        raise SqlValidationError("SQL_PARSE_ERROR", "SQL could not be parsed.") from error
-    if len(statements) != 1:
-        raise SqlValidationError(
-            "SQL_MULTIPLE_STATEMENTS",
-            "Exactly one SQL statement is required.",
-        )
-    statement = statements[0].stmt
-    if not isinstance(statement, ast.SelectStmt):
-        raise SqlValidationError(
-            "SQL_STATEMENT_NOT_ALLOWED",
-            "Only a read-only SELECT statement is allowed.",
-        )
+        if len(statements) != 1:
+            raise SqlValidationError(
+                "SQL_MULTIPLE_STATEMENTS",
+                "Exactly one SQL statement is required.",
+            )
+        statement = statements[0].stmt
+        if not isinstance(statement, ast.SelectStmt):
+            raise SqlValidationError(
+                "SQL_STATEMENT_NOT_ALLOWED",
+                "Only a read-only SELECT statement is allowed.",
+            )
 
-    tree = statement(skip_none=True)
-    policy = _ValidationPolicy(
-        allowed_relations=frozenset(allowed_relations),
-        allowed_functions=frozenset(value.casefold() for value in allowed_functions),
-        allowed_operators=frozenset(allowed_operators),
-        allowed_types=frozenset(value.casefold() for value in allowed_types),
-    )
-    policy.validate(tree)
-    return ValidatedSql(
-        fingerprint=f"pg_query:{fingerprint(sql)}",
-        relations=tuple(sorted(policy.relations)),
-        functions=tuple(sorted(policy.functions)),
-        operators=tuple(sorted(policy.operators)),
-    )
+        tree = statement(skip_none=True)
+        policy = _ValidationPolicy(
+            allowed_relations=frozenset(allowed_relations),
+            allowed_functions=frozenset(value.casefold() for value in allowed_functions),
+            allowed_operators=frozenset(allowed_operators),
+            allowed_types=frozenset(value.casefold() for value in allowed_types),
+        )
+        policy.validate(tree)
+        return ValidatedSql(
+            fingerprint=f"pg_query:{fingerprint(sql)}",
+            relations=tuple(sorted(policy.relations)),
+            functions=tuple(sorted(policy.functions)),
+            operators=tuple(sorted(policy.operators)),
+        )
+    except (ParseError, RecursionError) as error:
+        raise SqlValidationError("SQL_PARSE_ERROR", "SQL could not be parsed.") from error
 
 
 class _ValidationPolicy:
