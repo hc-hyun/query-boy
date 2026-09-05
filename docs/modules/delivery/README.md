@@ -45,5 +45,7 @@ uv run pytest tests/test_access.py tests/test_http.py tests/test_integration.py
 
 ## 집중해서 읽을 범위
 
-Auth는 `access.py`, `authentication.py`와 access/runtime config tests, business wire는 `gateway.py`,
-`app.py`와 HTTP tests, disconnect/lifespan은 integration과 Runtime cleanup tests까지 읽습니다.
+Auth는 [access.py](../../../src/query_man/delivery/access.py),
+[app.py](../../../src/query_man/delivery/app.py)의 인증 middleware와 access/runtime config tests를 읽습니다.
+Business wire는 `gateway.py`, `app.py`와 HTTP tests, disconnect/lifespan은 integration과 Runtime cleanup
+tests까지 읽습니다.

@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, date, datetime, time, timedelta, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
-from ipaddress import ip_address
-from uuid import UUID
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -18,42 +16,30 @@ from query_man.guarded_query.result_encoding import (
 )
 
 
-def test_encodes_exact_and_binary_postgres_scalars_as_stable_strings() -> None:
+def test_encodes_launch_postgres_scalars_as_stable_json_values() -> None:
     encoded = encode_result_value(
         {
+            "integer": 123,
+            "text": "한글🙂",
+            "null": None,
             "numeric": Decimal("12345678901234567890.1234567890"),
-            "binary": b"\xff\x00",
             "timestamp": datetime(2026, 8, 23, 1, 2, 3, 456789, tzinfo=UTC),
             "date": date(2026, 8, 23),
-            "time": time(1, 2, 3, 456789),
-            "interval": timedelta(days=-1, microseconds=1),
-            "uuid": UUID("00000000-0000-0000-0000-000000000001"),
-            "inet": ip_address("2001:db8::1"),
         }
     )
 
     assert encoded == {
+        "integer": 123,
+        "text": "한글🙂",
+        "null": None,
         "numeric": "12345678901234567890.1234567890",
-        "binary": "base64:/wA=",
         "timestamp": "2026-08-23T01:02:03.456789+00:00",
         "date": "2026-08-23",
-        "time": "01:02:03.456789",
-        "interval": "-1 day, 0:00:00.000001",
-        "uuid": "00000000-0000-0000-0000-000000000001",
-        "inet": "2001:db8::1",
     }
     json.dumps(encoded, allow_nan=False)
 
 
-def test_encodes_non_finite_floats_without_nonstandard_json_numbers() -> None:
-    assert encode_result_value([float("nan"), float("inf"), float("-inf")]) == [
-        "NaN",
-        "Infinity",
-        "-Infinity",
-    ]
-
-
-def test_normalizes_aware_datetimes_and_nested_dst_values_to_utc() -> None:
+def test_normalizes_aware_datetimes_and_dst_values_to_utc() -> None:
     encoded = encode_result_value(
         {
             "seoul": datetime(
@@ -64,47 +50,41 @@ def test_normalizes_aware_datetimes_and_nested_dst_values_to_utc() -> None:
                 34,
                 tzinfo=ZoneInfo("Asia/Seoul"),
             ),
-            "new_york_dst": [
-                datetime(
-                    2024,
-                    3,
-                    10,
-                    3,
-                    tzinfo=ZoneInfo("America/New_York"),
-                ),
-                datetime(
-                    2024,
-                    11,
-                    3,
-                    1,
-                    30,
-                    0,
-                    123456,
-                    tzinfo=ZoneInfo("America/New_York"),
-                    fold=1,
-                ),
-            ],
+            "new_york_spring": datetime(
+                2024,
+                3,
+                10,
+                3,
+                tzinfo=ZoneInfo("America/New_York"),
+            ),
+            "new_york_fall": datetime(
+                2024,
+                11,
+                3,
+                1,
+                30,
+                0,
+                123456,
+                tzinfo=ZoneInfo("America/New_York"),
+                fold=1,
+            ),
         }
     )
 
     assert encoded == {
         "seoul": "2026-08-25T03:34:00+00:00",
-        "new_york_dst": [
-            "2024-03-10T07:00:00+00:00",
-            "2024-11-03T06:30:00.123456+00:00",
-        ],
+        "new_york_spring": "2024-03-10T07:00:00+00:00",
+        "new_york_fall": "2024-11-03T06:30:00.123456+00:00",
     }
 
 
-def test_preserves_naive_datetime_date_time_and_timetz_isoformat() -> None:
+def test_preserves_naive_datetime_and_date_isoformat() -> None:
     values = [
         datetime(2026, 8, 25, 1, 2, 3, 456789),
         date(2026, 8, 25),
-        time(1, 2, 3, 456789),
-        time(1, 2, 3, 456789, tzinfo=timezone(timedelta(hours=9))),
     ]
 
-    assert encode_result_value(values) == [value.isoformat() for value in values]
+    assert [encode_result_value(value) for value in values] == [value.isoformat() for value in values]
 
 
 def test_canonical_time_policy_material_is_exact_and_immutable() -> None:
@@ -153,6 +133,14 @@ def test_result_oid_gate_accepts_each_launch_scalar_oid(oid: int) -> None:
     "oids",
     [
         pytest.param((16,), id="bool"),
+        pytest.param((701,), id="float8"),
+        pytest.param((17,), id="bytea"),
+        pytest.param((1083,), id="time"),
+        pytest.param((1266,), id="timetz"),
+        pytest.param((1186,), id="interval"),
+        pytest.param((2950,), id="uuid"),
+        pytest.param((869,), id="inet"),
+        pytest.param((1007,), id="int4-array"),
         pytest.param((3802,), id="jsonb"),
         pytest.param((), id="empty"),
         pytest.param(("20",), id="malformed"),

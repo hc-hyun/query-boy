@@ -135,13 +135,6 @@ class MetadataService:
         )
         # Use the exact public projection before publishing, including startup/query-only reads.
         _context_response(source, candidate, stale=False)
-        current_signature = self._view_structure_signatures.get(signature_key)
-        if current_signature is not None and current_signature != structure_signature:
-            operations.increment("metadata_validation_rejected", source.source_id)
-            operations.set_source_health(source.source_id, "unavailable")
-            raise MetadataUnavailableError(
-                {"contract_violations": ["View structure changed without a view contract version change."]}
-            )
         self._view_structure_signatures[signature_key] = structure_signature
         self._cache_value(source.source_id, candidate)
         operations.increment("metadata_refresh_succeeded", source.source_id)

@@ -33,9 +33,9 @@ Application 상태는 `/health`, `/ready`, operator용 상세 상태와 process-
 
 ## 현재 상태
 
-현재 repository에는 production source package와 database profile이 없습니다. 기본 production Runtime은
-의도적으로 fail-closed하며, Query Cave만 개발·온보딩·assurance용으로 제공됩니다. 첫 production source,
-실제 DB·인증 연결과 traffic 전환의 남은 순서는 [Active TODO](docs/development-todo.md)를 확인합니다.
+Production Runtime은 review된 source package와 database profile이 있어야 시작합니다. 현재 inventory와
+실제 DB·인증 연결, traffic 전환의 남은 순서는 [Active TODO](docs/development-todo.md)를 확인합니다.
+Query Cave는 production inventory와 분리된 개발·온보딩·assurance 환경입니다.
 
 ## 로컬 검증
 

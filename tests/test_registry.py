@@ -491,9 +491,12 @@ def test_rejects_flat_source_manifest(tmp_path: Path) -> None:
         )
 
 
-def test_source_directory_name_must_match_source_id(tmp_path: Path) -> None:
+@pytest.mark.parametrize("with_original", [False, True])
+def test_source_directory_name_must_match_source_id(tmp_path: Path, with_original: bool) -> None:
     raw = _query_cave_manifest()
-    source_directory = tmp_path / "sources"
+    if with_original:
+        _load_single_manifest(tmp_path, raw)
+    source_directory = tmp_path / "config" / "sources"
     source_path = source_directory / "wrong-name"
     source_path.mkdir(parents=True)
     (source_path / "source.yaml").write_text(

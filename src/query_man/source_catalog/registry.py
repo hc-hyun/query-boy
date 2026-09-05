@@ -195,21 +195,18 @@ class SourceRegistry:
             raise RegistryConfigurationError(f"No source directories found in {source_directory.resolve()}")
 
         sources: list[SourceProfile] = []
-        seen: set[str] = set()
         for source_path in source_paths:
             if source_path.is_symlink() or not source_path.is_dir():
                 raise RegistryConfigurationError(f"Unexpected source entry: {source_path.resolve()}")
             _require_source_package(source_path)
             manifest_path = source_path / "source.yaml"
             parsed = _parse_model(manifest_path, _SourceFile)
+            # Immediate child names are unique, so this also guarantees unique source IDs.
             if source_path.name != parsed.source_id:
                 raise RegistryConfigurationError(
                     f"{manifest_path} source_id must match directory name {source_path.name}"
                 )
             _require_sibling_view_reference(source_path, parsed, manifest_path)
-            if parsed.source_id in seen:
-                raise RegistryConfigurationError(f"Duplicate source_id: {parsed.source_id}")
-            seen.add(parsed.source_id)
             sources.append(
                 _resolve_source(
                     parsed,

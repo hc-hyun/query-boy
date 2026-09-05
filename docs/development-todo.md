@@ -31,21 +31,6 @@ AUTHENV-01 ──────────────┘
 | `AUTHENV-01` | Protected | 미실행 | 하나의 token authority, secret 전달 경로, query/operator·source authorization evidence가 승인된 환경 기록에 남음. [Operations](operations.md) |
 | `LAUNCH-02` | Protected | `DBENV-01`, `AUTHENV-01` 대기 | Approved image/config의 traffic-off acceptance, 제한적 cutover와 rollback readiness가 기록됨. [Operations](operations.md) |
 
-## SOURCE-01
-
-Source owner가 실제 source ID, public 설명, provenance, reader, allowed schema와 budget을 정하고 DB/data
-owner가 curated view의 exact output과 no-PII 경계를 review합니다. 첫 physical DB이므로 다음 versioned
-artifact가 필요합니다.
-
-```text
-config/database-profiles.yaml
-config/sources/<source-id>/source.yaml
-config/sources/<source-id>/views.sql
-```
-
-이 repository 작업은 certificate를 발급하거나 DB에 연결하고 DDL을 실행하지 않습니다. Exact target,
-credential과 DBA apply는 `DBENV-01`에서 별도 승인합니다.
-
 ## Protected 작업
 
 `DBENV-01`은 `SOURCE-01`의 approved revision을 고정한 뒤 source와 certificate guide의 positive/negative

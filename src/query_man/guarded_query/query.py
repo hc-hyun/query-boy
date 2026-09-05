@@ -518,8 +518,8 @@ class PostgresQueryExecutor:
                     batch = await cursor.fetchmany(min(_RESULT_FETCH_BATCH_ROWS, remaining_with_sentinel))
                     if not batch:
                         break
-                    # ponytail: a small fixed batch bounds pre-accounting memory while avoiding
-                    # one network round trip per result row.
+                    # ponytail: a small fixed batch bounds the row count before byte accounting,
+                    # not the size of an individual value, and avoids one round trip per row.
                     for row in batch:
                         if len(rows) >= source.budget.max_result_rows:
                             truncated = True

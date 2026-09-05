@@ -13,7 +13,7 @@ config/sources/<source-id>/
 Python 분기를 추가하지 않습니다. 기존 `config/database-profiles.yaml` entry와 DB별 client certificate를
 재사용합니다. DB apply와 reader/DN mapping은 repository 변경과 별도의 protected 작업입니다.
 
-현재 repository처럼 production database profile이 없는 상태에서 첫 physical DB를 추가할 때는
+Production database profile이 없는 상태에서 첫 physical DB를 추가할 때는
 `config/database-profiles.yaml`의 version 1 profile도 함께 생성합니다. 이후 같은 DB의 source 추가는 다시
 두 파일만 필요합니다. [Query Cave](../query-cave/README.md)는 DB bootstrap, view/reader, 인증서와 direct
 admission을 disposable 환경에서 연결한 최초 온보딩 참고 구현입니다.
