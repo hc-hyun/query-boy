@@ -63,13 +63,57 @@ when no source exists. Do not add a source-name list or change tests for each ne
 ## Add a database profile
 
 Read `docs/database-certificate-authentication.md`, ADR 0036, and
-`docs/source-extension-checklist.md`. Create or modify `config/database-profiles.yaml` version 1. Production
-profiles use `verify-full` and client-certificate authentication.
+`docs/source-extension-checklist.md`. A database profile can be registered before any source exists.
+For a database-only request, create or modify only `config/database-profiles.yaml` version 1;
+do not invent a source, reader, schema, view, or live database creation task.
+
+### Collect non-secret information first
+
+Offer this form before asking for connection information. Reuse facts already supplied and ask only
+for missing values; confirm the port rather than assuming the example applies:
+
+```yaml
+profile_id: <Query Man profile ID>
+host: <PostgreSQL hostname matching its server certificate>
+port: 5432
+database: <actual PostgreSQL database name>
+```
+
+Accept these non-secret fields in chat or a user-designated non-secret file. The profile ID is not
+the database name: hyphens are valid in a profile ID, while the current database-name schema requires
+`[A-Za-z_][A-Za-z0-9_$]{0,62}`. Do not silently rename an unsupported database name or substitute
+placeholder endpoints. Use the supplied literal host/port; add `host_env` or `port_env` only when an
+explicitly requested or existing deployment mapping needs them.
+
+If known, collect environment, PostgreSQL version/encoding, and client-certificate readiness as
+optional planning context. They are not database-profile fields, and unknown readiness does not
+prevent repository-only registration. Later runtime admission requires PostgreSQL 18/UTF8.
+Production profiles use `sslmode: verify-full` and `authentication.type: client-certificate`.
+
+No DBA login, password, authenticated session, or certificate file is needed to author this profile.
+If live DBA work is requested later, use `query-man-dba-onboarding` and its credential boundary:
+the user authenticates through an approved mechanism outside agent-visible input/output and supplies
+only a non-secret service alias or approved wrapper invocation, never the credential itself.
 
 Do not store secret values, secret-store identifiers, certificate bodies, private keys, passwords,
 or DSNs. Report the external credential-directory work that remains, but do not issue, copy,
 inspect, mount, or apply credentials. Stop before any protected action unless the user has approved
 the exact environment, target, executor, scope, stop condition, and change-record responsibility.
+
+### Validate a profile before the first source
+
+With no production sources, validate the actual repository profile using the existing inventory test:
+
+```bash
+uv run pytest tests/test_registry.py::test_repository_production_source_inventory_uses_discovered_packages
+```
+
+This checks the database-profile schema and repository certificate policy even with zero sources.
+It does not prove endpoint reachability, environment override resolution, certificate validity, or
+live admission. Complete the full repository gate from `docs/development-guidelines.md` as well.
+The source-package helper and runtime still reject zero sources by design; do not change that
+behavior or add a dummy source to make them succeed. If sources already exist, also run the helper
+and SQL tests from the source workflow. Report profile registration and source count separately.
 
 ## Work with Query Cave
 
@@ -79,8 +123,9 @@ explicitly asks to change the local Query Cave lifecycle.
 
 ## Validate and hand off
 
-Run the repository-local validator above and the tests selected by
-`docs/source-extension-checklist.md`; use the full repository gate when changing shared behavior.
+Use the database-only validation path above when no sources exist. Otherwise run the repository-local
+validator and the tests selected by `docs/source-extension-checklist.md`. Complete the full repository
+gate required by `docs/development-guidelines.md`.
 Summarize repository changes, remaining external credential or database work, required approvals,
 and test results. Never describe a repository-only change as deployed or live. The retired `qm` CLI
 must not be recreated.

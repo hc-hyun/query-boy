@@ -20,6 +20,18 @@ Codex 작업을 시작하고 요청 첫 부분에 정확한 이름을 적습니�
 
 ## Source와 database profile 준비
 
+Source보다 database profile만 먼저 등록하는 예:
+
+```text
+$query-man-admin erp-prod database profile만 추가해줘. Source는 아직 추가하지 마.
+필요한 정보는 스킬의 입력 양식으로 먼저 안내해줘. Repository 등록과 검증까지만 진행해줘.
+```
+
+Skill은 이미 제공된 정보를 재사용하고 profile ID, host, port, 실제 PostgreSQL database 이름 중
+누락된 값만 요청합니다. 제공 양식과 전달 방법은
+[DB profile 입력 안내](../.agents/skills/query-man-admin/SKILL.md#collect-non-secret-information-first)에
+있습니다. 이 단계에는 DBA 계정이나 실제 DB 접속이 필요하지 않습니다.
+
 기존 physical DB에 source를 추가하는 예:
 
 ```text
@@ -35,12 +47,20 @@ $query-man-admin erp-prod database profile과 sales source package를 준비해�
 host/database/reader/schema/view 정보는 아래와 같아. Repository 변경과 검증까지만 해줘.
 ```
 
-이 단계는 `config/database-profiles.yaml`과 source package의 `source.yaml`, `views.sql`만 다룹니다. Password,
+DB만 등록할 때는 `config/database-profiles.yaml`만 작성하고, source 추가를 요청할 때 해당 package의
+`source.yaml`, `views.sql`을 작성합니다. Password,
 DSN, token, certificate body/private key와 secret-store 식별자를 대화나 Git에 넣지 않습니다. 실제 DB에는
 접속하지 않습니다.
 
-설치형 `qm` 명령은 없습니다. Skill이 사용하는 credential-free validator는 필요할 때 다음처럼 직접
-실행할 수 있습니다.
+Source가 아직 없으면 다음 기존 검사가 실제 database profile의 형식과 인증 정책을 검증합니다.
+DB 연결이나 인증서 유효성 검사는 아니며, source helper와 Runtime은 빈 source inventory를 계속 거부합니다.
+
+```bash
+uv run pytest tests/test_registry.py::test_repository_production_source_inventory_uses_discovered_packages
+```
+
+설치형 `qm` 명령은 없습니다. Source를 추가한 뒤 skill이 사용하는 credential-free validator는
+필요할 때 다음처럼 직접 실행할 수 있습니다.
 
 ```bash
 uv run python .agents/skills/query-man-admin/scripts/validate_source_packages.py
@@ -52,7 +72,8 @@ Helper는 versioned 설정과 두 파일 layout을 검사하며, SQL 본문은 p
 적용되며 `views_sql_validated: false`로 SQL 본문을 검사하지 않았음을 명시합니다.
 `.env`, process credential, certificate file이나 database는
 읽지 않습니다. 첫 source를 추가해도 검사 대상이 자동으로 포함되며 테스트에 source 이름을 등록할 필요가
-없습니다. 완료 전에는 [source checklist](source-extension-checklist.md#repository-검증)의 전체 gate도 실행합니다.
+없습니다. DB만 등록하는 경우에도 완료 전에는
+[개발 지침](development-guidelines.md#tests)의 전체 gate를 실행합니다.
 
 ## 서버 상태 조회
 

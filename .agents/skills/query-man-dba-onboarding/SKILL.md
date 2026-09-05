@@ -20,6 +20,10 @@ This skill has two modes:
   append-only change-record location. Repository approval or creation of this skill is not execution
   approval.
 
+For repository-only database profile registration before any source exists, use the intake form in
+`../query-man-admin/SKILL.md`, section `Add a database profile`. That task needs non-secret endpoint
+fields and repository validation, not a DBA session or the source execution packet below.
+
 Before any credential or live-environment work, read
 [credential-boundary.md](references/credential-boundary.md). Before preparing or running a DBA
 change, read [execution-checklist.md](references/execution-checklist.md). Never ask the user to paste
