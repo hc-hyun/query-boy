@@ -122,7 +122,8 @@ read [query-passport.md](references/query-passport.md). After the repository val
 `scripts/query_passport.py` for `capabilities`, `inspect`, or `plan`; it checks the supported version
 and capability and returns only validated, bounded JSON judgments. Pass public profile fields and
 existing aliases, including `source_count: 0` when applicable. Keep unsupported names unchanged.
-Admin never calls Passport `verify` or credential/change commands. Offline `validated`/`planned`
+Admin never calls Passport `verify`, `prepare`, `status`, or credential/change commands. Route those
+requests to the DBA skill's existing Execute boundary. Offline `validated`/`planned`
 results do not establish DB connectivity, certificate validity, source admission, or app readiness.
 
 ## Work with Query Cave

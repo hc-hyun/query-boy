@@ -19,17 +19,35 @@ DBA = ROOT / ".agents/skills/query-man-dba-onboarding/scripts/query_passport_ver
 CANARY = "SYNTHETIC_CREDENTIAL_MUST_NOT_APPEAR"
 CAPABILITY = {
     "contract_version": "1",
-    "tool_version": "0.2.0",
+    "tool_version": "0.3.0",
     "command": "capabilities",
     "status": "validated",
     "scope": None,
     "errors": [],
     "result": {
         "supported_contract_majors": [1],
-        "capabilities": ["profile.inspect.v1", "plan.offline.v1", "connection.verify.v1"],
-        "commands": ["capabilities", "inspect", "plan", "verify"],
+        "capabilities": [
+            "profile.inspect.v1",
+            "plan.offline.v1",
+            "connection.verify.v1",
+            "lifecycle.local.v1",
+            "credential.rotate.local.v1",
+        ],
+        "commands": [
+            "capabilities",
+            "inspect",
+            "plan",
+            "verify",
+            "prepare",
+            "issue",
+            "apply",
+            "deliver",
+            "rotate",
+            "rollback",
+            "status",
+        ],
         "backend_types": ["offline", "local-docker"],
-        "policy_revision": "m2-local-docker-1",
+        "policy_revision": "m3-local-lifecycle-1",
         "profile_versions": [1],
         "source_reference_version": 6,
         "scopes": ["database-only"],
@@ -41,12 +59,13 @@ CAPABILITY = {
             "json_depth": 8,
             "timeout_seconds": 5,
             "live_timeout_seconds": 60,
+            "lifecycle_timeout_seconds": 180,
         },
     },
 }
 INSPECT = {
     "contract_version": "1",
-    "tool_version": "0.2.0",
+    "tool_version": "0.3.0",
     "command": "inspect",
     "status": "validated",
     "scope": "database-only",
@@ -112,7 +131,7 @@ def live_response() -> dict[str, Any]:
 def failure(command: str = "verify", code: str = "AUTHORIZATION_REQUIRED") -> dict[str, Any]:
     return {
         "contract_version": "1",
-        "tool_version": "0.2.0",
+        "tool_version": "0.3.0",
         "command": command,
         "status": "failed",
         "scope": None,
@@ -215,10 +234,13 @@ def test_public_filename_forwarded_to_passport_boundary(tmp_path: Path) -> None:
     "args",
     [
         ("verify",),
+        ("prepare",),
         ("issue",),
         ("apply",),
+        ("deliver",),
         ("rotate",),
         ("rollback",),
+        ("status",),
         ("inspect", "--approved"),
         ("inspect", "--execute"),
         ("inspect", "--yes"),
@@ -435,7 +457,7 @@ def test_offline_plan_remains_unexecutable(tmp_path: Path) -> None:
         {
             "input_digest": "sha256:" + "a" * 64,
             "plan_digest": "sha256:" + "b" * 64,
-            "policy_revision": "m2-local-docker-1",
+            "policy_revision": "m3-local-lifecycle-1",
             "executable": False,
             "target_snapshot": "unknown",
             "differences": "unknown",
@@ -501,3 +523,283 @@ def test_missing_shared_dba_resource_is_safe(tmp_path: Path) -> None:
     result = run_helper(path, "--request", "-")
     assert result.returncode == 1
     assert json.loads(result.stdout)["error"] == "PASSPORT_UNAVAILABLE"
+
+
+def lifecycle_response(
+    command: str = "prepare", *, intent: str = "provision", phase: str | None = None
+) -> dict[str, Any]:
+    phases = {
+        "prepare": "prepared",
+        "issue": "issued",
+        "apply": "applied",
+        "deliver": "verified",
+        "rotate": "verified",
+        "rollback": "rolled_back",
+        "status": "verified",
+    }
+    observation = "passed" if command in {"deliver", "rotate"} else "not_checked"
+    result = {
+        "operation_id": "a" * 32,
+        "plan_digest": "sha256:" + "b" * 64,
+        "phase": phase or phases[command],
+        "intent": "rotate" if command == "rotate" else intent,
+        "mode": "live",
+        "source_count": 0,
+        "source_inventory": "not_checked",
+        "reader_permissions": "not_checked",
+        "source_admission": "not_checked",
+        "deployment": "not_checked",
+        "application_readiness": "not_checked",
+        "certificate_validation": observation,
+        "db_connectivity": observation,
+        "authentication": observation,
+        "target_identity": "passed",
+        "recovery": "owned_changes_only",
+    }
+    if command == "prepare":
+        result.update(
+            actions=["issue_client_certificate", "verify_new_connections", "publish_verified_credential"]
+            if intent == "rotate"
+            else [
+                "issue_client_certificate",
+                "create_restricted_check_role",
+                "append_client_ca_trust",
+                "install_owned_auth_rules",
+                "publish_verified_credential",
+            ],
+            preserves=[
+                "existing_database_objects",
+                "existing_roles_and_grants",
+                "existing_server_credentials",
+                "existing_client_trust",
+                "previous_credential_generations",
+            ],
+            account="passport_check",
+            client_dn="CN=passport-check",
+            certificate_lifetime_days=30,
+        )
+    return {
+        "contract_version": "1",
+        "tool_version": "0.3.0",
+        "command": command,
+        "status": "planned" if command == "prepare" else "validated" if command == "status" else "succeeded",
+        "scope": "database-only",
+        "errors": [],
+        "result": result,
+    }
+
+
+@pytest.mark.parametrize("command", ["prepare", "issue", "apply", "deliver", "rotate", "rollback", "status"])
+def test_dba_lifecycle_preserves_plan_identity_and_zero_source_boundaries(tmp_path: Path, command: str) -> None:
+    response = lifecycle_response(command)
+    tool = fake_passport(tmp_path, encode(response))
+    result = run_helper(DBA, command, "--passport", str(tool), "--request", "-")
+    assert result.returncode == 0
+    summary = json.loads(result.stdout)
+    assert summary["command"] == command and summary["status"] == response["status"]
+    for name, value in response["result"].items():
+        assert summary[name] == value
+    calls = [json.loads(line) for line in (tmp_path / "calls.jsonl").read_text().splitlines()]
+    assert calls[1][0] == command and len(calls) == 2
+    for name in ("application_readiness", "source_admission", "reader_permissions", "deployment"):
+        assert summary[name] == "not_checked"
+
+
+def test_prepare_rotation_preserves_reviewable_bounded_actions(consumer: dict[str, Any]) -> None:
+    response = lifecycle_response("prepare", intent="rotate")
+    valid = consumer["validate_response"](encode(response), 0, "prepare")
+    summary = consumer["summarize"](valid)
+    assert summary["intent"] == "rotate"
+    assert summary["db_connectivity"] == "not_checked"
+    assert summary["account"] == "passport_check" and summary["client_dn"] == "CN=passport-check"
+    assert summary["certificate_lifetime_days"] == 30
+    assert summary["actions"] == ["issue_client_certificate", "verify_new_connections", "publish_verified_credential"]
+
+
+@pytest.mark.parametrize("command", ["verify", "prepare", "issue", "apply", "deliver", "rotate", "rollback", "status"])
+@pytest.mark.parametrize("flag", ["--approved", "--execute", "--yes"])
+def test_dba_never_accepts_approval_bypass_flags(tmp_path: Path, command: str, flag: str) -> None:
+    tool = fake_passport(tmp_path, encode(lifecycle_response()))
+    result = run_helper(DBA, command, flag, "--passport", str(tool), "--request", "-")
+    assert result.returncode == 2
+    assert json.loads(result.stdout)["error"] == "INVALID_INPUT"
+    assert not (tmp_path / "calls.jsonl").exists()
+
+
+@pytest.mark.parametrize(
+    "phase",
+    [
+        "prepared",
+        "issuing",
+        "issued",
+        "applying",
+        "applied",
+        "delivering",
+        "checking_delivery",
+        "delivered",
+        "verifying",
+        "verified",
+        "rolling_back",
+        "rolled_back",
+        "partial_failure",
+        "unknown",
+    ],
+)
+def test_status_accepts_historical_phase_without_fresh_authentication_claim(
+    consumer: dict[str, Any], phase: str
+) -> None:
+    response = lifecycle_response("status", phase=phase)
+    valid = consumer["validate_response"](encode(response), 0, "status")
+    summary = consumer["summarize"](valid)
+    assert summary["status"] == "validated" and summary["phase"] == phase
+    for name in ("db_connectivity", "authentication", "certificate_validation"):
+        assert summary[name] == "not_checked"
+    response["result"]["db_connectivity"] = "passed"
+    with pytest.raises(consumer["ConsumerError"]):
+        consumer["validate_response"](encode(response), 0, "status")
+
+
+@pytest.mark.parametrize("command", ["prepare", "issue", "apply", "deliver", "rotate", "rollback", "status"])
+@pytest.mark.parametrize(
+    "change", ["phase", "readiness", "target", "unknown_field", "identity", "digest", "source_bool", "status"]
+)
+def test_invalid_lifecycle_success_never_becomes_completion(
+    consumer: dict[str, Any], command: str, change: str
+) -> None:
+    response = lifecycle_response(command)
+    if change == "phase":
+        response["result"]["phase"] = "unknown_phase" if command == "status" else "partial_failure"
+    elif change == "readiness":
+        response["result"]["application_readiness"] = "passed"
+    elif change == "target":
+        response["result"]["target_identity"] = "not_checked"
+    elif change == "unknown_field":
+        response["result"]["provider_message"] = CANARY
+    elif change == "identity":
+        response["result"]["operation_id"] = "../../" + CANARY
+    elif change == "digest":
+        response["result"]["plan_digest"] = CANARY
+    elif change == "source_bool":
+        response["result"]["source_count"] = False
+    else:
+        response["status"] = "succeeded" if command in {"prepare", "status"} else "planned"
+    with pytest.raises(consumer["ConsumerError"]):
+        consumer["validate_response"](encode(response), 0, command)
+
+
+@pytest.mark.parametrize("change", ["actions", "preserves", "account", "dn", "lifetime", "lifetime_bool", "extra"])
+def test_prepare_never_forwards_unvalidated_plan_or_certificate_prose(consumer: dict[str, Any], change: str) -> None:
+    response = lifecycle_response()
+    if change == "actions":
+        response["result"]["actions"].append("drop_database")
+    elif change == "preserves":
+        response["result"]["preserves"] = []
+    elif change == "account":
+        response["result"]["account"] = CANARY + " PASSWORD secret"
+    elif change == "dn":
+        response["result"]["client_dn"] = "-----BEGIN CERTIFICATE-----"
+    elif change == "lifetime":
+        response["result"]["certificate_lifetime_days"] = 91
+    elif change == "lifetime_bool":
+        response["result"]["certificate_lifetime_days"] = True
+    else:
+        response["result"]["credential_path"] = CANARY
+    with pytest.raises(consumer["ConsumerError"]):
+        consumer["validate_response"](encode(response), 0, "prepare")
+
+
+@pytest.mark.parametrize("command", ["issue", "apply", "deliver", "rotate", "rollback", "status"])
+@pytest.mark.parametrize(
+    "error_code,exit_code", [("TIMEOUT", 5), ("TARGET_DRIFT", 7), ("RECOVERY_REQUIRED", 9), ("INTERRUPTED", 130)]
+)
+def test_operation_failure_keeps_only_identity_and_unconfirmed_outcome(
+    tmp_path: Path, command: str, error_code: str, exit_code: int
+) -> None:
+    response = failure(command, error_code)
+    # Actual Passport CLI exception envelopes keep scope null even after input
+    # validation captured a safe operation reference for recovery.
+    assert response["scope"] is None
+    response["result"] = {
+        "operation_id": "a" * 32,
+        "plan_digest": "sha256:" + "b" * 64,
+        "outcome": "not_confirmed",
+        "next_action": "status_or_scoped_recovery",
+    }
+    tool = fake_passport(tmp_path, encode(response), code=exit_code)
+    result = run_helper(DBA, command, "--passport", str(tool), "--request", "-")
+    summary = json.loads(result.stdout)
+    assert result.returncode == exit_code
+    assert summary["error"] == error_code and summary["outcome"] == "not_confirmed"
+    assert summary["operation_id"] == "a" * 32 and summary["plan_digest"] == "sha256:" + "b" * 64
+    assert summary["next_action"] == "status_or_scoped_recovery"
+    assert not ({"phase", "db_connectivity", "application_readiness"} & summary.keys())
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("phase", "verified"),
+        ("outcome", "completed"),
+        ("next_action", "retry_automatically"),
+        ("operation_id", CANARY),
+        ("plan_digest", CANARY),
+    ],
+)
+def test_operation_error_does_not_accept_phase_or_recovery_instructions(
+    consumer: dict[str, Any], field: str, value: str
+) -> None:
+    response = failure("rotate", "TIMEOUT")
+    response["result"] = {
+        "operation_id": "a" * 32,
+        "plan_digest": "sha256:" + "b" * 64,
+        "outcome": "not_confirmed",
+        "next_action": "status_or_scoped_recovery",
+    }
+    response["result"][field] = value
+    with pytest.raises(consumer["ConsumerError"]):
+        consumer["validate_response"](encode(response), 5, "rotate")
+
+
+@pytest.mark.parametrize("missing", ["lifecycle.local.v1", "credential.rotate.local.v1"])
+def test_rotation_requires_lifecycle_and_rotation_capability(tmp_path: Path, missing: str) -> None:
+    capability = copy.deepcopy(CAPABILITY)
+    capability["result"]["capabilities"].remove(missing)
+    tool = fake_passport(tmp_path, encode(lifecycle_response("rotate")), capability=capability)
+    result = run_helper(DBA, "rotate", "--passport", str(tool), "--request", "-")
+    assert result.returncode == 1
+    assert json.loads(result.stdout)["error"] == "PASSPORT_INCOMPATIBLE"
+    assert len((tmp_path / "calls.jsonl").read_text().splitlines()) == 1
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("tool_version", "0.2.0"), ("policy_revision", "m2-local-docker-1"), ("lifecycle_timeout_seconds", 181)],
+)
+def test_older_or_changed_lifecycle_contract_stops_discovery(tmp_path: Path, field: str, value: Any) -> None:
+    capability = copy.deepcopy(CAPABILITY)
+    if field == "tool_version":
+        capability[field] = value
+    elif field == "policy_revision":
+        capability["result"][field] = value
+    else:
+        capability["result"]["limits"][field] = value
+    tool = fake_passport(tmp_path, encode(lifecycle_response()), capability=capability)
+    result = run_helper(DBA, "prepare", "--passport", str(tool), "--request", "-")
+    assert result.returncode == 1
+    assert len((tmp_path / "calls.jsonl").read_text().splitlines()) == 1
+
+
+@pytest.mark.parametrize("command", ["prepare", "issue", "apply", "deliver", "rotate", "rollback", "status"])
+def test_lifecycle_invocation_gets_bounded_executor_cleanup_margin(
+    consumer: dict[str, Any], monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str], command: str
+) -> None:
+    calls = []
+
+    def run_tool(arguments, data, timeout):
+        calls.append((arguments, timeout))
+        return (encode(CAPABILITY), 0) if arguments[1] == "capabilities" else (encode(lifecycle_response(command)), 0)
+
+    consumer["run"].__globals__["run_tool"] = run_tool
+    assert consumer["run"]([command, "--request", "request.json"], commands=(command,)) == 0
+    assert [call[1] for call in calls] == [10, 190]
+    assert json.loads(capfd.readouterr().out)["command"] == command

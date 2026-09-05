@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Bounded, fail-closed consumer for an operator-installed Query Passport 0.2.0.
+"""Bounded, fail-closed consumer for an operator-installed Query Passport 0.3.0.
 
 The Admin entrypoint exposes only offline commands. The DBA skill reuses the
-consumer through its separate verify entrypoint after existing Execute approval.
+consumer through its separate DBA entrypoint after existing Execute approval.
 This helper grants no authority and does not open credentials or executor bindings.
 """
 
@@ -21,7 +21,7 @@ import time
 from collections.abc import Sequence
 from typing import Any, Never
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 MAX_OUTPUT = 16384
 MAX_INPUT = 65536
 COMMAND_CAPABILITY = {
@@ -29,7 +29,75 @@ COMMAND_CAPABILITY = {
     "inspect": "profile.inspect.v1",
     "plan": "plan.offline.v1",
     "verify": "connection.verify.v1",
+    "prepare": "lifecycle.local.v1",
+    "issue": "lifecycle.local.v1",
+    "apply": "lifecycle.local.v1",
+    "deliver": "lifecycle.local.v1",
+    "rotate": "credential.rotate.local.v1",
+    "rollback": "lifecycle.local.v1",
+    "status": "lifecycle.local.v1",
 }
+LIFECYCLE = frozenset({"prepare", "issue", "apply", "deliver", "rotate", "rollback", "status"})
+PHASES = frozenset(
+    {
+        "prepared",
+        "issuing",
+        "issued",
+        "applying",
+        "applied",
+        "delivering",
+        "checking_delivery",
+        "delivered",
+        "verifying",
+        "verified",
+        "rolling_back",
+        "rolled_back",
+        "partial_failure",
+        "unknown",
+    }
+)
+LIFECYCLE_UNCHANGED = frozenset(
+    {
+        "source_inventory",
+        "reader_permissions",
+        "source_admission",
+        "deployment",
+        "application_readiness",
+    }
+)
+LIFECYCLE_BASE = LIFECYCLE_UNCHANGED | frozenset(
+    {
+        "operation_id",
+        "plan_digest",
+        "phase",
+        "intent",
+        "mode",
+        "source_count",
+        "certificate_validation",
+        "db_connectivity",
+        "authentication",
+        "target_identity",
+        "recovery",
+    }
+)
+NOT_CONFIRMED = {"outcome": "not_confirmed", "next_action": "status_or_scoped_recovery"}
+PREPARE_ACTIONS = {
+    "provision": [
+        "issue_client_certificate",
+        "create_restricted_check_role",
+        "append_client_ca_trust",
+        "install_owned_auth_rules",
+        "publish_verified_credential",
+    ],
+    "rotate": ["issue_client_certificate", "verify_new_connections", "publish_verified_credential"],
+}
+PREPARE_PRESERVES = [
+    "existing_database_objects",
+    "existing_roles_and_grants",
+    "existing_server_credentials",
+    "existing_client_trust",
+    "previous_credential_generations",
+]
 CHECKS = frozenset(
     {
         "runtime_identity",
@@ -85,7 +153,7 @@ ERROR_EXITS = {
     "RECOVERY_REQUIRED": 9,
 }
 PLAN_FIXED: dict[str, Any] = {
-    "policy_revision": "m2-local-docker-1",
+    "policy_revision": "m3-local-lifecycle-1",
     "executable": False,
     "target_snapshot": "unknown",
     "differences": "unknown",
@@ -165,7 +233,7 @@ def _capabilities(result: Any) -> None:
     _require(result["supported_contract_majors"] == [1] and type(result["supported_contract_majors"][0]) is int)
     _require(result["profile_versions"] == [1] and type(result["profile_versions"][0]) is int)
     _require(type(result["source_reference_version"]) is int and result["source_reference_version"] == 6)
-    _require(result["policy_revision"] == "m2-local-docker-1")
+    _require(result["policy_revision"] == "m3-local-lifecycle-1")
     _require(result["scopes"] == ["database-only"])
     _require(result["backend_types"] == ["offline", "local-docker"])
     _require(result["environments"] == ["local-synthetic", "local", "protected"])
@@ -183,6 +251,7 @@ def _capabilities(result: Any) -> None:
         "json_depth": 8,
         "timeout_seconds": 5,
         "live_timeout_seconds": 60,
+        "lifecycle_timeout_seconds": 180,
     }
     _object(result["limits"], set(limits))
     _require(
@@ -224,6 +293,58 @@ def _result(command: str, result: Any, *, succeeded: bool) -> None:
             _require(type(result[field]) is str and re.fullmatch(r"sha256:[0-9a-f]{64}", result[field]) is not None)
 
 
+def _operation_identity(result: dict[str, Any]) -> None:
+    for name, pattern in (("operation_id", r"[0-9a-f]{32}"), ("plan_digest", r"sha256:[0-9a-f]{64}")):
+        _require(type(result[name]) is str and re.fullmatch(pattern, result[name]) is not None)
+
+
+def _lifecycle_result(command: str, result: Any) -> None:
+    extra = (
+        {"actions", "preserves", "account", "client_dn", "certificate_lifetime_days"} if command == "prepare" else set()
+    )
+    _object(result, LIFECYCLE_BASE | extra)
+    _operation_identity(result)
+    _require(type(result["source_count"]) is int and 0 <= result["source_count"] <= 1000000)
+    _require(result["mode"] == "live" and result["intent"] in ("provision", "rotate"))
+    _require(type(result["phase"]) is str and result["phase"] in PHASES)
+    expected = {
+        "prepare": "prepared",
+        "issue": "issued",
+        "apply": "applied",
+        "deliver": "verified",
+        "rotate": "verified",
+        "rollback": "rolled_back",
+    }
+    if command != "status":
+        _require(result["phase"] == expected[command])
+    if command == "rotate":
+        _require(result["intent"] == "rotate")
+    _require(all(result[field] == "not_checked" for field in LIFECYCLE_UNCHANGED))
+    _require(result["target_identity"] == "passed" and result["recovery"] == "owned_changes_only")
+    observation = "passed" if command in ("deliver", "rotate") else "not_checked"
+    _require(
+        all(result[field] == observation for field in ("certificate_validation", "db_connectivity", "authentication"))
+    )
+    if command == "prepare":
+        _require(
+            type(result["account"]) is str and re.fullmatch(r"[a-z_][a-z0-9_]{0,62}", result["account"]) is not None
+        )
+        _require(
+            type(result["client_dn"]) is str
+            and re.fullmatch(r"CN=[a-z][a-z0-9-]{0,124}", result["client_dn"]) is not None
+        )
+        _require(type(result["certificate_lifetime_days"]) is int and 1 <= result["certificate_lifetime_days"] <= 90)
+        # Filled from the fixed provider contract below; never forward arbitrary plan prose.
+        _require(result["actions"] == PREPARE_ACTIONS[result["intent"]])
+        _require(result["preserves"] == PREPARE_PRESERVES)
+
+
+def _unconfirmed_result(result: Any) -> None:
+    _object(result, {"operation_id", "plan_digest", *NOT_CONFIRMED})
+    _operation_identity(result)
+    _require(all(result[name] == value for name, value in NOT_CONFIRMED.items()))
+
+
 def validate_response(raw: bytes, returncode: int, command: str) -> dict[str, Any]:
     """Validate provider bytes before any status or claim is exposed to the skill."""
     _require(command in COMMAND_CAPABILITY and type(returncode) is int)
@@ -238,11 +359,20 @@ def validate_response(raw: bytes, returncode: int, command: str) -> dict[str, An
             "inspect": "validated",
             "plan": "planned",
             "verify": "succeeded",
+            "prepare": "planned",
+            "issue": "succeeded",
+            "apply": "succeeded",
+            "deliver": "succeeded",
+            "rotate": "succeeded",
+            "rollback": "succeeded",
+            "status": "validated",
         }
         _require(response["status"] == expected_status[command] and response["errors"] == [])
         _require(response["scope"] == (None if command == "capabilities" else "database-only"))
         if command == "capabilities":
             _capabilities(result)
+        elif command in LIFECYCLE:
+            _lifecycle_result(command, result)
         else:
             _result(command, result, succeeded=True)
     else:
@@ -254,8 +384,13 @@ def validate_response(raw: bytes, returncode: int, command: str) -> dict[str, An
         _require(type(code) is str and code in ERROR_EXITS and ERROR_EXITS[code] == returncode)
         _require(type(errors[0]["message"]) is str and len(errors[0]["message"]) <= 512)
         if result:
-            _require(command == "verify" and response["scope"] == "database-only")
-            _result(command, result, succeeded=False)
+            if command in LIFECYCLE - {"prepare"}:
+                # CLI failures can occur before a scope is established. A validated
+                # opaque operation reference is recovery context, not authorization.
+                _unconfirmed_result(result)
+            else:
+                _require(command == "verify" and response["scope"] == "database-only")
+                _result(command, result, succeeded=False)
     return response
 
 
@@ -271,9 +406,17 @@ def summarize(response: dict[str, Any]) -> dict[str, Any]:
     }
     if response["errors"]:
         summary["error"] = response["errors"][0]["code"]
+        if response["command"] in LIFECYCLE - {"prepare"}:
+            summary.update(NOT_CONFIRMED)
+            if result:
+                summary.update({name: result[name] for name in ("operation_id", "plan_digest")})
         return summary
     if response["command"] == "capabilities":
         summary["capabilities"] = sorted(result["capabilities"])
+        return summary
+    if response["command"] in LIFECYCLE:
+        summary["scope"] = "database-only"
+        summary.update(result)
         return summary
     summary.update(
         {
@@ -391,6 +534,8 @@ def run(arguments: Sequence[str], *, commands: tuple[str, ...] = ("capabilities"
         _require(command in capability["result"]["commands"], "PASSPORT_INCOMPATIBLE")
         required = COMMAND_CAPABILITY[command]
         _require(required is None or required in capability["result"]["capabilities"], "PASSPORT_INCOMPATIBLE")
+        if command in LIFECYCLE:
+            _require("lifecycle.local.v1" in capability["result"]["capabilities"], "PASSPORT_INCOMPATIBLE")
         response = capability
         if command != "capabilities":
             data = _stdin() if options.request == "-" else None
@@ -406,7 +551,7 @@ def run(arguments: Sequence[str], *, commands: tuple[str, ...] = ("capabilities"
                     "json",
                 ],
                 data,
-                70 if command == "verify" else 10,
+                190 if command in LIFECYCLE else 70 if command == "verify" else 10,
             )
             response = validate_response(raw, code, command)
         summary = summarize(response)
@@ -424,6 +569,9 @@ def run(arguments: Sequence[str], *, commands: tuple[str, ...] = ("capabilities"
             "status": "failed",
             "error": "PASSPORT_RESPONSE_INVALID",
         }
+    if code and command in LIFECYCLE - {"prepare"}:
+        # An interrupted/invalid response cannot tell us which effects committed.
+        summary.update(NOT_CONFIRMED)
     try:
         if sys.stdout is None:
             return 1

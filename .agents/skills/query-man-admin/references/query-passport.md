@@ -1,27 +1,26 @@
 # Query Passport consumer
 
-Use an operator-installed, approved `query-passport` executable. These helpers support tool version
-`0.2.0`, contract major `1`, and the advertised `profile.inspect.v1`, `plan.offline.v1`, and
-`connection.verify.v1` capabilities. They are repository skill resources; the Query Man application
-does not import or require Passport. Select an already approved installation with `--passport PATH`
-when it is not on `PATH`. Do not inspect credential wrappers or install an unreviewed executable to
-work around a failure.
+Use an operator-installed, approved `query-passport` executable. The helpers require tool version
+`0.3.0`, contract major `1`, policy `m3-local-lifecycle-1`, and the selected advertised capability:
+`profile.inspect.v1`, `plan.offline.v1`, `connection.verify.v1`, `lifecycle.local.v1`, or
+`credential.rotate.local.v1`. They are repository skill resources; the Query Man application has no
+Passport runtime dependency. Select an approved installation with `--passport PATH` when needed.
+Do not inspect credential wrappers or install an unreviewed executable to work around a failure.
 
-The Admin helper supports only `capabilities`, `inspect`, and `plan`. The DBA helper supports only
-`verify`, within the DBA skill's existing Execute authorization. Neither helper creates executor
-bindings or accepts an approval-bypass flag. An alias is context, not evidence of authority.
-Passport 0.2.0 supports live checks only in its advertised `local-synthetic` and `local` environments;
-`protected` remains an offline planning label. A protected Execute approval does not add a backend.
+Admin exposes only `capabilities`, `inspect`, and `plan`. DBA exposes `verify`, `prepare`, `issue`,
+`apply`, `deliver`, `rotate`, `rollback`, and `status` within its existing Execute authorization.
+Neither helper creates executor bindings or accepts an approval flag. An alias or operation ID is
+not execution authority. Passport's live backends support only advertised `local-synthetic` and
+`local` environments; `protected` remains an offline planning label. Approval does not add a backend.
 
 ## Public request
 
-First run the existing Query Man profile/inventory validation in the Admin skill. Project the selected
-profile's public literal fields into a user-designated public JSON request; do not read runtime
-environment values, credential paths, certificate files, or bindings to fill it. Passport has a narrower
-supported name subset: if the validated Query Man profile is unsupported, report that limitation and
-preserve the original profile. Do not rename it to make the tool accept it.
+First run the Query Man profile/inventory validation in the Admin skill. Project only public literal
+fields into a user-designated public JSON request. Do not read environment values, credential paths,
+certificate files or bindings to fill it. Preserve profile names that Passport cannot support and
+report the limitation; do not rename a profile or substitute an endpoint to make it pass.
 
-This synthetic example is not a target binding or execution approval:
+This synthetic base request is not a target binding or execution approval:
 
 ```json
 {
@@ -43,12 +42,12 @@ This synthetic example is not a target binding or execution approval:
 }
 ```
 
-Use aliases and environment facts already established for the task. `source_count` is caller context,
-including zero; it does not assert a verified inventory. This projection does not change database
-profile v1 or source v6. An unresolved environment-backed endpoint must remain unresolved until its
-authorized owner supplies public facts; the skill must not discover credentials or process settings.
+Use aliases and facts already established for the task. `source_count`, including zero, is caller
+context and does not assert a verified inventory. This projection does not change database profile
+v1 or source v6. Unresolved environment-backed endpoints remain unresolved until their authorized
+owner supplies public facts.
 
-Run from the Query Man repository root, passing a public `.json` relative to `--workspace`:
+Run from the Query Man repository root. Public filenames are relative to `--workspace`:
 
 ```bash
 python3 .agents/skills/query-man-admin/scripts/query_passport.py capabilities
@@ -57,42 +56,107 @@ python3 .agents/skills/query-man-admin/scripts/query_passport.py plan --workspac
 ```
 
 `--request -` accepts the same bounded public JSON through stdin. The helper does not open request
-files itself; Passport enforces its workspace/file boundary. It checks capabilities before forwarding
-the request, bounds stdout to 16 KiB and request stdin to 64 KiB, and rejects raw stderr, invalid JSON,
-unknown fields/checks, mismatched command/status/exit, and unsupported versions. Failures expose only
-classified codes. No free-form provider error or internal path is copied to the result.
+files itself; Passport enforces its file boundary. It checks capabilities before forwarding a request,
+bounds stdout to 16 KiB and stdin to 64 KiB, and rejects stderr, invalid JSON, unknown fields/checks,
+mismatched command/status/exit and unsupported versions. Subprocess deadlines are 10 seconds for
+offline commands, 70 for verification and 190 for lifecycle commands, including cleanup margin beyond
+Passport's advertised 5/60/180-second limits. Only validated metadata and fixed codes are returned;
+provider messages, credential contents and internal paths are discarded.
 
-## Authorized live verification
+## Authorized verification and preparation
 
-After the DBA skill's existing Execute approval covers the exact target, executor, access method,
-read-only verification scope, stop/rollback conditions, and environment record responsibility:
+The DBA skill's existing Execute approval must cover the exact target, executor, access method, scope,
+stop/rollback conditions and environment record responsibility. Within that scope:
 
 ```bash
-python3 .agents/skills/query-man-dba-onboarding/scripts/query_passport_verify.py --workspace /approved/public/workspace --request request.json
+python3 .agents/skills/query-man-dba-onboarding/scripts/query_passport_verify.py verify --workspace /approved/public/workspace --request request.json
+python3 .agents/skills/query-man-dba-onboarding/scripts/query_passport_verify.py prepare --workspace /approved/public/workspace --request prepare.json
 ```
 
-The operator must independently provision the approved Passport executor binding and credential-aware
-execution environment. `AUTHORIZATION_REQUIRED`/exit 6 means that binding is unavailable or invalid.
-Stop and report the missing mechanism; do not write a binding, request a secret value, change aliases,
-switch endpoints, or relax authentication to obtain a successful result. The helper itself is not an
-authorization service. Issuance, HBA/ident changes, credential delivery, and rotation remain separate
-actions under their existing owners and scopes.
+The original invocation without a command still means `verify`. `prepare.json` contains the base
+request plus optional `"intent": "provision"` or `"intent": "rotate"`; provision is the default.
+`prepare` reads the bound live target and creates a local operation record. It is not an offline plan
+and does not issue credentials or authorize subsequent changes. The default DBA Plan mode must not
+call it without live access authorization.
+
+Review `prepare`'s `operation_id`, `plan_digest`, `intent`, `actions`, `preserves`, `account`, `client_dn`
+and `certificate_lifetime_days`. The lifetime is the requested maximum and can be bounded by the CA.
+Provision plans cover client issuance, a restricted check role, appended client trust, owned auth
+rules and verified credential publication. Rotation plans cover new client issuance, fresh connection
+verification and credential publication. These operations do not create business sources or readers.
+
+The operator independently provides the valid binding and credential-aware executor. An unavailable or
+invalid binding returns `AUTHORIZATION_REQUIRED`/exit 6. Stop and report the missing mechanism; do not
+write bindings, request secret values, switch endpoints or weaken authentication to obtain success.
+
+## Execute the reviewed local operation
+
+After approval covers the exact prepared change, copy the returned opaque identifiers into the base
+request as the following `operation` object. Do not include `intent` in execution requests:
+
+```json
+{
+  "operation": {
+    "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "plan_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  }
+}
+```
+
+The values above illustrate the shape only. Use the actual returned identifiers without editing the
+plan digest. `operation.json` below contains the complete base request plus that object:
+
+```bash
+python3 .agents/skills/query-man-dba-onboarding/scripts/query_passport_verify.py issue --workspace /approved/public/workspace --request operation.json
+python3 .agents/skills/query-man-dba-onboarding/scripts/query_passport_verify.py apply --workspace /approved/public/workspace --request operation.json
+python3 .agents/skills/query-man-dba-onboarding/scripts/query_passport_verify.py deliver --workspace /approved/public/workspace --request operation.json
+```
+
+Call each step only within its approved scope. `issue` creates client material in the PKI boundary;
+`apply` changes the owned local authentication resources; `deliver` publishes only after runtime
+permission checks, positive TLS/client-identity checks, certificate-free/plaintext server refusals and
+fresh connection recovery checks pass. Credentials and CA private keys never pass through this helper.
+
+For an approved rotation, first `prepare` with `intent: rotate`, then use its operation object:
+
+```bash
+python3 .agents/skills/query-man-dba-onboarding/scripts/query_passport_verify.py rotate --workspace /approved/public/workspace --request operation.json
+```
+
+Rotation reuses the owned CA identity and issues a new client key/certificate. Old credential
+generations remain preserved; rotation does not revoke old certificates or remove DB authorization.
+
+After a failure or interruption, stop the mutation. These commands inspect progress or perform only
+already authorized recovery:
+
+```bash
+python3 .agents/skills/query-man-dba-onboarding/scripts/query_passport_verify.py status --workspace /approved/public/workspace --request operation.json
+python3 .agents/skills/query-man-dba-onboarding/scripts/query_passport_verify.py rollback --workspace /approved/public/workspace --request operation.json
+```
+
+`status` reads recorded progress and is not a fresh connection check. Rotation rollback restores only
+the previous credential generation and does not revoke DB access. Provision rollback is limited to
+the operation's owned changes. Preserve previous credentials, backups and logs; never auto-drop a DB
+or delete prior evidence as recovery. Do not automatically retry a mutation after a timeout.
 
 ## Interpret the result
 
-- `validated` means public input validation. It does not replace Query Man's repository validation.
-- `planned` means an offline plan with `executable: false`. DB/TLS/identity observations remain
-  `not_checked`; a plan is not an execution approval or a live target snapshot.
-- `succeeded` for `verify` requires every recognized check to pass: runtime identity, credential
-  permissions and read-only mount, TLS/client identity/target, read-only transaction, timeout/recovery,
-  cancellation/recovery, and reconnect. Any missing, unknown, failed, or pending check prevents success.
-- Even successful database verification leaves `source_inventory`, `query_man_validation`,
-  `reader_permissions`, `source_admission`, `deployment`, and `application_readiness` as `not_checked`.
-  Source zero remains valid database-only context; source admission, HTTP authentication, application
-  startup, and business queries are separate Query Man acceptance work.
+- `inspect`/`validated` confirms public projection validation. Query Man repository validation is
+  still required. `plan`/`planned` is offline with `executable: false` and DB/TLS facts `not_checked`.
+- `prepare`/`planned` means a bound target was inspected and a local plan recorded. Connectivity,
+  authentication and certificate validation remain `not_checked`; approval is a separate fact.
+- `verify`/`succeeded` requires all recognized checks to pass, including runtime identity, immutable
+  credential access, TLS/client identity/target, transaction limits, cancellation/recovery and reconnect.
+- `issue`, `apply`, `deliver`, `rotate` and `rollback` report only their exact successful phase.
+  `deliver`/`rotate` phase `verified` carries fresh DB/TLS/authentication success. Other steps do not.
+- `status`/`validated` returns historical `phase`, including `unknown` or `partial_failure`, with
+  DB/TLS/authentication `not_checked`, even when the stored phase is `verified`.
+- Failure after a valid operation request preserves only opaque operation identifiers, a fixed error,
+  `outcome: not_confirmed` and `next_action: status_or_scoped_recovery`. Never infer the last committed
+  phase or readiness from a failed, timed-out or malformed response.
 
-Report the fixed failure code once and stop the requested operation on failure. Do not describe
-partial checks, a helper exit failure, or a capability response as database/application readiness.
-Record actual approved live outcomes only in the existing environment record, not as repository
-activation evidence. Removing or replacing prior tools/credentials requires the separate verified
-cutover and rollback conditions; this consumer does not perform those actions.
+Source count zero remains valid database-only context. Source inventory, reader rights, source
+admission, deployment and application readiness remain `not_checked`; application startup, HTTP
+authentication and business-query acceptance remain separate Query Man work. Record approved live
+outcomes in the existing environment record. Passport's local operation log is not protected immutable
+evidence, and repository test success is not activation evidence.

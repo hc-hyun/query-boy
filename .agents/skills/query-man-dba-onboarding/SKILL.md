@@ -57,7 +57,7 @@ arguments, files, or shell text.
 Perform a read-only identity preflight first. Confirm the exact PostgreSQL 18/UTF-8 target and stop
 on any target, dependency, existing-role, privilege, certificate, HBA, or output mismatch.
 
-For an approved Passport 0.2.0 live verification, read the shared
+For approved Passport 0.3.0 local verification or credential lifecycle work, read the shared
 [Passport consumer reference](../query-man-admin/references/query-passport.md) and invoke
 `scripts/query_passport_verify.py` only within this existing Execute scope. The helper first checks
 contract/capability support and delegates to the operator-managed executor binding; it does not
@@ -66,6 +66,25 @@ Stop on unsupported environments, `AUTHORIZATION_REQUIRED`, or any failed/missin
 helper remains offline. A database-only request may have no sources; use the Admin profile validation
 path instead of inventing a source execution packet. Successful Passport verification leaves source
 and application acceptance pending and does not authorize any change step below.
+
+Passport `prepare` is a bound read-only target inspection plus a local operation record, so it also
+requires the approved live access scope; it is not this skill's default repository-only Plan mode.
+Review its concrete actions, preserved resources, account, client DN and maximum certificate lifetime.
+For provision, authorize the required `issue`, `apply` and `deliver` steps against the returned opaque
+operation ID and plan digest. Reuse approval already covering those exact steps. A prepared operation
+or `planned` status never supplies execution approval. Do not add an approval flag to the public JSON.
+
+For rotation, prepare with `intent: rotate`, review that plan, then call `rotate` within its approved
+scope. It issues a new client key/certificate under the owned CA and publishes only after fresh positive
+connection and certificate-free/plaintext rejection checks. It preserves old generations and does not
+revoke old certificates. Rotation `rollback` restores the previous credential generation only; it does
+not revoke DB access. Provision rollback is likewise limited to that operation's owned changes.
+
+After an error, interruption or timeout, report the classified code and `not_confirmed` outcome without
+guessing the last committed phase. Use `status` within the existing scope to inspect stored progress,
+then choose only authorized scoped recovery. Do not automatically retry a mutation or infer fresh
+connectivity from a stored `verified` phase. Keep evidence in the approved environment record; Passport's
+local operation log is not protected immutable evidence.
 
 - Create a database only when its non-transactional cluster-level action was separately approved.
   Never auto-drop it as rollback.
