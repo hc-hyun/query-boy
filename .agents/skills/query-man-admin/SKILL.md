@@ -115,6 +115,16 @@ The source-package helper and runtime still reject zero sources by design; do no
 behavior or add a dummy source to make them succeed. If sources already exist, also run the helper
 and SQL tests from the source workflow. Report profile registration and source count separately.
 
+### Inspect or plan with Query Passport
+
+When Passport is installed and the request needs its public configuration check or offline plan,
+read [query-passport.md](references/query-passport.md). After the repository validation above, use
+`scripts/query_passport.py` for `capabilities`, `inspect`, or `plan`; it checks the supported version
+and capability and returns only validated, bounded JSON judgments. Pass public profile fields and
+existing aliases, including `source_count: 0` when applicable. Keep unsupported names unchanged.
+Admin never calls Passport `verify` or credential/change commands. Offline `validated`/`planned`
+results do not establish DB connectivity, certificate validity, source admission, or app readiness.
+
 ## Work with Query Cave
 
 Read `query-cave/README.md`. Use it as the synthetic onboarding and CI reference. Status checks

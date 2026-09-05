@@ -75,6 +75,20 @@ Helper는 versioned 설정과 두 파일 layout을 검사하며, SQL 본문은 p
 없습니다. DB만 등록하는 경우에도 완료 전에는
 [개발 지침](development-guidelines.md#tests)의 전체 gate를 실행합니다.
 
+## Query Passport 연결
+
+승인된 Query Passport `0.2.0` 설치가 있으면 두 skill의 helper가 계약 major `1`과 capability를 먼저
+확인하고 JSON·종료 코드·검사 항목을 검증합니다. Admin은 `capabilities`·`inspect`·`plan`만 호출하며,
+DBA의 `verify`는 기존 Execute 승인 범위에서만 사용합니다. Query Man 앱에는 런타임 의존성을 추가하지
+않습니다. 설치 경로 지정, 공개 요청 예시와 호출 방법은
+[Passport consumer reference](../.agents/skills/query-man-admin/references/query-passport.md)를 따릅니다.
+
+오프라인 `validated`·`planned`는 실제 DB 접속이나 인증서 검증이 아닙니다. Live `succeeded`도 DB 준비
+검사 범위만 의미하며 source inventory·reader 권한·source admission·배포·application readiness는
+`not_checked`로 남습니다. Source 0개를 허용하며 기존 Runtime의 source 요구는 유지합니다.
+Passport 0.2.0의 live backend는 local 환경만 지원합니다. Binding 부재 시 `AUTHORIZATION_REQUIRED`로
+중단하며 helper가 승인이나 credential 준비를 대신하지 않습니다.
+
 ## 서버 상태 조회
 
 ```text

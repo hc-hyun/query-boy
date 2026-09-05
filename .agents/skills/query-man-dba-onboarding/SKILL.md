@@ -57,6 +57,16 @@ arguments, files, or shell text.
 Perform a read-only identity preflight first. Confirm the exact PostgreSQL 18/UTF-8 target and stop
 on any target, dependency, existing-role, privilege, certificate, HBA, or output mismatch.
 
+For an approved Passport 0.2.0 live verification, read the shared
+[Passport consumer reference](../query-man-admin/references/query-passport.md) and invoke
+`scripts/query_passport_verify.py` only within this existing Execute scope. The helper first checks
+contract/capability support and delegates to the operator-managed executor binding; it does not
+authorize execution or create bindings. Passport currently advertises only local live environments.
+Stop on unsupported environments, `AUTHORIZATION_REQUIRED`, or any failed/missing check. The Admin
+helper remains offline. A database-only request may have no sources; use the Admin profile validation
+path instead of inventing a source execution packet. Successful Passport verification leaves source
+and application acceptance pending and does not authorize any change step below.
+
 - Create a database only when its non-transactional cluster-level action was separately approved.
   Never auto-drop it as rollback.
 - Create new roles without passwords. The reader is `LOGIN` with a positive approved connection
