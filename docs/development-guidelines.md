@@ -84,6 +84,26 @@ owner별 여섯 physical package로 나뉜다. 논리 module의 owner, 현재 le
 - Module별 focused test는 빠른 feedback용이며 root 전체 gate를 대체하지 않는다. Provider interface를
   사용하는 코드를 바꾸면 provider와 직접 consumer test를 함께 실행한다.
 
+### homework 브랜치와 main 반영
+
+`homework`는 집의 로컬 DB/source로 E2E를 수행하면서 공통 기능도 개발하는 브랜치다.
+집 전용 설정은 이 브랜치에 유지하고, 공통 기능만 선택하여 `main`에 반영한다.
+
+- 집 전용 database profile, source package, 실행 설정과 그 환경의 상태 기록은 공통 코드·스킬·
+  테스트·문서 개선과 별도 커밋한다. 집 전용 커밋은 `chore(homework):` 등으로 목적을 표시한다.
+  접두어는 사람을 위한 표시이며 Git이 자동으로 제외해 주는 기능이 아니다.
+- `homework` 전체를 `main`으로 merge하거나 전체 diff로 PR/squash하면 집 전용 변경도 포함된다.
+  `main` 기준 반영용 브랜치에 필요한 공통 커밋만 `cherry-pick`하고, diff에 집 전용 설정이나
+  그 설정에 대한 코드 의존이 없는지 확인한 뒤 PR을 merge한다.
+- E2E 중 발견한 공통 수정도 같은 규칙으로 분리한다. 커밋을 고르기 위해 로컬 변경을 버리거나
+  공유 이력을 rewrite하지 않는다. 충돌은 각 변경의 소유 범위를 확인하고 해결한다.
+- 공통 변경은 집 전용 profile/source가 없는 반영용 브랜치에서도 repository gate를 통과해야 한다.
+  집에서의 E2E 성공과 공통 변경의 독립적인 검증을 구분한다.
+- `main`에 반영된 공통 변경은 이후 `homework`로 가져와 계속 개발한다. 갱신 후에도 집 전용
+  설정이 유지되는지 확인한다.
+- Git 브랜치는 실제 Docker DB, 계정, 데이터와 인증서를 분리하거나 복구하지 않는다. 실제 DB
+  변경과 rollback은 해당 환경의 기존 운영 절차를 따른다.
+
 ## Module Interface와 승인 대상 변경
 
 ### Internal module interface

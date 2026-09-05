@@ -1,0 +1,11 @@
+version: 1
+
+profiles:
+  voc-db:
+    # Repository Compose network endpoint; host access is 127.0.0.1:5678.
+    host: voc-db
+    port: 5432
+    database: query_man
+    sslmode: verify-full
+    authentication:
+      type: client-certificate

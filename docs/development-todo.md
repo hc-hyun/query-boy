@@ -7,7 +7,8 @@ append-only/immutable change record로 증명합니다.
 ## 현재 baseline
 
 - Production `config/sources/` package가 없습니다.
-- Production `config/database-profiles.yaml`이 없습니다.
+- `config/database-profiles.yaml`에 로컬 Docker `voc-db` profile이 있습니다. 로컬 연결용 인증서와
+  확인 계정은 준비되어 있으며, 자격 증명과 실행 기록은 저장소 밖에서 관리합니다.
 - Versioned budget, access-policy example과 security corpus는 있습니다.
 - Query Cave는 certificate-authenticated production 경로를 검증하는 disposable assurance 환경입니다.
 - 따라서 첫 production source가 review되기 전의 Runtime과 repository-local source validator는
@@ -26,7 +27,7 @@ AUTHENV-01 ──────────────┘
 
 | 작업 | 종류 | 현재 상태 | 완료 기준과 owner 절차 |
 |---|---|---|---|
-| `SOURCE-01` | Repository | 미착수 | 첫 production source package와 database profile이 review되고 repository gate를 통과함. [Source onboarding](source-extension-checklist.md) |
+| `SOURCE-01` | Repository | DB profile 등록, source 미착수 | 첫 production source package와 database profile이 review되고 repository gate를 통과함. [Source onboarding](source-extension-checklist.md) |
 | `DBENV-01` | Protected | `SOURCE-01` 대기 | Exact DB/source/reader, privilege, marker와 certificate admission evidence가 승인된 환경 기록에 남음. [Source onboarding](source-extension-checklist.md), [Certificate guide](database-certificate-authentication.md) |
 | `AUTHENV-01` | Protected | 미실행 | 하나의 token authority, secret 전달 경로, query/operator·source authorization evidence가 승인된 환경 기록에 남음. [Operations](operations.md) |
 | `LAUNCH-02` | Protected | `DBENV-01`, `AUTHENV-01` 대기 | Approved image/config의 traffic-off acceptance, 제한적 cutover와 rollback readiness가 기록됨. [Operations](operations.md) |
