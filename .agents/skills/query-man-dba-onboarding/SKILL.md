@@ -57,7 +57,7 @@ arguments, files, or shell text.
 Perform a read-only identity preflight first. Confirm the exact PostgreSQL 18/UTF-8 target and stop
 on any target, dependency, existing-role, privilege, certificate, HBA, or output mismatch.
 
-For approved Passport 0.3.0 local verification or credential lifecycle work, read the shared
+For approved Passport 0.4.0 local verification or credential lifecycle work, read the shared
 [Passport consumer reference](../query-man-admin/references/query-passport.md) and invoke
 `scripts/query_passport_verify.py` only within this existing Execute scope. The helper first checks
 contract/capability support and delegates to the operator-managed executor binding; it does not
@@ -77,14 +77,18 @@ or `planned` status never supplies execution approval. Do not add an approval fl
 For rotation, prepare with `intent: rotate`, review that plan, then call `rotate` within its approved
 scope. It issues a new client key/certificate under the owned CA and publishes only after fresh positive
 connection and certificate-free/plaintext rejection checks. It preserves old generations and does not
-revoke old certificates. Rotation `rollback` restores the previous credential generation only; it does
-not revoke DB access. Provision rollback is likewise limited to that operation's owned changes.
+revoke old certificates. Passport 0.4.0 provides no rollback or automatic compensation. Preserve prior
+credentials and records; use a new delivery store rather than migrating a 0.3.0 store implicitly.
+Its seven connection checks do not include timeout/cancellation recovery diagnostics; Query Man
+application acceptance still requires those separate checks.
 
 After an error, interruption or timeout, report the classified code and `not_confirmed` outcome without
 guessing the last committed phase. Use `status` within the existing scope to inspect stored progress,
-then choose only authorized scoped recovery. Do not automatically retry a mutation or infer fresh
-connectivity from a stored `verified` phase. Keep evidence in the approved environment record; Passport's
-local operation log is not protected immutable evidence.
+then use the environment owner's recovery procedure if needed. Once the cause is resolved, only an
+authorized retry of the same command and operation reference may resume it; partial files or drift
+still fail closed. Do not automatically retry a mutation or infer fresh connectivity from a stored
+`verified` phase. Keep evidence in the approved environment record; Passport's local operation log is
+not protected immutable evidence.
 
 - Create a database only when its non-transactional cluster-level action was separately approved.
   Never auto-drop it as rollback.

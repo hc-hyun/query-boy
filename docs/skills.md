@@ -77,9 +77,9 @@ Helper는 versioned 설정과 두 파일 layout을 검사하며, SQL 본문은 p
 
 ## Query Passport 연결
 
-승인된 Query Passport `0.3.0` 설치가 있으면 두 skill의 helper가 계약 major `1`과 capability를 먼저
+승인된 Query Passport `0.4.0` 설치가 있으면 두 skill의 helper가 계약 major `1`과 capability를 먼저
 확인하고 JSON·종료 코드·검사 항목을 검증합니다. Admin은 `capabilities`·`inspect`·`plan`만 호출하며,
-DBA는 기존 Execute 승인 범위에서 `verify`와 `prepare`·`issue`·`apply`·`deliver`·`rotate`·`rollback`·`status`를
+DBA는 기존 Execute 승인 범위에서 `verify`와 `prepare`·`issue`·`apply`·`deliver`·`rotate`·`status`를
 호출합니다. Query Man 앱에는 런타임 의존성을 추가하지
 않습니다. 설치 경로 지정, 공개 요청 예시와 호출 방법은
 [Passport consumer reference](../.agents/skills/query-man-admin/references/query-passport.md)를 따릅니다.
@@ -87,18 +87,24 @@ DBA는 기존 Execute 승인 범위에서 `verify`와 `prepare`·`issue`·`apply
 오프라인 `validated`·`planned`는 실제 DB 접속이나 인증서 검증이 아닙니다. Live `succeeded`도 DB 준비
 검사 범위만 의미하며 source inventory·reader 권한·source admission·배포·application readiness는
 `not_checked`로 남습니다. Source 0개를 허용하며 기존 Runtime의 source 요구는 유지합니다.
-Passport 0.3.0의 live backend는 local 환경만 지원합니다. Binding 부재 시 `AUTHORIZATION_REQUIRED`로
+Passport 0.4.0의 live backend는 local 환경만 지원합니다. Binding 부재 시 `AUTHORIZATION_REQUIRED`로
 중단하며 helper가 승인이나 credential 준비를 대신하지 않습니다.
+
+Live v2의 검사는 runtime identity·credential 권한·읽기 전용 mount·TLS·client identity·대상·읽기 전용
+transaction의 7개입니다. 이전 버전의 statement timeout·timeout 복구·cancel·cancel 복구·reconnect
+진단은 수행하지 않습니다. Query Man 앱의 필수 timeout·cancel·복구 검증은 별도로 유지합니다.
 
 `prepare`는 승인된 binding으로 실제 대상을 읽고 로컬 작업 기록을 만듭니다. 기본 오프라인 Plan이나
 실행 승인으로 취급하지 않습니다. 반환된 작업·보존 범위·계정·client DN·인증서 최대 기간을 검토한 뒤,
 승인된 단계에 동일한 operation ID와 plan digest를 전달합니다. `deliver`와 `rotate`는 새 연결의
 양성 검사와 인증서 없는 접속·평문 접속의 실제 거부를 확인해야 완료됩니다.
 
-Rotation은 기존 CA로 새 client key/인증서를 발급하고 이전 세대를 보존합니다. 이전 인증서를 revoke하지
-않으며 rotation rollback은 이전 credential 세대만 복원합니다. `status`의 `validated`와 저장된
+Rotation은 기존 CA로 새 client key/인증서를 발급하고 이전 세대를 보존하며 이전 인증서를 revoke하지
+않습니다. 0.4.0은 rollback·자동 보상 변경을 지원하지 않습니다. 0.3.0 작업 기록·전달 store를 자동 변환하지
+않고 새 전용 경로를 사용하며 이전 credential·백업·기록을 보존합니다. `status`의 `validated`와 저장된
 `verified` phase는 현재 접속 성공이 아닙니다. 오류·시간 초과 뒤에는 `not_confirmed`로 보고하고 기록을
-확인한 뒤 승인된 범위의 복구만 수행하며, 변경 명령을 자동 재시도하지 않습니다. 로컬 작업 로그를
+확인합니다. 원인을 해결한 뒤 승인된 동일 명령·operation의 재실행만 허용하며 부분 파일·drift를 삭제나
+덮어쓰기로 우회하지 않습니다. 필요한 복구는 환경 담당자의 절차를 따르고 변경 명령을 자동 재시도하지 않습니다. 로컬 작업 로그를
 protected immutable evidence로 부르지 않습니다.
 
 ## 서버 상태 조회

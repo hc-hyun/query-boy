@@ -1,17 +1,21 @@
 # Query Passport consumer
 
 Use an operator-installed, approved `query-passport` executable. The helpers require tool version
-`0.3.0`, contract major `1`, policy `m3-local-lifecycle-1`, and the selected advertised capability:
-`profile.inspect.v1`, `plan.offline.v1`, `connection.verify.v1`, `lifecycle.local.v1`, or
-`credential.rotate.local.v1`. They are repository skill resources; the Query Man application has no
+`0.4.0`, contract major `1`, policy `mvp-local-lifecycle-2`, and the selected advertised capability:
+`profile.inspect.v1`, `plan.offline.v1`, `connection.verify.v2`, `lifecycle.local.v2`, or
+`credential.rotate.local.v2`. They are repository skill resources; the Query Man application has no
 Passport runtime dependency. Select an approved installation with `--passport PATH` when needed.
 Do not inspect credential wrappers or install an unreviewed executable to work around a failure.
 
 Admin exposes only `capabilities`, `inspect`, and `plan`. DBA exposes `verify`, `prepare`, `issue`,
-`apply`, `deliver`, `rotate`, `rollback`, and `status` within its existing Execute authorization.
+`apply`, `deliver`, `rotate`, and `status` within its existing Execute authorization.
 Neither helper creates executor bindings or accepts an approval flag. An alias or operation ID is
 not execution authority. Passport's live backends support only advertised `local-synthetic` and
 `local` environments; `protected` remains an offline planning label. Approval does not add a backend.
+
+Version 0.4.0 has no rollback or automatic compensation. Its operation plan v2 and delivery owner v2
+do not migrate or resume 0.3.0 records/stores. Use a new operator-managed delivery path and preserve
+existing credentials, backups and records. A successful connection alone does not authorize deleting them.
 
 ## Public request
 
@@ -115,7 +119,8 @@ python3 .agents/skills/query-man-dba-onboarding/scripts/query_passport_verify.py
 Call each step only within its approved scope. `issue` creates client material in the PKI boundary;
 `apply` changes the owned local authentication resources; `deliver` publishes only after runtime
 permission checks, positive TLS/client-identity checks, certificate-free/plaintext server refusals and
-fresh connection recovery checks pass. Credentials and CA private keys never pass through this helper.
+a fresh positive connection pass. This does not test timeout or cancellation recovery.
+Credentials and CA private keys never pass through this helper.
 
 For an approved rotation, first `prepare` with `intent: rotate`, then use its operation object:
 
@@ -126,18 +131,18 @@ python3 .agents/skills/query-man-dba-onboarding/scripts/query_passport_verify.py
 Rotation reuses the owned CA identity and issues a new client key/certificate. Old credential
 generations remain preserved; rotation does not revoke old certificates or remove DB authorization.
 
-After a failure or interruption, stop the mutation. These commands inspect progress or perform only
-already authorized recovery:
+After a failure or interruption, stop the mutation and inspect the last recorded progress:
 
 ```bash
 python3 .agents/skills/query-man-dba-onboarding/scripts/query_passport_verify.py status --workspace /approved/public/workspace --request operation.json
-python3 .agents/skills/query-man-dba-onboarding/scripts/query_passport_verify.py rollback --workspace /approved/public/workspace --request operation.json
 ```
 
-`status` reads recorded progress and is not a fresh connection check. Rotation rollback restores only
-the previous credential generation and does not revoke DB access. Provision rollback is limited to
-the operation's owned changes. Preserve previous credentials, backups and logs; never auto-drop a DB
-or delete prior evidence as recovery. Do not automatically retry a mutation after a timeout.
+`status` reads recorded progress and is not a fresh connection check. A start record does not prove
+that external changes completed or were undone. Passport provides no rollback command. After fixing
+the cause, an operator may authorize repeating the same command with the same operation reference;
+partial files, conflicts and target drift still stop execution. Do not automatically retry a mutation
+after a timeout or delete partial files to force it through. Preserve previous credentials, backups
+and logs, and use the environment owner's recovery procedure when needed.
 
 ## Interpret the result
 
@@ -145,15 +150,17 @@ or delete prior evidence as recovery. Do not automatically retry a mutation afte
   still required. `plan`/`planned` is offline with `executable: false` and DB/TLS facts `not_checked`.
 - `prepare`/`planned` means a bound target was inspected and a local plan recorded. Connectivity,
   authentication and certificate validation remain `not_checked`; approval is a separate fact.
-- `verify`/`succeeded` requires all recognized checks to pass, including runtime identity, immutable
-  credential access, TLS/client identity/target, transaction limits, cancellation/recovery and reconnect.
-- `issue`, `apply`, `deliver`, `rotate` and `rollback` report only their exact successful phase.
+- `verify`/`succeeded` requires its seven recognized checks to pass: runtime identity, credential
+  permissions, read-only credential mount, TLS, client identity, target and read-only transaction.
+  Statement-timeout, timeout-recovery, cancellation, cancellation-recovery and reconnect diagnostics
+  from 0.3.0 are not performed. Query Man application acceptance must still run its own required checks.
+- `issue`, `apply`, `deliver` and `rotate` report only their exact successful phase.
   `deliver`/`rotate` phase `verified` carries fresh DB/TLS/authentication success. Other steps do not.
-- `status`/`validated` returns historical `phase`, including `unknown` or `partial_failure`, with
+- `status`/`validated` returns the last recorded `phase`, with
   DB/TLS/authentication `not_checked`, even when the stored phase is `verified`.
 - Failure after a valid operation request preserves only opaque operation identifiers, a fixed error,
-  `outcome: not_confirmed` and `next_action: status_or_scoped_recovery`. Never infer the last committed
-  phase or readiness from a failed, timed-out or malformed response.
+  and `outcome: not_confirmed`. It does not provide a recovery action or last confirmed external state.
+  Never infer the last committed phase or readiness from a failed, timed-out or malformed response.
 
 Source count zero remains valid database-only context. Source inventory, reader rights, source
 admission, deployment and application readiness remain `not_checked`; application startup, HTTP

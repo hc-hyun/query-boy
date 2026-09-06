@@ -4,6 +4,17 @@ Use this checklist to prepare a change packet. It preserves the repository's acc
 canonical details remain in `docs/source-extension-checklist.md` and
 `docs/database-certificate-authentication.md`.
 
+## Select the scope
+
+For database-only work, record the database profile and source count; mark source ID, reader, views,
+business output and source-specific approval fields as not applicable. With zero sources, use the
+Admin skill's database-profile inventory test instead of the source-package helper. The source/view
+preflight, bootstrap, SQL transaction and application acceptance steps below apply only to source
+onboarding; do not create placeholder sources or readers. A separately authorized database check
+account is not a source reader. Follow the shared [Passport reference](../../query-man-admin/references/query-passport.md)
+for its connection/lifecycle scope and report source/application acceptance as pending. The applicable
+target, access, PKI/configuration, stop and record responsibilities below still apply.
+
 ## Authorization record
 
 Do not execute while any field is absent or ambiguous:
@@ -11,8 +22,8 @@ Do not execute while any field is absent or ambiguous:
 ```text
 approved commit/image:
 environment and exact cluster/database:
-source ID and database profile:
-DB/data owner sign-off and no-PII confirmation:
+database profile and source ID (or not applicable for database-only):
+DB owner sign-off; data owner/no-PII confirmation for source onboarding:
 DBA/PKI/deployment executors:
 approved credential mechanism name (no value):
 traffic-off window:

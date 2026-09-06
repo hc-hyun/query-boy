@@ -12,7 +12,7 @@ def main() -> int:
     try:
         shared = Path(__file__).parents[2] / "query-man-admin/scripts/query_passport.py"
         consumer = runpy.run_path(str(shared))
-        commands = ("verify", "prepare", "issue", "apply", "deliver", "rotate", "rollback", "status")
+        commands = ("verify", "prepare", "issue", "apply", "deliver", "rotate", "status")
         arguments = sys.argv[1:]
         # Preserve the original verify-only invocation when arguments start with flags.
         if not arguments or arguments[0].startswith("-"):

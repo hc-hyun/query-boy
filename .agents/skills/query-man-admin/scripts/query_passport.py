@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded, fail-closed consumer for an operator-installed Query Passport 0.3.0.
+"""Bounded, fail-closed consumer for an operator-installed Query Passport 0.4.0.
 
 The Admin entrypoint exposes only offline commands. The DBA skill reuses the
 consumer through its separate DBA entrypoint after existing Execute approval.
@@ -21,23 +21,22 @@ import time
 from collections.abc import Sequence
 from typing import Any, Never
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 MAX_OUTPUT = 16384
 MAX_INPUT = 65536
 COMMAND_CAPABILITY = {
     "capabilities": None,
     "inspect": "profile.inspect.v1",
     "plan": "plan.offline.v1",
-    "verify": "connection.verify.v1",
-    "prepare": "lifecycle.local.v1",
-    "issue": "lifecycle.local.v1",
-    "apply": "lifecycle.local.v1",
-    "deliver": "lifecycle.local.v1",
-    "rotate": "credential.rotate.local.v1",
-    "rollback": "lifecycle.local.v1",
-    "status": "lifecycle.local.v1",
+    "verify": "connection.verify.v2",
+    "prepare": "lifecycle.local.v2",
+    "issue": "lifecycle.local.v2",
+    "apply": "lifecycle.local.v2",
+    "deliver": "lifecycle.local.v2",
+    "rotate": "credential.rotate.local.v2",
+    "status": "lifecycle.local.v2",
 }
-LIFECYCLE = frozenset({"prepare", "issue", "apply", "deliver", "rotate", "rollback", "status"})
+LIFECYCLE = frozenset({"prepare", "issue", "apply", "deliver", "rotate", "status"})
 PHASES = frozenset(
     {
         "prepared",
@@ -50,10 +49,6 @@ PHASES = frozenset(
         "delivered",
         "verifying",
         "verified",
-        "rolling_back",
-        "rolled_back",
-        "partial_failure",
-        "unknown",
     }
 )
 LIFECYCLE_UNCHANGED = frozenset(
@@ -80,7 +75,7 @@ LIFECYCLE_BASE = LIFECYCLE_UNCHANGED | frozenset(
         "recovery",
     }
 )
-NOT_CONFIRMED = {"outcome": "not_confirmed", "next_action": "status_or_scoped_recovery"}
+NOT_CONFIRMED = {"outcome": "not_confirmed"}
 PREPARE_ACTIONS = {
     "provision": [
         "issue_client_certificate",
@@ -107,11 +102,6 @@ CHECKS = frozenset(
         "client_identity",
         "target",
         "read_only_transaction",
-        "statement_timeout",
-        "timeout_recovery",
-        "cancellation",
-        "cancellation_recovery",
-        "reconnect",
     }
 )
 UNCHANGED = frozenset(
@@ -150,16 +140,41 @@ ERROR_EXITS = {
     "PERMISSION_DENIED": 8,
     "CONNECTION_FAILED": 8,
     "VERIFICATION_FAILED": 8,
-    "RECOVERY_REQUIRED": 9,
+    "OPERATION_ORDER_INVALID": 9,
+    "DB_CONFIG_WRITE_FAILED": 9,
+    "EXECUTOR_CLEANUP_FAILED": 9,
+    "STATE_ACCESS_DENIED": 9,
+    "STATE_WRITE_FAILED": 9,
+    "STATE_INVALID": 9,
+    "STATE_CONFLICT": 9,
+    "STATE_PARTIAL": 9,
+    "OPERATION_BUSY": 9,
+    "DELIVERY_INVALID_INPUT": 9,
+    "DELIVERY_ACCESS_DENIED": 9,
+    "DELIVERY_OWNERSHIP_REQUIRED": 9,
+    "DELIVERY_INPUT_CONFLICT": 9,
+    "DELIVERY_DRIFT": 9,
+    "DELIVERY_PARTIAL_STATE": 9,
+    "DELIVERY_PERMISSION_DENIED": 9,
+    "DELIVERY_BUSY": 9,
+    "DELIVERY_VALIDATION_FAILED": 9,
+    "PKI_INVALID_INPUT": 9,
+    "PKI_ACCESS_DENIED": 9,
+    "PKI_PARTIAL_STATE": 9,
+    "PKI_INPUT_CONFLICT": 9,
+    "PKI_VALIDATION_FAILED": 9,
+    "PKI_EXPIRED": 9,
+    "PKI_OPERATION_FAILED": 9,
+    "PKI_TIMEOUT": 9,
 }
 PLAN_FIXED: dict[str, Any] = {
-    "policy_revision": "m3-local-lifecycle-1",
+    "policy_revision": "mvp-local-lifecycle-2",
     "executable": False,
     "target_snapshot": "unknown",
     "differences": "unknown",
     "actions": [],
     "desired_state": {"sslmode": "verify-full", "authentication": "client-certificate"},
-    "required_capabilities": ["connection.verify.v1"],
+    "required_capabilities": ["connection.verify.v2"],
     "next_action": "authorized_read_only_verification",
     "preconditions": ["query_man_profile_validation", "authorized_executor_target_binding", "live_target_snapshot"],
     "verification": ["target_identity", "db_connectivity", "certificate_validation", "authentication", "deployment"],
@@ -233,7 +248,7 @@ def _capabilities(result: Any) -> None:
     _require(result["supported_contract_majors"] == [1] and type(result["supported_contract_majors"][0]) is int)
     _require(result["profile_versions"] == [1] and type(result["profile_versions"][0]) is int)
     _require(type(result["source_reference_version"]) is int and result["source_reference_version"] == 6)
-    _require(result["policy_revision"] == "m3-local-lifecycle-1")
+    _require(result["policy_revision"] == "mvp-local-lifecycle-2")
     _require(result["scopes"] == ["database-only"])
     _require(result["backend_types"] == ["offline", "local-docker"])
     _require(result["environments"] == ["local-synthetic", "local", "protected"])
@@ -281,7 +296,7 @@ def _result(command: str, result: Any, *, succeeded: bool) -> None:
         _require(all(type(state) is str and state in {"passed", "failed", "not_checked"} for state in checks.values()))
         _require(all(state == "passed" for state in checks.values()) == succeeded)
         _require(result["target_identity"] == checks["target"])
-        _require(result["db_connectivity"] == checks["reconnect"])
+        _require(result["db_connectivity"] == checks["read_only_transaction"])
         _require(result["authentication"] == checks["client_identity"])
         _require(result["verification_runtime"] == checks["runtime_identity"])
         certificate = "passed" if checks["tls"] == checks["client_identity"] == "passed" else "not_checked"
@@ -313,14 +328,13 @@ def _lifecycle_result(command: str, result: Any) -> None:
         "apply": "applied",
         "deliver": "verified",
         "rotate": "verified",
-        "rollback": "rolled_back",
     }
     if command != "status":
         _require(result["phase"] == expected[command])
     if command == "rotate":
         _require(result["intent"] == "rotate")
     _require(all(result[field] == "not_checked" for field in LIFECYCLE_UNCHANGED))
-    _require(result["target_identity"] == "passed" and result["recovery"] == "owned_changes_only")
+    _require(result["target_identity"] == "passed" and result["recovery"] == "not_supported")
     observation = "passed" if command in ("deliver", "rotate") else "not_checked"
     _require(
         all(result[field] == observation for field in ("certificate_validation", "db_connectivity", "authentication"))
@@ -364,7 +378,6 @@ def validate_response(raw: bytes, returncode: int, command: str) -> dict[str, An
             "apply": "succeeded",
             "deliver": "succeeded",
             "rotate": "succeeded",
-            "rollback": "succeeded",
             "status": "validated",
         }
         _require(response["status"] == expected_status[command] and response["errors"] == [])
@@ -535,7 +548,7 @@ def run(arguments: Sequence[str], *, commands: tuple[str, ...] = ("capabilities"
         required = COMMAND_CAPABILITY[command]
         _require(required is None or required in capability["result"]["capabilities"], "PASSPORT_INCOMPATIBLE")
         if command in LIFECYCLE:
-            _require("lifecycle.local.v1" in capability["result"]["capabilities"], "PASSPORT_INCOMPATIBLE")
+            _require("lifecycle.local.v2" in capability["result"]["capabilities"], "PASSPORT_INCOMPATIBLE")
         response = capability
         if command != "capabilities":
             data = _stdin() if options.request == "-" else None
